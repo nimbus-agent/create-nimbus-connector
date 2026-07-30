@@ -8,15 +8,19 @@ import { emitSandboxTest } from "./sandbox-test.ts";
 import { emitServer } from "./server/index.ts";
 import { emitTsconfig } from "./tsconfig.ts";
 
+export type GenerateTarget = "monorepo" | "standalone";
+export type GenerateOptions = { target?: GenerateTarget };
+
 /** Pure. Returns UNFORMATTED files — callers pass the result through formatAll(). */
-export function generate(spec: ConnectorSpec): GeneratedFile[] {
+export function generate(spec: ConnectorSpec, options: GenerateOptions = {}): GeneratedFile[] {
+  const target = options.target ?? "monorepo";
   validateSpec(spec);
   return [
-    emitServer(spec),
-    emitSandboxTest(),
+    emitServer(spec, target),
+    emitSandboxTest(target),
     emitPackageJson(spec),
     emitManifest(spec),
-    emitTsconfig(),
+    emitTsconfig(target),
     emitReadme(spec),
   ];
 }

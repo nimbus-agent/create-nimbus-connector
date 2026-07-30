@@ -1,6 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { generate } from "../../src/emit/index.ts";
-import { formatAll } from "../../src/format.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
@@ -27,6 +27,9 @@ const spec = parseSpec({
 });
 
 describe("generate", () => {
+  beforeAll(async () => {
+    await initFormatter();
+  });
   it("emits exactly the six-file connector tree", () => {
     expect(
       generate(spec)
@@ -126,5 +129,79 @@ describe("generate", () => {
     );
     expect(src.endsWith("await mcp.connect(transport);\n")).toBe(true);
     expect(src).not.toContain("\n\n\n");
+  });
+});
+
+const handRolled = parseSpec({
+  name: "acme",
+  displayName: "Acme",
+  description: "d.",
+  serviceLabel: "Acme",
+  style: "hand-rolled",
+  env: [{ vars: ["ACME_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "headers" },
+  tools: [{ name: "acme_item_list", description: "List items.", path: "/v1/items" }],
+});
+
+const restKit = parseSpec({
+  name: "acme",
+  displayName: "Acme",
+  description: "d.",
+  serviceLabel: "Acme",
+  style: "rest-kit",
+  env: [{ vars: ["ACME_TOKEN"], local: "hdrs", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "acmeFetch", base: "https://api.acme.test" },
+  tools: [{ name: "acme_item_list", description: "List items.", path: "/v1/items" }],
+});
+
+function server(spec: Parameters<typeof generate>[0], target?: "monorepo" | "standalone"): string {
+  const opts = target === undefined ? undefined : { target };
+  return generate(spec, opts).find((f) => displayPath(f.path) === "src/server.ts")!.content;
+}
+
+describe("generate target", () => {
+  it("defaults to monorepo, keeping relative shared imports", () => {
+    expect(server(handRolled)).toContain('} from "../../shared/mcp-tool-kit.ts";');
+    expect(server(handRolled)).not.toContain("@nimbus-dev/sdk/connector-kit");
+  });
+
+  it("emits one kit import for standalone hand-rolled", () => {
+    const src = server(handRolled, "standalone");
+    expect(src).toContain('} from "@nimbus-dev/sdk/connector-kit";');
+    expect(src).not.toContain("../../shared/");
+    expect(src.match(/@nimbus-dev\/sdk\/connector-kit/g)).toHaveLength(1);
+  });
+
+  it("emits one kit import for standalone rest-kit, including makeRestToolRegistrar", () => {
+    const src = server(restKit, "standalone");
+    expect(src).toContain("makeRestToolRegistrar,");
+    expect(src).not.toContain("../../shared/");
+    expect(src.match(/@nimbus-dev\/sdk\/connector-kit/g)).toHaveLength(1);
+  });
+
+  it("omits jsonResult for an all-stub standalone hand-rolled spec", () => {
+    const allStub = parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "headers" },
+      tools: [{ name: "acme_write", description: "Write.", impl: "stub" }],
+    });
+    const src = server(allStub, "standalone");
+    expect(src).not.toContain("jsonResult");
+    expect(src).toContain(
+      'import { createRegisterSimpleTool, createZodToolRegistrar } from "@nimbus-dev/sdk/connector-kit";',
+    );
+  });
+
+  it("no relative import escapes a standalone package", () => {
+    for (const spec of [handRolled, restKit]) {
+      for (const f of generate(spec, { target: "standalone" })) {
+        expect(f.content).not.toContain("../../");
+      }
+    }
   });
 });

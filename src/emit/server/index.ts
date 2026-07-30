@@ -1,11 +1,14 @@
 import type { ConnectorSpec } from "../../spec.ts";
 import type { GeneratedFile } from "../../types.ts";
+import type { GenerateTarget } from "../index.ts";
 import { renderEnvAccessor } from "./env.ts";
 import { renderFetchHelper } from "./fetch-helper.ts";
 import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
-function imports(spec: ConnectorSpec): string {
+const KIT = "@nimbus-dev/sdk/connector-kit";
+
+function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   // z.object(...) is only emitted per tool — a zero-tool spec never calls it.
   const usesZod = spec.tools.length > 0;
   // Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool.
@@ -17,6 +20,21 @@ function imports(spec: ConnectorSpec): string {
     ...(usesZod ? ['import { z } from "zod";'] : []),
     "",
   ];
+
+  if (target === "standalone") {
+    // One barrel export, so one import regardless of style.
+    const names = ["createRegisterSimpleTool", "createZodToolRegistrar"];
+    if (usesJsonResult) names.push("mcpJsonResult as jsonResult");
+    if (spec.style === "rest-kit") names.push("makeRestToolRegistrar");
+    if (names.length === 2) {
+      head.push(`import { ${names.join(", ")} } from "${KIT}";`);
+    } else {
+      head.push("import {", ...names.map((n) => `  ${n},`), `} from "${KIT}";`);
+    }
+    return head.join("\n");
+  }
+
+  // monorepo — unchanged from Stage A
   if (spec.style === "hand-rolled") {
     if (usesJsonResult) {
       head.push(
@@ -55,10 +73,10 @@ function tail(spec: ConnectorSpec): string {
   );
 }
 
-export function emitServer(spec: ConnectorSpec): GeneratedFile {
+export function emitServer(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const isHand = spec.style === "hand-rolled";
   const sections = [
-    imports(spec),
+    imports(spec, target),
     // Env accessors are emitted for hand-rolled ONLY. Rest-kit's makeRestToolRegistrar
     // resolves the credential itself via requireProcessEnv(cfg.tokenEnv), so an accessor
     // would never be called; mapping renderEnvAccessor unconditionally would emit dead code.
