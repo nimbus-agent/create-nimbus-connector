@@ -27,12 +27,36 @@ describe("resolveNimbusRoot", () => {
     expect(() => resolveNimbusRoot({ flag: empty, scriptDir: "/nowhere" })).toThrow(/marker/i);
   });
 
-  it("rejects an explicit flag path that does not exist, without falling back to a sibling", () => {
-    // scriptDir here resolves to a real ancestor of the actual project checkout, so a
-    // silently-successful sibling fallback would mask a typo'd --nimbus-root.
-    expect(() =>
-      resolveNimbusRoot({ flag: "/definitely/not/here", scriptDir: import.meta.dir }),
-    ).toThrow(/marker/i);
+  it("rejects an explicit flag that does not exist, even when a valid sibling checkout exists on disk", () => {
+    // Build a synthetic workspace containing a *real, valid* Nimbus sibling exactly
+    // where resolveNimbusRoot's sibling probe (resolve(scriptDir, "..", "..", name))
+    // would find it, then prove an explicit bogus --nimbus-root still fails loudly
+    // instead of silently falling through to that valid sibling. Fully hermetic: no
+    // dependency on this machine's actual checkout layout.
+    const workspace = mkdtempSync(join(tmpdir(), "workspace-"));
+    const validSibling = join(workspace, "Nimbus");
+    mkdirSync(join(validSibling, "packages", "mcp-connectors", "shared"), { recursive: true });
+    writeFileSync(
+      join(validSibling, "packages", "mcp-connectors", "shared", "mcp-tool-kit.ts"),
+      "",
+    );
+
+    const scriptDir = join(workspace, "some-project", "scripts");
+    mkdirSync(scriptDir, { recursive: true });
+
+    const bogusFlag = join(workspace, "definitely-not-here");
+
+    let thrown: unknown;
+    try {
+      resolveNimbusRoot({ flag: bogusFlag, scriptDir });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toMatch(/marker/i);
+    expect(message).toContain(bogusFlag);
   });
 
   it("lists every attempted path when nothing resolves", () => {

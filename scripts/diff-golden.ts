@@ -51,15 +51,35 @@ function main(): void {
     .map((f) => f.replace(/\.spec\.json$/, ""));
   const selected = names.length > 0 ? names : all;
 
+  // An empty comparison set must never report success: that is the same silent-pass
+  // failure mode this harness exists to prevent, just triggered by a hollow fixture
+  // list instead of a missing monorepo.
+  if (selected.length === 0) {
+    if (names.length === 0) {
+      throw new Error(
+        `No fixtures found in ${fixturesDir} (expected files matching *.spec.json). ` +
+          `Refusing to report a pass with nothing compared.`,
+      );
+    }
+    throw new Error(
+      `No fixture name(s) matched anything to run in ${fixturesDir}: ${names.join(", ")}`,
+    );
+  }
+
   console.log(`Nimbus root: ${root}`);
   console.log(`Biome:       ${biomeVersion()}\n`);
 
   let failures = 0;
 
   for (const name of selected) {
-    const spec = parseSpec(
-      JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")),
-    );
+    const specPath = join(fixturesDir, `${name}.spec.json`);
+    let specRaw: string;
+    try {
+      specRaw = readFileSync(specPath, "utf8");
+    } catch {
+      throw new Error(`No fixture named "${name}" — expected ${specPath}`);
+    }
+    const spec = parseSpec(JSON.parse(specRaw));
     const files: GeneratedFile[] = formatAll(generate(spec));
     const realDir = join(root, "packages", "mcp-connectors", name);
 
