@@ -114,4 +114,62 @@ describe("parseSpec", () => {
     };
     expect(() => parseSpec(bad)).toThrow(/headerNames/);
   });
+
+  it("rejects an argument name that is not a valid JS identifier (hyphenated)", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { "per-page": { type: "string" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/identifier/);
+  });
+
+  it("accepts valid argument names like camelCase and underscore prefixed", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [
+        { ...MINIMAL.tools[0], args: { perPage: { type: "string" }, _x: { type: "string" } } },
+      ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects a boolean argument with a default value", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { flag: { type: "boolean", default: true } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/default/);
+  });
+
+  it("accepts a boolean argument without a default (optional only)", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { only_open: { type: "boolean", optional: true } } }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects a boolean argument with min", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { flag: { type: "boolean", min: 1 } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/"min"\/"max"/);
+  });
+
+  it("accepts string argument with min and max", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { name: { type: "string", min: 1, max: 10 } } }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects a string argument with int flag", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { name: { type: "string", int: true } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/"int"/);
+  });
 });

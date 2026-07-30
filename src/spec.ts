@@ -7,24 +7,39 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
   hitl: "HITL declaration is Stage C",
 };
 
-export const ArgSchema = z.strictObject({
-  type: z.enum(["string", "number", "boolean"]),
-  optional: z.boolean().default(false),
-  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-  /** Hoisted const name. Cosmetic; defaults to the arg's own key. */
-  local: z.string().min(1).optional(),
-  min: z.number().optional(),
-  max: z.number().optional(),
-  int: z.boolean().default(false),
-});
+export const ArgSchema = z
+  .strictObject({
+    type: z.enum(["string", "number", "boolean"]),
+    optional: z.boolean().default(false),
+    default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    /** Hoisted const name. Cosmetic; defaults to the arg's own key. */
+    local: z.string().min(1).optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    int: z.boolean().default(false),
+  })
+  .refine((a) => !(a.type === "boolean" && a.default !== undefined), {
+    message: 'a boolean argument cannot declare "default" — the generated hoist ignores it',
+  })
+  .refine((a) => a.type !== "boolean" || (a.min === undefined && a.max === undefined), {
+    message: '"min"/"max" are not valid on a boolean argument',
+  })
+  .refine((a) => a.type === "number" || !a.int, {
+    message: '"int" is only valid on a number argument',
+  });
 
-export const ToolSchema = z.strictObject({
-  name: z.string().min(1),
-  description: z.string().min(1),
-  args: z.record(z.string(), ArgSchema).default({}),
-  path: z.string().optional(),
-  impl: z.enum(["get", "stub"]).default("get"),
-});
+export const ToolSchema = z
+  .strictObject({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    args: z.record(z.string(), ArgSchema).default({}),
+    path: z.string().optional(),
+    impl: z.enum(["get", "stub"]).default("get"),
+  })
+  .refine((t) => Object.keys(t.args).every((key) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)), {
+    message: "argument name must be a valid JS identifier",
+    path: ["args"],
+  });
 
 export const EnvSchema = z
   .strictObject({
