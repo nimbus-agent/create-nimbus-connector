@@ -140,29 +140,41 @@ let available = false;
 export async function initFormatter(): Promise<void> {
   if (initialised) return;
   initialised = true;
+
+  // ★ The try wraps the dynamic import and NOTHING ELSE. Verified against the installed
+  // @biomejs/js-api: applyConfiguration() throws on a malformed config value. If that call
+  // sat inside this try, a typo in the configuration below would be caught and reported as
+  // available=false — telling a CLI user "Biome is not installed" and handing them
+  // unformatted output, and telling a developer to run `bun install` for a package that is
+  // already there. That is the exact silent-degradation class this task exists to remove.
+  let BiomeCtor: new () => BiomeLike;
   try {
-    const { Biome } = (await import("@biomejs/js-api/nodejs")) as {
+    ({ Biome: BiomeCtor } = (await import("@biomejs/js-api/nodejs")) as {
       Biome: new () => BiomeLike;
-    };
-    const biome = new Biome();
-    const { projectKey } = biome.openProject();
-    biome.applyConfiguration(projectKey, {
-      formatter: {
-        enabled: true,
-        indentStyle: "space",
-        indentWidth: 2,
-        lineWidth: 100,
-        lineEnding: "lf",
-      },
-      javascript: {
-        formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
-      },
     });
-    cached = { biome, projectKey };
-    available = true;
   } catch {
+    // The ONLY tolerated failure: the optional dependency is absent.
     available = false;
+    return;
   }
+
+  // Past here Biome is present, so any failure is a programming error — let it propagate.
+  const biome = new BiomeCtor();
+  const { projectKey } = biome.openProject();
+  biome.applyConfiguration(projectKey, {
+    formatter: {
+      enabled: true,
+      indentStyle: "space",
+      indentWidth: 2,
+      lineWidth: 100,
+      lineEnding: "lf",
+    },
+    javascript: {
+      formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
+    },
+  });
+  cached = { biome, projectKey };
+  available = true;
 }
 
 export function formatterAvailable(): boolean {
