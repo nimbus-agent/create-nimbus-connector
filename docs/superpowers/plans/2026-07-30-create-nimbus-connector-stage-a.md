@@ -1170,6 +1170,20 @@ export type RenderContext = {
 const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
 const PLACEHOLDER = /\$\{([a-z]+)\.([A-Za-z0-9_]+)(?:\|([a-z]+))?\}/g;
 
+/**
+ * ★ Malformed placeholders MUST be a loud parse error, never silent corruption.
+ *
+ * The regex below only matches well-formed placeholders. Anything placeholder-LIKE that fails
+ * to match (case-typo'd mode `${arg.b|ENC}`, missing dot `${arg}`, uppercase namespace
+ * `${ARG.b}`, unterminated `${arg.b`) would otherwise fall through into a literal segment —
+ * and since literal escaping handles backslash and backtick but NOT `$`, it would be re-emitted
+ * verbatim inside a backtick template where the JS parser reads it as a real interpolation.
+ * Verified: that produces generated code failing with `ReferenceError: arg is not defined`.
+ *
+ * Do NOT fix this by escaping `$` in renderPath. A `${` in a path literal is essentially always
+ * an authoring error; escaping it would emit a connector that silently requests the wrong URL
+ * instead of failing at generation time.
+ */
 export function parsePathTemplate(tpl: string): PathSegment[] {
   const out: PathSegment[] = [];
   let last = 0;
@@ -1190,6 +1204,18 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
     last = at + whole.length;
   }
   if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+
+  // Any `${` surviving in a literal means a placeholder-like fragment was not recognised.
+  for (const seg of out) {
+    if (seg.kind === "literal" && seg.text.includes("${")) {
+      throw new Error(
+        `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
+          "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
+          "namespace and mode must be lowercase.",
+      );
+    }
+  }
+
   return out;
 }
 
