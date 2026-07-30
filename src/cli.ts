@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";
-import { formatAll } from "./format.ts";
+import { formatAll, formatterAvailable, initFormatter } from "./format.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
@@ -63,9 +63,19 @@ export async function main(argv: readonly string[]): Promise<void> {
       ? parseSpec(JSON.parse(await Bun.file(opts.specPath).text()))
       : promptForSpec(opts.name);
 
+  const outDir = opts.outDir ?? join("packages", "mcp-connectors", spec.name);
+
+  await initFormatter();
+  if (!formatterAvailable()) {
+    console.error(
+      "note: @biomejs/biome is not installed, so the generated files are unformatted.\n" +
+        "      they are valid TypeScript and will compile as-is. to format them:\n\n" +
+        `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
+    );
+  }
+
   // generate() and formatAll() are synchronous — do not await them.
   const files = formatAll(generate(spec));
-  const outDir = opts.outDir ?? join("packages", "mcp-connectors", spec.name);
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);

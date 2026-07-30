@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeValue } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
-import { biomeVersion, formatAll } from "../src/format.ts";
+import { biomeVersion, formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
 import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { classify, loadExpectations } from "../src/golden/expectations.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
@@ -50,7 +50,16 @@ function passNote(expected: number, total: number, stubs: number): string {
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  await initFormatter();
+  if (!formatterAvailable()) {
+    throw new Error(
+      "@biomejs/biome is required here — byte-exactness is the point of this check, and " +
+        "unformatted output would produce spurious diffs that look like emitter regressions. " +
+        "Run `bun install` to restore the optional dependency.",
+    );
+  }
+
   const { names, nimbusRoot } = parseArgs(process.argv.slice(2));
   const root = resolveNimbusRoot({
     flag: nimbusRoot,
@@ -158,4 +167,4 @@ function main(): void {
   console.log("\nAll fixtures match their declared expectations.");
 }
 
-main();
+await main();

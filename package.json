@@ -12,9 +12,11 @@
     "acceptance": "bun scripts/acceptance.ts"
   },
   "dependencies": {
-    "@biomejs/js-api": "^6.0.0",
-    "@biomejs/wasm-nodejs": "^2.5.6",
     "zod": "^4.4.2"
+  },
+  "optionalDependencies": {
+    "@biomejs/js-api": "^6.0.0",
+    "@biomejs/wasm-nodejs": "^2.5.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",

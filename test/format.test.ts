@@ -1,5 +1,42 @@
-import { describe, expect, it } from "bun:test";
-import { biomeVersion, formatAll } from "../src/format.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { biomeVersion, formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
+
+beforeAll(async () => {
+  await initFormatter();
+});
+
+describe("initFormatter", () => {
+  it("is idempotent", async () => {
+    await initFormatter();
+    await initFormatter();
+    expect(formatterAvailable()).toBe(true);
+  });
+
+  it("reports the formatter as available in this repo", () => {
+    expect(formatterAvailable()).toBe(true);
+  });
+});
+
+describe("formatAll before init", () => {
+  // Run in a subprocess with a pristine module registry. A query-string import
+  // (`../src/format.ts?x=1`) does currently give a fresh module in Bun 1.3.14 — verified —
+  // but that is loader behaviour, not a documented contract, and this test exists precisely
+  // to pin a guarantee. A subprocess also tests what a real caller hits: a program that
+  // forgot to init. No test-only reset export is added to production code.
+  it("throws a message naming initFormatter", () => {
+    const r = Bun.spawnSync(
+      [
+        "bun",
+        "-e",
+        'const { formatAll } = await import("./src/format.ts");' +
+          'formatAll([{ path: ["a.ts"], content: "const x=1\\n" }]);',
+      ],
+      { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toMatch(/initFormatter/);
+  });
+});
 
 describe("formatAll", () => {
   it("formats TypeScript to the Nimbus house style", () => {
