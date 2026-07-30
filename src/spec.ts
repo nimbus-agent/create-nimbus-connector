@@ -116,6 +116,17 @@ export const ConnectorSpecSchema = z
       message:
         "a hand-rolled connector must declare exactly one of fetchHelper.headers or fetchHelper.inlineHeaders",
     },
+  )
+  .refine(
+    (s) =>
+      s.style !== "rest-kit" ||
+      (s.fetchHelper.headers === undefined &&
+        s.fetchHelper.normalizeLeadingSlash === false &&
+        s.fetchHelper.jsonFallbackRaw === false),
+    {
+      message:
+        'fetchHelper.headers, .normalizeLeadingSlash and .jsonFallbackRaw apply only to style "hand-rolled" — the rest-kit helper ignores them',
+    },
   );
 
 export type EnvSpec = z.infer<typeof EnvSchema>;

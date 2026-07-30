@@ -320,6 +320,72 @@ describe("parseSpec", () => {
     expect(() => parseSpec(ok)).not.toThrow();
   });
 
+  it("rejects a rest-kit spec whose fetchHelper declares headers (hand-rolled-only field)", () => {
+    const { style, ...rest } = MINIMAL;
+    const bad = {
+      ...rest,
+      style: "rest-kit",
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10", headers: "h" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/hand-rolled/);
+  });
+
+  it("rejects a rest-kit spec whose fetchHelper sets normalizeLeadingSlash: true", () => {
+    const { style, ...rest } = MINIMAL;
+    const bad = {
+      ...rest,
+      style: "rest-kit",
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        normalizeLeadingSlash: true,
+      },
+    };
+    expect(() => parseSpec(bad)).toThrow(/hand-rolled/);
+  });
+
+  it("rejects a rest-kit spec whose fetchHelper sets jsonFallbackRaw: true", () => {
+    const { style, ...rest } = MINIMAL;
+    const bad = {
+      ...rest,
+      style: "rest-kit",
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        jsonFallbackRaw: true,
+      },
+    };
+    expect(() => parseSpec(bad)).toThrow(/hand-rolled/);
+  });
+
+  it("accepts a rest-kit spec whose fetchHelper declares only inlineHeaders", () => {
+    const { style, ...rest } = MINIMAL;
+    const ok = {
+      ...rest,
+      style: "rest-kit",
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { "X-Extra": "yes" },
+      },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("accepts a hand-rolled spec with normalizeLeadingSlash and jsonFallbackRaw both true (grafana shape)", () => {
+    const ok = {
+      ...MINIMAL,
+      fetchHelper: {
+        local: "grafanaGet",
+        base: "${env.baseUrl}",
+        headers: "authHeaders",
+        normalizeLeadingSlash: true,
+        jsonFallbackRaw: true,
+      },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
   it("accepts one var with transform and suffix and no auth", () => {
     const ok = {
       ...MINIMAL,
