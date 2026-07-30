@@ -17,6 +17,8 @@
 - **Emitted package deps, exactly:** `"@modelcontextprotocol/sdk": "1.30.0"`, `"@nimbus-dev/sdk": "^1.8.1"`, `"zod": "^4.4.2"`. Emitted `devDependencies`: `{"@types/bun": "latest"}`.
 - **Emitted package license:** `AGPL-3.0-only`. Emitted `private: false`, `type: "module"`.
 - **Biome pins:** `@biomejs/wasm-nodejs@^2.5.6`, `@biomejs/js-api@^6.0.0`. The monorepo has Biome **2.5.6** installed. Do **not** key off the `2.5.0` in `biome.json`'s `$schema` URL — that is the schema version, not the tool version.
+- **The WASM backend is fully self-contained and offline-safe.** `@biomejs/wasm-nodejs` ships `biome_wasm_bg.wasm` (**37.6 MB**) inside the npm tarball. There is no network fetch at init, so no proxy or air-gap setup is needed in CI. Verified under Bun 1.3.14: `new Biome()` from `@biomejs/js-api/nodejs` initialises with no flags and no runtime download.
+  - The 37.6 MB install cost is acceptable for Stage A (a repo-local dev tool) but is a real consideration for a published `bunx create-nimbus-connector`. Flag it for the Stage B distribution decision; do not solve it here.
 - **Biome format config (apply programmatically, do not rely on file discovery):** `indentStyle: "space"`, `indentWidth: 2`, `lineWidth: 100`, `lineEnding: "lf"`, `quoteStyle: "double"`, `trailingCommas: "all"`, `semicolons: "always"`.
 - **★ Biome preserves object-literal expansion.** Verified against Biome 2.5.6: an object written expanded stays expanded and one written inline stays inline, even when both fit in 100 columns. **The emitter must therefore choose expansion explicitly** — formatting will not normalise it. This is why `grafana`'s fetch helper differs from `datadog`'s.
 - **HTTP error snippet length is the constant `400`** in all four fixtures. Not a spec field.
@@ -586,26 +588,24 @@ git commit -m "feat(validate): flat identifier-uniqueness check"
 ```ts
 // test/format.test.ts
 import { describe, expect, it } from "bun:test";
-import { formatAll } from "../src/format.ts";
+import { biomeVersion, formatAll } from "../src/format.ts";
 
 describe("formatAll", () => {
-  it("formats TypeScript to the Nimbus house style", async () => {
-    const [out] = await formatAll([
-      { path: ["src", "server.ts"], content: "const x = {a:1,b:2}\n" },
-    ]);
-    expect(out?.content).toBe('const x = { a: 1, b: 2 };\n');
+  it("formats TypeScript to the Nimbus house style", () => {
+    const [out] = formatAll([{ path: ["src", "server.ts"], content: "const x = {a:1,b:2}\n" }]);
+    expect(out?.content).toBe("const x = { a: 1, b: 2 };\n");
   });
 
-  it("leaves non-TypeScript files untouched", async () => {
+  it("leaves non-TypeScript files untouched", () => {
     const input = { path: ["README.md"], content: "#   Title\n\n\n" };
-    const [out] = await formatAll([input]);
+    const [out] = formatAll([input]);
     expect(out?.content).toBe(input.content);
   });
 
-  it("preserves object expansion chosen by the emitter", async () => {
-    const expanded = "const r = fetch(u, {\n  headers: h(),\n});\n";
-    const inline = "const r = fetch(u, { headers: h() });\n";
-    const [a, b] = await formatAll([
+  it("preserves object expansion chosen by the emitter", () => {
+    const expanded = "const r = await fetch(u, {\n  headers: h(),\n});\n";
+    const inline = "const r = await fetch(u, { headers: h() });\n";
+    const [a, b] = formatAll([
       { path: ["a.ts"], content: expanded },
       { path: ["b.ts"], content: inline },
     ]);
@@ -613,10 +613,23 @@ describe("formatAll", () => {
     expect(b?.content).toBe(inline);
   });
 
-  it("breaks lines longer than 100 columns", async () => {
+  it("breaks lines longer than 100 columns", () => {
     const long = `const value = someFunction(${"argument, ".repeat(12)}last);\n`;
-    const [out] = await formatAll([{ path: ["c.ts"], content: long }]);
+    const [out] = formatAll([{ path: ["c.ts"], content: long }]);
     expect(out?.content.split("\n").every((l) => l.length <= 100)).toBe(true);
+  });
+
+  it("round-trips a newrelic-shaped concise-arrow registration unchanged", () => {
+    const reg =
+      'reg("newrelic_application_list", "List APM applications.", z.object({}), async () =>\n' +
+      '  jsonResult(await nrGet("/v2/applications.json")),\n);\n';
+    expect(formatAll([{ path: ["d.ts"], content: reg }])[0]?.content).toBe(reg);
+  });
+});
+
+describe("biomeVersion", () => {
+  it("reports the resolved backend version", () => {
+    expect(biomeVersion()).toMatch(/^2\.5\./);
   });
 });
 ```
@@ -629,17 +642,25 @@ Expected: FAIL — cannot resolve `../src/format.ts`.
 - [ ] **Step 3: Implement `src/format.ts`**
 
 ```ts
-import { Biome, Distribution } from "@biomejs/js-api";
+import { Biome } from "@biomejs/js-api/nodejs";
+import { createRequire } from "node:module";
 import type { GeneratedFile } from "./types.ts";
 
-type Instance = { biome: Biome; version: string };
-let cached: Promise<Instance> | undefined;
+type Instance = { biome: Biome; projectKey: ReturnType<Biome["openProject"]>["projectKey"] };
+let cached: Instance | undefined;
 
-/** Load the WASM backend once and apply the monorepo's formatter settings programmatically. */
-function instance(): Promise<Instance> {
-  cached ??= (async () => {
-    const biome = await Biome.create({ distribution: Distribution.NODE });
-    biome.applyConfiguration({
+/**
+ * Load the WASM backend once and apply the monorepo's formatter settings.
+ *
+ * js-api v6 is project-scoped: `openProject()` returns a key that every later
+ * call must pass. The `/nodejs` subpath exports a synchronous constructor, so
+ * no async init and no Distribution enum are needed.
+ */
+function instance(): Instance {
+  if (cached === undefined) {
+    const biome = new Biome();
+    const { projectKey } = biome.openProject();
+    biome.applyConfiguration(projectKey, {
       formatter: {
         enabled: true,
         indentStyle: "space",
@@ -651,33 +672,43 @@ function instance(): Promise<Instance> {
         formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
       },
     });
-    return { biome, version: biome.version ?? "unknown" };
-  })();
+    cached = { biome, projectKey };
+  }
   return cached;
 }
 
-export async function biomeVersion(): Promise<string> {
-  return (await instance()).version;
+/** BiomeCommon exposes no version field; read it from the resolved backend package. */
+export function biomeVersion(): string {
+  const require = createRequire(import.meta.url);
+  return (require("@biomejs/wasm-nodejs/package.json") as { version: string }).version;
 }
 
-export async function formatAll(files: readonly GeneratedFile[]): Promise<GeneratedFile[]> {
-  const { biome } = await instance();
+export function formatAll(files: readonly GeneratedFile[]): GeneratedFile[] {
+  const { biome, projectKey } = instance();
   return files.map((f) => {
     const name = f.path[f.path.length - 1] ?? "";
-    if (!name.endsWith(".ts")) return { ...f };
-    const filePath = f.path.join("/");
-    const { content } = biome.formatContent(f.content, { filePath });
+    if (!name.endsWith(".ts")) return { path: f.path, content: f.content };
+    const { content } = biome.formatContent(projectKey, f.content, {
+      filePath: f.path.join("/"),
+    });
     return { path: f.path, content };
   });
 }
 ```
 
+> **Verified against the real packages under Bun 1.3.14** — `js-api@6.0.0` + `wasm-nodejs@2.5.6`. All three call shapes below are load-bearing and were wrong in an earlier draft of this plan:
+> - `applyConfiguration` and `formatContent` both take **`projectKey` as their first argument**.
+> - `openProject()` must be called to obtain that key.
+> - There is **no `biome.version`** property.
+>
+> `formatAll` and `biomeVersion` are **synchronous** — the `/nodejs` constructor needs no await. Callers in Tasks 14 and 17 must not `await` them.
+
 - [ ] **Step 4: Run tests**
 
 Run: `bun test test/format.test.ts`
-Expected: PASS (4 tests).
+Expected: PASS (6 tests).
 
-> If `Biome.create` / `applyConfiguration` / `formatContent` differ in `@biomejs/js-api@6`, read `node_modules/@biomejs/js-api/dist/index.d.ts` and adapt. The **behaviour** the tests assert is the contract; the API surface is not. Do not change the assertions — especially the expansion-preservation one, which was verified against Biome 2.5.6 and is load-bearing for `grafana`.
+> Every assertion here was verified empirically against `js-api@6.0.0` + `wasm-nodejs@2.5.6` on Bun 1.3.14 before this plan was written. Do not weaken them — especially expansion-preservation, which is load-bearing for `grafana` in Task 15, and the `reg()` round-trip, which is the earliest signal that Task 14 can reach zero diff.
 
 - [ ] **Step 5: Commit**
 
@@ -2436,13 +2467,13 @@ async function main(): Promise<void> {
   const selected = names.length > 0 ? names : all;
 
   console.log(`Nimbus root: ${root}`);
-  console.log(`Biome:       ${await biomeVersion()}\n`);
+  console.log(`Biome:       ${biomeVersion()}\n`);
 
   let failures = 0;
 
   for (const name of selected) {
     const spec = parseSpec(JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")));
-    const files: GeneratedFile[] = await formatAll(generate(spec));
+    const files: GeneratedFile[] = formatAll(generate(spec));
     const realDir = join(root, "packages", "mcp-connectors", name);
 
     const stubs = spec.tools.filter((t) => t.impl === "stub").length;
@@ -2717,7 +2748,11 @@ git commit -m "feat(golden): style R fixtures with documented coverage gaps"
   - `renderTree(files): string` — the `--dry-run` output
   - `writeFiles(files, outDir): Promise<void>`
 
-**Background.** Prompts collect: connector name, display name, service label, base API URL, auth type (API token / bearer / basic), credential env var name, and read tool names. They build a `ConnectorSpec` which then follows the exact same path as `--spec`. Use `prompts` via Bun's stdin or a minimal hand-rolled reader — do **not** add a dependency for this.
+**Background.** Prompts collect: connector name, display name, service label, base API URL, auth type (API token / bearer / basic), credential env var name, and read tool names. They build a `ConnectorSpec` which then follows the exact same path as `--spec`. Do **not** add a dependency for this.
+
+Use Bun's global **`prompt(message, default)`**. It is synchronous, prints the ` [default]` hint itself, and returns the default on empty input or EOF — all verified on Bun 1.3.14.
+
+Do not use `for await (const line of console)`. Bun *does* make `console` async-iterable, so it is not invalid — but each call to a helper built on it opens a fresh iterator over the same stdin stream, and returning early from the loop closes that iterator. Across the nine sequential questions here that is a real hazard, and `prompt()` avoids the whole class of problem.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2823,9 +2858,9 @@ export async function main(argv: readonly string[]): Promise<void> {
   const spec =
     opts.specPath !== undefined
       ? parseSpec(JSON.parse(await Bun.file(opts.specPath).text()))
-      : await promptForSpec(opts.name);
+      : promptForSpec(opts.name);
 
-  const files = await formatAll(generate(spec));
+  const files = formatAll(generate(spec));
   const outDir = opts.outDir ?? join("packages", "mcp-connectors", spec.name);
 
   if (opts.dryRun) {
@@ -2848,13 +2883,13 @@ if (import.meta.main) {
 ```ts
 import { parseSpec, type ConnectorSpec } from "./spec.ts";
 
-async function ask(question: string, fallback = ""): Promise<string> {
-  process.stdout.write(fallback === "" ? `${question}: ` : `${question} [${fallback}]: `);
-  for await (const line of console) {
-    const v = line.trim();
-    return v === "" ? fallback : v;
-  }
-  return fallback;
+/**
+ * Bun implements the browser `prompt(message, default)`: synchronous, prints
+ * the ` [default]` hint itself, and returns the default on empty input or EOF.
+ * Verified on Bun 1.3.14.
+ */
+function ask(question: string, fallback = ""): string {
+  return prompt(question, fallback) ?? fallback;
 }
 
 const AUTH_HEADER: Record<string, "bearer" | "headers"> = {
@@ -2863,16 +2898,16 @@ const AUTH_HEADER: Record<string, "bearer" | "headers"> = {
   basic: "headers",
 };
 
-export async function promptForSpec(seedName?: string): Promise<ConnectorSpec> {
-  const name = seedName ?? (await ask("Connector name (lower-kebab-case)"));
-  const displayName = await ask("Display name", name);
-  const serviceLabel = await ask("Service label used in error messages", displayName);
-  const description = await ask("Description", `${displayName} connector. Read-focused.`);
-  const baseUrl = await ask("Base API URL", `https://api.${name}.com`);
-  const authKind = await ask("Auth type (bearer | token | basic)", "bearer");
-  const envVar = await ask("Credential env var", `${name.toUpperCase().replaceAll("-", "_")}_TOKEN`);
-  const headerName = authKind === "bearer" ? undefined : await ask("Header name", "X-Api-Key");
-  const toolCsv = await ask("Read tool names (comma-separated)", `${name}_list`);
+export function promptForSpec(seedName?: string): ConnectorSpec {
+  const name = seedName ?? ask("Connector name (lower-kebab-case)");
+  const displayName = ask("Display name", name);
+  const serviceLabel = ask("Service label used in error messages", displayName);
+  const description = ask("Description", `${displayName} connector. Read-focused.`);
+  const baseUrl = ask("Base API URL", `https://api.${name}.com`);
+  const authKind = ask("Auth type (bearer | token | basic)", "bearer");
+  const envVar = ask("Credential env var", `${name.toUpperCase().replaceAll("-", "_")}_TOKEN`);
+  const headerName = authKind === "bearer" ? undefined : ask("Header name", "X-Api-Key");
+  const toolCsv = ask("Read tool names (comma-separated)", `${name}_list`);
 
   const auth = AUTH_HEADER[authKind] ?? "bearer";
   const host = new URL(baseUrl).host;
@@ -2924,68 +2959,114 @@ git commit -m "feat(cli): interactive prompts, --spec and --dry-run"
 ### Task 18: End-to-end acceptance in the monorepo
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md` (record results)
-- Create: `README.md` (this repo's own)
+- Create: `fixtures/zzscratch.spec.json`, `scripts/acceptance.ts`, `README.md` (this repo's own)
+- Modify: `package.json` (add the `acceptance` script), `docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md` (record results)
 
-**Background.** This is the only task that proves criterion 3 — that a generated connector actually compiles and lints inside Nimbus. Do this on a scratch connector name, and **remove it from the monorepo afterwards**; never leave generated output in the Nimbus working tree.
+**Background.** This is the only task that proves criterion 3 — that a generated connector actually compiles and lints inside Nimbus. It is also the only task that **writes into someone else's repository**, so cleanup must be guaranteed rather than a final step that a crash can skip.
 
-- [ ] **Step 1: Generate a fresh connector into the monorepo**
+- [ ] **Step 1: Write `fixtures/zzscratch.spec.json`**
 
-```bash
-bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir C:/gitrep/Nimbus/packages/mcp-connectors/zzscratch
+A purpose-built scratch spec whose `name` is `zzscratch`, so the emitted `package.json` name and README slug are self-consistent. Copy the shape of `fixtures/sentry.spec.json`, changing `name`, `title`, `displayName`, `serviceLabel`, and the env var names to `ZZSCRATCH_*`.
+
+- [ ] **Step 2: Write `scripts/acceptance.ts` with guaranteed cleanup**
+
+```ts
+import { rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { generate } from "../src/emit/index.ts";
+import { formatAll } from "../src/format.ts";
+import { resolveNimbusRoot } from "../src/golden/resolve.ts";
+import { parseSpec } from "../src/spec.ts";
+import { writeFiles } from "../src/cli.ts";
+
+const NAME = "zzscratch";
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+
+function run(cmd: string[], cwd: string): { ok: boolean; output: string } {
+  const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  return {
+    ok: r.exitCode === 0,
+    output: `${r.stdout.toString()}${r.stderr.toString()}`.trim(),
+  };
+}
+
+const root = resolveNimbusRoot({
+  flag: process.argv[2],
+  env: process.env["NIMBUS_ROOT"],
+  scriptDir,
+});
+const outDir = join(root, "packages", "mcp-connectors", NAME);
+
+const checks: { name: string; ok: boolean; output: string }[] = [];
+
+try {
+  const spec = parseSpec(
+    JSON.parse(await Bun.file(join(scriptDir, "..", "fixtures", `${NAME}.spec.json`)).text()),
+  );
+  await writeFiles(formatAll(generate(spec)), outDir);
+
+  checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
+  checks.push({
+    name: "biome check",
+    ...run(["bunx", "biome", "check", `packages/mcp-connectors/${NAME}/src/`], root),
+  });
+  checks.push({
+    name: "audit:package-readmes",
+    ...run(["bun", "run", "audit:package-readmes"], root),
+  });
+} finally {
+  // Runs even if generation threw or a check crashed. Never leave the monorepo dirty.
+  await rm(outDir, { recursive: true, force: true });
+}
+
+const status = run(["git", "status", "--short", "packages/mcp-connectors/"], root);
+checks.push({
+  name: "monorepo working tree clean",
+  ok: status.output === "",
+  output: status.output,
+});
+
+for (const c of checks) {
+  console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}`);
+  if (!c.ok && c.output !== "") console.log(c.output);
+}
+
+if (checks.some((c) => !c.ok)) process.exit(1);
+console.log("\nAll acceptance checks passed.");
 ```
 
-Then edit `zzscratch/package.json`'s `name` to `nimbus-mcp-zzscratch` if the spec name differs, or generate with a purpose-built scratch spec whose `name` is `zzscratch`.
+Add to `package.json` scripts: `"acceptance": "bun scripts/acceptance.ts"`.
 
-- [ ] **Step 2: Typecheck it inside the monorepo**
+- [ ] **Step 3: Run it**
 
-```bash
-cd C:/gitrep/Nimbus/packages/mcp-connectors/zzscratch && bunx tsc --noEmit
-```
-Expected: no errors. If the `../../shared/*` imports fail to resolve, the emitted import paths are wrong — fix the emitter, not the connector.
+Run: `bun run acceptance C:/gitrep/Nimbus`
+Expected: four `PASS` lines. If `tsc` fails on `../../shared/*` imports, the emitted import paths are wrong — fix the emitter, not the generated file.
 
-- [ ] **Step 3: Lint it inside the monorepo**
+- [ ] **Step 4: Verify cleanup survives failure**
 
-```bash
-cd C:/gitrep/Nimbus && bunx biome check packages/mcp-connectors/zzscratch/src/
-```
-Expected: no diagnostics.
+Temporarily break the generator (e.g. emit a syntax error from `emitServer`), run `bun run acceptance C:/gitrep/Nimbus` again, and confirm it exits non-zero **and** that `git -C C:/gitrep/Nimbus status --short` is still empty. Then revert the break. Cleanup that only works on the happy path is not cleanup.
 
-- [ ] **Step 4: Run the README audit**
-
-```bash
-cd C:/gitrep/Nimbus && bun run audit:package-readmes
-```
-Expected: exits 0. A missing H2 in the generated README fails this.
-
-- [ ] **Step 5: Remove the scratch connector**
-
-```bash
-rm -rf C:/gitrep/Nimbus/packages/mcp-connectors/zzscratch
-cd C:/gitrep/Nimbus && git status --short
-```
-Expected: the Nimbus working tree is back to how it started. Confirm this explicitly — leaving generated files in someone else's repo is not acceptable.
-
-- [ ] **Step 6: Write this repo's `README.md`**
+- [ ] **Step 5: Write this repo's `README.md`**
 
 Cover: what it does, `bunx create-nimbus-connector <name>`, `--spec`, `--dry-run`, the Stage A boundary (single GET, read tools, monorepo-internal), how to run the harness including `--nimbus-root`, and a pointer to the design doc.
 
-- [ ] **Step 7: Record acceptance results in the design doc**
+- [ ] **Step 6: Record acceptance results in the design doc**
 
 Under "Acceptance criteria", state for each of the five criteria whether it passed, with the command run and the observed output. If a criterion did not pass, say so plainly and describe what is missing — do not quietly restate the criterion.
 
-- [ ] **Step 8: Final full verification**
+- [ ] **Step 7: Final full verification**
 
 ```bash
-bun test && bunx tsc --noEmit && bunx biome check src/ test/ scripts/ && bun run diff:golden --nimbus-root C:/gitrep/Nimbus
+bun test && bunx tsc --noEmit && bunx biome check src/ test/ scripts/ && bun run diff:golden --nimbus-root C:/gitrep/Nimbus && bun run acceptance C:/gitrep/Nimbus
 ```
-Expected: all green; four fixtures byte-identical.
+Expected: all green; four fixtures byte-identical; four acceptance checks pass.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add README.md docs/
-git commit -m "docs: Stage A acceptance results and repo README"
+git add README.md docs/ scripts/acceptance.ts fixtures/zzscratch.spec.json package.json
+git commit -m "feat: acceptance harness with guaranteed monorepo cleanup"
 ```
 
 ---
@@ -3015,6 +3096,22 @@ git commit -m "docs: Stage A acceptance results and repo README"
 | CLI, `--dry-run`, prompts | 17 |
 
 No spec section is unimplemented.
+
+**Corrections applied after plan review (all verified empirically, not reasoned about):**
+
+Probe run: `js-api@6.0.0` + `wasm-nodejs@2.5.6` on **Bun 1.3.14**.
+
+| Finding | Result |
+|---|---|
+| Does `@biomejs/wasm-nodejs` init under Bun without flags? | **Yes.** `new Biome()` from `@biomejs/js-api/nodejs` works. No CLI or `wasm-web` fallback needed. |
+| Is the WASM self-contained / offline-safe? | **Yes.** `biome_wasm_bg.wasm` (37.6 MB) ships in the tarball; no network fetch at init. |
+| `js-api@6` call shapes | **Task 4 was wrong.** `applyConfiguration` and `formatContent` both take `projectKey` first, obtained from `openProject()`. There is no `biome.version`; read it from `@biomejs/wasm-nodejs/package.json`. |
+| `formatAll` async? | **No.** The `/nodejs` constructor is synchronous, so `formatAll`/`biomeVersion` are sync. Callers in Tasks 14, 17, 18 updated. |
+| Is `for await (const line of console)` valid in Bun? | **Yes** — `console[Symbol.asyncIterator]` is a function, so the review's premise was wrong for Bun (right for Node). Switched to `prompt()` anyway: it is synchronous, prints the `[default]` hint itself, returns the default on EOF, and avoids the repeated-iterator-over-stdin hazard across nine sequential questions. |
+| Does `prompt(msg, default)` honour the default? | **Yes**, including on EOF. |
+| Does a `newrelic`-shaped `reg()` call round-trip through the formatter unchanged? | **Yes** — earliest evidence Task 14 can reach zero diff. Added as a Task 4 test. |
+
+Task 18 was additionally restructured into `scripts/acceptance.ts` with `try/finally`, so the scratch connector is removed from the Nimbus working tree even when generation or a check crashes, with an explicit step to verify cleanup survives failure.
 
 **Known deviations from the spec, deliberate:**
 
