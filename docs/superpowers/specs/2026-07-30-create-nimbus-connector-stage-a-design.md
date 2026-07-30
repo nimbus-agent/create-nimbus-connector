@@ -274,7 +274,7 @@ Whichever candidate is chosen must contain the marker file `packages/mcp-connect
 
 **If no candidate resolves, the harness prints every path it tried, states which check each one failed, and exits 1.** It is a standalone script, not a `bun:test` file, deliberately: `test/sandbox.test.ts` in the monorepo is wrapped in `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])` and that variable is set nowhere in `.github/`, `scripts/`, or `package.json` — all 79 of those tests skip on every CI run. That is the exact false-green this harness must not reproduce.
 
-Per fixture it reports each of the six files as identical / differing (with a unified diff) / missing, plus a stub count, and exits non-zero if any fixture regresses against a checked-in expectations file.
+Per fixture it reports each of the six files as identical / differing (with a unified diff) / missing, plus a stub count, and compares the identical-file count against `fixtures/expectations.json`. It exits non-zero if any fixture **diverges from its declared expectation in either direction** — a regression, or an unexpected improvement that means the expectations file and the criterion-2 gap report have gone stale. A fixture with no declared expectation throws rather than defaulting to a passing value. This is an expectation check, not an allow-list: nothing is forgiven, only recorded.
 
 ## Acceptance criteria
 
