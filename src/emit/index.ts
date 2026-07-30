@@ -17,10 +17,10 @@ export function generate(spec: ConnectorSpec, options: GenerateOptions = {}): Ge
   validateSpec(spec);
   return [
     emitServer(spec, target),
-    emitSandboxTest(target),
+    emitSandboxTest(),
     emitPackageJson(spec),
     emitManifest(spec),
-    emitTsconfig(target),
+    emitTsconfig(),
     emitReadme(spec),
   ];
 }

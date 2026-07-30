@@ -199,9 +199,30 @@ describe("generate target", () => {
 
   it("no relative import escapes a standalone package", () => {
     for (const spec of [handRolled, restKit]) {
-      for (const f of generate(spec, { target: "standalone" })) {
-        expect(f.content).not.toContain("../../");
+      const srcFiles = generate(spec, { target: "standalone" }).filter((f) => f.path[0] === "src");
+      expect(srcFiles.length).toBeGreaterThan(0);
+      for (const f of srcFiles) {
+        // Only import specifiers matter. A filesystem path such as
+        // resolve(fileURLToPath(import.meta.url), "../../nimbus.extension.json") is not an
+        // import and is legitimate inside the package — the manifest sits at the package root
+        // in both targets.
+        const specifiers = [...f.content.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+        for (const s of specifiers) {
+          expect(s?.startsWith("..")).toBe(false);
+        }
       }
+    }
+  });
+
+  it("sandbox tests are identical for both targets", () => {
+    for (const spec of [handRolled, restKit]) {
+      const monorepoSandbox = generate(spec).find(
+        (f) => displayPath(f.path) === "test/sandbox.test.ts",
+      )?.content;
+      const standaloneSandbox = generate(spec, { target: "standalone" }).find(
+        (f) => displayPath(f.path) === "test/sandbox.test.ts",
+      )?.content;
+      expect(monorepoSandbox).toBe(standaloneSandbox);
     }
   });
 });
