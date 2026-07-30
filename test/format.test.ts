@@ -36,6 +36,19 @@ describe("formatAll", () => {
       '  jsonResult(await nrGet("/v2/applications.json")),\n);\n';
     expect(formatAll([{ path: ["d.ts"], content: reg }])[0]?.content).toBe(reg);
   });
+
+  it("throws when fed syntactically invalid TypeScript, including the file path in the error", () => {
+    const broken = "const x = {a:1,,,;\nfunction (((\n";
+    expect(() => {
+      formatAll([{ path: ["src", "server.ts"], content: broken }]);
+    }).toThrow(/src\/server\.ts/);
+  });
+
+  it("formats valid code with no error diagnostics normally", () => {
+    const valid = "const x: number = 42;\n";
+    const [out] = formatAll([{ path: ["valid.ts"], content: valid }]);
+    expect(out?.content).toBeDefined();
+  });
 });
 
 describe("biomeVersion", () => {
