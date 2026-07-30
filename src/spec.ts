@@ -66,6 +66,18 @@ export const EnvSchema = z
   })
   .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
     message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
+  })
+  .refine(
+    (e) =>
+      e.auth === undefined ||
+      (e.transform === undefined && e.prefix === undefined && e.suffix === undefined),
+    {
+      message:
+        'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value',
+    },
+  )
+  .refine((e) => e.vars.length === 1 || e.auth === "headers", {
+    message: 'only an entry with auth: "headers" may declare multiple "vars"',
   });
 
 export const FetchHelperSchema = z.strictObject({

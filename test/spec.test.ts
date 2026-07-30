@@ -195,4 +195,102 @@ describe("parseSpec", () => {
       expect(msg).toContain("per-page");
     }
   });
+
+  it("rejects auth: bearer with prefix", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "tok", bindings: ["t"], auth: "bearer", prefix: "tok_" }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/auth/);
+  });
+
+  it("rejects auth: bearer with transform", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["X"],
+          local: "tok",
+          bindings: ["t"],
+          auth: "bearer",
+          transform: "stripTrailingSlash",
+        },
+      ],
+    };
+    expect(() => parseSpec(bad)).toThrow(/auth/);
+  });
+
+  it("rejects auth: headers with suffix", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["X"],
+          local: "h",
+          bindings: ["x"],
+          auth: "headers",
+          headerNames: ["X-Header"],
+          suffix: "/end",
+        },
+      ],
+    };
+    expect(() => parseSpec(bad)).toThrow(/auth/);
+  });
+
+  it("accepts auth: bearer with no transform/prefix/suffix", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [{ vars: ["SENTRY_AUTH_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("accepts two vars with auth: headers", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["DD_API_KEY", "DD_APP_KEY"],
+          local: "headers",
+          bindings: ["ak", "app"],
+          auth: "headers",
+          headerNames: ["DD-API-KEY", "DD-APPLICATION-KEY"],
+        },
+      ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects two vars with auth: bearer", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["A", "B"], local: "foo", bindings: ["a", "b"], auth: "bearer" }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/multiple/);
+  });
+
+  it("rejects two vars with no auth", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["A", "B"], local: "foo", bindings: ["a", "b"], required: true }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/multiple/);
+  });
+
+  it("accepts one var with transform and suffix and no auth", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["SENTRY_URL"],
+          local: "apiRoot",
+          bindings: ["u"],
+          default: "https://sentry.io",
+          transform: "stripTrailingSlash",
+          suffix: "/api/0",
+        },
+      ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
 });
