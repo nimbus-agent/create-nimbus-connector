@@ -7,7 +7,6 @@ const PARAM = "p";
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   const schema = renderZodSchema(tool.args);
   const head = `${JSON.stringify(tool.name)}, ${JSON.stringify(tool.description)}, ${schema}`;
-  const hasArgs = Object.keys(tool.args).length > 0;
 
   if (tool.impl === "stub") {
     return [
@@ -15,7 +14,7 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       `  ${JSON.stringify(tool.name)},`,
       `  ${JSON.stringify(tool.description)},`,
       `  ${schema},`,
-      `  async (${hasArgs ? PARAM : ""}) => {`,
+      "  async () => {",
       `    throw new Error(${JSON.stringify(`${tool.name} is not implemented`)});`,
       "  },",
       ");",
@@ -27,12 +26,16 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   }
 
   const hoisted = hoistedLocals(tool.args);
-  const pathExpr = renderPath(parsePathTemplate(tool.path), { param: PARAM, hoisted });
+  const segments = parsePathTemplate(tool.path);
+  const needsParam =
+    hoisted.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
+
+  const pathExpr = renderPath(segments, { param: PARAM, hoisted });
   const call = `jsonResult(await ${spec.fetchHelper.local}(${pathExpr}))`;
 
   if (hoisted.size === 0) {
-    const param = hasArgs ? `(${PARAM})` : "()";
-    if (hasArgs) {
+    const param = needsParam ? `(${PARAM})` : "()";
+    if (needsParam) {
       return `reg(${head}, async ${param} => ${call},\n);`;
     }
     return `reg(${head}, async ${param} =>\n  ${call},\n);`;

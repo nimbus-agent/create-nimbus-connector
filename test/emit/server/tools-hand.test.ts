@@ -81,4 +81,78 @@ describe("renderHandRolledTools", () => {
     );
     expect(out.split("\n\n").length).toBe(2);
   });
+
+  it("stub tool with args emits no parameter", () => {
+    const out = renderHandRolledTools(
+      make([
+        {
+          name: "nr_write",
+          description: "Write data.",
+          args: { data: { type: "string", min: 1 } },
+          impl: "stub",
+        },
+      ]),
+    );
+    expect(out).toContain("async () => {");
+    expect(out).toContain('throw new Error("nr_write is not implemented");');
+  });
+
+  it("get tool with unreferenced argument emits no parameter", () => {
+    const out = renderHandRolledTools(
+      make([
+        {
+          name: "nr_unused_arg",
+          description: "Endpoint that ignores args.",
+          args: { unused: { type: "string", min: 1 } },
+          path: "/v2/data.json",
+        },
+      ]),
+    );
+    expect(out).toContain("async () =>");
+    expect(out).toContain('jsonResult(await nrGet("/v2/data.json")),');
+  });
+
+  it("get tool with referenced argument emits parameter", () => {
+    const out = renderHandRolledTools(
+      make([
+        {
+          name: "nr_ref_arg",
+          description: "Endpoint that uses args.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/v2/resource/${arg.id}",
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) => jsonResult(await nrGet(`/v2/resource/${p.id}`)),");
+  });
+
+  it("hoisted argument requires parameter for hoist line", () => {
+    const out = renderHandRolledTools(
+      make([
+        {
+          name: "nr_hoisted",
+          description: "Endpoint with hoisted arg.",
+          args: { enabled: { type: "boolean", optional: true } },
+          path: "/v2/data?enabled=${arg.enabled|bool}",
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) => {");
+    expect(out).toContain('const enabled = p.enabled === true ? "true" : "false";');
+  });
+
+  it("literal p. in path with unreferenced arg emits no parameter", () => {
+    const out = renderHandRolledTools(
+      make([
+        {
+          name: "nr_literal_p",
+          description: "File endpoint.",
+          args: { unused: { type: "string", min: 1 } },
+          path: "/files/p.json",
+        },
+      ]),
+    );
+    expect(out).toContain("async () =>");
+    expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
+  });
 });
