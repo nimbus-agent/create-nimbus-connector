@@ -587,8 +587,10 @@ git commit -m "feat(validate): flat identifier-uniqueness check"
 **Interfaces:**
 - Consumes: `GeneratedFile` from Task 1
 - Produces:
-  - `formatAll(files: readonly GeneratedFile[]): Promise<GeneratedFile[]>` — formats `.ts` files, passes others through unchanged
-  - `biomeVersion(): Promise<string>` — resolved backend version, for the harness report
+  - `formatAll(files: readonly GeneratedFile[]): GeneratedFile[]` — formats `.ts` files, passes others through unchanged. **Synchronous** — callers must not `await` it.
+  - `biomeVersion(): string` — resolved backend version, for the harness report. **Synchronous.**
+
+  Both **throw** when Biome reports an error- or fatal-severity diagnostic for a file. See "Diagnostics are not optional" below.
 
 **Background:** Formatting must not shell out. `@biomejs/js-api` v6 with the `@biomejs/wasm-nodejs` backend runs in-process. Configuration is applied programmatically so there is no dependence on `biome.json` discovery or on `process.cwd()`.
 
@@ -705,6 +707,10 @@ export function formatAll(files: readonly GeneratedFile[]): GeneratedFile[] {
 }
 ```
 
+> **★ Diagnostics are not optional.** `formatContent` returns `{ content, diagnostics }`. Discarding `diagnostics` is a defect, verified empirically against `wasm-nodejs@2.5.6`: given syntactically invalid TypeScript, Biome returns `content` **byte-identical to the input** — completely unformatted — alongside four diagnostics of `severity: "error"`, `category: "parse"`. An emitter bug producing broken syntax would therefore pass this stage silently and surface in Tasks 14–16 as a byte mismatch indistinguishable from formatter-config drift. `formatAll` must throw when any diagnostic has severity `"error"` or `"fatal"`, naming the file and including the diagnostic text; other severities must not throw.
+>
+> Verified `Diagnostic` fields: `category`, `severity`, `description`, `message`, `advices`, `verboseAdvices`, `location`, `tags`, `source`. **`message` is a `MarkupBuf`, not a string** — read `description`, which is a plain string. Do not assert the SDK's `Diagnostic` into a hand-written interface declaring `message: string`; it fails to typecheck.
+>
 > **Verified against the real packages under Bun 1.3.14** — `js-api@6.0.0` + `wasm-nodejs@2.5.6`. All three call shapes below are load-bearing and were wrong in an earlier draft of this plan:
 > - `applyConfiguration` and `formatContent` both take **`projectKey` as their first argument**.
 > - `openProject()` must be called to obtain that key.
