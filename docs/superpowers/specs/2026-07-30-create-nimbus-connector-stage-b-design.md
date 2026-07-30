@@ -45,6 +45,7 @@ Two findings reframe the decision the Stage A doc deferred:
 | B4 | Acceptance is a live stdio `tools/list` handshake, not a byte diff | There are no standalone connectors in existence to diff against, so Stage A's ground truth does not exist here. Proving the server starts and describes itself is the available equivalent. |
 | B5 | One spec across three repos; implement this one first | The cross-repo contract is written down once, before any of the three PRs is authored. Only the Nimbus change is gated on an SDK release. |
 | B6 | The published CLI targets Bun only | Every Nimbus manifest declares `runtime: "bun"`, and Bun runs TypeScript directly. Supporting `npm create` would require building the CLI to JavaScript for no ecosystem benefit today. Cheap to add later. |
+| B7 | Generated standalone connectors are Bun-only too | The manifest declares `runtime: "bun"` (all 94 connectors do), `test/sandbox.test.ts` imports `bun:test`, and the build targets Bun. See "Runtime support" below — the server *source* happens to use no Bun-specific API, but that is incidental and is not a portability promise. |
 
 ## The cross-repo contract
 
@@ -117,9 +118,70 @@ defaulting to `"monorepo"`. Fixture spec files stay byte-identical and the Stage
 | `nimbus.extension.json` | identical | identical |
 | `test/sandbox.test.ts` | identical | identical |
 
-The standalone `build` script emits `dist/server.js`, which is what the manifest's `entrypoint` already declares and which nothing currently produces. Note that real `discord` declares `bin: "./dist/server.js"` while its build emits a compiled binary under a different name — that inconsistency is pre-existing in the monorepo and is deliberately not reproduced.
+### Runtime support
 
-The standalone `tsconfig.json` mirrors `tsconfig.base.json`'s compiler options but **omits `customConditions`**, since a standalone consumer must resolve the SDK to `dist`.
+**Generated standalone connectors are Bun-only by design** (B7), for three concrete reasons, not merely by convention:
+
+- `nimbus.extension.json` declares `"runtime": "bun"` — as all 94 monorepo connectors do — and the Gateway spawns extensions accordingly.
+- `test/sandbox.test.ts` imports `bun:test`.
+- The `build` script targets Bun (below).
+
+The emitted `src/server.ts` happens to use no Bun-specific API — it reads `process.env`, calls global `fetch`, and imports only `@modelcontextprotocol/sdk`, `zod` and the kit. That is incidental and must not be read as a Node-compatibility promise: nothing tests it, and the entry point is TypeScript that Node cannot execute directly.
+
+### Build scripts
+
+The exact commands, so the output shape is predictable rather than left to whoever writes the plan:
+
+```jsonc
+"dev":   "bun run --watch src/server.ts",
+"build": "bun build src/server.ts --outdir dist --target bun",
+"clean": "rm -rf dist"
+```
+
+`bun build` rather than `tsc`: it emits the single `dist/server.js` the manifest's `entrypoint` already declares, whereas `tsc` would emit a tree and require its own emit configuration. `tsc` remains the typechecker only (`typecheck: "tsc --noEmit"`), which is why the standalone `tsconfig.json` keeps `noEmit: true`.
+
+Real `discord` declares `bin: "./dist/server.js"` while its build emits a compiled binary under a different name; that inconsistency is pre-existing in the monorepo and is deliberately not reproduced. Generated standalone packages declare no `bin` at all — a connector is spawned by the Gateway via its manifest `entrypoint`, not run as a user-facing command.
+
+### The standalone `tsconfig.json`
+
+Stated explicitly rather than as "mirror the base", since the base file is in another repo and a reader of the generated package cannot see it:
+
+```jsonc
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "types": ["bun"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+Two deliberate differences from `tsconfig.base.json`. **`customConditions` is omitted**, so the SDK resolves to `dist` exactly as a real npm consumer does — the base sets `["bun"]` to get TS source, which a standalone package must not do. **`allowImportingTsExtensions` is omitted**, because no generated import carries a `.ts` extension once the relative `shared/*` imports are gone. `target` stays `ESNext` rather than a pinned year, matching the monorepo; deviating would be gratuitous.
 
 ### Biome becomes optional without breaking the synchronous contract
 
@@ -132,7 +194,25 @@ const files = formatAll(generate(spec));   // unchanged, still synchronous
 
 `formatAll` formats when a formatter was loaded and passes through unchanged when one was not. `formatterAvailable(): boolean` reports which happened.
 
-**Degradation is not permitted everywhere.** `scripts/diff-golden.ts` and monorepo-internal generation **fail** when Biome is absent — byte-exactness is the whole point there, and unformatted output would produce six spurious diffs that look like emitter regressions. Only the published CLI degrades, printing a notice naming the command to run.
+**Forgetting `initFormatter()` must be an error, not silent degradation.** Otherwise the two states — "Biome is absent, so degrade" and "Biome is present but nobody initialised it" — are indistinguishable at the call site, and the second silently produces unformatted output. That is the exact failure class Stage A spent a whole task eliminating from `formatAll`'s diagnostic handling. So:
+
+- `formatAll` **throws** if `initFormatter()` has not resolved, naming the missing call.
+- It passes through unchanged only when `initFormatter()` ran and genuinely found no formatter.
+
+A rejected alternative: kicking the load off in the background at import time and exposing a `formatterReady` promise. That reintroduces nondeterminism — output shape would depend on whether the load happened to finish first — and a floating promise nobody awaits is precisely how the silent-degradation bug returns.
+
+This package is a **CLI, not a library**: the tarball ships `bin` plus `src`, and no programmatic API is published or supported. `initFormatter` is called by the three internal entry points (CLI, golden harness, standalone acceptance). If a programmatic surface is ever wanted, it is a separate decision with its own compatibility obligations.
+
+**Degradation is not permitted everywhere.** `scripts/diff-golden.ts` and monorepo-internal generation **fail** when Biome is absent — byte-exactness is the whole point there, and unformatted output would produce six spurious diffs that look like emitter regressions. Only the published CLI degrades, printing a notice naming the exact command to run:
+
+```
+note: @biomejs/biome is not installed, so the generated files are unformatted.
+      they are valid TypeScript and will compile as-is. to format them:
+
+        cd <out-dir> && bunx @biomejs/biome format --write .
+```
+
+The advice is to format the *output*, not to install Biome into the caller's environment. Under `bunx create-nimbus-connector` the CLI runs in a transient environment the user cannot usefully add a dependency to, so "install Biome and re-run" would be bad advice. No package-manager detection is needed — B6 makes the CLI Bun-only, so the command is always the Bun one.
 
 ### Publishing
 
@@ -172,6 +252,20 @@ Three PRs, one hard ordering constraint:
 1. **`create-nimbus-connector`** — everything above, developed against the local SDK checkout. Blocked on nothing.
 2. **`nimbus-sdk`** — move the three modules in, add the `./connector-kit` export and its `dist` build, update the API surface snapshot, release 1.11.0. Blocked only on the contract above being agreed. Note this repo is currently mid-work on `docs/release-pipeline-loose-ends-spec`.
 3. **`Nimbus`** — convert the three `shared/*.ts` files to named re-exports. **Blocked on SDK 1.11.0 being published.** Must keep all 99 import sites working and Stage A's fixtures at 6/6.
+
+### Verifying the contract before each step
+
+Nothing automatically checks a contract that spans three repositories, so each step has a gate that must be run by hand before it lands:
+
+| Before | Run | Proves |
+|---|---|---|
+| releasing SDK 1.11.0 | `bun run standalone-acceptance --sdk-root /c/gitrep/nimbus-sdk` from this repo, against the SDK branch | the export resolves, typechecks and runs from `dist` — catching a wrong export map or missing build output *before* a release that cannot be withdrawn |
+| merging the Nimbus PR | `bun run diff:golden --nimbus-root /c/gitrep/Nimbus` against the modified monorepo | the re-export refactor did not change a single generated byte; all four hand-rolled fixtures still 6/6 |
+| publishing this CLI | both of the above, plus SDK 1.11.0 actually on the registry | a `bunx` user can install what the generated `package.json` asks for |
+
+The first gate needs no new machinery: the acceptance script already resolves the SDK root from a flag, so pointing it at an unreleased branch is the intended use.
+
+**Deferred:** wiring that first gate into `nimbus-sdk`'s own CI — cloning this repo and running its acceptance suite against the SDK branch automatically — is the right end state but belongs to that repo's pipeline work, which is in flight on another branch. Until then it is a documented manual pre-release step, and it is named here so it is not forgotten rather than assumed.
 
 ## Risks
 
