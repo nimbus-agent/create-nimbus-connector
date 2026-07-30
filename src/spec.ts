@@ -1,0 +1,121 @@
+import { z } from "zod";
+
+/** Keys that belong to Stage B/C. Detected before Zod so the error explains the boundary. */
+const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
+  method: 'non-GET tools are out of scope; use "impl": "stub"',
+  body: 'request bodies are out of scope; use "impl": "stub"',
+  hitl: "HITL declaration is Stage C",
+};
+
+export const ArgSchema = z.strictObject({
+  type: z.enum(["string", "number", "boolean"]),
+  optional: z.boolean().default(false),
+  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  /** Hoisted const name. Cosmetic; defaults to the arg's own key. */
+  local: z.string().min(1).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  int: z.boolean().default(false),
+});
+
+export const ToolSchema = z.strictObject({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  args: z.record(z.string(), ArgSchema).default({}),
+  path: z.string().optional(),
+  impl: z.enum(["get", "stub"]).default("get"),
+});
+
+export const EnvSchema = z
+  .strictObject({
+    vars: z.array(z.string().min(1)).min(1),
+    /** Accessor function name. */
+    local: z.string().min(1),
+    /** Internal variable name per var. Cosmetic; defaults to camelCase(var). */
+    bindings: z.array(z.string().min(1)).optional(),
+    required: z.boolean().default(false),
+    default: z.string().optional(),
+    transform: z.enum(["stripTrailingSlash"]).optional(),
+    prefix: z.string().optional(),
+    suffix: z.string().optional(),
+    auth: z.enum(["bearer", "headers"]).optional(),
+    /** Header name per var, required when auth === "headers". */
+    headerNames: z.array(z.string().min(1)).optional(),
+  })
+  .refine((e) => !(e.required && e.default !== undefined), {
+    message: 'env entry cannot declare both "default" and "required" — a defaulted value is never empty',
+  })
+  .refine((e) => e.bindings === undefined || e.bindings.length === e.vars.length, {
+    message: '"bindings" must have exactly one entry per "vars" entry',
+  })
+  .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
+    message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
+  });
+
+export const FetchHelperSchema = z.strictObject({
+  local: z.string().min(1),
+  /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
+  base: z.string().min(1),
+  /** Name of an env accessor returning the header record. */
+  headers: z.string().min(1).optional(),
+  /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
+  inlineHeaders: z.record(z.string(), z.string()).optional(),
+  normalizeLeadingSlash: z.boolean().default(false),
+  jsonFallbackRaw: z.boolean().default(false),
+});
+
+export const ConnectorSpecSchema = z.strictObject({
+  name: z.string().regex(/^[a-z0-9-]+$/, "name must be lower-kebab-case"),
+  title: z.string().min(1).optional(),
+  displayName: z.string().min(1),
+  id: z.string().min(1).optional(),
+  description: z.string().min(1),
+  serviceLabel: z.string().min(1),
+  style: z.enum(["rest-kit", "hand-rolled"]).default("rest-kit"),
+  network: z.array(z.string()).default([]),
+  syncInterval: z.number().int().positive().default(300),
+  minNimbusVersion: z.string().default("0.2.0"),
+  env: z.array(EnvSchema).default([]),
+  fetchHelper: FetchHelperSchema,
+  tools: z.array(ToolSchema).default([]),
+});
+
+export type EnvSpec = z.infer<typeof EnvSchema>;
+export type ToolSpec = z.infer<typeof ToolSchema>;
+export type ArgSpec = z.infer<typeof ArgSchema>;
+export type FetchHelperSpec = z.infer<typeof FetchHelperSchema>;
+
+export type ConnectorSpec = z.infer<typeof ConnectorSpecSchema> & {
+  readonly title: string;
+  readonly id: string;
+};
+
+/** Capitalise the first letter only: "newrelic" -> "Newrelic". Matches the README fixtures. */
+export function capitalize(s: string): string {
+  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
+}
+
+function preflightOutOfScope(input: unknown): void {
+  if (typeof input !== "object" || input === null) return;
+  const tools = (input as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) return;
+  for (const t of tools) {
+    if (typeof t !== "object" || t === null) continue;
+    for (const [key, why] of Object.entries(OUT_OF_SCOPE_TOOL_KEYS)) {
+      if (key in t) {
+        throw new Error(`"${key}" is not supported in Stage A (${why}).`);
+      }
+    }
+  }
+}
+
+export function parseSpec(input: unknown): ConnectorSpec {
+  preflightOutOfScope(input);
+  const parsed = ConnectorSpecSchema.safeParse(input);
+  if (!parsed.success) {
+    const lines = parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
+    throw new Error(`Invalid connector spec:\n${lines.join("\n")}`);
+  }
+  const s = parsed.data;
+  return { ...s, title: s.title ?? capitalize(s.name), id: s.id ?? `com.nimbus.${s.name}` };
+}
