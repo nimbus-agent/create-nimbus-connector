@@ -49,6 +49,33 @@ describe("formatAll", () => {
     const [out] = formatAll([{ path: ["valid.ts"], content: valid }]);
     expect(out?.content).toBeDefined();
   });
+
+  it("collapses a short JSON array onto one line", () => {
+    const input = JSON.stringify({ a: ["x", "y"] }, undefined, 2);
+    const [out] = formatAll([{ path: ["nimbus.extension.json"], content: input }]);
+    expect(out?.content).toBe('{\n  "a": ["x", "y"]\n}\n');
+  });
+
+  it("keeps a JSON array expanded when it does not fit within 100 columns", () => {
+    const items = Array.from({ length: 12 }, (_, i) => `"a-rather-long-array-item-${i}"`);
+    const input = `{"network":[${items.join(",")}]}`;
+    const [out] = formatAll([{ path: ["nimbus.extension.json"], content: input }]);
+    expect(out?.content).toContain("[\n");
+    expect(out?.content.split("\n").every((l) => l.length <= 100)).toBe(true);
+  });
+
+  it("leaves README.md untouched (regression guard for the pass-through path)", () => {
+    const input = { path: ["README.md"], content: "#   Title\n\n\n" };
+    const [out] = formatAll([input]);
+    expect(out?.content).toBe(input.content);
+  });
+
+  it("throws when fed syntactically invalid JSON, including the file path in the error", () => {
+    const broken = '{ "a": [1, 2,,, }';
+    expect(() => {
+      formatAll([{ path: ["nimbus.extension.json"], content: broken }]);
+    }).toThrow(/nimbus\.extension\.json/);
+  });
 });
 
 describe("biomeVersion", () => {

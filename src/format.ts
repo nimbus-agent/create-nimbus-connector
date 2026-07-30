@@ -43,7 +43,9 @@ export function formatAll(files: readonly GeneratedFile[]): GeneratedFile[] {
   const { biome, projectKey } = instance();
   return files.map((f) => {
     const name = f.path[f.path.length - 1] ?? "";
-    if (!name.endsWith(".ts")) return { path: f.path, content: f.content };
+    if (!(name.endsWith(".ts") || name.endsWith(".json"))) {
+      return { path: f.path, content: f.content };
+    }
     const { content, diagnostics } = biome.formatContent(projectKey, f.content, {
       filePath: f.path.join("/"),
     });
@@ -52,8 +54,9 @@ export function formatAll(files: readonly GeneratedFile[]): GeneratedFile[] {
       const details = fatal
         .map((d) => `  [${d.category ?? "unknown"}] ${d.description}`)
         .join("\n");
+      const kind = name.endsWith(".json") ? "JSON" : "TypeScript";
       throw new Error(
-        `Biome could not format ${f.path.join("/")} — the emitted code is not valid TypeScript:\n${details}`,
+        `Biome could not format ${f.path.join("/")} — the emitted code is not valid ${kind}:\n${details}`,
       );
     }
     return { path: f.path, content };

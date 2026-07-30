@@ -23,7 +23,10 @@
 - **★ Biome preserves object-literal expansion.** Verified against Biome 2.5.6: an object written expanded stays expanded and one written inline stays inline, even when both fit in 100 columns. **The emitter must therefore choose expansion explicitly** — formatting will not normalise it. This is why `grafana`'s fetch helper differs from `datadog`'s.
 - **HTTP error snippet length is the constant `400`** in all four fixtures. Not a spec field.
 - **Never commit on `main`.** All work lands on branch `stage-a-generator`.
-- **Emitted files end with a trailing newline.** JSON files are `JSON.stringify(x, undefined, 2) + "\n"`.
+- **Emitted files end with a trailing newline.** Emitters produce JSON as `JSON.stringify(x, undefined, 2) + "\n"`, but that is **not** the final form — see below.
+- **★ `formatAll` must format `.json` as well as `.ts`.** `JSON.stringify` always expands arrays across lines; the real connectors keep short arrays inline because the monorepo formats JSON with Biome. Verified: `"network": ["api.newrelic.com", "api.eu.newrelic.com"]` in the real `nimbus.extension.json` versus a three-line expansion from `JSON.stringify`. `tsconfig.json` diverges identically on `types`, `include` and `exclude`. Feeding the emitter output through `biome.formatContent` with the right `filePath` reproduces the real formatting exactly, with zero diagnostics.
+  - Everything that is neither `.ts` nor `.json` — notably `README.md` — must continue to pass through untouched.
+  - The error/fatal diagnostic check applies to JSON too: a malformed emitted manifest should fail loudly for the same reason malformed TypeScript does.
 - **★ Every task ends with all three green, not just tests.** Before committing, a task must have:
   1. `bun test` — 0 fail
   2. `bunx tsc --noEmit` — exit 0
