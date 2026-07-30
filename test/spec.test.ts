@@ -509,6 +509,65 @@ describe("parseSpec", () => {
     expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
   });
 
+  it("rejects a rest-kit spec whose fetchHelper.base references ${env.X}", () => {
+    const { style, env, ...rest } = MINIMAL;
+    const bad = {
+      ...rest,
+      style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
+      fetchHelper: { local: "discordFetch", base: "${env.x}" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/env accessors/);
+  });
+
+  it("rejects a rest-kit spec whose fetchHelper.inlineHeaders references ${env.X}", () => {
+    const { style, env, ...rest } = MINIMAL;
+    const bad = {
+      ...rest,
+      style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { "X-A": "${env.x}" },
+      },
+    };
+    expect(() => parseSpec(bad)).toThrow(/env accessors/);
+  });
+
+  it("accepts a rest-kit spec with a literal base and literal inlineHeaders values", () => {
+    const { style, env, ...rest } = MINIMAL;
+    const ok = {
+      ...rest,
+      style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { "X-Extra": "yes" },
+      },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("accepts a hand-rolled spec referencing ${env.X} in base and inlineHeaders (sentry/newrelic shape)", () => {
+    const ok = {
+      ...MINIMAL,
+      fetchHelper: {
+        local: "nrGet",
+        base: "${env.apiRoot}",
+        inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+      },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
   it("accepts hand-rolled with three env entries, mixed auth and non-auth (sentry shape)", () => {
     const ok = {
       ...MINIMAL,

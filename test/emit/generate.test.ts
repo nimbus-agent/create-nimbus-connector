@@ -59,6 +59,13 @@ describe("generate", () => {
       ...JSON.parse(JSON.stringify({ ...spec, title: undefined, id: undefined })),
       style: "rest-kit",
       env: [{ vars: ["NR_TOKEN"], local: "hdrs", bindings: ["t"], auth: "bearer" }],
+      // rest-kit cannot reference ${env.X} in fetchHelper — makeRestToolRegistrar resolves
+      // the token itself, so no accessor exists to call. Literal-only fetchHelper here.
+      fetchHelper: {
+        local: "nrGet",
+        base: "https://api.newrelic.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
     });
     const src = generate(restSpec).find((f) => displayPath(f.path) === "src/server.ts")!.content;
     expect(src).toContain('} from "../../shared/rest-tool-kit.ts";');
@@ -76,6 +83,38 @@ describe("generate", () => {
     // validateSpec() inside generate(), which is what this test asserts on.
     const bad = parseSpec({ ...spec, fetchHelper: { ...spec.fetchHelper, local: "apiKey" } });
     expect(() => generate(bad)).toThrow(/apiKey/);
+  });
+
+  it("omits the jsonResult import for an all-stub hand-rolled spec", () => {
+    const stubSpec = parseSpec({
+      ...JSON.parse(JSON.stringify({ ...spec, title: undefined, id: undefined })),
+      tools: [
+        { name: "newrelic_application_list", description: "List APM applications.", impl: "stub" },
+      ],
+    });
+    const src = generate(stubSpec).find((f) => displayPath(f.path) === "src/server.ts")!.content;
+    expect(src).not.toContain("jsonResult");
+  });
+
+  it("keeps the jsonResult import for a hand-rolled spec with one real tool", () => {
+    const src = generate(spec).find((f) => displayPath(f.path) === "src/server.ts")!.content;
+    expect(src).toContain("mcpJsonResult as jsonResult");
+  });
+
+  it("omits the z import for a zero-tool spec", () => {
+    const zeroToolSpec = parseSpec({
+      ...JSON.parse(JSON.stringify({ ...spec, title: undefined, id: undefined })),
+      tools: [],
+    });
+    const src = generate(zeroToolSpec).find(
+      (f) => displayPath(f.path) === "src/server.ts",
+    )!.content;
+    expect(src).not.toContain("import { z }");
+  });
+
+  it("keeps the z import for a spec with tools", () => {
+    const src = generate(spec).find((f) => displayPath(f.path) === "src/server.ts")!.content;
+    expect(src).toContain("import { z }");
   });
 
   it("produces a formattable, well-seamed server.ts for a full newrelic-shaped spec", () => {

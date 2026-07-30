@@ -6,20 +6,31 @@ import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
 function imports(spec: ConnectorSpec): string {
+  // z.object(...) is only emitted per tool — a zero-tool spec never calls it.
+  const usesZod = spec.tools.length > 0;
+  // Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool.
+  const usesJsonResult = spec.style === "hand-rolled" && spec.tools.some((t) => t.impl !== "stub");
+
   const head = [
     'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
     'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
-    'import { z } from "zod";',
+    ...(usesZod ? ['import { z } from "zod";'] : []),
     "",
   ];
   if (spec.style === "hand-rolled") {
-    head.push(
-      "import {",
-      "  createRegisterSimpleTool,",
-      "  createZodToolRegistrar,",
-      "  mcpJsonResult as jsonResult,",
-      '} from "../../shared/mcp-tool-kit.ts";',
-    );
+    if (usesJsonResult) {
+      head.push(
+        "import {",
+        "  createRegisterSimpleTool,",
+        "  createZodToolRegistrar,",
+        "  mcpJsonResult as jsonResult,",
+        '} from "../../shared/mcp-tool-kit.ts";',
+      );
+    } else {
+      head.push(
+        'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+      );
+    }
   } else {
     head.push(
       'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',

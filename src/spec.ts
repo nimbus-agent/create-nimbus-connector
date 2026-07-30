@@ -136,6 +136,16 @@ export const ConnectorSpecSchema = z
       message:
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
     },
+  )
+  .refine(
+    (s) =>
+      s.style !== "rest-kit" ||
+      (!/\$\{env\./.test(s.fetchHelper.base) &&
+        Object.values(s.fetchHelper.inlineHeaders ?? {}).every((v) => !/\$\{env\./.test(v))),
+    {
+      message:
+        "a rest-kit connector cannot reference ${env.X} in fetchHelper.base or fetchHelper.inlineHeaders — rest-kit emits no env accessors, so the call would be undefined",
+    },
   );
 
 export type EnvSpec = z.infer<typeof EnvSchema>;
