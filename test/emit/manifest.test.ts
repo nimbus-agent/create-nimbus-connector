@@ -7,8 +7,14 @@ const spec = parseSpec({
   displayName: "New Relic",
   description: "New Relic connector. Read-focused.",
   serviceLabel: "New Relic",
+  style: "hand-rolled",
   network: ["api.newrelic.com", "api.eu.newrelic.com"],
-  fetchHelper: { local: "nrGet", base: "https://api.newrelic.com" },
+  env: [{ vars: ["NEW_RELIC_API_KEY"], local: "apiKey", bindings: ["k"], required: true }],
+  fetchHelper: {
+    local: "nrGet",
+    base: "https://api.newrelic.com",
+    inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+  },
 });
 
 describe("emitManifest", () => {

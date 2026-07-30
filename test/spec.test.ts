@@ -34,8 +34,15 @@ describe("parseSpec", () => {
   });
 
   it("defaults style to rest-kit when omitted", () => {
-    const { style, ...rest } = MINIMAL;
-    expect(parseSpec(rest).style).toBe("rest-kit");
+    const { style, env, ...rest } = MINIMAL;
+    const ok = {
+      ...rest,
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(parseSpec(ok).style).toBe("rest-kit");
   });
 
   it("rejects an unknown top-level key", () => {
@@ -311,30 +318,39 @@ describe("parseSpec", () => {
   });
 
   it("accepts a rest-kit spec whose fetchHelper declares neither headers nor inlineHeaders", () => {
-    const { style, ...rest } = MINIMAL;
+    const { style, env, ...rest } = MINIMAL;
     const ok = {
       ...rest,
       style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
       fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
     };
     expect(() => parseSpec(ok)).not.toThrow();
   });
 
   it("rejects a rest-kit spec whose fetchHelper declares headers (hand-rolled-only field)", () => {
-    const { style, ...rest } = MINIMAL;
+    const { style, env, ...rest } = MINIMAL;
     const bad = {
       ...rest,
       style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
       fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10", headers: "h" },
     };
     expect(() => parseSpec(bad)).toThrow(/hand-rolled/);
   });
 
   it("rejects a rest-kit spec whose fetchHelper sets normalizeLeadingSlash: true", () => {
-    const { style, ...rest } = MINIMAL;
+    const { style, env, ...rest } = MINIMAL;
     const bad = {
       ...rest,
       style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
       fetchHelper: {
         local: "discordFetch",
         base: "https://discord.com/api/v10",
@@ -345,10 +361,13 @@ describe("parseSpec", () => {
   });
 
   it("rejects a rest-kit spec whose fetchHelper sets jsonFallbackRaw: true", () => {
-    const { style, ...rest } = MINIMAL;
+    const { style, env, ...rest } = MINIMAL;
     const bad = {
       ...rest,
       style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
       fetchHelper: {
         local: "discordFetch",
         base: "https://discord.com/api/v10",
@@ -359,10 +378,13 @@ describe("parseSpec", () => {
   });
 
   it("accepts a rest-kit spec whose fetchHelper declares only inlineHeaders", () => {
-    const { style, ...rest } = MINIMAL;
+    const { style, env, ...rest } = MINIMAL;
     const ok = {
       ...rest,
       style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
       fetchHelper: {
         local: "discordFetch",
         base: "https://discord.com/api/v10",
@@ -399,6 +421,108 @@ describe("parseSpec", () => {
           suffix: "/api/0",
         },
       ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  // rest-kit specific env validation
+  it("accepts rest-kit with exactly one auth: bearer single-var entry (discord shape)", () => {
+    const ok = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects rest-kit with two env entries, one auth bearer and one plain", () => {
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [
+        { vars: ["DISCORD_BOT_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" },
+        { vars: ["CONFIG_VAR"], local: "config", bindings: ["c"] },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
+  });
+
+  it("rejects rest-kit with two env entries both declaring auth", () => {
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [
+        { vars: ["TOKEN_1"], local: "h1", bindings: ["t1"], auth: "bearer" },
+        { vars: ["TOKEN_2"], local: "h2", bindings: ["t2"], auth: "bearer" },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
+  });
+
+  it("rejects rest-kit with one auth: headers entry", () => {
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [
+        {
+          vars: ["API_KEY"],
+          local: "headers",
+          bindings: ["k"],
+          auth: "headers",
+          headerNames: ["X-API-Key"],
+        },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
+  });
+
+  it("rejects rest-kit with one auth: bearer entry having two vars", () => {
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [
+        {
+          vars: ["TOKEN_A", "TOKEN_B"],
+          local: "tokens",
+          bindings: ["a", "b"],
+          auth: "bearer",
+        },
+      ],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
+  });
+
+  it("rejects rest-kit with zero env entries", () => {
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one env entry/);
+  });
+
+  it("accepts hand-rolled with three env entries, mixed auth and non-auth (sentry shape)", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [
+        { vars: ["SENTRY_URL"], local: "apiRoot", bindings: ["u"], default: "https://sentry.io" },
+        { vars: ["SENTRY_ORG"], local: "org", bindings: ["o"], required: true },
+        {
+          vars: ["SENTRY_AUTH_TOKEN"],
+          local: "headers",
+          bindings: ["t"],
+          auth: "bearer",
+        },
+      ],
+      fetchHelper: { local: "sentryGet", base: "${env.apiRoot}", headers: "headers" },
     };
     expect(() => parseSpec(ok)).not.toThrow();
   });

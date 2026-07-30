@@ -2353,17 +2353,26 @@ function tail(spec: ConnectorSpec): string {
 }
 
 export function emitServer(spec: ConnectorSpec): GeneratedFile {
+  const isHand = spec.style === "hand-rolled";
   const sections = [
     imports(spec),
-    ...spec.env.map((e) => renderEnvAccessor(e)),
+    // ★ Env accessors are emitted for hand-rolled ONLY. See note below.
+    ...(isHand ? spec.env.map((e) => renderEnvAccessor(e)) : []),
     renderFetchHelper(spec),
     wiring(spec),
-    spec.style === "hand-rolled" ? renderHandRolledTools(spec) : renderRestKitTools(spec),
+    isHand ? renderHandRolledTools(spec) : renderRestKitTools(spec),
     tail(spec),
   ].filter((s) => s.trim() !== "");
 
   return { path: ["src", "server.ts"], content: `${sections.join("\n\n")}\n` };
 }
+```
+
+> **★ Rest-kit emits no env accessors at all.** `makeRestToolRegistrar` resolves the credential itself via `requireProcessEnv(cfg.tokenEnv)`, so only the bare env-var *name* is needed — the accessor function would never be called. Verified against all five real Style R connectors (`discord`, `google-meet`, `github`, `pagerduty`, `circleci`): **every one has zero `process.env[` reads**. Mapping `renderEnvAccessor` over `spec.env` unconditionally, as an earlier draft of this plan did, would emit dead uncalled functions and guarantee a byte diff in Task 16.
+>
+> **★ `.filter((s) => s.trim() !== "")` is load-bearing.** `renderHandRolledTools` returns `""` for a spec with zero tools; without the filter, joining sections with `"\n\n"` leaves a stray blank line at that seam.
+
+```ts
 ```
 
 - [ ] **Step 4: Implement `src/emit/index.ts`**

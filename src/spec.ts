@@ -127,6 +127,15 @@ export const ConnectorSpecSchema = z
       message:
         'fetchHelper.headers, .normalizeLeadingSlash and .jsonFallbackRaw apply only to style "hand-rolled" — the rest-kit helper ignores them',
     },
+  )
+  .refine(
+    (s) =>
+      s.style !== "rest-kit" ||
+      (s.env.length === 1 && s.env[0]?.auth === "bearer" && s.env[0]?.vars.length === 1),
+    {
+      message:
+        'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
+    },
   );
 
 export type EnvSpec = z.infer<typeof EnvSchema>;

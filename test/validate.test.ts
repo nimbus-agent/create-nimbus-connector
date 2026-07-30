@@ -80,7 +80,7 @@ describe("validateSpec", () => {
   it("rejects a rest-kit spec whose env local collides with the registrar name", () => {
     const s = restKitSpecWith({
       title: "Foo",
-      env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], required: true }],
+      env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], auth: "bearer" }],
     });
     expect(() => validateSpec(s)).toThrow(/registerFooTool/);
   });
@@ -97,7 +97,7 @@ describe("validateSpec", () => {
   it("correctly strips non-alphanumerics from title in registrar name", () => {
     const s = restKitSpecWith({
       title: "Google Meet",
-      env: [{ vars: ["A"], local: "registerGoogleMeetTool", bindings: ["a"], required: true }],
+      env: [{ vars: ["A"], local: "registerGoogleMeetTool", bindings: ["a"], auth: "bearer" }],
     });
     expect(() => validateSpec(s)).toThrow(/registerGoogleMeetTool/);
   });

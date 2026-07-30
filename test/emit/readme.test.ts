@@ -7,7 +7,13 @@ const spec = parseSpec({
   displayName: "New Relic",
   description: "d.",
   serviceLabel: "New Relic",
-  fetchHelper: { local: "nrGet", base: "https://api.newrelic.com" },
+  style: "hand-rolled",
+  env: [{ vars: ["NEW_RELIC_API_KEY"], local: "apiKey", bindings: ["k"], required: true }],
+  fetchHelper: {
+    local: "nrGet",
+    base: "https://api.newrelic.com",
+    inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+  },
 });
 
 function h2s(md: string): string[] {
