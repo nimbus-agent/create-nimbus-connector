@@ -2504,7 +2504,18 @@ export function resolveNimbusRoot(opts: ResolveOptions): string {
   }
 
   for (const c of candidates) {
+    const explicit = c.source === "--nimbus-root" || c.source === "$NIMBUS_ROOT";
     if (!existsSync(c.path)) {
+      // ★ An EXPLICIT source that does not exist must fail loudly, never fall through.
+      // An earlier draft did `continue` here, so `--nimbus-root C:/nonsense` silently fell
+      // through to sibling probing — and since a valid sibling Nimbus checkout usually
+      // exists, the harness reported PASS 6/6 and exit 0 for a deliberately bogus root.
+      // That is precisely the silent-skip failure this harness exists to prevent.
+      if (explicit) {
+        throw new Error(
+          `${c.path} (${c.source}) does not exist — marker file missing: ${MARKER}`,
+        );
+      }
       tried.push(`  ${c.path}  (${c.source}) — does not exist`);
       continue;
     }
