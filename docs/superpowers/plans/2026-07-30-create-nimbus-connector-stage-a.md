@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Runtime:** Bun. Tests run with `bun test`. Typecheck with `bunx tsc --noEmit`.
-- **This repo is MIT. The Nimbus monorepo is AGPL-3.0-only.** Never copy connector source text into this repo. Unit tests assert *structure and behaviour* (e.g. "has exactly these three dependencies"), never byte-equality against transcribed connector content. Byte-equality is proven **only** by the diff harness reading the monorepo at runtime.
+- **This repo is MIT. The Nimbus monorepo is AGPL-3.0-only.** Emitter templates necessarily encode the shape of the files they produce — that is the product, and is expected. What is banned is: (a) vendoring connector directories into this repo, and (b) any **test** that asserts byte-equality against transcribed connector content. Unit tests assert *structure and behaviour* (e.g. "has exactly these three dependencies"). Byte-equality is proven **only** by the diff harness reading the monorepo at runtime.
 - **Emitted package deps, exactly:** `"@modelcontextprotocol/sdk": "1.30.0"`, `"@nimbus-dev/sdk": "^1.8.1"`, `"zod": "^4.4.2"`. Emitted `devDependencies`: `{"@types/bun": "latest"}`.
 - **Emitted package license:** `AGPL-3.0-only`. Emitted `private: false`, `type: "module"`.
 - **Biome pins:** `@biomejs/wasm-nodejs@^2.5.6`, `@biomejs/js-api@^6.0.0`. The monorepo has Biome **2.5.6** installed. Do **not** key off the `2.5.0` in `biome.json`'s `$schema` URL — that is the schema version, not the tool version.
@@ -1595,9 +1595,24 @@ git commit -m "feat(emit): env accessor emitter with fixed transform pipeline"
 - Create: `src/emit/server/fetch-helper.ts`, `test/emit/server/fetch-helper.test.ts`
 
 **Interfaces:**
-- Produces: `renderFetchHelper(spec: ConnectorSpec): string`
+- Produces: `renderFetchHelper(spec: ConnectorSpec): string` — **branches on `spec.style`**
 
 **★ Expansion matters.** `datadog`/`sentry` write `{ headers: headers() }` inline; `grafana` writes it expanded across three lines. Biome preserves both. The emitter expands the fetch options object iff `normalizeLeadingSlash` is set (the `grafana` shape) and inlines it otherwise.
+
+**★ Two signatures, one per style.** `makeRestToolRegistrar` (`shared/rest-tool-kit.ts:72`) requires
+`fetch: (token: string, pathOrUrl: string, init?: RequestInit) => Promise<HttpJsonBodyResponse>`.
+The Style H helper `(path) => Promise<unknown>` is **not** assignable to it. Since `style` defaults to
+`rest-kit`, emitting only the Style H shape would make the generator's default output fail `tsc`.
+So:
+
+| `spec.style` | Emitted signature | Returns | Error handling |
+|---|---|---|---|
+| `hand-rolled` | `(path: string)` | `Promise<unknown>` | throws `` `<Label> <status>: <snippet>` `` inside the helper |
+| `rest-kit` | `(token: string, path: string, init?: RequestInit)` | `Promise<{ ok: boolean; status: number; json: unknown; text: string }>` | **none** — returns the envelope; `makeRestToolRegistrar` calls `mcpJsonResultIfOk`, which raises the error |
+
+The Style R helper takes the token as a parameter rather than calling an env accessor, because
+`makeRestToolRegistrar` resolves the token itself via `requireProcessEnv(cfg.tokenEnv)` and passes it in.
+Absolute URLs pass through unchanged (`path.startsWith("http")`), matching `discord`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1664,6 +1679,37 @@ describe("renderFetchHelper", () => {
     expect(out).toContain("const res = await fetch(`${baseUrl()}${pathPart}`, {\n    headers: authHeaders(),\n  });");
     expect(out).toContain("  try {\n    return JSON.parse(text) as unknown;\n  } catch {\n    return { raw: text };\n  }");
   });
+
+  it("emits the token-taking signature makeRestToolRegistrar requires for rest-kit", () => {
+    const out = renderFetchHelper(
+      make({
+        style: "rest-kit",
+        serviceLabel: "Discord",
+        env: [{ vars: ["DISCORD_BOT_TOKEN"], local: "hdrs", bindings: ["t"], auth: "bearer" }],
+        fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+      }),
+    );
+    expect(out).toContain("async function discordFetch(\n  token: string,\n  path: string,\n  init?: RequestInit,\n)");
+    expect(out).toContain(
+      "Promise<{ ok: boolean; status: number; json: unknown; text: string }> {",
+    );
+    expect(out).toContain(
+      'const url = path.startsWith("http") ? path : `https://discord.com/api/v10${path}`;',
+    );
+    expect(out).toContain("return { ok: res.ok, status: res.status, json, text };");
+  });
+
+  it("does not throw on non-2xx in rest-kit style — mcpJsonResultIfOk owns that", () => {
+    const out = renderFetchHelper(
+      make({
+        style: "rest-kit",
+        env: [{ vars: ["T"], local: "hdrs", bindings: ["t"], auth: "bearer" }],
+        fetchHelper: { local: "xFetch", base: "https://x.test" },
+      }),
+    );
+    expect(out).not.toContain("throw new Error");
+    expect(out).not.toContain("if (!res.ok)");
+  });
 });
 ```
 
@@ -1699,7 +1745,57 @@ function headerOption(spec: ConnectorSpec): string {
   return `headers: ${fh.headers}()`;
 }
 
+/**
+ * Style R: `makeRestToolRegistrar` resolves the token itself and passes it in, and
+ * calls `mcpJsonResultIfOk` on the returned envelope — so this helper takes the token
+ * as a parameter and does NOT throw on non-2xx.
+ */
+function renderRestKitFetchHelper(spec: ConnectorSpec): string {
+  const fh = spec.fetchHelper;
+  const base = resolveEnvRefs(fh.base);
+  const extra =
+    fh.inlineHeaders === undefined
+      ? ""
+      : Object.entries(fh.inlineHeaders)
+          .map(([k, v]) => {
+            const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+            const inner = /^\$\{env\.[A-Za-z0-9_]+\}$/.test(v)
+              ? resolveEnvRefs(v).slice(2, -1)
+              : JSON.stringify(v);
+            return `      ${key}: ${inner},`;
+          })
+          .join("\n");
+
+  return [
+    `async function ${fh.local}(`,
+    "  token: string,",
+    "  path: string,",
+    "  init?: RequestInit,",
+    "): Promise<{ ok: boolean; status: number; json: unknown; text: string }> {",
+    `  const url = path.startsWith("http") ? path : \`${base}\${path}\`;`,
+    "  const res = await fetch(url, {",
+    "    ...init,",
+    "    headers: {",
+    "      Authorization: `Bearer ${token}`,",
+    ...(extra === "" ? [] : [extra]),
+    "      ...(init?.headers as Record<string, string> | undefined),",
+    "    },",
+    "  });",
+    "  const text = await res.text();",
+    "  let json: unknown;",
+    "  try {",
+    "    json = JSON.parse(text) as unknown;",
+    "  } catch {",
+    "    json = null;",
+    "  }",
+    "  return { ok: res.ok, status: res.status, json, text };",
+    "}",
+  ].join("\n");
+}
+
 export function renderFetchHelper(spec: ConnectorSpec): string {
+  if (spec.style === "rest-kit") return renderRestKitFetchHelper(spec);
+
   const fh = spec.fetchHelper;
   const pathVar = fh.normalizeLeadingSlash ? "pathPart" : "path";
   const url = `\`${resolveEnvRefs(fh.base)}\${${pathVar}}\``;
@@ -1742,7 +1838,7 @@ export function renderFetchHelper(spec: ConnectorSpec): string {
 - [ ] **Step 4: Run tests**
 
 Run: `bun test test/emit/server/fetch-helper.test.ts`
-Expected: PASS (3 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
