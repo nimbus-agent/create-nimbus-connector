@@ -68,7 +68,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   await initFormatter();
   if (!formatterAvailable()) {
     console.error(
-      "note: @biomejs/biome is not installed, so the generated files are unformatted.\n" +
+      "note: @biomejs/js-api is not installed, so the generated files are unformatted.\n" +
         "      they are valid TypeScript and will compile as-is. to format them:\n\n" +
         `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
     );

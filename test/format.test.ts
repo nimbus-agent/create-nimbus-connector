@@ -15,6 +15,68 @@ describe("initFormatter", () => {
   it("reports the formatter as available in this repo", () => {
     expect(formatterAvailable()).toBe(true);
   });
+
+  // Strengthens "is idempotent" above: that test alone would also pass if the second call
+  // silently re-ran the whole load. This proves re-entry does NOT happen, by observing the
+  // seam directly — mock.module replaces "@biomejs/js-api/nodejs" with a fake Biome whose
+  // constructor increments a shared counter, then calls initFormatter() twice and asserts
+  // the constructor ran exactly once. Run in a subprocess: a fresh module registry, and
+  // mock.module's effect is process-global, so isolating it from the rest of the suite
+  // matters. No test-only reset/call-count export is added to production code.
+  it("does not re-run the loader on a second call (observed via a counting mock)", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      "let constructCount = 0;" +
+      'mock.module("@biomejs/js-api/nodejs", () => ({' +
+      "  Biome: class {" +
+      "    constructor() { constructCount++; }" +
+      "    openProject() { return { projectKey: 1 }; }" +
+      "    applyConfiguration() {}" +
+      "  }," +
+      "}));" +
+      'const { initFormatter, formatterAvailable } = await import("./src/format.ts");' +
+      "await initFormatter();" +
+      "await initFormatter();" +
+      'if (constructCount !== 1) throw new Error("constructCount=" + constructCount);' +
+      'if (!formatterAvailable()) throw new Error("formatterAvailable() was false");' +
+      'console.log("ok");';
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: import.meta.dir + "/..",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toMatch(/ok/);
+  });
+});
+
+describe("initFormatter surfaces configuration bugs", () => {
+  // Pins the distinction the review flagged: a failure past the dynamic import (e.g. a
+  // typo in the hardcoded applyConfiguration() call) is a programming error and must
+  // reject initFormatter(), not be swallowed into formatterAvailable() === false. Proven
+  // at the seam via bun:test's mock.module, which replaces "@biomejs/js-api/nodejs" with a
+  // fake Biome whose applyConfiguration() throws. Run in a subprocess (same rationale as
+  // "formatAll before init" above): a fresh module registry, and mock.module's effect is
+  // process-global, so isolating it from the rest of the suite matters.
+  it("rejects instead of reporting unavailable when applyConfiguration throws", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/js-api/nodejs", () => ({' +
+      "  Biome: class {" +
+      "    openProject() { return { projectKey: 1 }; }" +
+      '    applyConfiguration() { throw new Error("boom: injected config bug"); }' +
+      "  }," +
+      "}));" +
+      'const { initFormatter } = await import("./src/format.ts");' +
+      "await initFormatter();";
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: import.meta.dir + "/..",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toMatch(/boom: injected config bug/);
+  });
 });
 
 describe("formatAll before init", () => {

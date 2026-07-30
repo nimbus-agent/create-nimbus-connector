@@ -28,29 +28,36 @@ let available = false;
 export async function initFormatter(): Promise<void> {
   if (initialised) return;
   initialised = true;
+
+  let BiomeCtor: new () => BiomeLike;
   try {
-    const { Biome } = (await import("@biomejs/js-api/nodejs")) as {
+    ({ Biome: BiomeCtor } = (await import("@biomejs/js-api/nodejs")) as {
       Biome: new () => BiomeLike;
-    };
-    const biome = new Biome();
-    const { projectKey } = biome.openProject();
-    biome.applyConfiguration(projectKey, {
-      formatter: {
-        enabled: true,
-        indentStyle: "space",
-        indentWidth: 2,
-        lineWidth: 100,
-        lineEnding: "lf",
-      },
-      javascript: {
-        formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
-      },
     });
-    cached = { biome, projectKey };
-    available = true;
   } catch {
+    // The ONLY tolerated failure: the optional dependency is not installed.
     available = false;
+    return;
   }
+
+  // Past this point Biome is present, so any failure is a programming error in the
+  // configuration below — let it propagate rather than masquerading as "unavailable".
+  const biome = new BiomeCtor();
+  const { projectKey } = biome.openProject();
+  biome.applyConfiguration(projectKey, {
+    formatter: {
+      enabled: true,
+      indentStyle: "space",
+      indentWidth: 2,
+      lineWidth: 100,
+      lineEnding: "lf",
+    },
+    javascript: {
+      formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
+    },
+  });
+  cached = { biome, projectKey };
+  available = true;
 }
 
 export function formatterAvailable(): boolean {
