@@ -10,7 +10,7 @@ function specWith(over: Record<string, unknown>) {
     serviceLabel: "Sentry",
     style: "hand-rolled",
     env: [{ vars: ["SENTRY_ORG_SLUG"], local: "org", bindings: ["o"], required: true }],
-    fetchHelper: { local: "sentryGet", base: "${env.org}" },
+    fetchHelper: { local: "sentryGet", base: "${env.org}", headers: "headers" },
     tools: [],
     ...over,
   });
@@ -68,7 +68,7 @@ describe("validateSpec", () => {
   });
 
   it("rejects a fetchHelper local colliding with an env local", () => {
-    const s = specWith({ fetchHelper: { local: "org", base: "https://x" } });
+    const s = specWith({ fetchHelper: { local: "org", base: "https://x", headers: "headers" } });
     expect(() => validateSpec(s)).toThrow(/org/);
   });
 

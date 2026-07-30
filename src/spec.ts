@@ -92,21 +92,31 @@ export const FetchHelperSchema = z.strictObject({
   jsonFallbackRaw: z.boolean().default(false),
 });
 
-export const ConnectorSpecSchema = z.strictObject({
-  name: z.string().regex(/^[a-z0-9-]+$/, "name must be lower-kebab-case"),
-  title: z.string().min(1).optional(),
-  displayName: z.string().min(1),
-  id: z.string().min(1).optional(),
-  description: z.string().min(1),
-  serviceLabel: z.string().min(1),
-  style: z.enum(["rest-kit", "hand-rolled"]).default("rest-kit"),
-  network: z.array(z.string()).default([]),
-  syncInterval: z.number().int().positive().default(300),
-  minNimbusVersion: z.string().default("0.2.0"),
-  env: z.array(EnvSchema).default([]),
-  fetchHelper: FetchHelperSchema,
-  tools: z.array(ToolSchema).default([]),
-});
+export const ConnectorSpecSchema = z
+  .strictObject({
+    name: z.string().regex(/^[a-z0-9-]+$/, "name must be lower-kebab-case"),
+    title: z.string().min(1).optional(),
+    displayName: z.string().min(1),
+    id: z.string().min(1).optional(),
+    description: z.string().min(1),
+    serviceLabel: z.string().min(1),
+    style: z.enum(["rest-kit", "hand-rolled"]).default("rest-kit"),
+    network: z.array(z.string()).default([]),
+    syncInterval: z.number().int().positive().default(300),
+    minNimbusVersion: z.string().default("0.2.0"),
+    env: z.array(EnvSchema).default([]),
+    fetchHelper: FetchHelperSchema,
+    tools: z.array(ToolSchema).default([]),
+  })
+  .refine(
+    (s) =>
+      s.style !== "hand-rolled" ||
+      (s.fetchHelper.headers === undefined) !== (s.fetchHelper.inlineHeaders === undefined),
+    {
+      message:
+        "a hand-rolled connector must declare exactly one of fetchHelper.headers or fetchHelper.inlineHeaders",
+    },
+  );
 
 export type EnvSpec = z.infer<typeof EnvSchema>;
 export type ToolSpec = z.infer<typeof ToolSchema>;

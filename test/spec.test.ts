@@ -277,6 +277,49 @@ describe("parseSpec", () => {
     expect(() => parseSpec(bad)).toThrow(/multiple/);
   });
 
+  it("rejects a hand-rolled spec whose fetchHelper declares both headers and inlineHeaders", () => {
+    const bad = {
+      ...MINIMAL,
+      fetchHelper: {
+        local: "nrGet",
+        base: "https://api.newrelic.com",
+        headers: "headers",
+        inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+      },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one of/);
+  });
+
+  it("rejects a hand-rolled spec whose fetchHelper declares neither headers nor inlineHeaders", () => {
+    const bad = {
+      ...MINIMAL,
+      fetchHelper: { local: "nrGet", base: "https://api.newrelic.com" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/exactly one of/);
+  });
+
+  it("accepts a hand-rolled spec whose fetchHelper declares only headers", () => {
+    const ok = {
+      ...MINIMAL,
+      fetchHelper: { local: "sentryGet", base: "${env.apiRoot}", headers: "headers" },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("accepts a hand-rolled spec whose fetchHelper declares only inlineHeaders (newrelic shape)", () => {
+    expect(() => parseSpec(MINIMAL)).not.toThrow();
+  });
+
+  it("accepts a rest-kit spec whose fetchHelper declares neither headers nor inlineHeaders", () => {
+    const { style, ...rest } = MINIMAL;
+    const ok = {
+      ...rest,
+      style: "rest-kit",
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
   it("accepts one var with transform and suffix and no auth", () => {
     const ok = {
       ...MINIMAL,
