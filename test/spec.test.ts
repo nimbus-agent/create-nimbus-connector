@@ -55,8 +55,63 @@ describe("parseSpec", () => {
     expect(() => parseSpec(bad)).toThrow(/both .*default.* and .*required/i);
   });
 
+  it("accepts an env entry declaring default without required", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "x", bindings: ["x"], default: "d" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
   it("rejects bindings whose length does not match vars", () => {
     const bad = { ...MINIMAL, env: [{ vars: ["A", "B"], local: "h", bindings: ["a"] }] };
     expect(() => parseSpec(bad)).toThrow(/bindings/);
+  });
+
+  it("accepts headerNames matching vars length when auth is headers", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["DD_API_KEY", "DD_APP_KEY"],
+          local: "dd",
+          bindings: ["ak", "app"],
+          auth: "headers",
+          headerNames: ["DD-API-KEY", "DD-APPLICATION-KEY"],
+        },
+      ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects headerNames whose length does not match vars when auth is headers", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["DD_API_KEY", "DD_APP_KEY"],
+          local: "dd",
+          bindings: ["ak", "app"],
+          auth: "headers",
+          headerNames: ["DD-API-KEY"],
+        },
+      ],
+    };
+    expect(() => parseSpec(bad)).toThrow(/headerNames/);
+  });
+
+  it("rejects auth: headers with headerNames entirely absent", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [
+        {
+          vars: ["DD_API_KEY", "DD_APP_KEY"],
+          local: "dd",
+          bindings: ["ak", "app"],
+          auth: "headers",
+        },
+      ],
+    };
+    expect(() => parseSpec(bad)).toThrow(/headerNames/);
   });
 });
