@@ -96,6 +96,11 @@ export function capitalize(s: string): string {
   return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** Module-scope registrar constant emitted for `style: "rest-kit"` connectors. */
+export function registrarName(spec: ConnectorSpec): string {
+  return `register${spec.title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
+}
+
 function preflightOutOfScope(input: unknown): void {
   if (typeof input !== "object" || input === null) return;
   const tools = (input as { tools?: unknown }).tools;

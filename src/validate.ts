@@ -1,4 +1,5 @@
 import type { ConnectorSpec } from "./spec.ts";
+import { registrarName } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -38,6 +39,10 @@ export function validateSpec(spec: ConnectorSpec): void {
 
   for (const r of RESERVED_IDENTIFIERS) {
     seen.set(r, "a reserved emitter identifier");
+  }
+
+  if (spec.style === "rest-kit") {
+    claim(seen, registrarName(spec), "the rest-kit tool registrar");
   }
 
   for (const e of spec.env) {

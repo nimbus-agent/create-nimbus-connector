@@ -16,6 +16,23 @@ function specWith(over: Record<string, unknown>) {
   });
 }
 
+function restKitSpecWith(over: Record<string, unknown>) {
+  return parseSpec({
+    name: "discord",
+    title: "Discord",
+    displayName: "Discord",
+    description: "Discord connector.",
+    serviceLabel: "Discord",
+    style: "rest-kit",
+    env: [
+      { vars: ["DISCORD_TOKEN"], local: "token", bindings: ["t"], required: true, auth: "bearer" },
+    ],
+    fetchHelper: { local: "discordGet", base: "https://discord.com/api/v10" },
+    tools: [],
+    ...over,
+  });
+}
+
 describe("validateSpec", () => {
   it("accepts a spec with no collisions", () => {
     expect(() => validateSpec(specWith({}))).not.toThrow();
@@ -58,5 +75,30 @@ describe("validateSpec", () => {
   it("rejects duplicate tool names", () => {
     const t = { name: "dup_tool", description: "d.", path: "/a" };
     expect(() => validateSpec(specWith({ tools: [t, t] }))).toThrow(/dup_tool/);
+  });
+
+  it("rejects a rest-kit spec whose env local collides with the registrar name", () => {
+    const s = restKitSpecWith({
+      title: "Foo",
+      env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], required: true }],
+    });
+    expect(() => validateSpec(s)).toThrow(/registerFooTool/);
+  });
+
+  it("accepts a hand-rolled spec whose env local matches what rest-kit would claim", () => {
+    const s = specWith({
+      title: "Foo",
+      style: "hand-rolled",
+      env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], required: true }],
+    });
+    expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  it("correctly strips non-alphanumerics from title in registrar name", () => {
+    const s = restKitSpecWith({
+      title: "Google Meet",
+      env: [{ vars: ["A"], local: "registerGoogleMeetTool", bindings: ["a"], required: true }],
+    });
+    expect(() => validateSpec(s)).toThrow(/registerGoogleMeetTool/);
   });
 });
