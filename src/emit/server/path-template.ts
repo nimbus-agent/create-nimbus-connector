@@ -35,6 +35,18 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
     last = at + whole.length;
   }
   if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+
+  // Validate: no unrecognized placeholders in literal segments
+  for (const seg of out) {
+    if (seg.kind === "literal" && seg.text.includes("${")) {
+      throw new Error(
+        `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
+          "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
+          "namespace and mode must be lowercase.",
+      );
+    }
+  }
+
   return out;
 }
 

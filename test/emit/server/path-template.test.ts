@@ -28,6 +28,30 @@ describe("parsePathTemplate", () => {
   it("rejects an unknown namespace", () => {
     expect(() => parsePathTemplate("/x/${cfg.a}")).toThrow(/cfg/);
   });
+
+  it("rejects env placeholder with a mode", () => {
+    expect(() => parsePathTemplate("/x/${env.a|enc}")).toThrow(/cannot take a mode/);
+  });
+
+  it("rejects uppercase mode name", () => {
+    expect(() => parsePathTemplate("/x/${env.a}/${arg.b|ENC}")).toThrow(/Malformed placeholder/);
+  });
+
+  it("rejects incomplete arg placeholder without dot", () => {
+    expect(() => parsePathTemplate("/x/${env.a}/${arg}")).toThrow(/Malformed placeholder/);
+  });
+
+  it("rejects uppercase namespace", () => {
+    expect(() => parsePathTemplate("/x/${env.a}/${ARG.b}")).toThrow(/Malformed placeholder/);
+  });
+
+  it("rejects unterminated placeholder", () => {
+    expect(() => parsePathTemplate("/x/${env.a}/${arg.b")).toThrow(/Malformed placeholder/);
+  });
+
+  it("returns empty array for empty template", () => {
+    expect(parsePathTemplate("")).toEqual([]);
+  });
 });
 
 describe("renderPath", () => {
@@ -60,5 +84,59 @@ describe("renderPath", () => {
     expect(renderPath(parsePathTemplate("?o=${arg.only_open|bool}"), { param: "p", hoisted })).toBe(
       "`?o=${only}`",
     );
+  });
+
+  it("renders empty template as empty quoted string", () => {
+    expect(renderPath([], noHoists)).toBe('""');
+  });
+
+  it("escapes backslashes in literal segments", () => {
+    const out = renderPath(parsePathTemplate("/path\\with\\backslashes/${arg.x}"), noHoists);
+    expect(out).toBe("`/path\\\\with\\\\backslashes/${p.x}`");
+  });
+
+  it("escapes backticks in literal segments", () => {
+    const out = renderPath(parsePathTemplate("/path`with`backticks/${arg.x}"), noHoists);
+    expect(out).toBe("`/path\\`with\\`backticks/${p.x}`");
+  });
+
+  it("renders /v2/applications.json without placeholders", () => {
+    expect(renderPath(parsePathTemplate("/v2/applications.json"), noHoists)).toBe(
+      '"/v2/applications.json"',
+    );
+  });
+
+  it("renders incident template with square brackets and hoisted num mode", () => {
+    const hoisted = new Map([["limit", "lim"]]);
+    expect(
+      renderPath(parsePathTemplate("/api/v2/incidents?page[size]=${arg.limit|num}"), {
+        param: "p",
+        hoisted,
+      }),
+    ).toBe("`/api/v2/incidents?page[size]=${String(lim)}`");
+  });
+
+  it("renders project issues template with multiple placeholders and hoisted limit", () => {
+    const hoisted = new Map([["limit", "lim"]]);
+    expect(
+      renderPath(
+        parsePathTemplate(
+          "/projects/${env.org}/${arg.projectSlug}/issues/?query=is:unresolved&limit=${arg.limit|num}",
+        ),
+        { param: "p", hoisted },
+      ),
+    ).toBe(
+      "`/projects/${org()}/${p.projectSlug}/issues/?query=is:unresolved&limit=${String(lim)}`",
+    );
+  });
+
+  it("renders search template with enc mode and hoisted query", () => {
+    const hoisted = new Map([["query", "q"]]);
+    expect(
+      renderPath(parsePathTemplate("/api/search?type=dash-db&query=${arg.query|enc}"), {
+        param: "p",
+        hoisted,
+      }),
+    ).toBe("`/api/search?type=dash-db&query=${encodeURIComponent(q)}`");
   });
 });
