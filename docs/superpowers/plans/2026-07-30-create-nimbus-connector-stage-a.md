@@ -1638,7 +1638,16 @@ git commit -m "feat(emit): env accessor emitter with fixed transform pipeline"
 **Interfaces:**
 - Produces: `renderFetchHelper(spec: ConnectorSpec): string` — **branches on `spec.style`**
 
-**★ Expansion matters.** `datadog`/`sentry` write `{ headers: headers() }` inline; `grafana` writes it expanded across three lines. Biome preserves both. The emitter expands the fetch options object iff `normalizeLeadingSlash` is set (the `grafana` shape) and inlines it otherwise.
+**★ Expansion matters.** `datadog`/`sentry` write `{ headers: headers() }` inline; `grafana` AND `newrelic` write it expanded across three lines. Biome preserves both, so the emitter must choose.
+
+The condition is **`normalizeLeadingSlash || inlineHeaders !== undefined`** — not `normalizeLeadingSlash` alone. An earlier draft of this plan had it wrong, which would have emitted `newrelic`'s options inline and produced a byte diff. Ground truth:
+
+| Connector | `normalizeLeadingSlash` | `inlineHeaders` | Options object |
+|---|---|---|---|
+| `newrelic` | no | **yes** | **expanded** |
+| `grafana` | **yes** | no | **expanded** |
+| `datadog` | no | no | inline |
+| `sentry` | no | no | inline |
 
 **★ Two signatures, one per style.** `makeRestToolRegistrar` (`shared/rest-tool-kit.ts:72`) requires
 `fetch: (token: string, pathOrUrl: string, init?: RequestInit) => Promise<HttpJsonBodyResponse>`.
