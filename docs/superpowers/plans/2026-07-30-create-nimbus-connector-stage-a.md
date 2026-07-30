@@ -24,6 +24,15 @@
 - **HTTP error snippet length is the constant `400`** in all four fixtures. Not a spec field.
 - **Never commit on `main`.** All work lands on branch `stage-a-generator`.
 - **Emitted files end with a trailing newline.** JSON files are `JSON.stringify(x, undefined, 2) + "\n"`.
+- **★ Every task ends with all three green, not just tests.** Before committing, a task must have:
+  1. `bun test` — 0 fail
+  2. `bunx tsc --noEmit` — exit 0
+  3. `bunx biome check src/ test/` — **exit 0** (add `scripts/` once Task 14 creates it)
+
+  A task is not DONE until `biome check` exits 0. Per-task steps below name only the first two; this constraint adds the third to every one of them. Use `bunx biome check --write` to apply formatting rather than hand-formatting — the formatter wins.
+- **`lint/suspicious/noTemplateCurlyInString` is disabled repo-wide** in `biome.json`. The spec's placeholder syntax `${env.X}` / `${arg.X}` is literal text inside ordinary double-quoted strings and appears throughout Tasks 7, 8, 11, 12 and every fixture in Tasks 14–16. The rule is a false positive for this project; per-line suppressions would be needed in dozens of places. This suppression is deliberate — do not remove it.
+- **`lint/style/noNonNullAssertion` is disabled repo-wide**, while `noUncheckedIndexedAccess: true` stays on in `tsconfig.json`. Rationale: the type system still forces every indexed access to be acknowledged as possibly-`undefined`, so a `!` is a deliberate, typechecked assertion rather than an unchecked hazard. Keeping the lint rule on as well would force guard branches over provably-valid loop indices (`e.vars[i]` inside `e.vars.map`), producing unreachable code that is worse for review and coverage than the assertion it replaces. The plan's example code uses `!` at roughly fifteen such sites and should be transcribed as written.
+  - Where a non-assertion form is equally clear, still prefer it — `s.charAt(0)` over `s[0]!`. Never take Biome's suggested optional-chain fix, which changes the type to include `undefined`.
 
 ## File Structure
 
