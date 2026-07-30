@@ -53,25 +53,29 @@ Style R is the direction of travel. Style H is what the four simplest fixtures u
 
 ### Generation is a pure function
 
+Generation is two stages, deliberately separated so the purity claim is literally true rather than approximately true:
+
 ```ts
-generate(spec: ConnectorSpec): GeneratedFile[]   // { path: string[]; content: string }[]
+generate(spec: ConnectorSpec): GeneratedFile[]          // pure. canonical, UNFORMATTED TS
+formatAll(files: GeneratedFile[]): Promise<GeneratedFile[]>  // impure at init, then deterministic
 ```
 
-No filesystem, no `process.env`, no clock. Three consumers sit on top:
+`generate` touches no filesystem, no `process.env`, no clock, and no child process. It emits semantically correct TypeScript with naive line breaks. `formatAll` is the only stage that needs Biome, and it is shared verbatim by all three consumers so none of them can disagree about formatting:
 
 1. the interactive CLI, which writes the result to disk;
 2. `--dry-run`, which prints the tree;
 3. the golden-diff harness, which compares in memory against a real connector directory.
 
-This purity is the load-bearing choice. It makes the harness a short pure-comparison script rather than a temp-dir fixture rig, and it makes every emitter unit-testable without touching disk.
+This split is the load-bearing choice. It makes the harness a short pure-comparison script rather than a temp-dir fixture rig, makes every emitter unit-testable without touching disk *or* loading Biome, and confines all environment dependence to one function.
 
 ### Module layout
 
 ```
 src/
-  spec.ts             ConnectorSpec type + Zod schema + defaults
+  spec.ts             ConnectorSpec type + strict Zod schema + defaults
+  validate.ts         identifier-uniqueness + out-of-scope-key checks
   prompts.ts          interactive session -> ConnectorSpec
-  format.ts           Biome formatting of emitted TypeScript
+  format.ts           formatAll() — Biome WASM, the only impure stage
   emit/
     index.ts          generate(spec) -> GeneratedFile[]
     package-json.ts
@@ -171,6 +175,30 @@ Observed variants, all four fixtures covered:
 
 The error-message wording is derived, not spec-supplied: one var yields `"<NAME> is not set"`, multiple yield `"<A> and <B> must be set"`. Both forms are observed verbatim in the fixtures.
 
+#### Accessor pipeline order
+
+The stages compose in exactly this order, and the order is **not** configurable:
+
+```
+read process.env["<VAR>"]
+  -> ?.trim()
+  -> default  (|| "<default>")   XOR   required check (throw if undefined or "")
+  -> transform (stripTrailingSlash)
+  -> prefix / suffix
+  -> auth wrapper (bearer | headers)
+```
+
+`default` and the required check are mutually exclusive: an entry with a `default` can never be empty, so emitting a throw would be dead code. The schema rejects an entry declaring both.
+
+Transform-before-suffix is not a coin flip — the fixtures decide it. `sentry`'s `apiRoot()` reads:
+
+```ts
+const u = process.env["SENTRY_URL"]?.trim() || "https://sentry.io";
+return `${u.replace(/\/$/, "")}/api/0`;
+```
+
+The strip applies to the env-derived value only; the `/api/0` suffix is appended afterwards and is never itself stripped. Applying the suffix first would corrupt it. `datadog`'s `siteHost()` (`` `api.${s}` `` after trim-and-default) and `grafana`'s `baseUrl()` (required check, then strip, no suffix) are consistent with the same pipeline.
+
 ### Fetch helper
 
 Style-dependent, with a small set of knobs drawn from observed variation:
@@ -183,16 +211,47 @@ Style-dependent, with a small set of knobs drawn from observed variation:
 
 The last two are single-fixture flags. See "Spec cosmetics policy" for why they are permitted and where the line is.
 
+## Spec validation
+
+Validation runs before any emission. A spec that would produce broken, shadowed, or silently-incomplete output is rejected with a message naming the offending field — the generator never emits code it knows is wrong.
+
+### Identifier uniqueness
+
+Every identifier the emitter introduces lives in one flat namespace per generated file, and all must be distinct. That covers:
+
+- **spec-supplied names** — each `env[].local`, `fetchHelper.local`, and each hoisted `args[].local`
+- **reserved emitter names** — `mcp`, `server`, `reg`, `transport`, `z`, `jsonResult`, `p`, `parsed`, plus the imported `createRegisterSimpleTool`, `createZodToolRegistrar`, `makeRestToolRegistrar`, and the Style-R `register<Title>Tool`
+
+Hoisted argument locals live in handler scope but are checked against the **whole** module namespace, not just the names a given tool's path happens to reference. This is stricter than strictly necessary and deliberately so: the rule is one flat set-uniqueness check, which is far easier to reason about — and to trust — than a per-tool reachability analysis.
+
+The failure this prevents is not hypothetical. `sentry` declares a module-scope accessor `org()`. A tool declaring `{ "limit": { "local": "org", "default": 20 } }` would hoist `const org = p.limit ?? 20`, shadowing the accessor, so `${env.org}` would emit `org()` — a call on a number. `tsc` would eventually catch that, but only for someone who runs it; validation catches it at the source with a message that says which two fields collided.
+
+### Strict schemas
+
+All Zod object schemas in the spec are `.strict()`. Any unknown key is a validation error.
+
+This is how out-of-scope features fail fast, and it generalises better than enumerating them: a tool declaring `method`, `body`, `hitl`, or any other Stage B/C field is rejected because Stage A's schema has no such key. Known-future keys additionally get a targeted message — `"method" is not supported in Stage A (non-GET tools are out of scope); use "impl": "stub"` — so the error explains the boundary rather than just reporting a typo.
+
+Note the deliberate choice: a tool declaring a non-GET method is a **hard error, not an automatic downgrade to `"impl": "stub"`**. Auto-stubbing would emit a connector silently missing functionality its author explicitly requested, and the stub count in the harness report would understate the gap. Making the author write `"impl": "stub"` themselves keeps the omission intentional and visible.
+
 ## Formatting
 
-The emitter never hand-formats. It produces semantically correct TypeScript with naive line breaks, then runs `@biomejs/biome`'s formatter over it with a config mirroring the monorepo's:
+The emitter never hand-formats. `newrelic`'s two `reg(...)` calls are formatted differently from each other — one collapsed onto three lines, one fully expanded — purely because of 100-column line-breaking. Reproducing that by hand is a losing game. Since the fixtures are themselves Biome output, running both sides through the same normal form makes byte-equality reachable, and generated connectors pass `biome check` by construction rather than by luck.
+
+**Formatting runs in-process via WASM, not by shelling out.** `formatAll` uses `@biomejs/js-api` (v6) with the `@biomejs/wasm-nodejs` backend. No child process, no `biome` binary on `PATH`, no dependence on the caller's working directory or on a `biome.json` being discoverable — the configuration is applied programmatically:
 
 ```
 indentStyle: space, indentWidth: 2, lineWidth: 100, lineEnding: lf
 quoteStyle: double, trailingCommas: all, semicolons: always
 ```
 
-`newrelic`'s two `reg(...)` calls are formatted differently from each other — one collapsed onto three lines, one fully expanded — purely because of 100-column line-breaking. Since the fixtures are themselves Biome output, formatting both sides through the same normal form makes byte-equality reachable. It also means generated connectors pass `biome check` by construction.
+Shelling out to the CLI was rejected: it would make the generator depend on an external executable and on config-file discovery, and would fold process-spawn failures into every code path.
+
+### Version pinning
+
+The monorepo pins `@biomejs/biome: ^2.5.6` in its root `package.json`. (The `2.5.0` in `biome.json`'s `$schema` URL is the *schema* version and is not the tool pin — do not key off it.) This repo pins `@biomejs/wasm-nodejs` to the same `^2.5.6` line, which satisfies `js-api@6`'s `^2.5.0` peer range.
+
+Formatter output can change between Biome minor versions. The harness therefore prints the resolved Biome version in its report, and treats a mismatch against the monorepo's installed version as a warning — a diff observed under a different formatter version is not trustworthy evidence either way.
 
 ## The golden-fixture diff harness
 
@@ -201,9 +260,19 @@ bun run diff:golden                              # all fixtures
 bun run diff:golden sentry --nimbus-root D:\Nimbus
 ```
 
-Monorepo resolution order: `--nimbus-root` → `$NIMBUS_ROOT` → `C:\gitrep\Nimbus`.
+### Locating the monorepo
 
-**If the monorepo cannot be found, the harness prints every path it tried and exits 1.** It is a standalone script, not a `bun:test` file, deliberately: `test/sandbox.test.ts` in the monorepo is wrapped in `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])` and that variable is set nowhere in `.github/`, `scripts/`, or `package.json` — all 79 of those tests skip on every CI run. That is the exact false-green this harness must not reproduce.
+Resolution order, all platform-neutral:
+
+1. `--nimbus-root <path>`
+2. `$NIMBUS_ROOT`
+3. a sibling of this repository named `Nimbus` or `nimbus` — i.e. `<repo>/../Nimbus`, resolved from the script's own location, not from `process.cwd()`
+
+No absolute path is hardcoded. The earlier draft's `C:\gitrep\Nimbus` fallback baked one developer's Windows layout into the tool and would fail confusingly on macOS and Linux; the sibling probe covers the same real-world layout without naming a drive.
+
+Whichever candidate is chosen must contain the marker file `packages/mcp-connectors/shared/mcp-tool-kit.ts`. A path that exists but lacks the marker is rejected as "not a Nimbus checkout" rather than producing a wall of missing-fixture errors — this is what catches a stale `$NIMBUS_ROOT` pointing at a moved or renamed directory.
+
+**If no candidate resolves, the harness prints every path it tried, states which check each one failed, and exits 1.** It is a standalone script, not a `bun:test` file, deliberately: `test/sandbox.test.ts` in the monorepo is wrapped in `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])` and that variable is set nowhere in `.github/`, `scripts/`, or `package.json` — all 79 of those tests skip on every CI run. That is the exact false-green this harness must not reproduce.
 
 Per fixture it reports each of the six files as identical / differing (with a unified diff) / missing, plus a stub count, and exits non-zero if any fixture regresses against a checked-in expectations file.
 
@@ -227,13 +296,21 @@ The policy: **`local` is permitted everywhere as one optional string defaulting 
 
 Write tools, non-GET methods, request bodies, `hitlRequired` population. Multi-fetch, paginated, and multi-step tools. GraphQL (`linear`), IMAP, and CLI-backed (`azure`, `gcp`, `kubernetes`, `iac`) connectors. The per-connector `src/search-filter.ts` second file, present in 49 connectors. Standalone / `bunx` distribution. Gateway wiring (sync handlers, catalog, connector-secrets-manifest, rate-limiter).
 
+### Considered and deferred: reverse spec generator
+
+A utility that parses an existing `src/server.ts` back into a draft `ConnectorSpec` — bootstrapping fixture specs automatically instead of by hand, and plausible for Style R connectors given how declarative `makeRestToolRegistrar` already is.
+
+Deferred, for two reasons. First, YAGNI at this scale: Stage A has **six** fixtures, and hand-writing six spec files is perhaps an hour of work, whereas a reverse parser is a real component — AST handling or a regex scanner that must itself be tested, and one whose failure mode is a *plausible but subtly wrong* spec that then poisons the diff harness's verdict. Second, it inverts the trust relationship the harness depends on: the harness is meaningful precisely because the spec is an independent statement of intent that we then check the real connector against. Deriving the spec *from* the connector makes agreement partly self-fulfilling and weakens the signal.
+
+It becomes genuinely attractive in Stage C, where the task is surveying the unmeasured OAuth and write-tool tail across dozens of connectors — the scale at which hand-writing stops being viable and where its output would be an input to analysis rather than to an acceptance test. Revisit it there.
+
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
 | Path-template DSL creeps toward a general language | D3 boundary is a hard rule; stubs are the escape valve, and stub counts are reported per fixture |
 | Only 4 of 94 connectors are byte-reproducible under D3 | Accepted and stated plainly. The four are the prompt's own starting ladder; coverage growth is Stage C's problem, not a reason to widen Stage A |
-| Biome version drift between this repo and the monorepo changes formatting | Pin `@biomejs/biome` to the monorepo's `2.5.0` and assert the version in the harness |
+| Biome version drift between this repo and the monorepo changes formatting | Pin `@biomejs/wasm-nodejs` to the monorepo's `^2.5.6` line; the harness prints the resolved version and warns on mismatch, since a diff measured under a different formatter is not evidence |
 | The harness cannot run in this repo's CI (no monorepo) | Accepted per D4. Emitter unit tests (criterion 5) carry CI; the harness is a local/pre-merge gate |
 | Generated connectors drift as the monorepo's shared kit evolves | The harness *is* the drift detector — running it against a newer monorepo surfaces divergence immediately |
 
