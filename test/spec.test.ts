@@ -14,7 +14,13 @@ const MINIMAL = {
     base: "https://api.newrelic.com",
     inlineHeaders: { "X-Api-Key": "${env.apiKey}", Accept: "application/json" },
   },
-  tools: [{ name: "newrelic_application_list", description: "List APM applications.", path: "/v2/applications.json" }],
+  tools: [
+    {
+      name: "newrelic_application_list",
+      description: "List APM applications.",
+      path: "/v2/applications.json",
+    },
+  ],
 };
 
 describe("parseSpec", () => {

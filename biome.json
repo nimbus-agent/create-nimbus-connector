@@ -7,7 +7,14 @@
     "lineWidth": 100,
     "lineEnding": "lf"
   },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": { "noTemplateCurlyInString": "off" },
+      "style": { "noNonNullAssertion": "off" }
+    }
+  },
   "javascript": {
     "formatter": { "quoteStyle": "double", "trailingCommas": "all", "semicolons": "always" }
   }

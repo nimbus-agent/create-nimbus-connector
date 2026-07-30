@@ -43,7 +43,8 @@ export const EnvSchema = z
     headerNames: z.array(z.string().min(1)).optional(),
   })
   .refine((e) => !(e.required && e.default !== undefined), {
-    message: 'env entry cannot declare both "default" and "required" — a defaulted value is never empty',
+    message:
+      'env entry cannot declare both "default" and "required" — a defaulted value is never empty',
   })
   .refine((e) => e.bindings === undefined || e.bindings.length === e.vars.length, {
     message: '"bindings" must have exactly one entry per "vars" entry',
@@ -92,7 +93,7 @@ export type ConnectorSpec = z.infer<typeof ConnectorSpecSchema> & {
 
 /** Capitalise the first letter only: "newrelic" -> "Newrelic". Matches the README fixtures. */
 export function capitalize(s: string): string {
-  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
+  return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function preflightOutOfScope(input: unknown): void {
