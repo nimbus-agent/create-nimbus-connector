@@ -1,0 +1,37 @@
+{
+  "name": "discord",
+  "title": "Discord",
+  "displayName": "Discord",
+  "description": "Discord opt-in connector (guilds, channels, messages). Disabled by default. Mutations require Gateway HITL.",
+  "serviceLabel": "Discord",
+  "style": "rest-kit",
+  "network": ["discord.com", "gateway.discord.gg", "cdn.discordapp.com"],
+  "syncInterval": 120,
+  "minNimbusVersion": "0.2.0",
+  "env": [{ "vars": ["DISCORD_BOT_TOKEN"], "local": "tokenHeaders", "bindings": ["t"], "auth": "bearer" }],
+  "fetchHelper": { "local": "discordFetch", "base": "https://discord.com/api/v10" },
+  "tools": [
+    {
+      "name": "discord_guild_list",
+      "description": "List guilds the bot is a member of.",
+      "path": "/users/@me/guilds"
+    },
+    {
+      "name": "discord_channel_list",
+      "description": "List channels in a guild (id, type, name).",
+      "args": { "guildId": { "type": "string", "min": 1 } },
+      "path": "/guilds/${arg.guildId|enc}/channels"
+    },
+    {
+      "name": "discord_channel_messages",
+      "description": "List recent messages in a channel (newest first). Optional `after` snowflake for incremental fetch.",
+      "impl": "stub"
+    },
+    {
+      "name": "discord_thread_list",
+      "description": "List active threads in a guild (includes public threads the bot can see).",
+      "args": { "guildId": { "type": "string", "min": 1 } },
+      "path": "/guilds/${arg.guildId|enc}/threads/active"
+    }
+  ]
+}

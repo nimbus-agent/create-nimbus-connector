@@ -286,6 +286,34 @@ Per fixture it reports each of the six files as identical / differing (with a un
 
 Note that criterion 3 is the real functional bar. Contract tests are explicitly **not** an acceptance signal — see the harness section.
 
+### Criterion 2: `discord` and `google-meet` gap report
+
+Both fixtures (`fixtures/discord.spec.json`, `fixtures/google-meet.spec.json`) are `style: "rest-kit"`, modelled directly on `packages/mcp-connectors/{discord,google-meet}/src/server.ts` and `nimbus.extension.json` in the monorepo. Neither reaches zero diff, by design — Task 16 exists to characterise the gap, not close it. `bun run diff:golden discord google-meet --nimbus-root <root>` reports:
+
+**`discord` — 3/6 files identical, 1 stub tool**
+
+| File | Result | Blocking construct |
+|---|---|---|
+| `src/server.ts` | DIFF | The hand-written `discordFetch` sends `Authorization: \`Bot ${token}\`` plus a static `"User-Agent"` header; the rest-kit `FetchHelperSchema` has no `authScheme` field (bearer is hardcoded in `renderRestKitFetchHelper`) and no way to add a header that isn't `${env.X}`-templated, since the schema explicitly forbids `${env.*}` references in a rest-kit `fetchHelper` (the token is resolved by `makeRestToolRegistrar`, not an env accessor). Also, `discord_channel_messages` builds its path with `new URL(...)` plus conditional `u.searchParams.set(...)` calls (an `after` param only added `if (parsed.after !== undefined && parsed.after !== "")`) — the D3 path-template DSL renders one fixed template string per tool and cannot express conditional query-parameter inclusion, so this tool is `"impl": "stub"`. |
+| `package.json` | DIFF | Real file adds a `"bin": { "nimbus-mcp-discord": "./dist/server.js" }` entry and `"dev"`/`"build"` scripts (`bun build --compile --outfile`) for standalone-binary distribution; `emitPackageJson` only emits `typecheck`/`lint`/`test`/`clean`. Standalone distribution is out of Stage A scope (see "Out of scope"). |
+| `nimbus.extension.json` | DIFF | Real manifest declares `"hitlRequired": ["write", "delete"]`; `emitManifest` always emits `"hitlRequired": []` — HITL population is explicitly Stage C (see "Out of scope" and `OUT_OF_SCOPE_TOOL_KEYS` in `src/spec.ts`). |
+| `tsconfig.json` | identical | — |
+| `README.md` | identical | Discord's hand-written README happens to be exactly the generic boilerplate `emitReadme` produces. |
+| `test/sandbox.test.ts` | identical | — |
+
+**`google-meet` — 2/6 files identical, 2 stub tools**
+
+| File | Result | Blocking construct |
+|---|---|---|
+| `src/server.ts` | DIFF | Real `meetFetch` delegates to `fetchBearerAuthorizedJson` + `resolveUrlWithBase` imported from `shared/fetch-bearer-json.ts` — a different, more-shared fetch primitive than the self-contained helper `renderRestKitFetchHelper` emits; the emitter models exactly one rest-kit fetch-helper shape and has no spec field selecting an alternate shared module. `google_meet_list` and `google_meet_search` both build their path with `new URL(...)` + conditional `searchParams.set(...)` (optional `pageToken`, and for search an optional `filter`) — the same conditional-query-parameter construct as discord's stub tool, outside the D3 path-template DSL — so both are `"impl": "stub"`. Only `google_meet_get` (a plain `/conferenceRecords/${id}` path, no query string) reaches full expression. |
+| `package.json` | DIFF | Same `bin` + `dev`/`build`-script gap as discord, for the same reason (standalone-binary distribution, out of scope). |
+| `tsconfig.json` | DIFF | Real file adds `"../shared/**/*.ts"` to `"include"` because `server.ts` imports `shared/fetch-bearer-json.ts` directly; `emitTsconfig` emits a fixed `["src/**/*"]` and has no notion of a per-connector extra include, which is downstream of the fetch-helper gap above, not a separate cause. |
+| `README.md` | DIFF | Real README is several paragraphs of hand-authored product prose (OAuth scope, gateway-side sync behavior, a vault-key table) — `emitReadme` only ever produces the fixed four-section boilerplate. No boilerplate rewording closes this; it is a content gap, not a formatting one. |
+| `nimbus.extension.json` | identical | Google Meet's real manifest has `"hitlRequired": []` already, so the Stage-C gap above happens not to surface here. |
+| `test/sandbox.test.ts` | identical | — |
+
+No emitter bug was found or fixed while producing these two fixtures. Every diff traces to one of: (a) a fetch-helper shape the rest-kit schema does not model (auth scheme / extra static header / an alternate shared fetch module), (b) a path-building construct (`new URL()` + conditional `searchParams`) outside the D3 boundary, or (c) manifest/package.json surface explicitly deferred to Stage B/C. `registerDiscordTool`'s factory block and both non-stub tool registrations are byte-identical to the real file, confirming the `makeRestToolRegistrar` wiring itself is correct; `google-meet`'s registrar name (`registerGoogleMeetTool`, from the fixed `register${title}Tool` formula) does not match the real hand-picked short name `registerMeetTool` — a cosmetic author choice, not something the formula can or should chase without a new naming-override field. Two additional per-connector authoring choices were confirmed, by grepping every monorepo connector that calls `makeRestToolRegistrar`, to be genuine style variance rather than bugs: the wiring line (`const reg = createZodToolRegistrar(createRegisterSimpleTool(server));` one-liner vs. a `registerSimpleTool` intermediate + blank line) and the tail (`const transport = ...; await server.connect(transport);` vs. inline `await server.connect(new StdioServerTransport());`) are each used by roughly half of the real rest-kit connectors (e.g. `github-actions`/`outlook` match the emitter's one-liner wiring exactly; `gmail`/`onedrive`/`outlook`/`google-photos`/`google-meet` use the inline tail while `github`/`circleci`/`pagerduty`/`discord` use the two-line form) — so there is no single "correct" idiom to converge on, and the emitter's fixed choice is left as-is.
+
 ## Spec cosmetics policy
 
 Byte-exactness forces some cosmetics into the spec. Real connectors hoist defaulted args to local consts with human-chosen abbreviations: `const lim = p.limit ?? 10` (datadog), `const q = p.query ?? ""` (grafana), `const only = p.only_open === true ? "true" : "false"` (newrelic). There is no derivable rule — `limit`→`lim` and `query`→`q` are taste. The same applies to accessor names (`headers` vs `authHeaders`) and fetch-helper names (`nrGet`, `ddGet`, `grafanaGet`, `sentryGet`).
