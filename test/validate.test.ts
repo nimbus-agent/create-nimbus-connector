@@ -94,6 +94,108 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).not.toThrow();
   });
 
+  // F2: tool path placeholders must resolve against the spec that declared them.
+  it("rejects a rest-kit tool path referencing ${env.X} — rest-kit emits no env accessors", () => {
+    const s = restKitSpecWith({
+      tools: [
+        {
+          name: "discord_guild_list",
+          description: "d.",
+          path: "/guilds/${env.anything}",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).toThrow(/env accessors/);
+  });
+
+  it("rejects a hand-rolled tool path referencing an env local the spec never declares", () => {
+    const s = specWith({
+      tools: [
+        {
+          name: "sentry_issue_list",
+          description: "d.",
+          path: "/projects/${env.nosuch}/issues/",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).toThrow(/nosuch/);
+  });
+
+  it("rejects a tool path referencing an arg the tool never declares", () => {
+    const s = specWith({
+      tools: [
+        {
+          name: "sentry_issue_list",
+          description: "d.",
+          path: "/projects/${env.org}/${arg.typo}/issues/",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).toThrow(/typo/);
+  });
+
+  it("accepts a hand-rolled tool path whose env and arg references both resolve", () => {
+    const s = specWith({
+      tools: [
+        {
+          name: "sentry_issue_list",
+          description: "d.",
+          args: { projectSlug: { type: "string" } },
+          path: "/projects/${env.org}/${arg.projectSlug}/issues/",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  it("accepts a rest-kit tool path whose arg references resolve and has no env reference", () => {
+    const s = restKitSpecWith({
+      tools: [
+        {
+          name: "discord_channel_list",
+          description: "d.",
+          args: { guildId: { type: "string" } },
+          path: "/guilds/${arg.guildId|enc}/channels",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  // F7: |bool is restricted to boolean-typed args.
+  it("rejects a |bool placeholder applied to a non-boolean arg", () => {
+    const s = specWith({
+      tools: [
+        {
+          name: "sentry_issue_list",
+          description: "d.",
+          args: { projectSlug: { type: "string" } },
+          path: "/projects/${env.org}/issues/?flag=${arg.projectSlug|bool}",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).toThrow(/"projectSlug".*boolean/s);
+  });
+
+  it("accepts a |bool placeholder applied to a boolean arg", () => {
+    const s = specWith({
+      tools: [
+        {
+          name: "sentry_issue_list",
+          description: "d.",
+          args: { onlyOpen: { type: "boolean", optional: true } },
+          path: "/projects/${env.org}/issues/?open=${arg.onlyOpen|bool}",
+        },
+      ],
+    });
+    expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  it("rejects an env local colliding with the reserved global `fetch` (F6)", () => {
+    const s = specWith({ env: [{ vars: ["A"], local: "fetch", bindings: ["a"], required: true }] });
+    expect(() => validateSpec(s)).toThrow(/fetch/);
+  });
+
   it("correctly strips non-alphanumerics from title in registrar name", () => {
     const s = restKitSpecWith({
       title: "Google Meet",

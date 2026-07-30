@@ -21,12 +21,12 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     ].join("\n");
   }
 
-  if (tool.path === undefined) {
-    throw new Error(`Tool "${tool.name}" has impl "get" but no "path".`);
-  }
+  // Schema guarantees "path" is present here — ToolSchema's refine rejects any
+  // impl !== "stub" tool with no path.
+  const path = tool.path!;
 
   const hoisted = hoistedLocals(tool.args);
-  const segments = parsePathTemplate(tool.path);
+  const segments = parsePathTemplate(path);
   const needsParam =
     hoisted.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
 

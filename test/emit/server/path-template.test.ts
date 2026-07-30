@@ -34,19 +34,27 @@ describe("parsePathTemplate", () => {
   });
 
   it("rejects uppercase mode name", () => {
-    expect(() => parsePathTemplate("/x/${env.a}/${arg.b|ENC}")).toThrow(/Malformed placeholder/);
+    expect(() => parsePathTemplate("/x/${env.a}/${arg.b|ENC}")).toThrow(
+      /Malformed placeholder in path template: "\/\$\{arg\.b\|ENC\}"/,
+    );
   });
 
   it("rejects incomplete arg placeholder without dot", () => {
-    expect(() => parsePathTemplate("/x/${env.a}/${arg}")).toThrow(/Malformed placeholder/);
+    expect(() => parsePathTemplate("/x/${env.a}/${arg}")).toThrow(
+      /Malformed placeholder in path template: "\/\$\{arg\}"/,
+    );
   });
 
   it("rejects uppercase namespace", () => {
-    expect(() => parsePathTemplate("/x/${env.a}/${ARG.b}")).toThrow(/Malformed placeholder/);
+    expect(() => parsePathTemplate("/x/${env.a}/${ARG.b}")).toThrow(
+      /Malformed placeholder in path template: "\/\$\{ARG\.b\}"/,
+    );
   });
 
   it("rejects unterminated placeholder", () => {
-    expect(() => parsePathTemplate("/x/${env.a}/${arg.b")).toThrow(/Malformed placeholder/);
+    expect(() => parsePathTemplate("/x/${env.a}/${arg.b")).toThrow(
+      /Malformed placeholder in path template: "\/\$\{arg\.b"/,
+    );
   });
 
   it("returns empty array for empty template", () => {
@@ -84,6 +92,18 @@ describe("renderPath", () => {
     expect(renderPath(parsePathTemplate("?o=${arg.only_open|bool}"), { param: "p", hoisted })).toBe(
       "`?o=${only}`",
     );
+  });
+
+  it("|bool contributes nothing beyond the hoist — identical to |raw once hoisted (F7)", () => {
+    // Pins the actual behaviour: the "true"/"false" conversion comes entirely from
+    // renderHoists (keyed on type === "boolean"), never from this placeholder mode —
+    // argExpression's `bool` case falls through to the same code path as `raw`. Restricting
+    // |bool to boolean-typed args is enforced at validation (validateSpec), not here, since
+    // renderPath has no notion of an arg's declared type.
+    const hoisted = new Map([["only_open", "only"]]);
+    const bool = renderPath(parsePathTemplate("?o=${arg.only_open|bool}"), { param: "p", hoisted });
+    const raw = renderPath(parsePathTemplate("?o=${arg.only_open|raw}"), { param: "p", hoisted });
+    expect(bool).toBe(raw);
   });
 
   it("renders empty template as empty quoted string", () => {

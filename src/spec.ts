@@ -7,13 +7,21 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
   hitl: "HITL declaration is Stage C",
 };
 
+/**
+ * Every `local` field becomes an emitted identifier (a function name, a hoisted
+ * const name), so it is held to the same rule as tool argument keys — a valid
+ * JS identifier, not just a non-empty string.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const identifierField = () => z.string().regex(IDENTIFIER_RE, "must be a valid JS identifier");
+
 export const ArgSchema = z
   .strictObject({
     type: z.enum(["string", "number", "boolean"]),
     optional: z.boolean().default(false),
     default: z.union([z.string(), z.number(), z.boolean()]).optional(),
     /** Hoisted const name. Cosmetic; defaults to the arg's own key. */
-    local: z.string().min(1).optional(),
+    local: identifierField().optional(),
     min: z.number().optional(),
     max: z.number().optional(),
     int: z.boolean().default(false),
@@ -26,26 +34,39 @@ export const ArgSchema = z
   })
   .refine((a) => a.type === "number" || !a.int, {
     message: '"int" is only valid on a number argument',
+  })
+  .refine((a) => a.default === undefined || a.optional, {
+    message:
+      'an argument declaring "default" must also declare "optional": true — a required ' +
+      "argument's default can never be reached, since the schema demands a value",
   });
 
-export const ToolSchema = z.strictObject({
-  name: z.string().min(1),
-  description: z.string().min(1),
-  args: z
-    .record(
-      z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, "argument name must be a valid JS identifier"),
-      ArgSchema,
-    )
-    .default({}),
-  path: z.string().optional(),
-  impl: z.enum(["get", "stub"]).default("get"),
-});
+export const ToolSchema = z
+  .strictObject({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    args: z
+      .record(
+        z
+          .string()
+          .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, "argument name must be a valid JS identifier"),
+        ArgSchema,
+      )
+      .default({}),
+    path: z.string().optional(),
+    impl: z.enum(["get", "stub"]).default("get"),
+  })
+  .refine((t) => (t.impl === "stub") === (t.path === undefined), {
+    message:
+      '"path" is required when "impl" is not "stub", and must be omitted when "impl" is "stub" ' +
+      '— "impl" and "path" disagree',
+  });
 
 export const EnvSchema = z
   .strictObject({
     vars: z.array(z.string().min(1)).min(1),
     /** Accessor function name. */
-    local: z.string().min(1),
+    local: identifierField(),
     /** Internal variable name per var. Cosmetic; defaults to camelCase(var). */
     bindings: z.array(z.string().min(1)).optional(),
     required: z.boolean().default(false),
@@ -81,7 +102,7 @@ export const EnvSchema = z
   });
 
 export const FetchHelperSchema = z.strictObject({
-  local: z.string().min(1),
+  local: identifierField(),
   /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
   base: z.string().min(1),
   /** Name of an env accessor returning the header record. */

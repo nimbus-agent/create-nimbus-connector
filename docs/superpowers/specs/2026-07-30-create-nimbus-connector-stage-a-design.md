@@ -56,8 +56,8 @@ Style R is the direction of travel. Style H is what the four simplest fixtures u
 Generation is two stages, deliberately separated so the purity claim is literally true rather than approximately true:
 
 ```ts
-generate(spec: ConnectorSpec): GeneratedFile[]          // pure. canonical, UNFORMATTED TS
-formatAll(files: GeneratedFile[]): Promise<GeneratedFile[]>  // impure at init, then deterministic
+generate(spec: ConnectorSpec): GeneratedFile[]     // pure. canonical, UNFORMATTED TS
+formatAll(files: GeneratedFile[]): GeneratedFile[]  // SYNCHRONOUS. impure at init, then deterministic
 ```
 
 `generate` touches no filesystem, no `process.env`, no clock, and no child process. It emits semantically correct TypeScript with naive line breaks. `formatAll` is the only stage that needs Biome, and it is shared verbatim by all three consumers so none of them can disagree about formatting:
@@ -153,9 +153,16 @@ The whole DSL. A path is a literal string with `${...}` placeholders:
 | `${arg.X}` | `p.X` verbatim | sentry `projectSlug` |
 | `${arg.X\|enc}` | `encodeURIComponent(...)` | grafana `query`, discord ids |
 | `${arg.X\|num}` | `String(...)` | datadog / sentry `limit` |
-| `${arg.X\|bool}` | `"true"` / `"false"` | newrelic `only_open` |
+| `${arg.X\|bool}` | the hoisted boolean local, verbatim | newrelic `only_open` |
 
-An arg with a `default` (or a `bool` placeholder) is hoisted to a `const` preamble line inside the handler, named by its `local` field. This mirrors what every real connector does.
+An arg with a `default`, or of `type: "boolean"`, is hoisted to a `const` preamble line inside
+the handler, named by its `local` field. This mirrors what every real connector does. The
+`"true"`/`"false"` conversion comes from that hoist itself (`renderHoists`, keyed on
+`type === "boolean"`) — it is not something the `|bool` placeholder does. `|bool` merely
+renders whatever local the hoist produced; it exists so a boolean-valued path segment reads
+as intentional rather than as a bare `${arg.X}` that happens to work. Validation rejects
+`|bool` applied to a non-boolean arg, since there the mode would otherwise be a silent alias
+for `|raw` (no hoist, no conversion).
 
 A tool that cannot be expressed sets `"impl": "stub"`; the emitter produces a typed handler that throws `"<tool> not implemented"`. The harness counts stubs per fixture so degradation is always visible.
 

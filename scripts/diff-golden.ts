@@ -1,8 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeValue } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
 import { biomeVersion, formatAll } from "../src/format.ts";
+import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { classify, loadExpectations } from "../src/golden/expectations.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
@@ -17,7 +19,7 @@ function parseArgs(argv: string[]): { names: string[]; nimbusRoot?: string } {
   let nimbusRoot: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--nimbus-root") {
-      nimbusRoot = argv[++i];
+      nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
     } else if (argv[i]?.startsWith("--")) {
       throw new Error(`Unknown flag: ${argv[i]}`);
     } else {
@@ -77,8 +79,12 @@ function main(): void {
     );
   }
 
+  const resolvedBiomeVersion = biomeVersion();
   console.log(`Nimbus root: ${root}`);
-  console.log(`Biome:       ${biomeVersion()}\n`);
+  console.log(`Biome:       ${resolvedBiomeVersion}`);
+  const versionWarning = checkBiomeVersion(root, resolvedBiomeVersion);
+  if (versionWarning !== undefined) console.log(versionWarning);
+  console.log();
 
   let failures = 0;
 

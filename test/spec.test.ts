@@ -180,6 +180,89 @@ describe("parseSpec", () => {
     expect(() => parseSpec(bad)).toThrow(/"int"/);
   });
 
+  it("rejects impl: get with no path (F5)", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ name: "x", description: "d.", impl: "get" }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/"path".*"impl"|"impl".*"path"/s);
+  });
+
+  it("rejects impl: stub with a path (F5)", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ name: "x", description: "d.", impl: "stub", path: "/x" }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/"path".*"impl"|"impl".*"path"/s);
+  });
+
+  it("accepts impl: stub without a path (F5)", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [{ name: "x", description: "d.", impl: "stub" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("accepts impl: get with a path (F5)", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [{ name: "x", description: "d.", impl: "get", path: "/x" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects a non-optional string argument declaring default (F12)", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { name: { type: "string", default: "hi" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/optional/);
+  });
+
+  it("accepts a string argument declaring default with optional: true (F12)", () => {
+    const ok = {
+      ...MINIMAL,
+      tools: [
+        { ...MINIMAL.tools[0], args: { name: { type: "string", optional: true, default: "hi" } } },
+      ],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
+  it("rejects an env local that is not a valid JS identifier (F6)", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/env\.0\.local.*valid JS identifier/s);
+  });
+
+  it("rejects an arg local that is not a valid JS identifier (F6)", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "string", local: "probe-fetch" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/local.*valid JS identifier/s);
+  });
+
+  it("rejects a fetchHelper local that is not a valid JS identifier (F6)", () => {
+    const bad = {
+      ...MINIMAL,
+      fetchHelper: { local: "probe-fetch", base: "https://x", headers: "h" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/fetchHelper\.local.*valid JS identifier/s);
+  });
+
+  it("accepts ordinary locals (F6)", () => {
+    const ok = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "apiRoot2", bindings: ["x"], required: true }],
+      fetchHelper: { local: "nrGet2", base: "https://api.newrelic.com", headers: "apiRoot2" },
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
+  });
+
   it("rejects a mixed args object and names the specific invalid key", () => {
     const bad = {
       ...MINIMAL,

@@ -29,17 +29,18 @@ function headerOption(spec: ConnectorSpec): string {
  */
 function renderRestKitFetchHelper(spec: ConnectorSpec): string {
   const fh = spec.fetchHelper;
-  const base = resolveEnvRefs(fh.base);
+  // Both fh.base and fh.inlineHeaders values are guaranteed free of ${env.X} references
+  // here — ConnectorSpecSchema's rest-kit refine rejects any such reference at parse
+  // time, since rest-kit emits no env accessors and the call would be undefined. No
+  // resolveEnvRefs() call is needed or reachable for either.
+  const base = fh.base;
   const extra =
     fh.inlineHeaders === undefined
       ? ""
       : Object.entries(fh.inlineHeaders)
           .map(([k, v]) => {
             const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
-            const inner = /^\$\{env\.[A-Za-z0-9_]+\}$/.test(v)
-              ? resolveEnvRefs(v).slice(2, -1)
-              : JSON.stringify(v);
-            return `      ${key}: ${inner},`;
+            return `      ${key}: ${JSON.stringify(v)},`;
           })
           .join("\n");
 

@@ -13,7 +13,8 @@ export type CliOptions = {
   dryRun: boolean;
 };
 
-function takeValue(argv: readonly string[], i: number, flag: string): string {
+/** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
+export function takeValue(argv: readonly string[], i: number, flag: string): string {
   const value = argv[i];
   if (value === undefined) {
     throw new Error(`${flag} requires a value`);

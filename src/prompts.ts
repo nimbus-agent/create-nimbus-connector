@@ -74,6 +74,7 @@ export function buildSpec(answers: PromptAnswers): ConnectorSpec {
 
   const shared = {
     name: answers.name,
+    title: answers.displayName,
     displayName: answers.displayName,
     description: answers.description,
     serviceLabel: answers.serviceLabel,

@@ -17,10 +17,14 @@ A tool spec that can't be expressed under these constraints sets `"impl": "stub"
 ## Usage
 
 ```
-bunx create-nimbus-connector <name>
+bun src/cli.ts <name>
 ```
 
 Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory).
+
+The package is not yet published, so `bunx create-nimbus-connector <name>` does not work — that
+form is what Stage B (standalone distribution) will enable. Run from a checkout of this repo
+with `bun src/cli.ts` in the meantime.
 
 ### Flags
 
@@ -31,8 +35,8 @@ Runs an interactive prompt session (name, title, description, network hosts, env
 Examples:
 
 ```
-bunx create-nimbus-connector --spec fixtures/sentry.spec.json --dry-run
-bunx create-nimbus-connector --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
+bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
+bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
 ```
 
 ## The golden-fixture diff harness

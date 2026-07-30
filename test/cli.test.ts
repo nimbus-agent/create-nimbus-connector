@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { parseCliArgs, renderTree } from "../src/cli.ts";
+import { emitReadme } from "../src/emit/readme.ts";
 import { buildSpec, type PromptAnswers } from "../src/prompts.ts";
+import { registrarName } from "../src/spec.ts";
 
 describe("parseCliArgs", () => {
   it("reads a positional name", () => {
@@ -107,6 +109,19 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
     });
     expect(spec.tools).toHaveLength(2);
     expect(spec.tools.every((t) => t.impl === "stub")).toBe(true);
+  });
+
+  it("sets title from displayName for a hyphenated name (F1)", () => {
+    const spec = buildSpec({
+      ...base,
+      name: "google-meet",
+      displayName: "Google Meet",
+      authKind: "bearer",
+      headerName: "",
+    });
+    expect(spec.title).toBe("Google Meet");
+    expect(emitReadme(spec).content).toContain("# Google Meet Connector");
+    expect(registrarName(spec)).toBe("registerGoogleMeetTool");
   });
 
   it("throws a message naming the base URL field and value when it is not a valid URL", () => {
