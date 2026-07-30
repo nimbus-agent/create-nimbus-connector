@@ -1,0 +1,31 @@
+{
+  "name": "zzscratch",
+  "title": "Zzscratch",
+  "displayName": "ZZ Scratch",
+  "description": "Throwaway acceptance-check connector. Read-focused.",
+  "serviceLabel": "ZZ Scratch",
+  "style": "hand-rolled",
+  "network": ["api.zzscratch.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["ZZSCRATCH_URL"],
+      "local": "apiRoot",
+      "bindings": ["u"],
+      "default": "https://api.zzscratch.test",
+      "transform": "stripTrailingSlash"
+    },
+    { "vars": ["ZZSCRATCH_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzGet", "base": "${env.apiRoot}", "headers": "headers" },
+  "tools": [
+    { "name": "zzscratch_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzscratch_item_get",
+      "description": "Get one item by id.",
+      "args": { "itemId": { "type": "string", "min": 1 } },
+      "path": "/v1/items/${arg.itemId|enc}"
+    }
+  ]
+}

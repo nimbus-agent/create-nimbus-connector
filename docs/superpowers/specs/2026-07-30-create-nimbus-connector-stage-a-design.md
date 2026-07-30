@@ -286,6 +286,33 @@ Per fixture it reports each of the six files as identical / differing (with a un
 
 Note that criterion 3 is the real functional bar. Contract tests are explicitly **not** an acceptance signal — see the harness section.
 
+### Acceptance criteria — results (2026-07-30, Task 18)
+
+Measured against `C:\gitrep\Nimbus`, Biome `2.5.6`, Bun `1.3.14`.
+
+**Criterion 1 — PASS.** `bun run diff:golden --nimbus-root C:\gitrep\Nimbus`. `newrelic`, `datadog`, `grafana`, and `sentry` each report `PASS  <name>  6/6 files identical` with no residual diff.
+
+**Criterion 2 — PASS (gap documented, not closed).** Same command; `discord` reports `PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))` and `google-meet` reports `PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))`, matching the counts declared in `fixtures/expectations.json` and the per-file gap tables below. The harness would fail the run if either count drifted in either direction; it did not.
+
+**Criterion 3 — PASS.** `bun run acceptance C:\gitrep\Nimbus` (`scripts/acceptance.ts`) generates the `zzscratch` fixture (`fixtures/zzscratch.spec.json`) into `packages/mcp-connectors/zzscratch/` inside the live monorepo and runs the monorepo's own toolchain against it, with a `try/finally` that removes the scratch connector regardless of outcome:
+
+```
+PASS  tsc --noEmit
+PASS  biome check
+PASS  audit:package-readmes
+PASS  monorepo working tree clean
+
+All acceptance checks passed.
+```
+
+Cleanup-under-failure was verified separately, not assumed: a temporary `throw` was inserted into `scripts/acceptance.ts` immediately *after* `writeFiles(...)` (i.e. after the scratch connector's six files already existed on disk inside the Nimbus checkout) and the harness was re-run. It exited non-zero (`error: script "acceptance" exited with code 1`) and `git -C C:\gitrep\Nimbus status --short packages/mcp-connectors/` was still empty — the `finally` block removed the on-disk files before the process exited. The injected throw was then reverted and the harness re-run clean (all four `PASS` lines again), confirming this repo's own `git status` and the Nimbus checkout's `git status` were both clean afterward.
+
+**Criterion 4 — PASS.** Folded into the criterion-3 run above: `PASS  audit:package-readmes` is `bun run audit:package-readmes` (`scripts/audit/package-readmes.ts` in the monorepo) run against the full `packages/mcp-connectors/` tree including the generated `zzscratch/README.md`, with exit 0.
+
+**Criterion 5 — PASS.** `bun test` — 174 pass, 0 fail, across 17 files, with no `NIMBUS_ROOT` set and no Nimbus checkout required (the golden-harness and acceptance scripts are separate entry points, not part of the `bun:test` suite).
+
+**On `fixtures/zzscratch.spec.json` and the golden harness:** this fixture is purpose-built for criterion 3, not criterion 1 — there is no real `zzscratch` connector in the monorepo to diff against. Rather than exempting it from `scripts/diff-golden.ts`'s directory scan (which would let an undeclared fixture silently bypass the expectations check the harness exists to enforce), it is declared in `fixtures/expectations.json` as `"zzscratch": 0`. The harness reports it as `PASS  zzscratch  0/6 files identical (expected partial)` with all six files listed `MISSING — not present in the real connector`, which is the correct and expected verdict for a fixture with no real counterpart, not a bypass.
+
 ### Criterion 2: `discord` and `google-meet` gap report
 
 Both fixtures (`fixtures/discord.spec.json`, `fixtures/google-meet.spec.json`) are `style: "rest-kit"`, modelled directly on `packages/mcp-connectors/{discord,google-meet}/src/server.ts` and `nimbus.extension.json` in the monorepo. Neither reaches zero diff, by design — Task 16 exists to characterise the gap, not close it. `bun run diff:golden discord google-meet --nimbus-root <root>` reports:
