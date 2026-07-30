@@ -118,10 +118,10 @@ JSON on disk, Zod-validated on load. One file per fixture. Shape:
   "minNimbusVersion": "0.2.0",
 
   "env": [
-    { "vars": ["SENTRY_URL"], "local": "apiRoot", "default": "https://sentry.io",
-      "transform": "stripTrailingSlash", "suffix": "/api/0" },
-    { "vars": ["SENTRY_ORG_SLUG"],   "local": "org",     "required": true },
-    { "vars": ["SENTRY_AUTH_TOKEN"], "local": "headers", "auth": "bearer" }
+    { "vars": ["SENTRY_URL"], "local": "apiRoot", "bindings": ["u"],
+      "default": "https://sentry.io", "transform": "stripTrailingSlash", "suffix": "/api/0" },
+    { "vars": ["SENTRY_ORG_SLUG"],   "local": "org",     "bindings": ["o"], "required": true },
+    { "vars": ["SENTRY_AUTH_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
   ],
 
   "fetchHelper": { "local": "sentryGet", "base": "${env.apiRoot}", "headers": "${env.headers}" },
@@ -290,7 +290,9 @@ Note that criterion 3 is the real functional bar. Contract tests are explicitly 
 
 Byte-exactness forces some cosmetics into the spec. Real connectors hoist defaulted args to local consts with human-chosen abbreviations: `const lim = p.limit ?? 10` (datadog), `const q = p.query ?? ""` (grafana), `const only = p.only_open === true ? "true" : "false"` (newrelic). There is no derivable rule — `limit`→`lim` and `query`→`q` are taste. The same applies to accessor names (`headers` vs `authHeaders`) and fetch-helper names (`nrGet`, `ddGet`, `grafanaGet`, `sentryGet`).
 
-The policy: **`local` is permitted everywhere as one optional string defaulting to a sensible derivation.** Beyond that, the two grafana-only flags (`normalizeLeadingSlash`, `jsonFallbackRaw`) are accepted because they change behaviour, not just appearance. If any further fixture requires a new purely-cosmetic field to reach zero diff, it is recorded as a documented irreducible diff instead of growing the spec. Spec surface is the cost being controlled here; a generator whose input is harder to write than the output is a failed generator.
+There is a second instance of the same axis inside accessors. Each reads its env var into a short internal binding, and those are equally hand-chosen: `k` (newrelic), `s`/`ak`/`app` (datadog), `u`/`tok` (grafana), `u`/`o`/`t` (sentry). Hence the `bindings` array, parallel to `vars`, defaulting to `camelCase(<VAR_NAME>)`.
+
+The policy: **`local` and `bindings` are permitted everywhere as optional strings defaulting to a sensible derivation.** Beyond that, the two grafana-only flags (`normalizeLeadingSlash`, `jsonFallbackRaw`) are accepted because they change behaviour, not just appearance. If any further fixture requires a new purely-cosmetic field to reach zero diff, it is recorded as a documented irreducible diff instead of growing the spec. Spec surface is the cost being controlled here; a generator whose input is harder to write than the output is a failed generator.
 
 ## Out of scope
 
