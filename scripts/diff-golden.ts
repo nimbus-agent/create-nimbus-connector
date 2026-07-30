@@ -3,12 +3,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generate } from "../src/emit/index.ts";
 import { biomeVersion, formatAll } from "../src/format.ts";
+import { classify, loadExpectations } from "../src/golden/expectations.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../src/types.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(scriptDir, "..", "fixtures");
+const expectationsPath = join(fixturesDir, "expectations.json");
 
 function parseArgs(argv: string[]): { names: string[]; nimbusRoot?: string } {
   const names: string[] = [];
@@ -38,6 +40,14 @@ function unifiedDiff(expected: string, actual: string): string {
   return out.slice(0, 40).join("\n");
 }
 
+/** Parenthetical note appended after the identical-file count on a PASS line. */
+function passNote(expected: number, total: number, stubs: number): string {
+  const parts: string[] = [];
+  if (expected < total) parts.push("expected partial");
+  if (stubs > 0) parts.push(`${stubs} stub tool(s)`);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
 function main(): void {
   const { names, nimbusRoot } = parseArgs(process.argv.slice(2));
   const root = resolveNimbusRoot({
@@ -45,6 +55,7 @@ function main(): void {
     env: process.env["NIMBUS_ROOT"],
     scriptDir,
   });
+  const expectations = loadExpectations(expectationsPath);
 
   const all = readdirSync(fixturesDir)
     .filter((f) => f.endsWith(".spec.json"))
@@ -89,34 +100,56 @@ function main(): void {
 
     for (const f of files) {
       const rel = displayPath(f.path);
-      let expected: string;
+      let expectedContent: string;
       try {
-        expected = readFileSync(join(realDir, ...f.path), "utf8").replaceAll("\r\n", "\n");
+        expectedContent = readFileSync(join(realDir, ...f.path), "utf8").replaceAll("\r\n", "\n");
       } catch {
         problems.push(`  MISSING  ${rel} — not present in the real connector`);
         continue;
       }
-      if (expected === f.content) {
+      if (expectedContent === f.content) {
         identical++;
       } else {
-        problems.push(`  DIFF     ${rel}\n${unifiedDiff(expected, f.content)}`);
+        problems.push(`  DIFF     ${rel}\n${unifiedDiff(expectedContent, f.content)}`);
       }
     }
 
-    const ok = problems.length === 0;
-    if (!ok) failures++;
+    const total = files.length;
+    const expectedCount = expectations[name];
+    if (expectedCount === undefined) {
+      throw new Error(
+        `No expectation declared for fixture "${name}" in ${expectationsPath}. ` +
+          `Add an entry recording its current identical-file count (out of ${total}) before ` +
+          "running the harness — an undeclared fixture must not be able to pass by accident.",
+      );
+    }
+
+    const verdict = classify(identical, expectedCount);
+    if (verdict !== "pass") failures++;
+
     const stubNote = stubs > 0 ? `, ${stubs} stub tool(s)` : "";
-    console.log(
-      `${ok ? "PASS" : "FAIL"}  ${name}  ${identical}/${files.length} files identical${stubNote}`,
-    );
+    let line: string;
+    if (verdict === "pass") {
+      line = `PASS  ${name}  ${identical}/${total} files identical${passNote(expectedCount, total, stubs)}`;
+    } else if (verdict === "regressed") {
+      line =
+        `FAIL  ${name}  ${identical}/${total} files identical${stubNote} — ` +
+        `regressed from ${expectedCount}/${total} to ${identical}/${total}`;
+    } else {
+      line =
+        `FAIL  ${name}  ${identical}/${total} files identical${stubNote} — ` +
+        `improved from ${expectedCount}/${total} to ${identical}/${total}; update ` +
+        "fixtures/expectations.json and the design doc's criterion-2 gap report";
+    }
+    console.log(line);
     for (const p of problems) console.log(p);
   }
 
   if (failures > 0) {
-    console.log(`\n${failures} fixture(s) differ.`);
+    console.log(`\n${failures} fixture(s) deviate from their declared expectations.`);
     process.exit(1);
   }
-  console.log("\nAll fixtures byte-identical.");
+  console.log("\nAll fixtures match their declared expectations.");
 }
 
 main();

@@ -1,0 +1,8 @@
+{
+  "newrelic": 6,
+  "datadog": 6,
+  "grafana": 6,
+  "sentry": 6,
+  "discord": 3,
+  "google-meet": 2
+}

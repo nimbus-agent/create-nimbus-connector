@@ -290,6 +290,8 @@ Note that criterion 3 is the real functional bar. Contract tests are explicitly 
 
 Both fixtures (`fixtures/discord.spec.json`, `fixtures/google-meet.spec.json`) are `style: "rest-kit"`, modelled directly on `packages/mcp-connectors/{discord,google-meet}/src/server.ts` and `nimbus.extension.json` in the monorepo. Neither reaches zero diff, by design — Task 16 exists to characterise the gap, not close it. `bun run diff:golden discord google-meet --nimbus-root <root>` reports:
 
+The exact identical-file counts below (3/6 and 2/6) are checked in as machine-readable expectations in `fixtures/expectations.json`. The harness (`scripts/diff-golden.ts`) fails the run if reality diverges from a declared count **in either direction** — including an unexpected improvement — so this table cannot silently drift out of date; closing any part of the gap requires updating both the expectation and this section in the same change.
+
 **`discord` — 3/6 files identical, 1 stub tool**
 
 | File | Result | Blocking construct |
