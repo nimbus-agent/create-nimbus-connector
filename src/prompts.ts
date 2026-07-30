@@ -52,6 +52,18 @@ export type PromptAnswers = {
  * paths, and emitting a stub the author fills in is honest where guessing a
  * path would not be.
  */
+/** Parse a URL, throwing a message that names the offending field and value. */
+function parseBaseUrl(baseUrl: string): URL {
+  try {
+    return new URL(baseUrl);
+  } catch {
+    throw new Error(
+      `Base API URL "${baseUrl}" is not a valid URL — include the scheme, ` +
+        `e.g. https://api.example.com`,
+    );
+  }
+}
+
 export function buildSpec(answers: PromptAnswers): ConnectorSpec {
   const fetchLocal = `${answers.name.replaceAll("-", "")}Fetch`;
   const tools = answers.toolNames.map((name) => ({
@@ -65,7 +77,7 @@ export function buildSpec(answers: PromptAnswers): ConnectorSpec {
     displayName: answers.displayName,
     description: answers.description,
     serviceLabel: answers.serviceLabel,
-    network: [new URL(answers.baseUrl).host],
+    network: [parseBaseUrl(answers.baseUrl).host],
     tools,
   };
 

@@ -25,6 +25,26 @@ describe("parseCliArgs", () => {
   it("rejects an unknown flag", () => {
     expect(() => parseCliArgs(["--nope"])).toThrow(/--nope/);
   });
+
+  it("rejects --spec with no following value", () => {
+    expect(() => parseCliArgs(["--spec"])).toThrow(/--spec/);
+  });
+
+  it("rejects --out-dir with no following value", () => {
+    expect(() => parseCliArgs(["--out-dir"])).toThrow(/--out-dir/);
+  });
+
+  it("rejects a positional name combined with --spec", () => {
+    expect(() => parseCliArgs(["slack", "--spec", "x.json"])).toThrow(/--spec/);
+  });
+
+  it("still accepts a bare positional name", () => {
+    expect(() => parseCliArgs(["slack"])).not.toThrow();
+  });
+
+  it("still accepts --spec alone with a value", () => {
+    expect(() => parseCliArgs(["--spec", "x.json"])).not.toThrow();
+  });
 });
 
 describe("renderTree", () => {
@@ -87,5 +107,18 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
     });
     expect(spec.tools).toHaveLength(2);
     expect(spec.tools.every((t) => t.impl === "stub")).toBe(true);
+  });
+
+  it("throws a message naming the base URL field and value when it is not a valid URL", () => {
+    expect(() =>
+      buildSpec({ ...base, authKind: "bearer", headerName: "", baseUrl: "not-a-url" }),
+    ).toThrow(/not-a-url/);
+    try {
+      buildSpec({ ...base, authKind: "bearer", headerName: "", baseUrl: "not-a-url" });
+      throw new Error("expected buildSpec to throw");
+    } catch (e) {
+      expect((e as Error).message).toContain("not-a-url");
+      expect((e as Error).message).toMatch(/base api url/i);
+    }
   });
 });
