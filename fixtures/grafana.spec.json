@@ -1,0 +1,31 @@
+{
+  "name": "grafana",
+  "title": "Grafana",
+  "displayName": "Grafana",
+  "description": "Grafana HTTP API connector (dashboards, datasources, alerting). Always user-configured — the target host is read from grafana.url at spawn time and merged into permissions.network by the Gateway. Read-focused.",
+  "serviceLabel": "Grafana",
+  "style": "hand-rolled",
+  "network": [],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["GRAFANA_URL"], "local": "baseUrl", "bindings": ["u"], "required": true, "transform": "stripTrailingSlash" },
+    { "vars": ["GRAFANA_API_TOKEN"], "local": "authHeaders", "bindings": ["tok"], "auth": "bearer" }
+  ],
+  "fetchHelper": {
+    "local": "grafanaGet",
+    "base": "${env.baseUrl}",
+    "headers": "authHeaders",
+    "normalizeLeadingSlash": true,
+    "jsonFallbackRaw": true
+  },
+  "tools": [
+    { "name": "grafana_alert_list", "description": "List alert rules (Ruler API).", "path": "/api/ruler/grafana/api/v1/rules" },
+    {
+      "name": "grafana_dashboard_list",
+      "description": "Search dashboards.",
+      "args": { "query": { "type": "string", "optional": true, "default": "", "local": "q" } },
+      "path": "/api/search?type=dash-db&query=${arg.query|enc}"
+    }
+  ]
+}

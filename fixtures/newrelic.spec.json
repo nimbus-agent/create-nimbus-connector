@@ -1,0 +1,32 @@
+{
+  "name": "newrelic",
+  "title": "Newrelic",
+  "displayName": "New Relic",
+  "description": "New Relic NerdGraph + REST connector (alerts, incidents, dashboards). Read-focused.",
+  "serviceLabel": "New Relic",
+  "style": "hand-rolled",
+  "network": ["api.newrelic.com", "api.eu.newrelic.com"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["NEW_RELIC_API_KEY"], "local": "apiKey", "bindings": ["k"], "required": true }
+  ],
+  "fetchHelper": {
+    "local": "nrGet",
+    "base": "https://api.newrelic.com",
+    "inlineHeaders": { "X-Api-Key": "${env.apiKey}", "Accept": "application/json" }
+  },
+  "tools": [
+    {
+      "name": "newrelic_application_list",
+      "description": "List APM applications.",
+      "path": "/v2/applications.json"
+    },
+    {
+      "name": "newrelic_alert_violations",
+      "description": "List recent alert violations.",
+      "args": { "only_open": { "type": "boolean", "optional": true, "local": "only" } },
+      "path": "/v2/alerts_violations.json?only_open=${arg.only_open|bool}"
+    }
+  ]
+}

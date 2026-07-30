@@ -1,0 +1,41 @@
+{
+  "name": "sentry",
+  "title": "Sentry",
+  "displayName": "Sentry",
+  "description": "Sentry REST connector (issues, events, releases). Self-hosted Sentry (sentry.url) is a known Task 14 follow-up. Read-focused.",
+  "serviceLabel": "Sentry",
+  "style": "hand-rolled",
+  "network": ["sentry.io"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["SENTRY_URL"],
+      "local": "apiRoot",
+      "bindings": ["u"],
+      "default": "https://sentry.io",
+      "transform": "stripTrailingSlash",
+      "suffix": "/api/0"
+    },
+    { "vars": ["SENTRY_ORG_SLUG"], "local": "org", "bindings": ["o"], "required": true },
+    { "vars": ["SENTRY_AUTH_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "sentryGet", "base": "${env.apiRoot}", "headers": "headers" },
+  "tools": [
+    {
+      "name": "sentry_issue_list",
+      "description": "List unresolved issues for a project.",
+      "args": {
+        "projectSlug": { "type": "string", "min": 1 },
+        "limit": { "type": "number", "int": true, "min": 1, "max": 100, "optional": true, "default": 20, "local": "lim" }
+      },
+      "path": "/projects/${env.org}/${arg.projectSlug}/issues/?query=is:unresolved&limit=${arg.limit|num}"
+    },
+    {
+      "name": "sentry_release_list",
+      "description": "List releases for a project.",
+      "args": { "projectSlug": { "type": "string", "min": 1 } },
+      "path": "/projects/${env.org}/${arg.projectSlug}/releases/"
+    }
+  ]
+}

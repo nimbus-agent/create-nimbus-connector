@@ -1,0 +1,31 @@
+{
+  "name": "datadog",
+  "title": "Datadog",
+  "displayName": "Datadog",
+  "description": "Datadog API v1/v2 connector (monitors, incidents). Non-us1 regional sites (DD_SITE = eu1/us3/us5/ap1/gov) are a known Task 14 follow-up. Read-focused.",
+  "serviceLabel": "Datadog",
+  "style": "hand-rolled",
+  "network": ["api.datadoghq.com"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["DD_SITE"], "local": "siteHost", "bindings": ["s"], "default": "datadoghq.com", "prefix": "api." },
+    {
+      "vars": ["DD_API_KEY", "DD_APP_KEY"],
+      "local": "headers",
+      "bindings": ["ak", "app"],
+      "auth": "headers",
+      "headerNames": ["DD-API-KEY", "DD-APPLICATION-KEY"]
+    }
+  ],
+  "fetchHelper": { "local": "ddGet", "base": "https://${env.siteHost}", "headers": "headers" },
+  "tools": [
+    { "name": "datadog_monitor_list", "description": "List monitors.", "path": "/api/v1/monitor" },
+    {
+      "name": "datadog_incident_list",
+      "description": "List incidents (v2).",
+      "args": { "limit": { "type": "number", "int": true, "min": 1, "max": 50, "optional": true, "default": 10, "local": "lim" } },
+      "path": "/api/v2/incidents?page[size]=${arg.limit|num}"
+    }
+  ]
+}
