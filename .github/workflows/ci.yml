@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: Tests
+        run: bun test
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Lint and format
+        run: bunx biome check src/ test/ scripts/
+
+# Deliberately NOT run here: `bun run diff:golden` and `bun run acceptance`.
+#
+# Both compare generated output against the real connectors in the Nimbus
+# monorepo, which is a separate AGPL-3.0-only repository that is not checked
+# out on this runner. Vendoring it into this MIT repo was rejected in decision
+# D4 of the design doc, so the byte-diff acceptance test remains a local
+# pre-merge gate rather than a CI check.
+#
+# That is a real limitation, not an oversight: the project's most valuable
+# test does not run here. Run it before merging:
+#
+#   bun run diff:golden --nimbus-root /path/to/Nimbus
+#   bun run acceptance  /path/to/Nimbus

@@ -291,6 +291,8 @@ Per fixture it reports each of the six files as identical / differing (with a un
 4. Its README passes `bun run audit:package-readmes`.
 5. The emitters have unit tests that do not require the monorepo, so this repo's CI is meaningful on its own.
 
+   **What CI actually covers.** `.github/workflows/ci.yml` runs three gates on every push and pull request: `bun test`, `bunx tsc --noEmit`, and `bunx biome check src/ test/ scripts/`. It does **not** run `diff:golden` or `acceptance` — both need a Nimbus checkout that is not present on a runner, and vendoring one was rejected in D4. So the project's most valuable test, the byte diff against real connectors, is a local pre-merge gate rather than a CI check. That is a real limitation and is stated here rather than implied by a green badge.
+
 Note that criterion 3 is the real functional bar. Contract tests are explicitly **not** an acceptance signal — see the harness section.
 
 ### Acceptance criteria — results (2026-07-30, Task 18)
@@ -377,7 +379,7 @@ It becomes genuinely attractive in Stage C, where the task is surveying the unme
 | Path-template DSL creeps toward a general language | D3 boundary is a hard rule; stubs are the escape valve, and stub counts are reported per fixture |
 | Only 4 of 94 connectors are byte-reproducible under D3 | Accepted and stated plainly. The four are the prompt's own starting ladder; coverage growth is Stage C's problem, not a reason to widen Stage A |
 | Biome version drift between this repo and the monorepo changes formatting | Pin `@biomejs/wasm-nodejs` to the monorepo's `^2.5.6` line; the harness prints the resolved version and warns on mismatch, since a diff measured under a different formatter is not evidence |
-| The harness cannot run in this repo's CI (no monorepo) | Accepted per D4. Emitter unit tests (criterion 5) carry CI; the harness is a local/pre-merge gate |
+| The harness cannot run in this repo's CI (no monorepo) | Accepted per D4. CI (`.github/workflows/ci.yml`) runs tests, typecheck and lint only; the byte-diff harness and the monorepo acceptance check are local pre-merge gates and are **not** covered by CI. A green CI badge on this repo does not mean the fixtures still match |
 | Generated connectors drift as the monorepo's shared kit evolves | The harness *is* the drift detector — running it against a newer monorepo surfaces divergence immediately |
 
 ## Open questions deferred to Stage B
