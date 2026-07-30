@@ -81,11 +81,23 @@ describe("initFormatter", () => {
 });
 
 describe("formatAll before init", () => {
-  it("throws a message naming initFormatter", async () => {
-    const mod = await import(`../src/format.ts?uninit=${Math.random()}`);
-    expect(() => mod.formatAll([{ path: ["a.ts"], content: "const x=1\n" }])).toThrow(
-      /initFormatter/,
+  // Run in a subprocess with a pristine module registry. A query-string import
+  // (`../src/format.ts?x=1`) does currently give a fresh module in Bun 1.3.14 — verified —
+  // but that is loader behaviour, not a documented contract, and this test exists precisely
+  // to pin a guarantee. A subprocess also tests what a real caller hits: a program that
+  // forgot to init. No test-only reset export is added to production code.
+  it("throws a message naming initFormatter", () => {
+    const r = Bun.spawnSync(
+      [
+        "bun",
+        "-e",
+        'const { formatAll } = await import("./src/format.ts");' +
+          'formatAll([{ path: ["a.ts"], content: "const x=1\\n" }]);',
+      ],
+      { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" },
     );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toMatch(/initFormatter/);
   });
 });
 ```
@@ -957,7 +969,11 @@ if (!existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
   );
 }
 
-const outDir = mkdtempSync(join(tmpdir(), "cnc-standalone-"));
+// realpathSync normalises a Windows short (8.3) path such as C:\Users\ASAFG~1\... to its
+// long form. It does not differ on every machine — it did not on the one this plan was
+// written on — but a mismatch between the path we write to and the path tooling resolves
+// shows up as confusing module-resolution failures, and one call removes the class.
+const outDir = realpathSync(mkdtempSync(join(tmpdir(), "cnc-standalone-")));
 const checks: { name: string; ok: boolean; output: string }[] = [];
 
 try {
@@ -973,7 +989,29 @@ try {
   pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
   writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
 
-  checks.push({ name: "bun install", ...run(["bun", "install"], outDir) });
+  // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
+  // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
+  checks.push({ name: "bun install", ...run(["bun", "install", "--force"], outDir) });
+
+  // Do not trust --force to have worked — prove the built kit actually landed. A stale or
+  // partial install would otherwise surface as a confusing tsc error about missing types.
+  const installedKit = join(
+    outDir,
+    "node_modules",
+    "@nimbus-dev",
+    "sdk",
+    "dist",
+    "connector-kit",
+    "index.js",
+  );
+  checks.push({
+    name: "connector-kit present in node_modules",
+    ok: existsSync(installedKit),
+    output: existsSync(installedKit)
+      ? installedKit
+      : `${installedKit} is missing — the SDK installed without the connector-kit build output`,
+  });
+
   checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
 
   const escaping = run(["grep", "-rn", "\\.\\./\\.\\.", "src"], outDir);
@@ -989,7 +1027,97 @@ try {
 }
 ```
 
-`toolsListCheck` spawns `bun src/server.ts` in `outDir`, writes an MCP `initialize` request then `tools/list`, both as newline-delimited JSON-RPC on stdin, and asserts the response names `zzstandalone_item_list` and `zzstandalone_item_get`. **Set no credential env vars** — accessors are only called inside tool handlers, so a clean `tools/list` proves the server starts and describes itself without secrets. Give the spawn a timeout (10s) and kill the child in a `finally` so a hung server cannot wedge the script.
+- [ ] **Step 5b: Write `toolsListCheck` — parse JSON-RPC properly, do not string-match**
+
+This is the one genuinely fiddly piece. Three things make a naive implementation flaky, and all three must be handled:
+
+**The full MCP handshake is three messages, not two.** The protocol is `initialize` request → server response → `notifications/initialized` **notification** (no `id`, no response expected) → only then normal requests. Sending `tools/list` immediately after `initialize` may be rejected as out-of-order.
+
+**stdout is a stream, not a message boundary.** A single read can contain a partial line, several lines, or a line split across chunks. Accumulate into a buffer and split on `\n`, keeping any trailing partial fragment for the next chunk.
+
+**Not every line is a response.** The runtime or a library may print warnings, and notifications carry no `id`. Parse each complete line as JSON, **skip anything that fails to parse**, and match the response by its `id` rather than by searching the raw text for a tool name.
+
+```ts
+async function toolsListCheck(cwd: string): Promise<{ ok: boolean; output: string }> {
+  const proc = Bun.spawn(["bun", "src/server.ts"], {
+    cwd,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    // No credential env vars are set. Accessors are only called inside tool handlers,
+    // so a clean tools/list proves the server starts and describes itself without secrets.
+  });
+
+  const timer = setTimeout(() => proc.kill(), 10_000);
+  try {
+    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
+
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "standalone-acceptance", version: "0.0.0" },
+      },
+    });
+
+    const reader = proc.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let sawInitialized = false;
+
+    // Read until the tools/list response (id 2) arrives, the process exits, or the timeout kills it.
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? ""; // keep the trailing partial fragment
+
+      for (const line of lines) {
+        if (line.trim() === "") continue;
+        let msg: { id?: unknown; result?: { tools?: Array<{ name?: string }> } };
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue; // a warning or other non-JSON output — not a protocol error
+        }
+
+        if (msg.id === 1 && !sawInitialized) {
+          sawInitialized = true;
+          send({ jsonrpc: "2.0", method: "notifications/initialized" });
+          send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+          continue;
+        }
+
+        if (msg.id === 2) {
+          const names = (msg.result?.tools ?? []).map((t) => t.name);
+          const expected = ["zzstandalone_item_list", "zzstandalone_item_get"];
+          const missing = expected.filter((n) => !names.includes(n));
+          return {
+            ok: missing.length === 0,
+            output:
+              missing.length === 0
+                ? `tools/list returned ${names.join(", ")}`
+                : `tools/list missing ${missing.join(", ")}; got ${names.join(", ") || "(none)"}`,
+          };
+        }
+      }
+    }
+
+    const stderr = await new Response(proc.stderr).text();
+    return { ok: false, output: `server exited before answering tools/list.\n${stderr.trim()}` };
+  } finally {
+    clearTimeout(timer);
+    proc.kill();
+  }
+}
+```
+
+A hung server cannot wedge the script: the timeout kills it, and the `finally` kills it again on every exit path.
 
 Add to `package.json`: `"standalone-acceptance": "bun scripts/standalone-acceptance.ts"`.
 
