@@ -28,18 +28,18 @@ export const ArgSchema = z
     message: '"int" is only valid on a number argument',
   });
 
-export const ToolSchema = z
-  .strictObject({
-    name: z.string().min(1),
-    description: z.string().min(1),
-    args: z.record(z.string(), ArgSchema).default({}),
-    path: z.string().optional(),
-    impl: z.enum(["get", "stub"]).default("get"),
-  })
-  .refine((t) => Object.keys(t.args).every((key) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)), {
-    message: "argument name must be a valid JS identifier",
-    path: ["args"],
-  });
+export const ToolSchema = z.strictObject({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  args: z
+    .record(
+      z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, "argument name must be a valid JS identifier"),
+      ArgSchema,
+    )
+    .default({}),
+  path: z.string().optional(),
+  impl: z.enum(["get", "stub"]).default("get"),
+});
 
 export const EnvSchema = z
   .strictObject({

@@ -120,7 +120,7 @@ describe("parseSpec", () => {
       ...MINIMAL,
       tools: [{ ...MINIMAL.tools[0], args: { "per-page": { type: "string" } } }],
     };
-    expect(() => parseSpec(bad)).toThrow(/identifier/);
+    expect(() => parseSpec(bad)).toThrow(/per-page/);
   });
 
   it("accepts valid argument names like camelCase and underscore prefixed", () => {
@@ -171,5 +171,28 @@ describe("parseSpec", () => {
       tools: [{ ...MINIMAL.tools[0], args: { name: { type: "string", int: true } } }],
     };
     expect(() => parseSpec(bad)).toThrow(/"int"/);
+  });
+
+  it("rejects a mixed args object and names the specific invalid key", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [
+        {
+          ...MINIMAL.tools[0],
+          args: {
+            perPage: { type: "string" },
+            _x: { type: "string" },
+            "per-page": { type: "string" },
+          },
+        },
+      ],
+    };
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("per-page");
+    }
   });
 });
