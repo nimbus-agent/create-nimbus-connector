@@ -2101,15 +2101,11 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement `src/emit/server/tools-rest.ts`**
 
 ```ts
-import type { ConnectorSpec } from "../../spec.ts";
+import { type ConnectorSpec, registrarName } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
 
 const PARAM = "parsed";
-
-export function registrarName(spec: ConnectorSpec): string {
-  return `register${spec.title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
-}
 
 function tokenEnvVar(spec: ConnectorSpec): string {
   const authEntry = spec.env.find((e) => e.auth !== undefined);
