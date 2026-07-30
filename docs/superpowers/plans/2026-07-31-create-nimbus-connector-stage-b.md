@@ -394,12 +394,32 @@ describe("generate target", () => {
     expect(src).toContain('import { createRegisterSimpleTool, createZodToolRegistrar } from "@nimbus-dev/sdk/connector-kit";');
   });
 
+  // ★ Assert on IMPORT SPECIFIERS in src/, not on raw file content. An earlier draft of this
+  // plan scanned every file for the substring "../../", which is wrong: test/sandbox.test.ts
+  // legitimately contains resolve(fileURLToPath(import.meta.url), "../../nimbus.extension.json")
+  // — a filesystem traversal INSIDE the package, not an import escape. The manifest sits at the
+  // package root in both targets, and `resolve` treats the file itself as a segment, so "../.."
+  // is exactly what reaches it. The over-broad assertion pushed an implementer into "fixing"
+  // that path to "../", which resolves to <pkg>/test/ where no manifest exists.
   it("no relative import escapes a standalone package", () => {
     for (const spec of [handRolled, restKit]) {
-      for (const f of generate(spec, { target: "standalone" })) {
-        expect(f.content).not.toContain("../../");
+      const srcFiles = generate(spec, { target: "standalone" }).filter((f) => f.path[0] === "src");
+      expect(srcFiles.length).toBeGreaterThan(0); // guard against a vacuous pass
+      for (const f of srcFiles) {
+        const specifiers = [...f.content.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+        for (const s of specifiers) {
+          expect(s?.startsWith("..")).toBe(false);
+        }
       }
     }
+  });
+
+  it("emits an identical sandbox test for both targets", () => {
+    const pick = (t?: "standalone") =>
+      generate(handRolled, t === undefined ? undefined : { target: t }).find(
+        (f) => displayPath(f.path) === "test/sandbox.test.ts",
+      )!.content;
+    expect(pick("standalone")).toBe(pick());
   });
 });
 ```
