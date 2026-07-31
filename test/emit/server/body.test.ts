@@ -39,6 +39,26 @@ describe("renderBodyExpr", () => {
     expect(renderBodyExpr(t, "p")).toBe("JSON.stringify({ title: p.title, count: p.count })");
   });
 
+  it("excludes an arg referenced in the path from the default body — a PATCH must not send its id twice", () => {
+    const t = toolOf({
+      path: "/items/${arg.id}",
+      method: "PATCH",
+      effect: "write",
+      args: { id: { type: "string" }, title: { type: "string" } },
+    });
+    expect(renderBodyExpr(t, "p")).toBe("JSON.stringify({ title: p.title })");
+  });
+
+  it("returns undefined when every default-body arg is a path arg — a DELETE with only its id arg sends no body", () => {
+    const t = toolOf({
+      path: "/items/${arg.id}",
+      method: "DELETE",
+      effect: "delete",
+      args: { id: { type: "string" } },
+    });
+    expect(renderBodyExpr(t, "p")).toBeUndefined();
+  });
+
   it("renames keys under an explicit mapping", () => {
     const t = toolOf({
       path: "/a",

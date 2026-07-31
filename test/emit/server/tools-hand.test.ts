@@ -212,4 +212,40 @@ describe("hand-rolled write support", () => {
     );
     expect(out).toContain('zzGetSend("/i", "DELETE", undefined)');
   });
+
+  it("PATCH excludes its path id from the default body but still takes a parameter for the path", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_update",
+          description: "U.",
+          path: "/items/${arg.id}",
+          method: "PATCH",
+          effect: "write",
+          args: { id: { type: "string" }, title: { type: "string" } },
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) =>");
+    expect(out).toContain(
+      'zzGetSend(`/items/${p.id}`, "PATCH", JSON.stringify({ title: p.title }))',
+    );
+  });
+
+  it("DELETE with only a path id sends no body but still takes a parameter for the path", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_delete",
+          description: "D.",
+          path: "/items/${arg.id}",
+          method: "DELETE",
+          effect: "delete",
+          args: { id: { type: "string" } },
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) =>");
+    expect(out).toContain('zzGetSend(`/items/${p.id}`, "DELETE", undefined)');
+  });
 });
