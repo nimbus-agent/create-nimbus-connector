@@ -73,9 +73,20 @@ const stepIndex = (jobId: string, predicate: (step: Step) => boolean): number =>
  * `npm pack` rather than `bun pm pack` "because that is the packer `npm publish` will
  * use" — and a naive `run.includes("npm publish")` matched that comment, found the wrong
  * step, and reported the publish as happening before itself. Caught by these very tests.
+ *
+ * Scans lines rather than building a `RegExp` from `command`. The callers pass literals, so
+ * a dynamic pattern was never exploitable here — but constructing a regex from an argument
+ * is a security finding on sight (Sonar rated it, correctly, without knowing the inputs),
+ * and a plain string comparison expresses the same rule without the question arising.
  */
 const invokes = (step: Step, command: string): boolean =>
-  new RegExp(String.raw`^[ \t]*${command}\b`, "m").test(step.run ?? "");
+  (step.run ?? "").split("\n").some((line) => {
+    const code = line.replace(/^[ \t]+/, "");
+    if (!code.startsWith(command)) return false;
+    // Word boundary, so `npm pack` does not match a hypothetical `npm packfoo`.
+    const next = code.charAt(command.length);
+    return next === "" || !/[\w$]/.test(next);
+  });
 
 const publishStep = (): Step | undefined =>
   releaseSteps("publish").find((s) => invokes(s, "npm publish"));
