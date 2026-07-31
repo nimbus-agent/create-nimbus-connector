@@ -1,0 +1,31 @@
+{
+  "name": "zzstandalonehand",
+  "title": "Zzstandalonehand",
+  "displayName": "ZZ Standalone Hand",
+  "description": "Throwaway standalone acceptance connector, hand-rolled style. Read-focused.",
+  "serviceLabel": "ZZ Standalone Hand",
+  "style": "hand-rolled",
+  "network": ["api.zzstandalonehand.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["ZZSTANDALONEHAND_URL"],
+      "local": "apiRoot",
+      "bindings": ["u"],
+      "default": "https://api.zzstandalonehand.test",
+      "transform": "stripTrailingSlash"
+    },
+    { "vars": ["ZZSTANDALONEHAND_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzGet", "base": "${env.apiRoot}", "headers": "headers" },
+  "tools": [
+    { "name": "zzstandalonehand_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzstandalonehand_item_get",
+      "description": "Get one item by id.",
+      "args": { "itemId": { "type": "string", "min": 1 } },
+      "path": "/v1/items/${arg.itemId|enc}"
+    }
+  ]
+}

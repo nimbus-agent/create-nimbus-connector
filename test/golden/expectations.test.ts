@@ -130,6 +130,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       "sentry",
       "zzscratch",
       "zzstandalone",
+      "zzstandalonehand",
     ]);
     // The two partial fixtures are the reason the shape changed; assert their sets, not
     // their sizes, so a count-preserving swap fails here too.
