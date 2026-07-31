@@ -30,7 +30,7 @@ describe("parseSpec", () => {
     expect(s.id).toBe("com.nimbus.newrelic");
     expect(s.syncInterval).toBe(300);
     expect(s.minNimbusVersion).toBe("0.2.0");
-    expect(s.tools[0]?.impl).toBe("get");
+    expect(s.tools[0]?.impl).toBe("rest");
   });
 
   it("defaults style to rest-kit when omitted", () => {
@@ -49,9 +49,14 @@ describe("parseSpec", () => {
     expect(() => parseSpec({ ...MINIMAL, oauth: true })).toThrow(/oauth/);
   });
 
-  it("rejects a non-GET method on a tool as out of scope", () => {
-    const bad = { ...MINIMAL, tools: [{ ...MINIMAL.tools[0], method: "POST" }] };
-    expect(() => parseSpec(bad)).toThrow(/method.*Stage A/s);
+  it("accepts a non-GET method on a tool now that method/effect are in scope", () => {
+    // Superseded: "method" was out-of-scope in Stage A/B; Stage C makes it (and "effect") real
+    // fields. See test/spec.test.ts's "Stage C tool fields" describe block for the dedicated coverage.
+    const ok = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], method: "POST", effect: "read" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
   });
 
   it("rejects an env entry declaring both default and required", () => {
@@ -667,5 +672,80 @@ describe("parseSpec", () => {
       fetchHelper: { local: "sentryGet", base: "${env.apiRoot}", headers: "headers" },
     };
     expect(() => parseSpec(ok)).not.toThrow();
+  });
+});
+
+const stageCBase = {
+  name: "zz",
+  title: "Zz",
+  displayName: "Zz",
+  description: "d.",
+  serviceLabel: "Zz",
+  style: "hand-rolled",
+  network: ["api.zz.test"],
+  syncInterval: 300,
+  minNimbusVersion: "0.2.0",
+  env: [{ vars: ["ZZ_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "headers" },
+};
+const stageCTool = (o: Record<string, unknown>) => ({
+  ...stageCBase,
+  tools: [{ name: "zz_a", description: "A.", ...o }],
+});
+
+describe("Stage C tool fields", () => {
+  it("defaults method to GET and effect to read", () => {
+    const s = parseSpec(stageCTool({ path: "/a" }));
+    expect(s.tools[0]!.method).toBe("GET");
+    expect(s.tools[0]!.effect).toBe("read");
+  });
+
+  it("accepts impl 'get' as a deprecated alias for 'rest'", () => {
+    // 0.2.2 is published; specs already written must keep working.
+    expect(parseSpec(stageCTool({ path: "/a", impl: "get" })).tools[0]!.impl).toBe("rest");
+  });
+
+  it("allows POST with effect read — a GraphQL query is not a write", () => {
+    const s = parseSpec(stageCTool({ path: "/g", method: "POST", effect: "read" }));
+    expect(s.tools[0]!.effect).toBe("read");
+  });
+
+  it("rejects a mutating GET", () => {
+    expect(() => parseSpec(stageCTool({ path: "/a", effect: "write" }))).toThrow(/GET/);
+  });
+
+  it("rejects a body on GET", () => {
+    expect(() => parseSpec(stageCTool({ path: "/a", body: { x: "x" } }))).toThrow(/body/i);
+  });
+
+  it("rejects method or body on a stub", () => {
+    expect(() => parseSpec(stageCTool({ impl: "stub", method: "POST" }))).toThrow(/stub/i);
+    expect(() => parseSpec(stageCTool({ impl: "stub", body: { x: "x" } }))).toThrow(/stub/i);
+  });
+
+  it("rejects a body key naming an undeclared arg", () => {
+    // NOTE: the task brief's literal example here was `body: { api_title: "nope" }` —
+    // that can never satisfy /nope/, because the schema's own docstring ("arg name ->
+    // API field name") and the brief's own superRefine (which iterates Object.keys(body))
+    // both check the KEY against declared args, not the value. "nope" only appears in the
+    // error if it is the key. Swapped key/value here so the test matches the implementation
+    // both the docstring and the superRefine agree on; see task-1-report.md for detail.
+    expect(() =>
+      parseSpec(
+        stageCTool({
+          path: "/a",
+          method: "POST",
+          args: { title: { type: "string" } },
+          body: { nope: "api_title" },
+        }),
+      ),
+    ).toThrow(/nope/);
+  });
+
+  it("allows DELETE with effect write", () => {
+    // Deleting a webhook subscription is not destructive to user data.
+    expect(
+      parseSpec(stageCTool({ path: "/a", method: "DELETE", effect: "write" })).tools[0]!.effect,
+    ).toBe("write");
   });
 });
