@@ -159,6 +159,50 @@ describe("bun src/cli.ts (the real binary)", () => {
     });
   });
 
+  it("--gateway-wiring writes the two wiring files and prints the paste-able registration lines", () => {
+    withTempDir((dir) => {
+      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const { exitCode, output } = runCli(["--gateway-wiring", nimbusRoot], dir);
+      expect(exitCode).toBe(0);
+
+      const connectorsDir = join(nimbusRoot, "packages", "gateway", "src", "connectors");
+      const syncFile = join(connectorsDir, "zzstandalone-sync.ts");
+      const mappingFile = join(connectorsDir, "zzstandalone-mapping.ts");
+      expect(existsSync(syncFile)).toBe(true);
+      expect(existsSync(mappingFile)).toBe(true);
+
+      const sync = readFileSync(syncFile, "utf8");
+      expect(sync).toContain("export function createZzstandaloneSyncable(): Syncable");
+      expect(sync).toContain('"zzstandalone_item_list"');
+
+      const mapping = readFileSync(mappingFile, "utf8");
+      expect(mapping).toContain("throw new Error(");
+
+      // The normal connector package is still written — wiring is additive, not a replacement.
+      expect(existsSync(join(dir, "packages", "mcp-connectors", CONNECTOR, "package.json"))).toBe(
+        true,
+      );
+
+      // The two lines to paste, plus the corrected second-file guidance (see wiring.ts's doc
+      // comment: the original brief named gateway-syncable-ids.ts, which is wrong).
+      expect(output).toContain(
+        'import { createZzstandaloneSyncable } from "../connectors/zzstandalone-sync.ts";',
+      );
+      expect(output).toContain("syncScheduler.register(createZzstandaloneSyncable());");
+      expect(output).toContain("connector-catalog.ts");
+      expect(output).not.toContain("GATEWAY_SYNCABLE_SERVICE_IDS");
+    });
+  });
+
+  it("without --gateway-wiring writes nothing outside outDir and prints no wiring instructions", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli([], dir);
+      expect(exitCode).toBe(0);
+      expect(output).not.toContain("Gateway wiring");
+      expect(output).not.toContain("assemble-sync-registrations.ts");
+    });
+  });
+
   it("--out-dir overrides the default for both targets, without changing the target", () => {
     withTempDir((dir) => {
       const explicit = join(dir, "elsewhere");

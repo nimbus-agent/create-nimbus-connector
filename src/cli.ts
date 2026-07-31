@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";
+import { emitWiring, renderWiringInstructions } from "./emit/wiring.ts";
 import {
   formatAll,
   formatterAvailable,
@@ -20,6 +21,8 @@ export type CliOptions = {
   license?: string;
   dryRun: boolean;
   standalone: boolean;
+  /** --gateway-wiring <nimbus-root>: opt-in, off by default. See emitWiring's module doc. */
+  gatewayWiring?: string;
 };
 
 /** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
@@ -40,7 +43,9 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
-    else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
+    else if (a === "--gateway-wiring") {
+      opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
+    } else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
     else opts.name = a;
   }
   if (opts.name !== undefined && opts.specPath !== undefined) {
@@ -88,6 +93,12 @@ export async function main(argv: readonly string[]): Promise<void> {
   const target = opts.standalone ? "standalone" : "monorepo";
   const outDir =
     opts.outDir ?? (opts.standalone ? spec.name : join("packages", "mcp-connectors", spec.name));
+  // Opt-in only: undefined unless --gateway-wiring was passed, so normal generation is
+  // entirely unaffected — no new console output, no new disk writes, no new failure mode.
+  const gatewayWiringDir =
+    opts.gatewayWiring === undefined
+      ? undefined
+      : join(opts.gatewayWiring, "packages", "gateway", "src", "connectors");
 
   await initFormatter();
   if (!formatterAvailable()) {
@@ -104,15 +115,32 @@ export async function main(argv: readonly string[]): Promise<void> {
   const files = formatAll(
     generate(spec, { target, ...(opts.license === undefined ? {} : { license: opts.license }) }),
   );
+  // emitWiring() throws when the spec has no tool named "*_list". Computed alongside the
+  // main package, before either is written, so a spec that cannot be wired fails loudly
+  // rather than leaving the connector package written and its wiring silently skipped.
+  const wiringFiles = gatewayWiringDir === undefined ? undefined : formatAll(emitWiring(spec));
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);
     console.log(renderTree(files));
+    if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
+      console.log(
+        `\nWould write ${wiringFiles.length} Gateway wiring file(s) to ${gatewayWiringDir}/\n`,
+      );
+      console.log(renderTree(wiringFiles));
+      console.log(`\n${renderWiringInstructions(spec)}`);
+    }
     return;
   }
 
   await writeFiles(files, outDir);
   console.log(`Created ${outDir}/ (${files.length} files)`);
+
+  if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
+    await writeFiles(wiringFiles, gatewayWiringDir);
+    console.log(`\nWrote Gateway wiring for ${spec.name} to ${gatewayWiringDir}/`);
+    console.log(`\n${renderWiringInstructions(spec)}`);
+  }
 }
 
 // Guarded so Task 18's scripts/acceptance.ts can import writeFiles without side effects.

@@ -90,6 +90,22 @@ describe("parseCliArgs", () => {
       });
     });
   });
+
+  describe("--gateway-wiring", () => {
+    it("is undefined by default", () => {
+      expect(parseCliArgs(["acme"]).gatewayWiring).toBeUndefined();
+    });
+
+    it("is set by the flag", () => {
+      expect(parseCliArgs(["acme", "--gateway-wiring", "C:/gitrep/Nimbus"]).gatewayWiring).toBe(
+        "C:/gitrep/Nimbus",
+      );
+    });
+
+    it("rejects --gateway-wiring with no following value", () => {
+      expect(() => parseCliArgs(["acme", "--gateway-wiring"])).toThrow(/--gateway-wiring/);
+    });
+  });
 });
 
 describe("renderTree", () => {
