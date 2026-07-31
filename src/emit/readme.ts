@@ -1,9 +1,15 @@
 import type { ConnectorSpec } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
+import type { GenerateTarget } from "./index.ts";
 
-export function emitReadme(spec: ConnectorSpec): GeneratedFile {
+export function emitReadme(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const t = spec.title;
-  const content = `# ${t} Connector
+  const content = target === "standalone" ? standaloneReadme(spec, t) : monorepoReadme(spec, t);
+  return { path: ["README.md"], content };
+}
+
+function monorepoReadme(spec: ConnectorSpec, t: string): string {
+  return `# ${t} Connector
 
 ## What this is
 
@@ -30,5 +36,46 @@ nimbus ask "Summarize my recent activity in ${t}"
 
 AGPL-3.0
 `;
-  return { path: ["README.md"], content };
+}
+
+function standaloneReadme(spec: ConnectorSpec, t: string): string {
+  const vars = spec.env.flatMap((e) => e.vars);
+  const exportLines = vars.map((v) => `export ${v}=...`).join("\n");
+  return `# ${t} Connector
+
+## What this is
+
+Nimbus MCP connector for ${t}. Indexes and provides context from ${t} to the Nimbus agent.
+
+## Install
+
+\`\`\`bash
+bun install
+bun run build
+\`\`\`
+
+## Quickstart
+
+Set the credentials this connector reads from the environment:
+
+\`\`\`bash
+${exportLines}
+\`\`\`
+
+Then register it with Nimbus, or run it directly over stdio:
+
+\`\`\`bash
+bun src/server.ts
+\`\`\`
+
+## See also
+
+- [${t} Connector Documentation](https://nimbus-agent.dev/user-guide/connectors/)
+- [Nimbus Architecture Overview](https://nimbus-agent.dev/architecture-overview/)
+- [HITL and Safety](https://nimbus-agent.dev/user-guide/hitl-and-safety/)
+
+## License
+
+AGPL-3.0
+`;
 }

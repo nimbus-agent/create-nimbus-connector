@@ -20,7 +20,7 @@ const spec = parseSpec({
 
 describe("emitPackageJson", () => {
   it("names the package nimbus-mcp-<name> and is AGPL", () => {
-    const pkg = JSON.parse(emitPackageJson(spec).content);
+    const pkg = JSON.parse(emitPackageJson(spec, "monorepo").content);
     expect(pkg.name).toBe("nimbus-mcp-newrelic");
     expect(pkg.license).toBe("AGPL-3.0-only");
     expect(pkg.private).toBe(false);
@@ -28,7 +28,7 @@ describe("emitPackageJson", () => {
   });
 
   it("declares exactly the three connector dependencies", () => {
-    const pkg = JSON.parse(emitPackageJson(spec).content);
+    const pkg = JSON.parse(emitPackageJson(spec, "monorepo").content);
     expect(pkg.dependencies).toEqual({
       "@modelcontextprotocol/sdk": "1.30.0",
       "@nimbus-dev/sdk": "^1.8.1",
@@ -37,13 +37,13 @@ describe("emitPackageJson", () => {
   });
 
   it("ends with a trailing newline", () => {
-    expect(emitPackageJson(spec).content.endsWith("}\n")).toBe(true);
+    expect(emitPackageJson(spec, "monorepo").content.endsWith("}\n")).toBe(true);
   });
 });
 
 describe("emitTsconfig", () => {
   it("extends the monorepo base three levels up", () => {
-    const cfg = JSON.parse(emitTsconfig().content);
+    const cfg = JSON.parse(emitTsconfig("monorepo").content);
     expect(cfg.extends).toBe("../../../tsconfig.base.json");
     expect(cfg.include).toEqual(["src/**/*"]);
   });
@@ -55,5 +55,58 @@ describe("emitSandboxTest", () => {
     expect(f.path).toEqual(["test", "sandbox.test.ts"]);
     expect(f.content).toContain("NIMBUS_TEST_HARNESS");
     expect(f.content).toContain("runSandboxContractTests");
+  });
+});
+
+describe("standalone package.json", () => {
+  const pkg = () => JSON.parse(emitPackageJson(spec, "standalone").content);
+
+  it("raises the SDK floor to the version carrying connector-kit", () => {
+    expect(pkg().dependencies["@nimbus-dev/sdk"]).toBe("^1.11.0");
+  });
+
+  it("keeps the other two connector dependencies unchanged", () => {
+    expect(pkg().dependencies["@modelcontextprotocol/sdk"]).toBe("1.30.0");
+    expect(pkg().dependencies.zod).toBe("^4.4.2");
+  });
+
+  it("adds dev and build scripts producing the manifest's declared entrypoint", () => {
+    expect(pkg().scripts.build).toBe("bun build src/server.ts --outdir dist --target bun");
+    expect(pkg().scripts.dev).toBe("bun run --watch src/server.ts");
+  });
+
+  it("declares no bin — a connector is spawned via its manifest entrypoint", () => {
+    expect(pkg().bin).toBeUndefined();
+  });
+
+  it("leaves the monorepo target untouched", () => {
+    const mono = JSON.parse(emitPackageJson(spec, "monorepo").content);
+    expect(mono.dependencies["@nimbus-dev/sdk"]).toBe("^1.8.1");
+    expect(mono.scripts.build).toBeUndefined();
+  });
+});
+
+describe("standalone tsconfig", () => {
+  const cfg = () => JSON.parse(emitTsconfig("standalone").content);
+
+  it("is self-contained, not extending the monorepo base", () => {
+    expect(cfg().extends).toBeUndefined();
+    expect(cfg().compilerOptions.strict).toBe(true);
+    expect(cfg().compilerOptions.target).toBe("ESNext");
+    expect(cfg().compilerOptions.moduleResolution).toBe("bundler");
+  });
+
+  it("omits customConditions so the SDK resolves to dist like a real consumer", () => {
+    expect(cfg().compilerOptions.customConditions).toBeUndefined();
+  });
+
+  it("omits allowImportingTsExtensions — no .ts imports remain", () => {
+    expect(cfg().compilerOptions.allowImportingTsExtensions).toBeUndefined();
+  });
+
+  it("leaves the monorepo target extending the base", () => {
+    expect(JSON.parse(emitTsconfig("monorepo").content).extends).toBe(
+      "../../../tsconfig.base.json",
+    );
   });
 });

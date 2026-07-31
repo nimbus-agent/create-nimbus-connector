@@ -18,9 +18,9 @@ export function generate(spec: ConnectorSpec, options: GenerateOptions = {}): Ge
   return [
     emitServer(spec, target),
     emitSandboxTest(),
-    emitPackageJson(spec),
+    emitPackageJson(spec, target),
     emitManifest(spec),
-    emitTsconfig(),
-    emitReadme(spec),
+    emitTsconfig(target),
+    emitReadme(spec, target),
   ];
 }

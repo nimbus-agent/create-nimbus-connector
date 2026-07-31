@@ -120,7 +120,7 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
       headerName: "",
     });
     expect(spec.title).toBe("Google Meet");
-    expect(emitReadme(spec).content).toContain("# Google Meet Connector");
+    expect(emitReadme(spec, "monorepo").content).toContain("# Google Meet Connector");
     expect(registrarName(spec)).toBe("registerGoogleMeetTool");
   });
 

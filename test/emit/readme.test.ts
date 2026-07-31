@@ -22,7 +22,7 @@ function h2s(md: string): string[] {
 
 describe("emitReadme", () => {
   it("carries every H2 that audit:package-readmes requires for the public tier", () => {
-    expect(h2s(emitReadme(spec).content)).toEqual([
+    expect(h2s(emitReadme(spec, "monorepo").content)).toEqual([
       "what this is",
       "install",
       "quickstart",
@@ -32,8 +32,29 @@ describe("emitReadme", () => {
   });
 
   it("uses the derived title in the H1 and the directory name as the auth slug", () => {
-    const md = emitReadme(spec).content;
+    const md = emitReadme(spec, "monorepo").content;
     expect(md.startsWith("# Newrelic Connector\n")).toBe(true);
     expect(md).toContain("nimbus connector auth newrelic");
+  });
+});
+
+describe("standalone README", () => {
+  const md = () => emitReadme(spec, "standalone").content;
+
+  it("still carries every H2 the monorepo audit requires", () => {
+    expect(h2s(md())).toEqual(["what this is", "install", "quickstart", "see also", "license"]);
+  });
+
+  it("gives real install instructions instead of 'bundled with Nimbus'", () => {
+    expect(md()).not.toContain("Bundled with Nimbus");
+    expect(md()).toContain("bun install");
+  });
+
+  it("names the credential env var the connector actually reads", () => {
+    expect(md()).toContain("NEW_RELIC_API_KEY");
+  });
+
+  it("leaves the monorepo README unchanged", () => {
+    expect(emitReadme(spec, "monorepo").content).toContain("Bundled with Nimbus");
   });
 });
