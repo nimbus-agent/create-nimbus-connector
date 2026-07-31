@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { parseSpec } from "../spec.ts";
 
 /**
  * A pure diff between two file trees, keyed by POSIX-relative path -> content.
@@ -86,4 +87,29 @@ export function loadSnapshot(dir: string): Map<string, string> {
   }
 
   return out;
+}
+
+/**
+ * The sorted names of every fixture under `fixturesDir` that has at least one non-`read`
+ * effect tool — the same `effect` field the emitter reads for `hitlRequired`.
+ *
+ * Deliberately data-driven rather than a hardcoded list, and deliberately the single
+ * definition (imported by both test/golden/snapshots.test.ts and
+ * scripts/snapshot-update.ts, not copied into each): neither of those files is on Task 8's
+ * list of files to modify, so both must pick up `zzwrite` / `zzwriterest` (and anything
+ * added later) purely from fixture content, and must agree with each other on exactly
+ * which fixtures that is — a script that snapshots fixtures the test never checks (or vice
+ * versa) would defeat the point of either.
+ */
+export function listWriteFixtures(fixturesDir: string): string[] {
+  return readdirSync(fixturesDir)
+    .filter((f) => f.endsWith(".spec.json"))
+    .map((f) => f.replace(/\.spec\.json$/, ""))
+    .filter((name) => {
+      const spec = parseSpec(
+        JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")),
+      );
+      return spec.tools.some((t) => t.effect !== "read");
+    })
+    .sort();
 }

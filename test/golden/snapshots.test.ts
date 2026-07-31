@@ -1,10 +1,15 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generate } from "../../src/emit/index.ts";
-import { formatAll, initFormatter } from "../../src/format.ts";
-import { compareSnapshot, loadSnapshot } from "../../src/golden/snapshots.ts";
+import {
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../../src/format.ts";
+import { compareSnapshot, listWriteFixtures, loadSnapshot } from "../../src/golden/snapshots.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
@@ -40,6 +45,28 @@ describe("compareSnapshot", () => {
     expect(compareSnapshot(new Map([["a.ts", "x"]]), new Map()).unexpected).toEqual(["a.ts"]);
   });
 
+  // The single-element cases above pass even if .sort() were never called (an array of
+  // one is already sorted). This pins the ordering itself, inserted deliberately out of
+  // order across all three buckets.
+  it("sorts multi-element missing/unexpected/changed arrays by code unit, not insertion order", () => {
+    const actual = new Map([
+      ["z-changed.ts", "new-z"],
+      ["a-changed.ts", "new-a"],
+      ["z-new.ts", "x"],
+      ["a-new.ts", "x"],
+    ]);
+    const expected = new Map([
+      ["z-changed.ts", "old-z"],
+      ["a-changed.ts", "old-a"],
+      ["z-gone.ts", "x"],
+      ["a-gone.ts", "x"],
+    ]);
+    const diff = compareSnapshot(actual, expected);
+    expect(diff.changed).toEqual(["a-changed.ts", "z-changed.ts"]);
+    expect(diff.missing).toEqual(["a-gone.ts", "z-gone.ts"]);
+    expect(diff.unexpected).toEqual(["a-new.ts", "z-new.ts"]);
+  });
+
   it("refuses to load a missing snapshot directory", () => {
     expect(() => loadSnapshot("does/not/exist")).toThrow(/no snapshot/i);
   });
@@ -57,32 +84,43 @@ describe("compareSnapshot", () => {
 const fixturesDir = join(import.meta.dir, "..", "..", "fixtures");
 const snapshotsDir = join(fixturesDir, "snapshots");
 
-/**
- * A "write fixture" is a spec with at least one non-`read`-effect tool — the same
- * `effect` field the emitter reads to decide `hitlRequired`. Deliberately not a hardcoded
- * name list: no write fixture exists yet (Task 8 adds `zzwrite` and `zzwriterest`), and
- * neither this file nor scripts/snapshot-update.ts is on Task 8's list of files to modify,
- * so both must pick up new write fixtures purely from fixture content.
- */
-function listWriteFixtures(): string[] {
-  return readdirSync(fixturesDir)
-    .filter((f) => f.endsWith(".spec.json"))
-    .map((f) => f.replace(/\.spec\.json$/, ""))
-    .filter((name) => {
-      const spec = parseSpec(
-        JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")),
-      );
-      return spec.tools.some((t) => t.effect !== "read");
-    })
-    .sort();
-}
-
 describe("generated write output vs. checked-in snapshots", () => {
   beforeAll(async () => {
     await initFormatter();
+    if (!formatterAvailable()) {
+      throw new Error(
+        "@biomejs/biome is required here — snapshots are checked in byte-exact, and an " +
+          "unformatted comparison would report spurious `changed` diffs that look like " +
+          `generator regressions. ${formatterUnavailableReason()}`,
+      );
+    }
   });
 
-  const names = listWriteFixtures();
+  const names = listWriteFixtures(fixturesDir);
+
+  // The guard finding-1 exists for: `names` is derived (effect !== "read" on a fixture's
+  // tools), not hardcoded, so a broken predicate — wrong glob, renamed field, schema
+  // drift — would silently shrink `names` to fewer entries (or zero) while
+  // fixtures/snapshots/ still holds the checked-in directories for the fixtures that
+  // dropped out. Each of those would then never get an `it()` generated for it below,
+  // and the suite would report full green while comparing nothing for them — exactly
+  // the Stage A failure shape, just triggered by the selection predicate instead of the
+  // snapshot directory itself.
+  //
+  // This equality is bidirectional and needs no hardcoded count: today both sides are
+  // empty (no write fixture exists yet — Task 8 adds zzwrite/zzwriterest) and it passes;
+  // once Task 8 lands both sides gain the same two entries and it still passes. It also
+  // catches the reverse mistake — a snapshot directory left behind for a fixture that no
+  // longer qualifies.
+  it("derives exactly the set of directories checked in under fixtures/snapshots/", () => {
+    const onDisk = existsSync(snapshotsDir)
+      ? readdirSync(snapshotsDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)
+          .sort()
+      : [];
+    expect(names).toEqual(onDisk);
+  });
 
   // Nothing to iterate yet — this task builds the machinery; Task 8 adds the write
   // fixtures and their snapshots, at which point the loop below starts generating cases

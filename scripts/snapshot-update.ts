@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
@@ -9,33 +9,13 @@ import {
   formatterUnavailableReason,
   initFormatter,
 } from "../src/format.ts";
-import { compareSnapshot, loadSnapshot } from "../src/golden/snapshots.ts";
+import { compareSnapshot, listWriteFixtures, loadSnapshot } from "../src/golden/snapshots.ts";
 import { parseSpec } from "../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../src/types.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(scriptDir, "..", "fixtures");
 const snapshotsDir = join(fixturesDir, "snapshots");
-
-/**
- * A "write fixture" is a spec with at least one non-`read`-effect tool — mirrors
- * test/golden/snapshots.test.ts's `listWriteFixtures`. Deliberately data-driven rather
- * than a hardcoded name list: this script is not on Task 8's list of files to modify, so
- * it must pick up `zzwrite` / `zzwriterest` (and anything added later) purely from
- * fixture content, with no edit here.
- */
-function listWriteFixtures(): string[] {
-  return readdirSync(fixturesDir)
-    .filter((f) => f.endsWith(".spec.json"))
-    .map((f) => f.replace(/\.spec\.json$/, ""))
-    .filter((name) => {
-      const spec = parseSpec(
-        JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")),
-      );
-      return spec.tools.some((t) => t.effect !== "read");
-    })
-    .sort();
-}
 
 /** Like loadSnapshot, but a first run for a brand-new fixture has nothing to load yet. */
 function loadExistingSnapshot(dir: string): Map<string, string> {
@@ -56,7 +36,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const names = listWriteFixtures();
+  const names = listWriteFixtures(fixturesDir);
   if (names.length === 0) {
     console.log(
       "No write fixtures found (a write fixture is a spec with at least one non-read-effect " +
