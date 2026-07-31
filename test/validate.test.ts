@@ -25,7 +25,15 @@ function restKitSpecWith(over: Record<string, unknown>) {
     serviceLabel: "Discord",
     style: "rest-kit",
     env: [
-      { vars: ["DISCORD_TOKEN"], local: "token", bindings: ["t"], required: true, auth: "bearer" },
+      // Not "token": that is now a reserved emitter identifier — the client-credentials
+      // branch emits `token()` at module scope.
+      {
+        vars: ["DISCORD_TOKEN"],
+        local: "tokenHeaders",
+        bindings: ["t"],
+        required: true,
+        auth: "bearer",
+      },
     ],
     fetchHelper: { local: "discordGet", base: "https://discord.com/api/v10" },
     tools: [],
@@ -194,6 +202,47 @@ describe("validateSpec", () => {
   it("rejects an env local colliding with the reserved global `fetch` (F6)", () => {
     const s = specWith({ env: [{ vars: ["A"], local: "fetch", bindings: ["a"], required: true }] });
     expect(() => validateSpec(s)).toThrow(/fetch/);
+  });
+
+  /**
+   * Final fix wave, MINOR 1. Stage C introduced three module-scope names — `token`,
+   * `cachedToken` and `<fetchHelper.local>Send` — and registered none of them, so a spec
+   * could name an env accessor after one and emit two declarations of it.
+   */
+  describe("Stage C's emitted module-scope names are reserved", () => {
+    for (const name of ["token", "cachedToken", "encodeBasicAuthHeader", "URLSearchParams"]) {
+      it(`rejects an env local named "${name}"`, () => {
+        const s = specWith({
+          env: [{ vars: ["A"], local: name, bindings: ["a"], required: true }],
+        });
+        expect(() => validateSpec(s)).toThrow(new RegExp(`"${name}"`));
+      });
+    }
+
+    it("rejects an env local colliding with the write helper's derived name", () => {
+      // The write helper is `<fetchHelper.local>Send`, so "sentryGetSend" is taken by
+      // fetchHelper.local "sentryGet" even though no spec field spells it out.
+      const s = specWith({
+        env: [{ vars: ["A"], local: "sentryGetSend", bindings: ["a"], required: true }],
+      });
+      expect(() => validateSpec(s)).toThrow(/sentryGetSend/);
+    });
+
+    it("rejects a hoisted arg local colliding with the write helper's derived name", () => {
+      const s = specWith({
+        tools: [
+          {
+            name: "sentry_issue_list",
+            description: "d.",
+            args: {
+              limit: { type: "number", optional: true, default: 20, local: "sentryGetSend" },
+            },
+            path: "/issues/?limit=${arg.limit|num}",
+          },
+        ],
+      });
+      expect(() => validateSpec(s)).toThrow(/sentryGetSend/);
+    });
   });
 
   it("correctly strips non-alphanumerics from title in registrar name", () => {

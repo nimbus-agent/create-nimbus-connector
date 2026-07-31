@@ -1,0 +1,32 @@
+{
+  "name": "zzwriterest",
+  "title": "Zzwriterest",
+  "displayName": "ZZ Write Rest",
+  "description": "Throwaway write-fixture connector, rest-kit style with bearer auth. Exercises the write effect end to end.",
+  "serviceLabel": "ZZ Write Rest",
+  "style": "rest-kit",
+  "network": ["api.zzwriterest.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZWRITEREST_TOKEN"], "local": "authHeaders", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzwriteRestFetch", "base": "https://api.zzwriterest.test" },
+  "tools": [
+    { "name": "zzwriterest_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzwriterest_item_update",
+      "description": "Update an item's title.",
+      "method": "PATCH",
+      "effect": "write",
+      "args": {
+        "itemId": { "type": "string", "min": 1 },
+        "title": { "type": "string", "min": 1 },
+        "mode": { "type": "string", "optional": true, "default": "merge" },
+        "notify": { "type": "boolean", "optional": true }
+      },
+      "body": { "title": "title", "mode": "mode", "notify": "notify" },
+      "path": "/v1/items/${arg.itemId|enc}?mode=${arg.mode}"
+    }
+  ]
+}

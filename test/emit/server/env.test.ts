@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { renderEnvAccessor } from "../../../src/emit/server/env.ts";
-import { EnvSchema } from "../../../src/spec.ts";
+import { renderEnvAccessor, renderEnvAccessors } from "../../../src/emit/server/env.ts";
+import { EnvSchema, parseSpec } from "../../../src/spec.ts";
 
 const env = (raw: unknown) => EnvSchema.parse(raw);
 
@@ -93,5 +93,81 @@ describe("renderEnvAccessor", () => {
     expect(out).toContain('"DD-API-KEY": ak,');
     expect(out).toContain('"DD-APPLICATION-KEY": app,');
     expect(out).toContain('Accept: "application/json",');
+  });
+});
+
+describe("client-credentials", () => {
+  const ccSpec = (over: Record<string, unknown> = {}) =>
+    parseSpec({
+      name: "zz",
+      title: "Zz",
+      displayName: "Zz",
+      description: "d.",
+      serviceLabel: "Zz",
+      style: "hand-rolled",
+      network: ["api.zz.test"],
+      syncInterval: 300,
+      minNimbusVersion: "0.2.0",
+      env: [
+        {
+          vars: ["ZZ_CLIENT_ID", "ZZ_CLIENT_SECRET"],
+          local: "authHeaders",
+          bindings: ["id", "secret"],
+          auth: "client-credentials",
+          tokenUrl: "https://api.zz.test/token",
+          scope: "items:read",
+          credentialsIn: "basic",
+          ...over,
+        },
+      ],
+      fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "authHeaders" },
+      tools: [{ name: "zz_a", description: "A.", path: "/a" }],
+    });
+
+  it("requires exactly two vars", () => {
+    expect(() => ccSpec({ vars: ["ONLY_ONE"] })).toThrow(/two/i);
+  });
+
+  it("rejects rest-kit style — the registrar resolves one bearer credential itself", () => {
+    expect(() =>
+      parseSpec({
+        ...JSON.parse(JSON.stringify(ccSpec())),
+        style: "rest-kit",
+        fetchHelper: { local: "zzGet", base: "https://api.zz.test" },
+      }),
+    ).toThrow(/hand-rolled/);
+  });
+
+  it("emits a cached token function and a Bearer header", () => {
+    const out = renderEnvAccessors(ccSpec());
+    expect(out).toContain("let cachedToken: string | null = null");
+    expect(out).toContain('grant_type: "client_credentials"');
+    expect(out).toContain("Authorization: `Bearer ${await token()}`");
+  });
+
+  it("sends credentials as a Basic header when credentialsIn is basic", () => {
+    // NOT `` Authorization: `Basic ${...}` `` — that shape is a hand-rolled base64
+    // encode, exactly the `btoa`-style approach the brief warns against emitting.
+    // `encodeBasicAuthHeader` already returns the complete "Basic <b64>" value, so it is
+    // assigned directly, as a plain call, not interpolated into another template literal.
+    expect(renderEnvAccessors(ccSpec())).toContain(
+      "Authorization: encodeBasicAuthHeader(id, secret)",
+    );
+  });
+
+  it("does not send a Basic header when credentialsIn is body", () => {
+    const out = renderEnvAccessors(ccSpec({ credentialsIn: "body" }));
+    expect(out).not.toContain("encodeBasicAuthHeader");
+  });
+
+  it("sends them in the form body when credentialsIn is body", () => {
+    const out = renderEnvAccessors(ccSpec({ credentialsIn: "body" }));
+    expect(out).toContain("client_secret");
+    expect(out).not.toContain("Authorization: `Basic ${");
+  });
+
+  it("omits the scope line when the spec declares no scope", () => {
+    const out = renderEnvAccessors(ccSpec({ scope: undefined }));
+    expect(out).not.toContain("scope");
   });
 });

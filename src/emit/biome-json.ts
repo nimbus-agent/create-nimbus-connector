@@ -24,7 +24,16 @@ export function emitBiomeJson(): GeneratedFile {
     formatter: FORMATTER_CONFIG.formatter,
     // Biome's own default, restated so the emitted `lint` script is a real lint gate and
     // its behaviour is visible in the generated file rather than implied by omission.
-    linter: { enabled: true, rules: { recommended: true } },
+    //
+    // noUnusedVariables IS in the recommended preset, but at severity "warn" — `biome check`
+    // prints it and exits 0. An unused emitted local therefore already fails the generated
+    // package's `typecheck` (its tsconfig sets noUnusedLocals) while silently passing its
+    // `lint`. Raising it to "error" makes the two gates agree, and matches the Nimbus
+    // monorepo root, which sets this same rule to "error" for connectors it hosts.
+    linter: {
+      enabled: true,
+      rules: { recommended: true, correctness: { noUnusedVariables: "error" } },
+    },
     javascript: FORMATTER_CONFIG.javascript,
   };
   return { path: ["biome.json"], content: `${JSON.stringify(cfg, undefined, 2)}\n` };

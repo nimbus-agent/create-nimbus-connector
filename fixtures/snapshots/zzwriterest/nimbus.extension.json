@@ -1,0 +1,15 @@
+{
+  "id": "com.nimbus.zzwriterest",
+  "displayName": "ZZ Write Rest",
+  "version": "0.1.0",
+  "description": "Throwaway write-fixture connector, rest-kit style with bearer auth. Exercises the write effect end to end.",
+  "author": "Nimbus",
+  "entrypoint": "dist/server.js",
+  "runtime": "bun",
+  "permissions": {
+    "network": ["api.zzwriterest.test"]
+  },
+  "hitlRequired": ["write"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0"
+}

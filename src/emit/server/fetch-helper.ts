@@ -19,7 +19,13 @@ function headerOption(spec: ConnectorSpec): string {
       .join(", ");
     return `headers: { ${fields} }`;
   }
-  return `headers: ${fh.headers}()`;
+  // A client-credentials accessor is `async` (it awaits the cached token exchange), so its
+  // call must be awaited — every call site of headerOption is itself inside an `async`
+  // function ($fh.local and $fh.localSend), so `await` is always valid here. Every other
+  // auth mode's accessor is synchronous and unaffected.
+  const entry = spec.env.find((e) => e.local === fh.headers);
+  const call = entry?.auth === "client-credentials" ? `await ${fh.headers}()` : `${fh.headers}()`;
+  return `headers: ${call}`;
 }
 
 /**
@@ -69,6 +75,72 @@ function renderRestKitFetchHelper(spec: ConnectorSpec): string {
     "  return { ok: res.ok, status: res.status, json, text };",
     "}",
   ].join("\n");
+}
+
+/**
+ * The write helper, or undefined when the spec has no non-GET tool.
+ *
+ * Emitting it conditionally is what makes Stage C byte-safe: a read-only spec never
+ * reaches this function, so newrelic/datadog/grafana/sentry cannot move. It also mirrors
+ * the corpus — argocd has agPost because argocd posts.
+ */
+export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
+  if (!spec.tools.some((t) => t.method !== "GET")) return undefined;
+  if (spec.style === "rest-kit") return undefined; // the registrar's buildInit carries it
+
+  const fh = spec.fetchHelper;
+  const url = `\`${resolveEnvRefs(fh.base)}\${path}\``;
+  // headerOption(spec) returns "headers: <expr>" where <expr> is either an inline object
+  // literal or an accessor call (see FetchHelperSchema — headers and inlineHeaders are
+  // mutually exclusive). Strip the "headers: " prefix and spread the expression so the
+  // write helper gets the same headers as the read helper, plus Content-Type.
+  const headerExpr = headerOption(spec).replace(/^headers: /, "");
+  return [
+    `async function ${fh.local}Send(`,
+    "  path: string,",
+    "  method: string,",
+    "  body: string | undefined,",
+    "): Promise<unknown> {",
+    `  const res = await fetch(${url}, {`,
+    "    method,",
+    `    headers: { ...${headerExpr}, "Content-Type": "application/json" },`,
+    "    ...(body === undefined ? {} : { body }),",
+    "  });",
+    "  const text = await res.text();",
+    "  if (!res.ok) {",
+    `    throw new Error(\`${spec.serviceLabel} \${String(res.status)}: \${text.slice(0, 400)}\`);`,
+    "  }",
+    "  try {",
+    "    return JSON.parse(text) as unknown;",
+    "  } catch {",
+    "    return null;",
+    "  }",
+    "}",
+  ].join("\n");
+}
+
+/**
+ * The read helper, or undefined when nothing the emitted server contains would call it.
+ *
+ * Final fix wave, IMPORTANT 3: the read helper used to be emitted unconditionally, which is
+ * exactly the defect `renderWriteHelper`'s own guard above exists to prevent, mirrored. A
+ * hand-rolled spec whose only tool is a POST emits `async function <local>(path)` that
+ * nothing calls — a write tool routes through `<local>Send`, a different function — and the
+ * generated package's own tsconfig (`noUnusedLocals`) and biome.json (`noUnusedVariables`)
+ * both reject it. The same holds for a hand-rolled spec that is all stubs, or has no tools:
+ * a stub handler only throws.
+ *
+ * rest-kit is unconditional, and not for symmetry's sake: `makeRestToolRegistrar` is handed
+ * the helper as its `fetch:` option, so the factory line references it whatever the tools
+ * do — including for a spec with no tools at all.
+ *
+ * Read-only and mixed specs are unaffected, which is what keeps newrelic/datadog/grafana/
+ * sentry byte-identical.
+ */
+export function renderReadHelper(spec: ConnectorSpec): string | undefined {
+  if (spec.style === "rest-kit") return renderFetchHelper(spec);
+  const called = spec.tools.some((t) => t.method === "GET" && t.impl !== "stub");
+  return called ? renderFetchHelper(spec) : undefined;
 }
 
 export function renderFetchHelper(spec: ConnectorSpec): string {

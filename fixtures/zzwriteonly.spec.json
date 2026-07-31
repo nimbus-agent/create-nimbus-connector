@@ -1,0 +1,28 @@
+{
+  "name": "zzwriteonly",
+  "title": "Zzwriteonly",
+  "displayName": "ZZ Write Only",
+  "description": "Throwaway write-fixture connector whose only tool mutates. Exists so the acceptance run compiles a hand-rolled package that must NOT emit a read fetch helper.",
+  "serviceLabel": "ZZ Write Only",
+  "style": "hand-rolled",
+  "network": ["api.zzwriteonly.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZWRITEONLY_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzGet", "base": "https://api.zzwriteonly.test", "headers": "headers" },
+  "tools": [
+    {
+      "name": "zzwriteonly_item_create",
+      "description": "Create an item.",
+      "method": "POST",
+      "effect": "write",
+      "args": {
+        "title": { "type": "string", "min": 1 },
+        "draft": { "type": "boolean", "optional": true }
+      },
+      "path": "/v1/items"
+    }
+  ]
+}

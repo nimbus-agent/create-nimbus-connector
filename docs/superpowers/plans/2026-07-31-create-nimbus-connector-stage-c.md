@@ -243,13 +243,13 @@ describe("hitlRequired", () => {
     expect(hitl([{ name: "a", description: "A.", path: "/a", method: "POST", effect: "write" }])).toEqual(["write"]);
   });
 
-  it("sorts delete before write, matching all 37 manifests that declare them", () => {
+  it("orders write before delete, matching all 23 manifests that declare both", () => {
     expect(
       hitl([
         { name: "a", description: "A.", path: "/a", method: "POST", effect: "write" },
         { name: "b", description: "B.", path: "/b", method: "DELETE", effect: "delete" },
       ]),
-    ).toEqual(["delete", "write"]);
+    ).toEqual(["write", "delete"]);
   });
 
   it("deduplicates", () => {
@@ -283,8 +283,11 @@ In `src/emit/manifest.ts`, replace `hitlRequired: [] as string[]`:
 and add above `emitManifest`:
 
 ```ts
+/** The corpus's capability order — NOT alphabetical. 23 manifests declare ["write", "delete"]; none reverse it. */
+const CAPABILITY_ORDER = ["write", "delete"] as const;
+
 /**
- * The sorted unique set of non-read effects.
+ * The unique set of non-read effects, in CAPABILITY_ORDER.
  *
  * Computed rather than declared: 32 of the 94 monorepo connectors have a hand-written
  * hitlRequired that disagrees with their tools, which is what a hand-maintained
@@ -292,11 +295,11 @@ and add above `emitManifest`:
  */
 function hitlRequired(spec: ConnectorSpec): string[] {
   const effects = new Set(spec.tools.map((t) => t.effect).filter((e) => e !== "read"));
-  return [...effects].sort();
+  return CAPABILITY_ORDER.filter((c) => effects.has(c));
 }
 ```
 
-`sort()` puts `delete` before `write` alphabetically, which is the order all 37 declaring manifests use.
+CORRECTION (final fix wave): this step originally specified `[...effects].sort()`, on the claim that alphabetical order put `delete` first "matching all 37 declaring manifests". Both halves are wrong. Measured across all 94 manifests: 57 declare `[]`, 23 declare `["write", "delete"]`, 14 declare `["write"]` — **zero** declare `delete` first. The order is a fixed corpus convention, so it is filtered from a declared constant rather than sorted.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -385,9 +388,13 @@ const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 /**
  * The JSON body expression for a tool, or undefined when it sends none.
  *
- * The args object IS the body by default, which is the shape the corpus uses
- * (`JSON.stringify({ issueId, status })`). Arg values are referenced directly rather
+ * Args NOT referenced in the path are the body by default, which is the shape the corpus
+ * uses (`JSON.stringify({ issueId, status })`). Arg values are referenced directly rather
  * than interpolated into a string, so a number arg stays a number in the JSON.
+ *
+ * Path args are excluded because including them sends a PATCH's path parameter twice and
+ * gives a DELETE a body it should not have — see the spec's §4.4 table. An explicit `body`
+ * mapping still wins entirely: naming a path arg there is a deliberate request.
  */
 export function renderBodyExpr(tool: ToolSpec, param: string): string | undefined {
   if (tool.method === "GET") return undefined;
@@ -879,7 +886,7 @@ Add `"zzwrite": []` and `"zzwriterest": []` to `fixtures/expectations.json`, and
 
 - [ ] **Step 3: Generate the snapshots**
 
-Run: `bun run snapshot:update`. Read the printed file list. Confirm the emitted `nimbus.extension.json` shows `"hitlRequired": ["delete", "write"]` for `zzwrite` and `["write"]` for `zzwriterest`.
+Run: `bun run snapshot:update`. Read the printed file list. Confirm the emitted `nimbus.extension.json` shows `"hitlRequired": ["write", "delete"]` for `zzwrite` and `["write"]` for `zzwriterest`. (Originally written as `["delete", "write"]` — see the CORRECTION under Task 3.)
 
 - [ ] **Step 4: Add both to standalone acceptance**
 
@@ -891,8 +898,8 @@ Add `"zzwrite"` and `"zzwriterest"` to `FIXTURES` in `scripts/standalone-accepta
 bun test
 bunx tsc --noEmit
 bunx biome check src/ test/ scripts/
-bun run diff:golden --nimbus-root C:/gitrep/Nimbus    # 11/11
-bun run standalone-acceptance --registry              # 40 checks across 4 fixtures
+bun run diff:golden --nimbus-root C:/gitrep/Nimbus    # 12/12
+bun run standalone-acceptance --registry              # 50 checks across 5 fixtures
 ```
 
 Confirm zero `cnc-*` directories remain in `%TEMP%`.

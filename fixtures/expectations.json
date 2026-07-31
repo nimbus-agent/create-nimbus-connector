@@ -35,5 +35,8 @@
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
   "zzscratch": [],
   "zzstandalone": [],
-  "zzstandalonehand": []
+  "zzstandalonehand": [],
+  "zzwrite": [],
+  "zzwriteonly": [],
+  "zzwriterest": []
 }

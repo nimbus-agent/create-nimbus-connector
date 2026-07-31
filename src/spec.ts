@@ -1,10 +1,17 @@
 import { z } from "zod";
 
-/** Keys that belong to Stage B/C. Detected before Zod so the error explains the boundary. */
+/**
+ * Tool keys rejected with a targeted message rather than Zod's generic "unrecognized key".
+ * Detected before Zod so the error explains the boundary and names the alternative.
+ *
+ * The message used to read "is not supported in Stage A (… a later Stage C task)". Stage C
+ * happened, and it did not add `hitl` — the manifest's `hitlRequired` array is computed from
+ * each tool's `effect` instead, deliberately (see the Stage C design doc §1.1: `hitlRequired`
+ * is a manifest-level capability array in all 94 corpus connectors, never per-tool). The
+ * message now says what is true and what to write instead, and does not promise a stage.
+ */
 const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
-  method: 'non-GET tools are out of scope; use "impl": "stub"',
-  body: 'request bodies are out of scope; use "impl": "stub"',
-  hitl: "HITL declaration is Stage C",
+  hitl: 'HITL is not declared per tool; use "effect": "write" | "delete", which is what the manifest\'s hitlRequired array is computed from',
 };
 
 /**
@@ -54,12 +61,48 @@ export const ToolSchema = z
       )
       .default({}),
     path: z.string().optional(),
-    impl: z.enum(["get", "stub"]).default("get"),
+    // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
+    // 0.2.2 is published, so it is normalised rather than rejected.
+    impl: z
+      .enum(["rest", "get", "stub"])
+      .default("rest")
+      .transform((v) => (v === "get" ? "rest" : v)),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
+    /**
+     * The author's declaration of intent, deliberately NOT derived from `method`.
+     * Measured against the 94 connectors, method-derived HITL matches only 62 — dagster
+     * POSTs GraphQL queries, ramp and wiz POST to exchange tokens.
+     */
+    effect: z.enum(["read", "write", "delete"]).default("read"),
+    /** arg name -> API field name. Omitted means "the args object is the body". */
+    body: z.record(z.string().min(1), z.string().min(1)).optional(),
   })
   .refine((t) => (t.impl === "stub") === (t.path === undefined), {
     message:
       '"path" is required when "impl" is not "stub", and must be omitted when "impl" is "stub" ' +
       '— "impl" and "path" disagree',
+  })
+  .refine((t) => !(t.impl === "stub" && (t.method !== "GET" || t.body !== undefined)), {
+    message: 'a "stub" tool issues no request, so "method" and "body" have nothing to describe',
+  })
+  .refine((t) => !(t.method === "GET" && t.effect !== "read" && t.impl !== "stub"), {
+    message:
+      'a GET tool cannot have effect "write" or "delete" — a REST GET that mutates is a bug, ' +
+      "not a design. Set the method the API actually requires.",
+  })
+  .refine((t) => !(t.body !== undefined && t.method === "GET"), {
+    message: '"body" requires a non-GET "method"',
+  })
+  // superRefine only, deliberately: a parallel .refine asserting the same condition would
+  // fire alongside this one with a vaguer message, and the test asserts the offending key
+  // name appears in the error. One check, one message, naming the key that is wrong.
+  .superRefine((t, ctx) => {
+    if (t.body === undefined) return;
+    for (const k of Object.keys(t.body)) {
+      if (!(k in t.args)) {
+        ctx.addIssue({ code: "custom", message: `"body" key "${k}" is not a declared arg` });
+      }
+    }
   });
 
 export const EnvSchema = z
@@ -74,9 +117,14 @@ export const EnvSchema = z
     transform: z.enum(["stripTrailingSlash"]).optional(),
     prefix: z.string().optional(),
     suffix: z.string().optional(),
-    auth: z.enum(["bearer", "headers"]).optional(),
+    auth: z.enum(["bearer", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
+    /** Token endpoint, required when auth === "client-credentials". */
+    tokenUrl: z.string().url().optional(),
+    scope: z.string().min(1).optional(),
+    /** ramp sends Basic; powerbi, looker and teams put client_secret in the body. */
+    credentialsIn: z.enum(["basic", "body"]).optional(),
   })
   .refine((e) => !(e.required && e.default !== undefined), {
     message:
@@ -97,8 +145,27 @@ export const EnvSchema = z
         'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value',
     },
   )
-  .refine((e) => e.vars.length === 1 || e.auth === "headers", {
-    message: 'only an entry with auth: "headers" may declare multiple "vars"',
+  .refine((e) => e.vars.length === 1 || e.auth === "headers" || e.auth === "client-credentials", {
+    message:
+      'only an entry with auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
+    message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.tokenUrl !== undefined, {
+    message: '"tokenUrl" is required when auth is "client-credentials"',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.credentialsIn !== undefined, {
+    message: '"credentialsIn" is required when auth is "client-credentials"',
+  })
+  .refine((e) => e.tokenUrl === undefined || e.auth === "client-credentials", {
+    message: '"tokenUrl" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.scope === undefined || e.auth === "client-credentials", {
+    message: '"scope" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
+    message: '"credentialsIn" is only valid when auth is "client-credentials"',
   });
 
 export const FetchHelperSchema = z.strictObject({
@@ -158,6 +225,22 @@ export const ConnectorSpecSchema = z
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
     },
   )
+  // Not a validate.ts identifier claim, because the colliding names are not spec-authored:
+  // renderTokenFunction emits `cachedToken` and `token` at module scope, hard-coded, once per
+  // client-credentials entry. Two entries emit each name twice. Nothing in the corpus has two
+  // token exchanges, and supporting them would mean parameterising those names — a change to
+  // emitted shape for a case no connector has, so this is rejected instead.
+  .refine((s) => s.env.filter((e) => e.auth === "client-credentials").length <= 1, {
+    message:
+      'a connector may declare at most one env entry with auth: "client-credentials" — the ' +
+      "emitted token exchange declares `token` and `cachedToken` at module scope, so a second " +
+      "entry would redeclare both",
+  })
+  .refine((s) => s.style !== "rest-kit" || !s.env.some((e) => e.auth === "client-credentials"), {
+    message:
+      'style "rest-kit" cannot use client-credentials: makeRestToolRegistrar resolves a single ' +
+      'bearer credential itself and has no seam for a token exchange. Use style "hand-rolled".',
+  })
   .refine(
     (s) =>
       s.style !== "rest-kit" ||
@@ -197,7 +280,7 @@ function preflightOutOfScope(input: unknown): void {
     if (typeof t !== "object" || t === null) continue;
     for (const [key, why] of Object.entries(OUT_OF_SCOPE_TOOL_KEYS)) {
       if (key in t) {
-        throw new Error(`"${key}" is not supported in Stage A (${why}).`);
+        throw new Error(`"${key}" is not a supported tool field: ${why}.`);
       }
     }
   }

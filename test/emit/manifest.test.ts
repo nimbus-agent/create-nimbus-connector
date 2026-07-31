@@ -34,3 +34,73 @@ describe("emitManifest", () => {
     expect(m.hitlRequired).toEqual([]);
   });
 });
+
+const hitlSpec = (tools: unknown[]) =>
+  parseSpec({
+    name: "zz",
+    title: "Zz",
+    displayName: "Zz",
+    description: "d.",
+    serviceLabel: "Zz",
+    style: "hand-rolled",
+    network: ["api.zz.test"],
+    syncInterval: 300,
+    minNimbusVersion: "0.2.0",
+    env: [{ vars: ["ZZ_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+    fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "headers" },
+    tools,
+  });
+
+const hitl = (tools: unknown[]) =>
+  JSON.parse(emitManifest(hitlSpec(tools)).content).hitlRequired as string[];
+
+describe("hitlRequired", () => {
+  it("is empty for a read-only connector", () => {
+    expect(hitl([{ name: "a", description: "A.", path: "/a" }])).toEqual([]);
+  });
+
+  it("collects write", () => {
+    expect(
+      hitl([{ name: "a", description: "A.", path: "/a", method: "POST", effect: "write" }]),
+    ).toEqual(["write"]);
+  });
+
+  it("orders write before delete, matching all 23 manifests that declare both (zero declare delete first)", () => {
+    expect(
+      hitl([
+        { name: "a", description: "A.", path: "/a", method: "POST", effect: "write" },
+        { name: "b", description: "B.", path: "/b", method: "DELETE", effect: "delete" },
+      ]),
+    ).toEqual(["write", "delete"]);
+  });
+
+  it("uses the fixed capability order regardless of declaration order — a delete tool declared first still emits write first", () => {
+    expect(
+      hitl([
+        { name: "a", description: "A.", path: "/a", method: "DELETE", effect: "delete" },
+        { name: "b", description: "B.", path: "/b", method: "POST", effect: "write" },
+      ]),
+    ).toEqual(["write", "delete"]);
+  });
+
+  it("collects delete alone", () => {
+    expect(
+      hitl([{ name: "a", description: "A.", path: "/a", method: "DELETE", effect: "delete" }]),
+    ).toEqual(["delete"]);
+  });
+
+  it("deduplicates", () => {
+    expect(
+      hitl([
+        { name: "a", description: "A.", path: "/a", method: "POST", effect: "write" },
+        { name: "b", description: "B.", path: "/b", method: "PUT", effect: "write" },
+      ]),
+    ).toEqual(["write"]);
+  });
+
+  it("counts a stub's declared effect — over-declaring asks for a needless approval, under-declaring lets a mutation past review", () => {
+    expect(hitl([{ name: "a", description: "A.", impl: "stub", effect: "write" }])).toEqual([
+      "write",
+    ]);
+  });
+});

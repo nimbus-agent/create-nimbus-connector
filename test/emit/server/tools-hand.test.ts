@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { renderWriteHelper } from "../../../src/emit/server/fetch-helper.ts";
 import { renderHandRolledTools } from "../../../src/emit/server/tools-hand.ts";
 import { parseSpec } from "../../../src/spec.ts";
 
@@ -154,5 +155,201 @@ describe("renderHandRolledTools", () => {
     );
     expect(out).toContain("async () =>");
     expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
+  });
+});
+
+describe("hand-rolled write support", () => {
+  const spec = (tools: unknown[]) =>
+    parseSpec({
+      name: "zz",
+      title: "Zz",
+      displayName: "Zz",
+      description: "d.",
+      serviceLabel: "Zz",
+      style: "hand-rolled",
+      network: ["api.zz.test"],
+      syncInterval: 300,
+      minNimbusVersion: "0.2.0",
+      env: [{ vars: ["ZZ_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+      fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "headers" },
+      tools,
+    });
+
+  it("emits NO write helper for a read-only spec — this is what keeps the 6/6 fixtures byte-identical", () => {
+    expect(renderWriteHelper(spec([{ name: "a", description: "A.", path: "/a" }]))).toBeUndefined();
+  });
+
+  it("emits a write helper when any tool is non-GET", () => {
+    const out = renderWriteHelper(
+      spec([{ name: "a", description: "A.", path: "/a", method: "POST", effect: "write" }]),
+    );
+    expect(out).toContain("async function zzGetSend(");
+    expect(out).toContain("method,");
+    expect(out).toContain('"Content-Type": "application/json"');
+  });
+
+  it("routes a write tool through the write helper with method and body", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_create",
+          description: "C.",
+          path: "/i",
+          method: "POST",
+          effect: "write",
+          args: { title: { type: "string" } },
+        },
+      ]),
+    );
+    // pathExpr follows the same renderPath contract as the read path: a fully static
+    // path renders as a plain double-quoted string, not a template literal.
+    expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ title: p.title }))');
+  });
+
+  it("sends no body on a DELETE with no args", () => {
+    const out = renderHandRolledTools(
+      spec([{ name: "zz_rm", description: "R.", path: "/i", method: "DELETE", effect: "delete" }]),
+    );
+    expect(out).toContain('zzGetSend("/i", "DELETE", undefined)');
+  });
+
+  it("PATCH excludes its path id from the default body but still takes a parameter for the path", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_update",
+          description: "U.",
+          path: "/items/${arg.id}",
+          method: "PATCH",
+          effect: "write",
+          args: { id: { type: "string" }, title: { type: "string" } },
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) =>");
+    expect(out).toContain(
+      'zzGetSend(`/items/${p.id}`, "PATCH", JSON.stringify({ title: p.title }))',
+    );
+  });
+
+  it("DELETE with only a path id sends no body but still takes a parameter for the path", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_delete",
+          description: "D.",
+          path: "/items/${arg.id}",
+          method: "DELETE",
+          effect: "delete",
+          args: { id: { type: "string" } },
+        },
+      ]),
+    );
+    expect(out).toContain("async (p) =>");
+    expect(out).toContain('zzGetSend(`/items/${p.id}`, "DELETE", undefined)');
+  });
+
+  /**
+   * Final fix wave, IMPORTANT 2. The body used to emit `p.<arg>` unconditionally, ignoring
+   * the hoisted-locals map this call site already computes.
+   */
+  describe("hoisted args in a write body", () => {
+    it("references the hoisted const, so the URL and the body carry the same value (silent case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i?scope=${arg.scope}",
+            method: "POST",
+            effect: "write",
+            args: {
+              title: { type: "string" },
+              scope: { type: "string", optional: true, default: "all" },
+            },
+            body: { title: "title", scope: "scope" },
+          },
+        ]),
+      );
+      expect(out).toContain('const scope = p.scope ?? "all";');
+      expect(out).toContain(
+        'zzGetSend(`/i?scope=${scope}`, "POST", JSON.stringify({ title: p.title, scope }))',
+      );
+      // The defect: `scope: p.scope` sent undefined in the body while the URL carried "all".
+      expect(out).not.toContain("scope: p.scope");
+    });
+
+    it("emits no unread hoist for a defaulted arg the path never names (loud case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i",
+            method: "POST",
+            effect: "write",
+            args: { limit: { type: "number", optional: true, default: 20, local: "lim" } },
+          },
+        ]),
+      );
+      // The hoist IS emitted here, because the body consumes it.
+      expect(out).toContain("const lim = p.limit ?? 20;");
+      expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ limit: lim }))');
+    });
+
+    it("drops the hoist entirely for a boolean arg nothing reads — a plain POST with one boolean arg (loud case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i",
+            method: "POST",
+            effect: "write",
+            args: { draft: { type: "boolean" } },
+          },
+        ]),
+      );
+      // `const draft = p.draft === true ? "true" : "false";` had no consumer: the body used
+      // p.draft, so the const was a TS6133 and a biome noUnusedVariables error.
+      expect(out).not.toContain("const draft =");
+      // And the body sends a real JSON boolean, not the hoist's string.
+      expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ draft: p.draft }))');
+    });
+
+    it("keeps a boolean's hoist for the URL while the body still sends a real boolean", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i?draft=${arg.draft|bool}",
+            method: "POST",
+            effect: "write",
+            args: { title: { type: "string" }, draft: { type: "boolean" } },
+            body: { title: "title", draft: "draft" },
+          },
+        ]),
+      );
+      expect(out).toContain('const draft = p.draft === true ? "true" : "false";');
+      expect(out).toContain(
+        'zzGetSend(`/i?draft=${draft}`, "POST", JSON.stringify({ title: p.title, draft: p.draft }))',
+      );
+    });
+
+    it("emits no unread hoist on a GET whose defaulted arg the path never names", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_list",
+            description: "L.",
+            path: "/i",
+            args: { limit: { type: "number", optional: true, default: 20, local: "lim" } },
+          },
+        ]),
+      );
+      expect(out).not.toContain("const lim =");
+      expect(out).toContain('jsonResult(await zzGet("/i"))');
+    });
   });
 });

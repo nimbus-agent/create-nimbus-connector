@@ -1,6 +1,6 @@
 # create-nimbus-connector — Stage C design
 
-**Status:** approved, not yet implemented
+**Status:** implemented on `stage-c-writes`; acceptance results in §9. Three claims in §1 and §4–6 were corrected mid-implementation when measurement contradicted them — each correction is recorded inline rather than rewritten away.
 **Date:** 2026-07-31
 **Predecessors:** Stage A (generator, monorepo target), Stage B (standalone target, published as `create-nimbus-connector@0.2.2`)
 
@@ -55,11 +55,20 @@ None reads `expires_in`. All cache for the process lifetime.
 
 ### 1.5 Gateway wiring lives in the monorepo, and half of it is not generatable
 
-`packages/gateway/src/connectors/` holds 98 `*-sync.ts` files totalling 17,636 lines. The simplest are ~42 lines and follow one shape: `createXSyncable()` returning a `Syncable` whose `sync()` drains a single list tool via `listConnectorItems` and upserts each item through a per-connector `mapXToItem`.
+`packages/gateway/src/connectors/` holds 98 `*-sync.ts` files totalling 17,636 lines. The simplest are ~42 lines: `createXSyncable()` returning a `Syncable` whose `sync()` drains a single list tool via `listConnectorItems` and upserts each item through a per-connector `mapXToItem`.
+
+**Correction, from Task 10's review.** An earlier draft called that "one shape" and treated it as formulaic. It is not: the `listConnectorItems`-draining assembly appears in **exactly two** of the ~98 files (`monte-carlo-sync.ts`, `bigeye-sync.ts`). This spec's original claim came from sampling the shortest files and generalising. The four connectors this project uses as golden fixtures — `newrelic`, `datadog`, `grafana`, `sentry` — are hand-authored with a different structure entirely: direct `fetch`, `readConnectorSecret`, cursor pagination, and an options-object factory.
+
+Two consequences, both applied in §6:
+
+- Emitting a *working* sync implementation would reproduce two specific AGPL files nearly verbatim, which an MIT repository must not do.
+- It would also imply a shape that fits 2 of 98 connectors, which is worse than emitting nothing where the answer is unknown.
 
 The `*-mapping.ts` half is bespoke — it maps a service's API response shape into the local index, and no connector spec contains that information.
 
-93 syncables are registered in a single file, `platform/assemble-sync-registrations.ts`, with a parallel id list in `connectors/gateway-syncable-ids.ts`.
+93 syncables are registered in a single file, `platform/assemble-sync-registrations.ts`, and each API-backed connector also needs an id in `connectors/connector-catalog.ts` (`CONNECTOR_SERVICE_IDS`, alongside a `CONNECTOR_SYNC_INTERVAL_MS` entry that `tsc` enforces stays in step).
+
+`connectors/gateway-syncable-ids.ts` is **not** that list, despite the similar name: it holds four ids — `blame`, `filesystem`, `obsidian`, `openapi` — for local filesystem-backed syncables that have no catalog entry at all.
 
 ### 1.6 Two latent defects found while measuring
 
@@ -81,7 +90,7 @@ The 94 are unaffected in practice — they are workspace packages that never tra
 | D2 | Separate `method` and `effect` fields | §1.2 — method does not imply write-intent |
 | D3 | `effect` is three-valued, not two booleans | Maps onto the only two `hitlRequired` values observed; two booleans admit nonsense states |
 | D4 | `hitlRequired` computed from `effect`, never declared | §1.2 — hand-declared capability drifts from the tools; 32 of 94 already have |
-| D5 | Args are the body by default, explicit mapping optional | Matches the observed `JSON.stringify({ issueId, status })` shape |
+| D5 | Args **not referenced in the path** are the body by default; explicit mapping optional and overriding | Matches the observed `JSON.stringify({ issueId, status })` shape. Amended after Task 4's review: the original "all args are the body" sent path parameters in the body too — see §4.4 |
 | D6 | Writes verified by golden snapshots of our own output | §1.3 — byte-matching hand-written writers is unachievable |
 | D7 | Nimbus accepts `entrypoint` as a fallback for `entry` | Fixes the 94, `nimbus scaffold`, and generated connectors at once |
 | D8 | Gateway wiring is opt-in and emits new files only | Editing a 93-entry file in another repository risks silent corruption |
@@ -131,7 +140,18 @@ Following the Stage A precedent that the schema must reject anything the emitter
 
 ### 3.3 Manifest
 
-`hitlRequired` is the sorted unique set of non-`read` effects across the tools, `delete` before `write` — matching all 37 manifests that declare them. A read-only spec yields `[]`, byte-identical to today.
+`hitlRequired` is the unique set of non-`read` effects across the tools, emitted in a **fixed capability order — `write` before `delete`** — filtered to those actually present. A read-only spec yields `[]`, byte-identical to today.
+
+The order is a convention of the corpus, not a sort. Re-measured across all 94 manifests (§1.1):
+
+| Value | Connectors |
+| --- | --- |
+| `[]` | 57 |
+| `["write", "delete"]` | 23 |
+| `["write"]` | 14 |
+| `["delete", "write"]` | **0** |
+
+An earlier draft of this section claimed `delete` before `write` and an alphabetical `.sort()` implemented it. That is wrong in every one of the 23 manifests that declare both, and it would have made this project's headline property — byte-reproducing a real connector — unreachable for every mutating connector in the corpus. The emitter therefore filters a declared `["write", "delete"]` constant rather than sorting; a comparator that "happens to" produce the right order is the defect that was just removed.
 
 ---
 
@@ -166,9 +186,30 @@ async function zzSend(path: string, method: string, body: unknown): Promise<unkn
 
 ### 4.4 Bodies
 
-The args object becomes the body directly, preserving Zod types — `JSON.stringify({ title, body })` for args `title` and `body`. An explicit mapping changes key names only: `{ issue_title: title }`.
+The args **not referenced in the path** become the body, preserving Zod types. An explicit mapping changes key names only: `{ issue_title: title }`, and wins entirely where present — an author who names a path arg there has asked for it deliberately.
 
-A `DELETE` with no body emits neither a `body` field nor a `Content-Type` header.
+Excluding path args was not in the first draft of this spec, which said simply "the args object becomes the body". Reviewing Task 4 exposed what that produces:
+
+| Tool | "args are the body" | Excluding path args |
+| --- | --- | --- |
+| `POST /items` args `{title}` | `{ title }` | `{ title }` — unchanged |
+| `PATCH /items/${arg.id}` args `{id, title}` | `{ id, title }` | `{ title }` |
+| `DELETE /items/${arg.id}` args `{id}` | `{ id }` | no body at all |
+
+The middle and bottom rows are the two commonest REST write shapes, and the original rule got both wrong: a PATCH sent its path parameter twice, and a DELETE sent a body it should not have. `parsePathTemplate` already yields which args a path references, so the exclusion is mechanical.
+
+A `DELETE` whose only arg is a path parameter therefore emits neither a `body` field nor a `Content-Type` header.
+
+#### Hoisted args in a body
+
+An arg with a `default`, or of type `boolean`, is *hoisted*: the handler lifts a `const` above the request so the path template can interpolate it. The body has to take a position on those consts, and it is not one position but two.
+
+- **A `default` is a value.** The body must carry the defaulted value, not the raw arg. The first implementation emitted `p.<arg>` unconditionally, so a defaulted arg named in both the path and an explicit `body` mapping put `"all"` in the URL and `undefined` in the JSON — one argument, one call, two values, compiling and running. The body now references the hoisted const where it is in scope.
+- **A `boolean`'s hoist is a URL serialisation.** It renders the *string* `"true"`/`"false"`, which is what a query parameter needs and precisely wrong for JSON, where the API distinguishes `true` from `"true"`. The body therefore reaches past the hoist to the raw arg. A boolean in both the path and the body deliberately emits two different expressions; that is one value serialised two ways, not a disagreement.
+
+Scope is not uniform between the two styles, and the rule follows scope rather than style. Hand-rolled builds the body inside the same handler block as the hoists, so they are in scope and are referenced. rest-kit builds it in the registrar's *second* callback — `(parsed) => ({ method, body })` — while the hoists live in the first, so nothing is in scope and the `?? default` is inlined instead. Same value; naming the const there would emit an undeclared identifier.
+
+Finally, **a hoisted const is emitted only if something reads it.** The path reports the args it interpolates, the body reports the hoists it referenced, and only the union is rendered. Without that, a plain `POST` with one `boolean` arg emitted a const no expression read — a `TS6133` under the generated package's own `noUnusedLocals`, and a `noUnusedVariables` error under its own `biome.json`. Both write fixtures now carry a defaulted arg and a boolean arg for exactly this reason: neither did before, so the standalone acceptance run — which is where the generated package's `tsc` and `biome` actually execute — could not see any of this.
 
 ### 4.5 `client-credentials`
 
@@ -193,7 +234,9 @@ Emits the shape all five share: form-encoded POST with `grant_type=client_creden
 
 ### 5.1 The monorepo golden harness is untouched
 
-It still byte-diffs generated output against the real 94. It currently passes 9 fixtures; the two new write fixtures bring it to **11**, each declared with expectation `[]` — no hand-written connector should match a generated write connector, and if one ever did, the harness would report it as "improved" and fail, which is the correct response to an expectation that has gone stale.
+It still byte-diffs generated output against the real 94. It currently passes 9 fixtures; the two new write fixtures bring it to **11**, and the final fix wave adds `zzwriteonly` for **12** — each declared with expectation `[]`, because no hand-written connector should match a generated write connector, and if one ever did, the harness would report it as "improved" and fail, which is the correct response to an expectation that has gone stale.
+
+`zzwriteonly` is a hand-rolled connector whose only tool mutates. It exists because that is the one shape which must *not* emit a read fetch helper, and nothing else in the project compiled such a package — which is how an unread `async function <local>(path)` shipped. It carries a boolean arg for the same reason. What matters for byte-safety is unchanged by its addition: `newrelic`, `datadog`, `grafana` and `sentry` remain at 6/6.
 
 This remains the strongest evidence the project has, and Stage C's first obligation is not to disturb it.
 
@@ -210,11 +253,11 @@ Two failure modes are designed against explicitly, both of which this project ha
 
 ### 5.3 Standalone acceptance
 
-Two write fixtures join the two existing ones: **40 checks across four fixtures**, proving generated write connectors typecheck, build, and answer `tools/list` against the published SDK.
+Three write fixtures join the two existing ones: **50 checks across five fixtures**, proving generated write connectors typecheck, build, and answer `tools/list` against the published SDK.
 
-**New fixtures:** `zzwrite` (hand-rolled — second helper and `client-credentials`) and `zzwriterest` (rest-kit — `init` passthrough). Both carry a `delete`-effect tool so the `["delete","write"]` manifest path is covered. Both also appear in the snapshot set (§5.2) and in the monorepo golden harness with expectation `[]` (§5.1).
+**New fixtures:** `zzwrite` (hand-rolled — second helper, `client-credentials`, and a `delete`-effect tool, so the `["write","delete"]` manifest path of §3.3 is covered), `zzwriterest` (rest-kit — `init` passthrough), and `zzwriteonly` (hand-rolled, POST only). `zzwriteonly` exists because nothing in the project had ever put a write-only package in front of a real `tsc`: with the read helper emitted unconditionally, such a package emitted an uncalled `async function <local>(path)` and failed its own `typecheck`. Substring assertions could not see it. All three appear in the snapshot set (§5.2) and in the monorepo golden harness with expectation `[]` (§5.1).
 
-Runtime roughly doubles, to ~40s. That is the cost of covering both styles on both paths, and it is paid by a script run on demand rather than by CI (which runs neither acceptance harness — see `ci.yml`).
+Runtime grows roughly linearly with the fixture count — each fixture installs the published SDK and runs a real `tsc` and `bun build`. That is the cost of covering both styles on both paths, and it is paid by a script run on demand rather than by CI (which runs neither acceptance harness — see `ci.yml`).
 
 ---
 
@@ -222,11 +265,14 @@ Runtime roughly doubles, to ~40s. That is the cost of covering both styles on bo
 
 Opt-in via `--gateway-wiring <nimbus-root>`; never part of normal generation. Stage B's premise is that a generated connector needs no Nimbus checkout.
 
-**Emitted (new files):**
-- `connectors/<name>-sync.ts` — the formulaic `createXSyncable()` draining one list tool.
+**Emitted (new files), both skeletons rather than implementations:**
+- `connectors/<name>-sync.ts` — the `createXSyncable(): Syncable` interface, with `serviceId`, `defaultIntervalMs` and a `sync()` whose **body throws** and documents what must be written. The interface is dictated by the Gateway's own `Syncable` type; the body is deliberately not supplied, because supplying one would reproduce AGPL source and assert a shape that fits 2 of 98 connectors (§1.5).
+- Writing refuses if either target file already exists, unless `--force` is passed. `newrelic-sync.ts` and `datadog-sync.ts` are real hand-authored files in the monorepo today, so an unguarded write could destroy one — the same class of silent damage this feature cites as its reason not to auto-edit the registration files.
 - `connectors/<name>-mapping.ts` — **a stub that throws**, with the expected signature and a comment naming what must be supplied. The mapping depends on the service's API response shape, which no spec contains. A plausible-looking guess would be worse than nothing.
 
-**Not emitted (edits to existing files):** `platform/assemble-sync-registrations.ts` and `connectors/gateway-syncable-ids.ts`. The generator prints the exact lines to paste. Patching a 93-entry file it does not own, in another repository under another licence, risks silent corruption of someone else's source; a two-line paste is a worse UX and a much better trade.
+**Not emitted (edits to existing files):** `platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The generator prints the exact lines to paste.
+
+An earlier draft of this spec named `connectors/gateway-syncable-ids.ts` as the second file. That was wrong, and Task 10 caught it: that file holds exactly four ids — `blame`, `filesystem`, `obsidian`, `openapi` — for **local, filesystem-backed** syncables with no catalog entry, and is never consulted for an API-backed connector. Its own header says so. The file a generated connector actually needs an entry in is `connector-catalog.ts` (`CONNECTOR_SERVICE_IDS`, plus the mapped-type `CONNECTOR_SYNC_INTERVAL_MS` that `tsc` enforces stays in step with it). Patching a 93-entry file it does not own, in another repository under another licence, risks silent corruption of someone else's source; a two-line paste is a worse UX and a much better trade.
 
 The licensing boundary holds: output is written into a path the user supplies, and no monorepo source enters this MIT repository.
 
@@ -254,3 +300,162 @@ Step 6 is the only item whose value lies entirely outside this repository, and i
 - Editing Nimbus registration files automatically (D8).
 - Changing what the Gateway *does* with `hitlRequired`. Stage C emits accurate metadata; making it enforce anything is a Gateway change, not a generator change (§1.1).
 - Fixing `nimbus scaffold extension`'s legacy `permissions` array (§1.6). Noted, not owned here.
+
+**Known asymmetry, deliberately left alone.** An *optional boolean with no default* renders `false` in the URL — the hoist maps `undefined → "false"` — but is **omitted** from the JSON body. So one argument, unset, reads as explicitly-false to the query string and as absent to the body. Both halves behaved this way before Stage C and neither was changed by it, so fixing it here would be an unreviewed behaviour change to the read path that the golden fixtures cannot see. It is the only URL/body disagreement left after §4.4's serialisation rules: a boolean's two renderings (string in the URL, real JSON boolean in the body) are intentional and correct, but its two *unset* renderings are not obviously either. Worth a follow-up that decides which one is right.
+
+---
+
+## 9. Acceptance results
+
+Recorded 2026-07-31, on `stage-c-writes`, Task 11. Every command below was run in this
+session against this branch; output is pasted as observed, not summarized or copied from a
+plan. `C:\gitrep\Nimbus` and `C:\gitrep\nimbus-sdk` were confirmed clean (`git status --short`)
+both before and after the run — `Nimbus` carries only its pre-existing untracked
+`facebook-post.txt`, which this project does not own and left alone. No `cnc-*` directory
+remained under `%TEMP%` afterward.
+
+**1. `bun test`**
+
+```
+bun test v1.3.14 (0d9b296a)
+
+ 374 pass
+ 0 fail
+ 672 expect() calls
+Ran 374 tests across 25 files. [3.25s]
+```
+
+Includes `test/golden/snapshots.test.ts` (11 pass), which is Task 11's §5.2 evidence: it
+asserts the snapshot file set is non-empty and matches what `generate()` produces for
+`zzwrite` and `zzwriterest` before comparing contents, so neither failure mode named in §5.2
+(reflexive updating, vacuous pass) is silently possible here.
+
+**2. `bunx tsc --noEmit`**
+
+No output, exit 0.
+
+**3. `bunx biome check src/ test/ scripts/`**
+
+Exit 0. Five pre-existing `lint/complexity/useLiteralKeys` and `lint/style/useTemplate`
+**infos** (not errors — `Found 5 infos.`) in `scripts/diff-golden.ts`,
+`scripts/standalone-acceptance.ts` and `test/format.test.ts`, unrelated to this task's
+changes and unchanged by it.
+
+**4. `bun run diff:golden --nimbus-root C:/gitrep/Nimbus`**
+
+```
+PASS  datadog  6/6 files identical
+PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))
+PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))
+PASS  grafana  6/6 files identical
+PASS  newrelic  6/6 files identical
+PASS  sentry  6/6 files identical
+PASS  zzscratch  0/6 files identical (expected partial)
+PASS  zzstandalone  0/6 files identical (expected partial)
+PASS  zzstandalonehand  0/6 files identical (expected partial)
+PASS  zzwrite  0/6 files identical (expected partial)
+PASS  zzwriterest  0/6 files identical (expected partial)
+
+All fixtures match their declared expectations.
+```
+
+11 fixtures, matching §5.1's count exactly (9 carried over from Stage A/B plus the 2 new
+write fixtures). This is §5.1's claim, and it is met exactly as scoped: the four hand-rolled
+read fixtures (`datadog`, `grafana`, `newrelic`, `sentry`) stay at 6/6; the two write
+fixtures (`zzwrite`, `zzwriterest`) are declared `[]` and land at 0/6 — no hand-written
+Nimbus connector matches generated write output, which is the expected and correct result,
+not a gap.
+
+**5. `bun run acceptance C:/gitrep/Nimbus`**
+
+```
+PASS  tsc --noEmit
+PASS  biome check
+PASS  audit:package-readmes
+PASS  monorepo working tree clean
+```
+
+**6. `bun run standalone-acceptance --registry`**
+
+```
+Mode:        registry (@nimbus-dev/sdk resolved from npm, generated dependency unmodified)
+Fixtures:    zzstandalone, zzstandalonehand, zzwrite, zzwriterest
+
+  zzstandalone: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzstandalonehand: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzwrite: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzwriterest: installing @nimbus-dev/sdk ^1.11.0 as emitted
+PASS  [zzstandalone] bun install
+PASS  [zzstandalone] connector-kit present in node_modules
+PASS  [zzstandalone] tsc --noEmit
+PASS  [zzstandalone] bun run typecheck
+PASS  [zzstandalone] bun run lint
+PASS  [zzstandalone] no relative import escapes the package
+PASS  [zzstandalone] tools/list over stdio (src)
+PASS  [zzstandalone] bun run build
+PASS  [zzstandalone] dist/server.js exists after build
+PASS  [zzstandalone] tools/list over stdio (dist/server.js)
+PASS  [zzstandalonehand] bun install
+PASS  [zzstandalonehand] connector-kit present in node_modules
+PASS  [zzstandalonehand] tsc --noEmit
+PASS  [zzstandalonehand] bun run typecheck
+PASS  [zzstandalonehand] bun run lint
+PASS  [zzstandalonehand] no relative import escapes the package
+PASS  [zzstandalonehand] tools/list over stdio (src)
+PASS  [zzstandalonehand] bun run build
+PASS  [zzstandalonehand] dist/server.js exists after build
+PASS  [zzstandalonehand] tools/list over stdio (dist/server.js)
+PASS  [zzwrite] bun install
+PASS  [zzwrite] connector-kit present in node_modules
+PASS  [zzwrite] tsc --noEmit
+PASS  [zzwrite] bun run typecheck
+PASS  [zzwrite] bun run lint
+PASS  [zzwrite] no relative import escapes the package
+PASS  [zzwrite] tools/list over stdio (src)
+PASS  [zzwrite] bun run build
+PASS  [zzwrite] dist/server.js exists after build
+PASS  [zzwrite] tools/list over stdio (dist/server.js)
+PASS  [zzwriterest] bun install
+PASS  [zzwriterest] connector-kit present in node_modules
+PASS  [zzwriterest] tsc --noEmit
+PASS  [zzwriterest] bun run typecheck
+PASS  [zzwriterest] bun run lint
+PASS  [zzwriterest] no relative import escapes the package
+PASS  [zzwriterest] tools/list over stdio (src)
+PASS  [zzwriterest] bun run build
+PASS  [zzwriterest] dist/server.js exists after build
+PASS  [zzwriterest] tools/list over stdio (dist/server.js)
+
+All standalone acceptance checks passed.
+```
+
+Four fixtures × 10 checks = 40, confirming §5.3's "40 checks across four fixtures" against
+the **published** SDK tarball — the strongest of the two modes, per the existing README
+section "Two modes".
+
+**7. `bun run standalone-acceptance C:/gitrep/nimbus-sdk`**
+
+Same 4×10 = 40 checks, all `PASS`, against a **local checkout** of the SDK
+(`C:\gitrep\nimbus-sdk\sdks\typescript`) rather than the registry tarball — the pre-release
+gate mode. Included here because Task 11's brief lists it explicitly; it is not part of the
+top-level task instructions' command list, and running it is what "confirm
+`C:\gitrep\nimbus-sdk` has a clean working tree" in that instruction presupposes.
+
+### Where a claim had to be qualified rather than asserted outright
+
+- **Snapshots (§5.2) prove non-regression, not resemblance to hand-written code.** The 11
+  passing snapshot tests prove `zzwrite` and `zzwriterest` generate byte-identically to their
+  checked-in snapshots — i.e., that this project's own output hasn't drifted. They prove
+  nothing about whether that output resembles how a human at Nimbus would write the same
+  connector, because §1.3 already established there is no single reference shape to compare
+  against: normalizing every real write helper in the corpus yields 18 distinct skeletons from
+  18 helpers, no two alike. "Passes its own snapshot" and "looks like a real Nimbus write
+  connector" are different claims, and only the first is tested.
+- **Gateway wiring (§6) is scaffolding, not a working syncable.** `--gateway-wiring` was not
+  re-exercised live in this results section (it is covered by `bun test`'s existing CLI/wiring
+  suites, part of the 374 passing above); what is recorded here is the honest limit already
+  stated in §6 and repeated in the README's new "Gateway wiring" section: both emitted files'
+  bodies **throw**. The feature saves the boilerplate of getting the `Syncable` interface shape
+  and the two files' scaffolding right; it does not produce a connector that syncs. Anyone
+  running it still has to write `sync()` and the mapping function by hand before the
+  connector does anything.

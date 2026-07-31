@@ -30,7 +30,7 @@ describe("parseSpec", () => {
     expect(s.id).toBe("com.nimbus.newrelic");
     expect(s.syncInterval).toBe(300);
     expect(s.minNimbusVersion).toBe("0.2.0");
-    expect(s.tools[0]?.impl).toBe("get");
+    expect(s.tools[0]?.impl).toBe("rest");
   });
 
   it("defaults style to rest-kit when omitted", () => {
@@ -49,9 +49,14 @@ describe("parseSpec", () => {
     expect(() => parseSpec({ ...MINIMAL, oauth: true })).toThrow(/oauth/);
   });
 
-  it("rejects a non-GET method on a tool as out of scope", () => {
-    const bad = { ...MINIMAL, tools: [{ ...MINIMAL.tools[0], method: "POST" }] };
-    expect(() => parseSpec(bad)).toThrow(/method.*Stage A/s);
+  it("accepts a non-GET method on a tool now that method/effect are in scope", () => {
+    // Superseded: "method" was out-of-scope in Stage A/B; Stage C makes it (and "effect") real
+    // fields. See test/spec.test.ts's "Stage C tool fields" describe block for the dedicated coverage.
+    const ok = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], method: "POST", effect: "read" }],
+    };
+    expect(() => parseSpec(ok)).not.toThrow();
   });
 
   it("rejects an env entry declaring both default and required", () => {
@@ -667,5 +672,246 @@ describe("parseSpec", () => {
       fetchHelper: { local: "sentryGet", base: "${env.apiRoot}", headers: "headers" },
     };
     expect(() => parseSpec(ok)).not.toThrow();
+  });
+});
+
+const stageCBase = {
+  name: "zz",
+  title: "Zz",
+  displayName: "Zz",
+  description: "d.",
+  serviceLabel: "Zz",
+  style: "hand-rolled",
+  network: ["api.zz.test"],
+  syncInterval: 300,
+  minNimbusVersion: "0.2.0",
+  env: [{ vars: ["ZZ_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "headers" },
+};
+const stageCTool = (o: Record<string, unknown>) => ({
+  ...stageCBase,
+  tools: [{ name: "zz_a", description: "A.", ...o }],
+});
+
+describe("Stage C tool fields", () => {
+  it("defaults method to GET and effect to read", () => {
+    const s = parseSpec(stageCTool({ path: "/a" }));
+    expect(s.tools[0]!.method).toBe("GET");
+    expect(s.tools[0]!.effect).toBe("read");
+  });
+
+  it("accepts impl 'get' as a deprecated alias for 'rest'", () => {
+    // 0.2.2 is published; specs already written must keep working.
+    expect(parseSpec(stageCTool({ path: "/a", impl: "get" })).tools[0]!.impl).toBe("rest");
+  });
+
+  it("allows POST with effect read — a GraphQL query is not a write", () => {
+    const s = parseSpec(stageCTool({ path: "/g", method: "POST", effect: "read" }));
+    expect(s.tools[0]!.effect).toBe("read");
+  });
+
+  it("rejects a mutating GET", () => {
+    expect(() => parseSpec(stageCTool({ path: "/a", effect: "write" }))).toThrow(/GET/);
+  });
+
+  it("rejects a body on GET", () => {
+    // `x` IS declared, so the undeclared-arg rule cannot fire — the GET+body rule is the
+    // only one left that can reject this. The previous version (`body: { x: "x" }` with no
+    // declared args, asserting the bare word "body") passed for the wrong reason: the
+    // undeclared-arg rule fired instead and its message merely contains "body" too. Mutation
+    // testing (deleting the GET+body refine) proved the old test could not fail.
+    expect(() =>
+      parseSpec(stageCTool({ path: "/a", args: { x: { type: "string" } }, body: { x: "api_x" } })),
+    ).toThrow(/non-GET/);
+  });
+
+  it("rejects method or body on a stub", () => {
+    expect(() => parseSpec(stageCTool({ impl: "stub", method: "POST" }))).toThrow(/stub/i);
+    expect(() => parseSpec(stageCTool({ impl: "stub", body: { x: "x" } }))).toThrow(/stub/i);
+  });
+
+  it("rejects a body key naming an undeclared arg", () => {
+    // NOTE: the task brief's literal example here was `body: { api_title: "nope" }` —
+    // that can never satisfy /nope/, because the schema's own docstring ("arg name ->
+    // API field name") and the brief's own superRefine (which iterates Object.keys(body))
+    // both check the KEY against declared args, not the value. "nope" only appears in the
+    // error if it is the key. Swapped key/value here so the test matches the implementation
+    // both the docstring and the superRefine agree on; see task-1-report.md for detail.
+    expect(() =>
+      parseSpec(
+        stageCTool({
+          path: "/a",
+          method: "POST",
+          args: { title: { type: "string" } },
+          body: { nope: "api_title" },
+        }),
+      ),
+    ).toThrow(/nope/);
+  });
+
+  it("allows DELETE with effect write", () => {
+    // Deleting a webhook subscription is not destructive to user data.
+    expect(
+      parseSpec(stageCTool({ path: "/a", method: "DELETE", effect: "write" })).tools[0]!.effect,
+    ).toBe("write");
+  });
+});
+
+/**
+ * Final fix wave, IMPORTANT 4. These five refines had zero coverage: replacing any of them
+ * with `.refine((_e) => true)` left 374 tests passing. Two of them are load-bearing beyond
+ * schema tidiness — `env.ts:87` does `e.credentialsIn!` and `env.ts:121` does
+ * `JSON.stringify(e.tokenUrl)`, so without them a spec omitting either emits
+ * `const res = await fetch(undefined, {...})`. One test per refine, each written so that
+ * only its own refine can produce the asserted message.
+ */
+const ccEnvSpec = (mutate: (e: Record<string, unknown>) => void) => {
+  const e: Record<string, unknown> = {
+    vars: ["ZZ_CLIENT_ID", "ZZ_CLIENT_SECRET"],
+    local: "headers",
+    bindings: ["id", "secret"],
+    auth: "client-credentials",
+    tokenUrl: "https://api.zz.test/oauth/token",
+    credentialsIn: "basic",
+  };
+  mutate(e);
+  return { ...stageCBase, env: [e], tools: [{ name: "zz_a", description: "A.", path: "/a" }] };
+};
+
+/** Reduce the entry to a plain single-var bearer, leaving only the field under test behind. */
+const asBearer = (e: Record<string, unknown>) => {
+  e.auth = "bearer";
+  e.vars = ["ZZ_TOKEN"];
+  e.bindings = ["t"];
+};
+
+describe("client-credentials env validation", () => {
+  it("accepts a complete client-credentials entry", () => {
+    expect(() => parseSpec(ccEnvSpec(() => {}))).not.toThrow();
+  });
+
+  it('requires "tokenUrl" — without it the emitted token exchange is fetch(undefined, ...)', () => {
+    expect(() =>
+      parseSpec(
+        ccEnvSpec((e) => {
+          delete e.tokenUrl;
+        }),
+      ),
+    ).toThrow(/"tokenUrl" is required/);
+  });
+
+  it('requires "credentialsIn" — env.ts dereferences it with a non-null assertion', () => {
+    expect(() =>
+      parseSpec(
+        ccEnvSpec((e) => {
+          delete e.credentialsIn;
+        }),
+      ),
+    ).toThrow(/"credentialsIn" is required/);
+  });
+
+  it('rejects "tokenUrl" on a non-client-credentials entry', () => {
+    expect(() =>
+      parseSpec(
+        ccEnvSpec((e) => {
+          asBearer(e);
+          delete e.credentialsIn;
+        }),
+      ),
+    ).toThrow(/"tokenUrl" is only valid/);
+  });
+
+  it('rejects "scope" on a non-client-credentials entry', () => {
+    expect(() =>
+      parseSpec(
+        ccEnvSpec((e) => {
+          asBearer(e);
+          delete e.tokenUrl;
+          delete e.credentialsIn;
+          e.scope = "items:read";
+        }),
+      ),
+    ).toThrow(/"scope" is only valid/);
+  });
+
+  it('rejects "credentialsIn" on a non-client-credentials entry', () => {
+    expect(() =>
+      parseSpec(
+        ccEnvSpec((e) => {
+          asBearer(e);
+          delete e.tokenUrl;
+        }),
+      ),
+    ).toThrow(/"credentialsIn" is only valid/);
+  });
+});
+
+describe("at most one client-credentials env entry", () => {
+  const twoCc = {
+    ...stageCBase,
+    env: [
+      {
+        vars: ["ZZ_A_ID", "ZZ_A_SECRET"],
+        local: "headers",
+        bindings: ["aId", "aSecret"],
+        auth: "client-credentials",
+        tokenUrl: "https://api.zz.test/oauth/a",
+        credentialsIn: "basic",
+      },
+      {
+        vars: ["ZZ_B_ID", "ZZ_B_SECRET"],
+        local: "otherHeaders",
+        bindings: ["bId", "bSecret"],
+        auth: "client-credentials",
+        tokenUrl: "https://api.zz.test/oauth/b",
+        credentialsIn: "body",
+      },
+    ],
+    tools: [{ name: "zz_a", description: "A.", path: "/a" }],
+  };
+
+  it("rejects a second entry — both would emit `token` and `cachedToken` at module scope", () => {
+    expect(() => parseSpec(twoCc)).toThrow(/at most one env entry with auth: "client-credentials"/);
+  });
+
+  it("accepts one client-credentials entry alongside other auth kinds", () => {
+    expect(() =>
+      parseSpec({
+        ...twoCc,
+        env: [
+          twoCc.env[0]!,
+          { vars: ["ZZ_SITE"], local: "siteHost", bindings: ["s"], default: "zz.test" },
+        ],
+      }),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * Final fix wave, MINOR 3. `preflightOutOfScope` runs before Zod so a known-future key gets
+ * a targeted message rather than Zod's generic "unrecognized key". Task 1 rewrote its only
+ * test into an accept-test for `effect`, leaving the sole remaining key with zero coverage —
+ * and with a message that had gone stale ("a later Stage C task", written on the Stage C
+ * branch, which did not add it).
+ */
+describe("preflightOutOfScope", () => {
+  it('rejects a tool declaring "hitl" and points at "effect" instead', () => {
+    const bad = stageCTool({ path: "/a", hitl: true });
+    expect(() => parseSpec(bad)).toThrow(/"hitl" is not a supported tool field/);
+    expect(() => parseSpec(bad)).toThrow(/"effect"/);
+    // The stale promise is gone: Stage C shipped and did not add per-tool HITL.
+    expect(() => parseSpec(bad)).not.toThrow(/Stage [ABC]/);
+  });
+
+  it("fires before Zod, so the message is the targeted one and not 'unrecognized key'", () => {
+    // Two problems at once: an out-of-scope key AND a genuinely invalid field. The preflight
+    // message is what surfaces, which is the whole reason it runs first.
+    expect(() => parseSpec(stageCTool({ path: "/a", hitl: true, method: "TRACE" }))).toThrow(
+      /"hitl" is not a supported tool field/,
+    );
+  });
+
+  it("ignores a non-array tools value rather than throwing on it — Zod reports that", () => {
+    expect(() => parseSpec({ ...stageCBase, tools: "nope" })).toThrow(/Invalid connector spec/);
   });
 });

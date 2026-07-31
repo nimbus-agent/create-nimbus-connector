@@ -32,7 +32,19 @@ import { parseSpec } from "../src/spec.ts";
  * user — every generated file is emitted from the same code path, so "one style works"
  * says nothing about the other.
  */
-const FIXTURES = ["zzstandalone", "zzstandalonehand"] as const;
+const FIXTURES = [
+  "zzstandalone",
+  "zzstandalonehand",
+  "zzwrite",
+  // A hand-rolled connector whose ONLY tool mutates. It is here because it is the one shape
+  // that must NOT emit a read fetch helper: a write tool calls `<local>Send`, so an
+  // unconditionally-emitted `<local>` has no call site, and the generated package's own
+  // `bun run typecheck` (noUnusedLocals) and `bun run lint` (noUnusedVariables) both reject
+  // it. Nothing else in this project compiles a write-only package, which is how that
+  // shipped. Its boolean arg covers the paired hoist defect from the same fix wave.
+  "zzwriteonly",
+  "zzwriterest",
+] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const { registry, flag } = parseSdkArgs(process.argv.slice(2));
 

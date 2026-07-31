@@ -22,6 +22,14 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "createZodToolRegistrar",
   "makeRestToolRegistrar",
   "requireProcessEnv",
+  // Stage C's client-credentials branch emits these at module scope (see env.ts's
+  // renderTokenFunction) and imports encodeBasicAuthHeader for credentialsIn: "basic".
+  // Verified collision: a single entry whose env `local` is "token" or "cachedToken" emits
+  // two declarations of that name in the same module.
+  "token",
+  "cachedToken",
+  "encodeBasicAuthHeader",
+  "URLSearchParams",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits
   // `function fetch()` shadowing the global, then calls it with two arguments.
@@ -63,6 +71,10 @@ export function validateSpec(spec: ConnectorSpec): void {
   }
 
   claim(seen, spec.fetchHelper.local, "the fetch helper");
+  // Claimed unconditionally, not only when a non-GET tool exists: the name is derived from
+  // fetchHelper.local, so whether it collides is a property of the spec's identifiers, and a
+  // spec that validates today must not start failing the moment a write tool is added to it.
+  claim(seen, `${spec.fetchHelper.local}Send`, "the write helper");
 
   const toolNames = new Set<string>();
   for (const t of spec.tools) {

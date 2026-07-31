@@ -6,7 +6,12 @@ import { registrarName } from "../src/spec.ts";
 
 describe("parseCliArgs", () => {
   it("reads a positional name", () => {
-    expect(parseCliArgs(["slack"])).toEqual({ name: "slack", dryRun: false, standalone: false });
+    expect(parseCliArgs(["slack"])).toEqual({
+      name: "slack",
+      dryRun: false,
+      standalone: false,
+      force: false,
+    });
   });
 
   it("reads --spec and --dry-run", () => {
@@ -14,6 +19,7 @@ describe("parseCliArgs", () => {
       specPath: "fixtures/sentry.spec.json",
       dryRun: true,
       standalone: false,
+      force: false,
     });
   });
 
@@ -23,6 +29,7 @@ describe("parseCliArgs", () => {
       outDir: "/tmp/x",
       dryRun: false,
       standalone: false,
+      force: false,
     });
   });
 
@@ -87,7 +94,56 @@ describe("parseCliArgs", () => {
         outDir: "/tmp/x",
         standalone: true,
         dryRun: false,
+        force: false,
       });
+    });
+  });
+
+  describe("--gateway-wiring", () => {
+    it("is undefined by default", () => {
+      expect(parseCliArgs(["acme"]).gatewayWiring).toBeUndefined();
+    });
+
+    it("is set by the flag", () => {
+      expect(parseCliArgs(["acme", "--gateway-wiring", "C:/gitrep/Nimbus"]).gatewayWiring).toBe(
+        "C:/gitrep/Nimbus",
+      );
+    });
+
+    it("rejects --gateway-wiring with no following value", () => {
+      expect(() => parseCliArgs(["acme", "--gateway-wiring"])).toThrow(/--gateway-wiring/);
+    });
+
+    // Final fix wave, MINOR 2. The README calls this flag monorepo-target only, and every
+    // other conflict in this CLI already errors; this pairing was the one silently accepted.
+    it("rejects --gateway-wiring with --standalone rather than accepting it silently", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--gateway-wiring", "C:/x"])).toThrow(
+        /monorepo target only/,
+      );
+      // Order-independent: the check runs after the whole argv is parsed.
+      expect(() => parseCliArgs(["acme", "--gateway-wiring", "C:/x", "--standalone"])).toThrow(
+        /monorepo target only/,
+      );
+    });
+
+    it("still accepts --gateway-wiring on its own", () => {
+      expect(() => parseCliArgs(["acme", "--gateway-wiring", "C:/x"])).not.toThrow();
+    });
+  });
+
+  describe("--force", () => {
+    it("defaults to false", () => {
+      expect(parseCliArgs(["acme"]).force).toBe(false);
+    });
+
+    it("is set by the flag when combined with --gateway-wiring", () => {
+      expect(parseCliArgs(["acme", "--gateway-wiring", "C:/gitrep/Nimbus", "--force"]).force).toBe(
+        true,
+      );
+    });
+
+    it("rejects --force without --gateway-wiring rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--force"])).toThrow(/--gateway-wiring/);
     });
   });
 });
