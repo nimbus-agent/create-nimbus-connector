@@ -1,15 +1,22 @@
 {
   "name": "create-nimbus-connector",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nimbus-agent/create-nimbus-connector.git"
   },
-  "bin": { "create-nimbus-connector": "src/cli.ts" },
-  "files": ["src", "README.md"],
-  "publishConfig": { "access": "public" },
+  "bin": {
+    "create-nimbus-connector": "src/cli.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
