@@ -1,5 +1,6 @@
 import type { ConnectorSpec } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
+import { BIOME_VERSION } from "./biome-json.ts";
 import type { GenerateTarget } from "./index.ts";
 
 export function emitPackageJson(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
@@ -23,7 +24,14 @@ export function emitPackageJson(spec: ConnectorSpec, target: GenerateTarget): Ge
       "@nimbus-dev/sdk": standalone ? "^1.11.0" : "^1.8.1",
       zod: "^4.4.2",
     },
-    devDependencies: { "@types/bun": "latest" },
+    // A monorepo connector gets biome and tsc from the workspace root's node_modules/.bin.
+    // A standalone package has no root: without these two, `bun run lint` and
+    // `bun run typecheck` fail with "command not found" on a clean registry install.
+    devDependencies: {
+      ...(standalone ? { "@biomejs/biome": `^${BIOME_VERSION}` } : {}),
+      "@types/bun": "latest",
+      ...(standalone ? { typescript: "^5.6.0" } : {}),
+    },
   };
   return { path: ["package.json"], content: `${JSON.stringify(pkg, undefined, 2)}\n` };
 }

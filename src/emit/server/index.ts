@@ -14,15 +14,18 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   // Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool.
   const usesJsonResult = spec.style === "hand-rolled" && spec.tools.some((t) => t.impl !== "stub");
 
+  const zodImport = 'import { z } from "zod";';
   const head = [
     'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
     'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
-    ...(usesZod ? ['import { z } from "zod";'] : []),
-    "",
   ];
 
   if (target === "standalone") {
-    // One barrel export, so one import regardless of style.
+    // One barrel export, so one import regardless of style. Unlike the monorepo target's
+    // trailing `../../shared/*` import — a relative specifier, which Biome sorts into its
+    // own group behind a blank line — the kit is a package specifier, and
+    // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
+    // BEFORE "zod". It therefore belongs inside the first group, in that position.
     const names = ["createRegisterSimpleTool", "createZodToolRegistrar"];
     if (usesJsonResult) names.push("mcpJsonResult as jsonResult");
     if (spec.style === "rest-kit") names.push("makeRestToolRegistrar");
@@ -31,10 +34,13 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     } else {
       head.push("import {", ...names.map((n) => `  ${n},`), `} from "${KIT}";`);
     }
+    if (usesZod) head.push(zodImport);
     return head.join("\n");
   }
 
   // monorepo — unchanged from Stage A
+  if (usesZod) head.push(zodImport);
+  head.push("");
   if (spec.style === "hand-rolled") {
     if (usesJsonResult) {
       head.push(

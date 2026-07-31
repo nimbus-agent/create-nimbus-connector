@@ -1,6 +1,7 @@
 import type { ConnectorSpec } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import { validateSpec } from "../validate.ts";
+import { emitBiomeJson } from "./biome-json.ts";
 import { emitManifest } from "./manifest.ts";
 import { emitPackageJson } from "./package-json.ts";
 import { emitReadme } from "./readme.ts";
@@ -22,5 +23,8 @@ export function generate(spec: ConnectorSpec, options: GenerateOptions = {}): Ge
     emitManifest(spec),
     emitTsconfig(target),
     emitReadme(spec, target),
+    // Standalone only: a monorepo connector inherits the workspace root's biome.json,
+    // so emitting one there would both be dead weight and break the six-file byte-diff.
+    ...(target === "standalone" ? [emitBiomeJson()] : []),
   ];
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { BIOME_VERSION, emitBiomeJson } from "../../src/emit/biome-json.ts";
 import { emitPackageJson } from "../../src/emit/package-json.ts";
 import { emitSandboxTest } from "../../src/emit/sandbox-test.ts";
 import { emitTsconfig } from "../../src/emit/tsconfig.ts";
+import { FORMATTER_CONFIG } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
 
 const spec = parseSpec({
@@ -79,10 +81,50 @@ describe("standalone package.json", () => {
     expect(pkg().bin).toBeUndefined();
   });
 
+  it("declares the tools its own lint and typecheck scripts invoke", () => {
+    // A monorepo connector finds biome and tsc in the workspace root's node_modules/.bin.
+    // A standalone package has no root, so `bun run lint` / `bun run typecheck` are
+    // "command not found" on a clean registry install unless these are declared here.
+    expect(pkg().scripts.lint).toBe("biome check src/");
+    expect(pkg().scripts.typecheck).toBe("tsc --noEmit");
+    expect(pkg().devDependencies["@biomejs/biome"]).toBe(`^${BIOME_VERSION}`);
+    expect(pkg().devDependencies.typescript).toBeDefined();
+    expect(pkg().devDependencies["@types/bun"]).toBe("latest");
+  });
+
   it("leaves the monorepo target untouched", () => {
     const mono = JSON.parse(emitPackageJson(spec, "monorepo").content);
     expect(mono.dependencies["@nimbus-dev/sdk"]).toBe("^1.8.1");
     expect(mono.scripts.build).toBeUndefined();
+    // The workspace root supplies both — declaring them here would change golden bytes.
+    expect(mono.devDependencies).toEqual({ "@types/bun": "latest" });
+  });
+});
+
+describe("emitBiomeJson", () => {
+  const cfg = () => JSON.parse(emitBiomeJson().content);
+
+  it("is written to the package root", () => {
+    expect(emitBiomeJson().path).toEqual(["biome.json"]);
+  });
+
+  it("mirrors the formatter settings src/format.ts applies", () => {
+    // Not a restatement from memory: any drift between the generator's own formatter and
+    // the config it ships means `biome check src/` reformats what the generator produced.
+    expect(cfg().formatter).toEqual(FORMATTER_CONFIG.formatter);
+    expect(cfg().javascript).toEqual(FORMATTER_CONFIG.javascript);
+  });
+
+  it("pins its $schema to the Biome version it declares as a devDependency", () => {
+    expect(cfg().$schema).toBe(`https://biomejs.dev/schemas/${BIOME_VERSION}/schema.json`);
+    expect(
+      JSON.parse(emitPackageJson(spec, "standalone").content).devDependencies["@biomejs/biome"],
+    ).toBe(`^${BIOME_VERSION}`);
+  });
+
+  it("enables the linter, so `biome check src/` is a real gate and not a format-only pass", () => {
+    expect(cfg().linter.enabled).toBe(true);
+    expect(cfg().linter.rules.recommended).toBe(true);
   });
 });
 

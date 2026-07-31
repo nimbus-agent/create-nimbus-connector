@@ -16,6 +16,25 @@ type BiomeLike = {
 
 type Instance = { biome: BiomeLike; projectKey: unknown };
 
+/**
+ * The one formatter configuration this project formats with. Exported so
+ * src/emit/biome-json.ts can ship exactly these settings inside a generated standalone
+ * package: if the two ever diverged, `biome check src/` in a freshly generated package
+ * would reformat the very bytes the generator just produced.
+ */
+export const FORMATTER_CONFIG = {
+  formatter: {
+    enabled: true,
+    indentStyle: "space",
+    indentWidth: 2,
+    lineWidth: 100,
+    lineEnding: "lf",
+  },
+  javascript: {
+    formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
+  },
+} as const;
+
 let cached: Instance | undefined;
 let initialised = false;
 let available = false;
@@ -44,18 +63,7 @@ export async function initFormatter(): Promise<void> {
   // configuration below — let it propagate rather than masquerading as "unavailable".
   const biome = new BiomeCtor();
   const { projectKey } = biome.openProject();
-  biome.applyConfiguration(projectKey, {
-    formatter: {
-      enabled: true,
-      indentStyle: "space",
-      indentWidth: 2,
-      lineWidth: 100,
-      lineEnding: "lf",
-    },
-    javascript: {
-      formatter: { quoteStyle: "double", trailingCommas: "all", semicolons: "always" },
-    },
-  });
+  biome.applyConfiguration(projectKey, FORMATTER_CONFIG);
   cached = { biome, projectKey };
   available = true;
 }

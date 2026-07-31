@@ -214,6 +214,40 @@ describe("generate target", () => {
     }
   });
 
+  it("adds biome.json to the standalone tree and only there", () => {
+    const standalone = generate(handRolled, { target: "standalone" }).map((f) =>
+      displayPath(f.path),
+    );
+    expect(standalone).toContain("biome.json");
+    expect(generate(handRolled).map((f) => displayPath(f.path))).not.toContain("biome.json");
+  });
+
+  it("sorts the standalone import block the way `biome check` demands", () => {
+    // The kit is a package specifier, so it sorts with the other packages — after
+    // "@modelcontextprotocol/*" and before "zod" — not into the trailing relative-import
+    // group where the monorepo target's "../../shared/*" import lives. Getting this wrong
+    // makes every generated package fail its own `bun run lint` on the first run.
+    for (const spec of [handRolled, restKit]) {
+      const lines = server(spec, "standalone").split("\n");
+      const kit = lines.findIndex((l) => l.includes("@nimbus-dev/sdk/connector-kit"));
+      const stdio = lines.findIndex((l) => l.includes("server/stdio.js"));
+      const zod = lines.findIndex((l) => l === 'import { z } from "zod";');
+      expect(stdio).toBeGreaterThanOrEqual(0);
+      expect(zod).toBeGreaterThanOrEqual(0);
+      expect(kit).toBeGreaterThan(stdio);
+      expect(kit).toBeLessThan(zod);
+      // No blank line anywhere inside the import block.
+      expect(lines.slice(0, zod + 1).some((l) => l === "")).toBe(false);
+    }
+  });
+
+  it("keeps the monorepo import block in its two-group shape", () => {
+    const lines = server(handRolled).split("\n");
+    const zod = lines.findIndex((l) => l === 'import { z } from "zod";');
+    expect(lines[zod + 1]).toBe("");
+    expect(lines[zod + 2]).toContain("import {");
+  });
+
   it("sandbox tests are identical for both targets", () => {
     for (const spec of [handRolled, restKit]) {
       const monorepoSandbox = generate(spec).find(
