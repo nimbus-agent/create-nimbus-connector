@@ -245,11 +245,16 @@ jobs:
           set -euo pipefail
           tmp="$(mktemp -d)"
           cd "$tmp"
-          npm init -y >/dev/null
+          # Pin the exact published version in a manifest rather than passing a
+          # spec to `npm install`. The lockfile generated from it resolves
+          # deterministically, so the install that actually places files is
+          # `npm ci` — a locked install — not an unlocked `npm install <spec>`.
+          printf '{"name":"provenance-verify","version":"0.0.0","private":true,"dependencies":{"create-nimbus-connector":"%s"}}\n' \
+            "${PUBLISHED_VERSION}" > package.json
           # A publish is followed by TWO independent propagation lags, and each
           # has already turned a good nimbus-sdk release red:
           #
-          #   * packument lag — `npm install pkg@<v>` fails ETARGET "No matching
+          #   * packument lag — lockfile resolution fails ETARGET "No matching
           #     version found" while the version is still propagating.
           #   * attestation lag — the tarball installs fine while
           #     `/-/npm/v1/attestations/...` still 404s, so `npm audit
@@ -263,8 +268,9 @@ jobs:
           # instead of asking the registry again.
           verified=""
           for attempt in 1 2 3 4 5 6 7 8; do
-            if npm install "create-nimbus-connector@${PUBLISHED_VERSION}" \
-                 --no-audit --no-fund --prefer-online --ignore-scripts \
+            if npm install --package-lock-only --prefer-online \
+                 --no-audit --no-fund --ignore-scripts \
+              && npm ci --no-audit --no-fund --ignore-scripts \
               && npm audit signatures; then
               verified=1
               break
