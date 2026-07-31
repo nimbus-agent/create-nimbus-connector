@@ -60,12 +60,11 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   // but the arrow it's built from must take no parameter — the generated package's tsconfig
   // sets noUnusedParameters, and an unreferenced ${PARAM} would fail its own typecheck.
   const initParam = bodyExpr === undefined ? "()" : `(${PARAM})`;
+  const bodyPart = bodyExpr === undefined ? "" : `, body: ${bodyExpr}`;
   const initArg =
     tool.method === "GET"
       ? undefined
-      : `  ${initParam} => ({ method: ${JSON.stringify(tool.method)}` +
-        (bodyExpr === undefined ? "" : `, body: ${bodyExpr}`) +
-        " }),";
+      : `  ${initParam} => ({ method: ${JSON.stringify(tool.method)}${bodyPart} }),`;
 
   if (used.size === 0) {
     const lines = [...head, `  ${param} => ${pathExpr},`];
