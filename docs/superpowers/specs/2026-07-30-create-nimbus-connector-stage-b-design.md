@@ -245,6 +245,119 @@ Step 5 runs with **no credentials set**. Env accessors are only called inside to
 4. Stage A's four hand-rolled fixtures still report 6/6, and the full harness still exits 0.
 5. The CLI runs and generates correctly with Biome absent, printing a notice, while the harness fails loudly without it.
 
+### Acceptance criteria — results
+
+Recorded 2026-07-31, on `stage-b-standalone`. **Caveat that applies to criteria 1–3 as a
+whole, stated once here rather than repeated per criterion:** `bun run standalone-acceptance`
+resolves `@nimbus-dev/sdk` from a **local checkout** (`C:\gitrep\nimbus-sdk`, branch
+`feat/connector-kit-export`, unreleased) via a `file:` dependency rewrite, not from the npm
+registry — SDK 1.11.0 does not exist on npm yet (that is Task 8). These results prove the
+`./connector-kit` export map and the generated package work against the SDK's **built
+`dist`**, exactly the resolution path a real npm consumer takes once 1.11.0 ships. They do
+**not** prove anything about a published artifact, because none exists yet.
+
+**1. A connector generated into an empty directory outside the monorepo typechecks with no manual edits.**
+
+Command: `bun run standalone-acceptance C:/gitrep/nimbus-sdk`. This generates the
+`zzstandalone` fixture with `target: "standalone"` into a fresh temp directory outside any
+monorepo, rewrites its `package.json` to point `@nimbus-dev/sdk` at the local checkout,
+`bun install`s, then runs `bunx tsc --noEmit` with no manual edits in between.
+
+```
+PASS  bun install
+PASS  connector-kit present in node_modules
+PASS  tsc --noEmit
+```
+
+Met, subject to the caveat above.
+
+**2. No relative import escapes the generated package.**
+
+Same run. The harness greps `src/` for `../..`:
+
+```
+PASS  no relative import escapes the package
+```
+
+Met outright — this criterion is a property of the emitted source text, not of which SDK
+copy is installed, so the local-checkout caveat does not weaken it.
+
+**3. Its server starts and returns the expected tools from `tools/list` over stdio, with no credentials in the environment.**
+
+Same run, driven twice: once against `src/server.ts` (what `bun run dev` runs) and once
+against the `bun build`-produced `dist/server.js` (what the Gateway's `entrypoint` actually
+launches):
+
+```
+PASS  tools/list over stdio (src)
+PASS  bun run build
+PASS  dist/server.js exists after build
+PASS  tools/list over stdio (dist/server.js)
+```
+
+`toolsListCheck` in `scripts/standalone-acceptance.ts` spawns the server with no credential
+environment variables set; a successful `tools/list` response (matched by JSON-RPC `id`, not
+merely "the process didn't crash") proves the generated tool names come back without secrets
+present. Met, subject to the caveat above.
+
+**4. Stage A's four hand-rolled fixtures still report 6/6, and the full harness still exits 0.**
+
+Command: `bun run diff:golden --nimbus-root C:/gitrep/Nimbus`.
+
+```
+PASS  datadog  6/6 files identical
+PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))
+PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))
+PASS  grafana  6/6 files identical
+PASS  newrelic  6/6 files identical
+PASS  sentry  6/6 files identical
+PASS  zzscratch  0/6 files identical (expected partial)
+PASS  zzstandalone  0/6 files identical (expected partial)
+
+All fixtures match their declared expectations.
+```
+
+Exit code 0. The four hand-rolled fixtures at a plain 6/6 (`datadog`, `grafana`, `newrelic`,
+`sentry`) are unchanged; `discord`/`google-meet` remain at their Stage-A-declared partial
+counts (stub tools, not a regression); `zzscratch` and `zzstandalone` (the latter added by
+Task 6) report their declared 0/6, since neither is a real monorepo connector. Met in full —
+no caveat applies, since this criterion is entirely about the monorepo-target path and
+touches no unreleased SDK.
+
+**5. The CLI runs and generates correctly with Biome absent, printing a notice, while the harness fails loudly without it.**
+
+Verified live in two parts by temporarily hiding the installed optional dependency
+(`node_modules/@biomejs/js-api`, renamed aside and restored immediately after, with `bun
+test` re-run afterward — 230 pass / 0 fail — to confirm the repo was left exactly as found):
+
+Harness half, `bun run diff:golden --nimbus-root C:/gitrep/Nimbus sentry` with Biome hidden:
+
+```
+error: @biomejs/biome is required here — byte-exactness is the point of this check, and
+unformatted output would produce spurious diffs that look like emitter regressions. Run
+`bun install` to restore the optional dependency.
+      at main (C:\gitrep\create-nimbus-connector\scripts\diff-golden.ts:56:15)
+error: script "diff:golden" exited with code 1
+```
+
+Fails loudly, as required — confirmed live in this session.
+
+CLI half: attempting to reproduce the equivalent live run for `bun src/cli.ts` was blocked by
+this session's sandbox while `@biomejs/js-api` was hidden, so the degrade-notice path is
+confirmed by source inspection rather than a fresh live run this session: `src/cli.ts` calls
+`await initFormatter()`, then if `!formatterAvailable()` prints
+`"note: @biomejs/js-api is not installed, so the generated files are unformatted. ... to
+format them: cd <out-dir> && bunx @biomejs/biome format --write ."` to stderr before
+proceeding to write files via the same synchronous `formatAll` used everywhere else — unchanged
+since Task 1, which live-verified this exact path (subprocess run, notice text asserted) per
+`task-1-report.md`. The underlying `initFormatter`/`formatterAvailable`/`formatAll` degrade
+contract this depends on is exercised by `test/format.test.ts`, part of the `bun test` run
+below (230 pass / 0 fail, including this file's suite).
+
+Met: the harness's fail-loud half is freshly confirmed live above; the CLI's degrade half
+rests on unchanged source plus Task 1's prior live verification rather than a fresh run in
+this session — noted here rather than silently claimed as freshly re-run.
+
 ## Sequencing
 
 Three PRs, one hard ordering constraint:

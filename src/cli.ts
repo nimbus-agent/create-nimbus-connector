@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";

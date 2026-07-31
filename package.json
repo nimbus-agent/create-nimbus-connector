@@ -4,6 +4,8 @@
   "type": "module",
   "license": "MIT",
   "bin": { "create-nimbus-connector": "./src/cli.ts" },
+  "files": ["src", "README.md"],
+  "publishConfig": { "access": "public" },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
