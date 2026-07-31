@@ -23,13 +23,10 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   ];
 
   if (tool.impl === "stub") {
-    return [
-      ...head,
-      `  () => {`,
-      `    throw new Error(${JSON.stringify(`${tool.name} is not implemented`)});`,
-      "  },",
-      ");",
-    ].join("\n");
+    const notImplemented = JSON.stringify(`${tool.name} is not implemented`);
+    return [...head, `  () => {`, `    throw new Error(${notImplemented});`, "  },", ");"].join(
+      "\n",
+    );
   }
 
   // Schema guarantees "path" is present here — ToolSchema's refine rejects any

@@ -137,8 +137,10 @@ try {
   // harness did not notice: it resolves them through node_modules, exactly as a consumer
   // does. `bun run lint` additionally re-checks the emitted formatting and import order
   // against the emitted biome.json, so a drift between the two fails here.
-  checks.push({ name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) });
-  checks.push({ name: "bun run lint", ...run(["bun", "run", "lint"], outDir) });
+  checks.push(
+    { name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) },
+    { name: "bun run lint", ...run(["bun", "run", "lint"], outDir) },
+  );
 
   // Scoped to src/ specifically, not the whole package: the generated test/sandbox.test.ts
   // legitimately contains "../../" (it resolves from test/ up to the package root), so

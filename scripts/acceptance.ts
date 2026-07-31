@@ -40,15 +40,17 @@ try {
   );
   await writeFiles(formatAll(generate(spec)), outDir);
 
-  checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
-  checks.push({
-    name: "biome check",
-    ...run(["bunx", "biome", "check", `packages/mcp-connectors/${NAME}/src/`], root),
-  });
-  checks.push({
-    name: "audit:package-readmes",
-    ...run(["bun", "run", "audit:package-readmes"], root),
-  });
+  checks.push(
+    { name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) },
+    {
+      name: "biome check",
+      ...run(["bunx", "biome", "check", `packages/mcp-connectors/${NAME}/src/`], root),
+    },
+    {
+      name: "audit:package-readmes",
+      ...run(["bun", "run", "audit:package-readmes"], root),
+    },
+  );
 } finally {
   // Runs even if generation threw or a check crashed. Never leave the monorepo dirty.
   await rm(outDir, { recursive: true, force: true });

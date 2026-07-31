@@ -3,7 +3,7 @@ import type { EnvSchema } from "../../spec.ts";
 
 type EnvEntry = z.infer<typeof EnvSchema>;
 
-const STRIP = 'replace(/\\/$/, "")';
+const STRIP = String.raw`replace(/\/$/, "")`;
 
 function camel(varName: string): string {
   const parts = varName.toLowerCase().split("_");

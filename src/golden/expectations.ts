@@ -34,11 +34,21 @@ export type Comparison = {
  * When files are both lost and gained the verdict is "changed": neither "regressed" nor
  * "improved" describes it, and collapsing it into either would mislabel the failure.
  */
+/**
+ * Sort file paths by UTF-16 code unit, deliberately not by `localeCompare`.
+ *
+ * These lists are printed by the harness and read in CI logs, so the order has to be the
+ * same on every machine. `localeCompare` is locale- and ICU-dependent, which is exactly the
+ * property to avoid here — it can order the same two paths differently on two runners.
+ * Only ordering is at stake either way: the verdict below is decided by `length`.
+ */
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 export function classify(actual: readonly string[], expected: readonly string[]): Comparison {
   const actualSet = new Set(actual);
   const expectedSet = new Set(expected);
-  const lost = [...expectedSet].filter((p) => !actualSet.has(p)).sort();
-  const gained = [...actualSet].filter((p) => !expectedSet.has(p)).sort();
+  const lost = [...expectedSet].filter((p) => !actualSet.has(p)).sort(byCodeUnit);
+  const gained = [...actualSet].filter((p) => !expectedSet.has(p)).sort(byCodeUnit);
 
   let verdict: Verdict;
   if (lost.length === 0 && gained.length === 0) verdict = "pass";

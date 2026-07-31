@@ -79,7 +79,7 @@ describe("renderHandRolledTools", () => {
         { name: "b", description: "B.", path: "/b" },
       ]),
     );
-    expect(out.split("\n\n").length).toBe(2);
+    expect(out.split("\n\n")).toHaveLength(2);
   });
 
   it("stub tool with args emits no parameter", () => {
