@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.0...create-nimbus-connector-v0.2.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **dependabot:** use the bun ecosystem, not npm ([#15](https://github.com/nimbus-agent/create-nimbus-connector/issues/15)) ([46ab544](https://github.com/nimbus-agent/create-nimbus-connector/commit/46ab544ebb24b383b02809be92b680289cbfc1a5))
+
 ## [0.2.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.1.0...create-nimbus-connector-v0.2.0) (2026-07-31)
 
 
