@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+
+  # The one that matters most here. Every action in this repo is pinned to a
+  # full-length commit SHA because the org requires it — which means none of
+  # them will ever move on their own. Without this block the pins silently rot,
+  # and a pinned-but-stale action is not more secure than an unpinned one.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Bump all actions in a single grouped PR. Multi-step actions such as
+    # github/codeql-action (init + analyze) MUST move together — a split bump
+    # leaves the steps on mismatched versions and CodeQL hard-fails with
+    # "Loaded a configuration file for version X, but running version Y".
+    groups:
+      github-actions:
+        patterns:
+          - "*"
