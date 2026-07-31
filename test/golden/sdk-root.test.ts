@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveSdkRoot } from "../../src/golden/sdk-root.ts";
+import { parseSdkArgs, resolveSdkRoot } from "../../src/golden/sdk-root.ts";
 
 function fakeSdk(): string {
   const root = mkdtempSync(join(tmpdir(), "nimbus-sdk-"));
@@ -58,5 +58,34 @@ describe("resolveSdkRoot", () => {
 
   it("lists every attempted path when nothing resolves", () => {
     expect(() => resolveSdkRoot({ scriptDir: "/nowhere" })).toThrow(/tried/i);
+  });
+});
+
+describe("parseSdkArgs", () => {
+  it("accepts the bare positional form README.md documents", () => {
+    expect(parseSdkArgs(["/c/gitrep/nimbus-sdk"])).toEqual({ flag: "/c/gitrep/nimbus-sdk" });
+  });
+
+  it("accepts the --sdk-root form the design doc's pre-release gate table documents", () => {
+    expect(parseSdkArgs(["--sdk-root", "/c/gitrep/nimbus-sdk"])).toEqual({
+      flag: "/c/gitrep/nimbus-sdk",
+    });
+  });
+
+  it("returns no flag when nothing is passed, leaving env/sibling probing to resolve", () => {
+    expect(parseSdkArgs([])).toEqual({});
+  });
+
+  it("rejects an unknown flag rather than resolving it as a directory", () => {
+    expect(() => parseSdkArgs(["--sdk-rot", "/x"])).toThrow(/--sdk-rot/);
+  });
+
+  it("rejects --sdk-root with no following value", () => {
+    expect(() => parseSdkArgs(["--sdk-root"])).toThrow(/--sdk-root/);
+  });
+
+  it("rejects two conflicting roots instead of silently keeping one", () => {
+    expect(() => parseSdkArgs(["/a", "--sdk-root", "/b"])).toThrow(/twice/i);
+    expect(() => parseSdkArgs(["/a", "/b"])).toThrow(/twice/i);
   });
 });

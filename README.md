@@ -84,7 +84,9 @@ Stage A's acceptance harness proves a monorepo-target connector against a live N
 bun run standalone-acceptance C:\gitrep\nimbus-sdk
 ```
 
-`<sdk-root>` resolves the same way `--nimbus-root` does: the argument, then `$NIMBUS_SDK_ROOT`, then a sibling directory of this repo named `nimbus-sdk`, requiring the marker file `sdks/typescript/package.json`. The SDK must already be built (`dist/connector-kit/index.js` present) — a `file:` dependency installs built output, not source, so this is what makes the check exercise the same `dist` resolution path a real npm consumer takes.
+`<sdk-root>` may be given positionally or as `--sdk-root <path>`, and resolves the same way `--nimbus-root` does: the argument, then `$NIMBUS_SDK_ROOT`, then a sibling directory of this repo named `nimbus-sdk`, requiring the marker file `sdks/typescript/package.json`.
+
+The SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness.
 
 ## Development
 

@@ -13,13 +13,13 @@ import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
 import { formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
 import { run } from "../src/golden/run.ts";
-import { resolveSdkRoot } from "../src/golden/sdk-root.ts";
+import { parseSdkArgs, resolveSdkRoot } from "../src/golden/sdk-root.ts";
 import { parseSpec } from "../src/spec.ts";
 
 const NAME = "zzstandalone";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const sdkRoot = resolveSdkRoot({
-  flag: process.argv[2],
+  ...parseSdkArgs(process.argv.slice(2)),
   env: process.env["NIMBUS_SDK_ROOT"],
   scriptDir,
 });
@@ -39,7 +39,9 @@ const sdkPkg = join(sdkRoot, "sdks", "typescript");
 if (!existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
   throw new Error(
     `${sdkPkg}/dist/connector-kit/index.js is missing — run \`bun run build\` in the SDK first. ` +
-      "A file: dependency installs dist, not src, so an unbuilt SDK cannot be verified here.",
+      "`bunx tsc --noEmit` below resolves the kit's types from dist/connector-kit/index.d.ts, " +
+      "and the node_modules check asserts dist/connector-kit/index.js is on disk, so neither " +
+      "can be verified against an unbuilt SDK.",
   );
 }
 

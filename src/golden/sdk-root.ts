@@ -10,6 +10,42 @@ export type ResolveOptions = {
   readonly scriptDir: string;
 };
 
+/**
+ * Parse scripts/standalone-acceptance.ts's argv.
+ *
+ * The SDK root may be given positionally (`bun run standalone-acceptance <path>`, the form
+ * README.md documents) or as `--sdk-root <path>` (the form the design doc's pre-release
+ * gate table documents, and the name resolveSdkRoot already uses in its error messages and
+ * its "Pass --sdk-root <path>" hint). Both are accepted so the two documents agree with the
+ * script and with each other.
+ *
+ * Unknown flags are rejected rather than silently treated as a path, mirroring
+ * scripts/diff-golden.ts's parser — otherwise `--sdk-rot /x` resolves "--sdk-rot" as a
+ * directory and dies with a confusing "does not exist".
+ */
+export function parseSdkArgs(argv: readonly string[]): Pick<ResolveOptions, "flag"> {
+  let sdkRoot: string | undefined;
+  const set = (value: string): void => {
+    if (sdkRoot !== undefined) {
+      throw new Error(`The SDK root was given twice: "${sdkRoot}" and "${value}" — pass it once.`);
+    }
+    sdkRoot = value;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--sdk-root") {
+      const value = argv[++i];
+      if (value === undefined) throw new Error("--sdk-root requires a value");
+      set(value);
+    } else if (a.startsWith("--")) {
+      throw new Error(`Unknown flag: ${a}`);
+    } else {
+      set(a);
+    }
+  }
+  return sdkRoot === undefined ? {} : { flag: sdkRoot };
+}
+
 export function resolveSdkRoot(opts: ResolveOptions): string {
   const tried: string[] = [];
   const candidates: { path: string; source: string }[] = [];
