@@ -2,16 +2,51 @@
 
 A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages. Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary. This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files, run through the same Biome formatter the real connectors are formatted with.
 
-Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation) and [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing).
+Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation), [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing), and [`docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md`](./docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md) (Stage C — writes, HITL, OAuth, Gateway wiring).
 
-## Stage A boundary
+## Scope
 
-This is **Stage A** — deliberately narrow:
+Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools. A tool spec that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Fields the emitters cannot render are a **hard validation error**, not an automatic downgrade to a stub — see the design doc's "Validation" section. `hitl` on a tool is the one field still rejected outright; declare a tool's write-intent through `effect` instead (below).
 
-- **One GET per tool.** Every tool is a single HTTP GET against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No request bodies, no non-GET methods, no pagination, no multi-step or multi-fetch tools.
-- **Read tools only.** No write tools, no HITL-gated actions, no `hitlRequired` population.
+Originally (Stage A) that one request was always a GET with no body. **Stage C lifted that**: `method` and `body` are now supported, and only GET-with-no-body remains the default. `POST`, `PUT`, `PATCH` and `DELETE` are all supported, each with an optional JSON body.
 
-A tool spec that can't be expressed under these constraints sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Non-GET methods and other out-of-scope fields are a **hard validation error**, not an automatic downgrade to a stub — see the design doc's "Strict schemas" section.
+### Writes: `method`, `effect` and `body`
+
+```jsonc
+{
+  "name": "zzwrite_item_create",
+  "description": "Create an item.",
+  "impl": "rest",
+  "method": "POST",
+  "effect": "write",
+  "path": "/v1/items",
+  "args": { "title": { "type": "string", "min": 1 } }
+}
+```
+
+- **`method`** (`"GET" | "POST" | "PUT" | "PATCH" | "DELETE"`, default `"GET"`) is the HTTP verb, nothing more.
+- **`effect`** (`"read" | "write" | "delete"`, default `"read"`) is the author's declaration of intent, and drives the manifest's `hitlRequired` array (the sorted, deduplicated set of non-`read` effects across a spec's tools). It is deliberately **not** derived from `method` — in the Nimbus corpus a POST is not necessarily a write: `dagster` POSTs GraphQL *queries* and `ramp` POSTs to *exchange an OAuth token*. A REST GET may not carry a write or delete effect (that combination is a hard validation error); a write or delete effect may pair with any non-GET method, including `DELETE` with `effect: "write"` — deleting a webhook subscription, for instance, is not destructive to user data, and `effect` is the author's judgement rather than something read off the verb.
+- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg *not* referenced in the tool's path** — `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`, and a `DELETE` whose only arg appears in the path sends no body (and no `Content-Type` header) at all. An explicit `body` mapping overrides the default entirely and wins even for a path arg named there deliberately.
+- **`impl: "get"` is a deprecated alias for `"rest"`.** `create-nimbus-connector@0.2.2` is published without `method`, so specs already written against it (which all say `"impl": "get"`, implying a GET) still parse unchanged — `"get"` is normalised to `"rest"` at parse time.
+
+**rest-kit gets writes almost free.** The rest-kit registrar (`makeRestToolRegistrar`, from the published SDK) already accepts an optional `buildInit` returning `{ method, body }`, so a write tool is a few extra lines in a factory that already existed. Hand-rolled has no such seam — a second helper (`<fetchHelper.local>Send`, taking `method` and a serialized body) is emitted alongside the read helper, conditionally: only when the spec contains a non-GET tool, so a read-only spec never touches that code path. Prefer **rest-kit** for a new write connector; hand-rolled write support exists for connectors that already use hand-rolled headers/auth shapes rest-kit does not fit.
+
+### OAuth: `client-credentials`
+
+An env entry may declare `"auth": "client-credentials"` instead of `"bearer"` or `"headers"`:
+
+```jsonc
+{
+  "vars": ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  "local": "authHeaders",
+  "auth": "client-credentials",
+  "tokenUrl": "https://api.zzwrite.test/oauth/token",
+  "scope": "items:readwrite",
+  "credentialsIn": "basic"
+}
+```
+
+This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches the token for the process's lifetime — it is never refreshed and `expires_in` is never read, which is correct only because a generated connector is spawned per invocation and is short-lived. `credentialsIn` controls how the client id/secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` connector does); `"body"` puts `client_id`/`client_secret` in the form body (as Nimbus's `looker`, `powerbi`, `teams` and `wiz` connectors do). `scope` is optional; the two `vars` and `style: "hand-rolled"` are required — `client-credentials` is **hand-rolled only** (`style: "rest-kit"` is a validation error), because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
 
 ## Stage B: standalone connectors
 
@@ -48,6 +83,8 @@ This CLI is not published to npm yet, so `bunx create-nimbus-connector <name>` d
 - `--dry-run` — don't write anything; print the file tree that would be created (path + byte size per file).
 - `--out-dir <path>` — write to a directory other than the default.
 - `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
+- `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit two Gateway-side scaffold files into `<nimbus-root>/packages/gateway/src/connectors/`. See "Gateway wiring" below. Off by default; normal generation is unaffected by its absence.
+- `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts` in the target directory. An **error** when passed without `--gateway-wiring`. Without `--force`, `--gateway-wiring` refuses to write over a file it did not create — including a real, hand-authored sync file already in the monorepo.
 
 ### Licensing of generated connectors
 
@@ -70,6 +107,25 @@ bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
 bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
 bun src/cli.ts --spec fixtures/zzstandalone.spec.json --standalone --out-dir /tmp/zzstandalone-preview
 ```
+
+## Gateway wiring
+
+```
+bun src/cli.ts <name> --spec fixtures/<name>.spec.json --gateway-wiring C:\gitrep\Nimbus
+```
+
+Opt-in, monorepo-target only, and off by default — normal generation never touches Nimbus's Gateway. When passed, two additional files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
+
+- **`<name>-sync.ts`** — a `create<Name>Syncable(): Syncable` matching the Gateway's own `Syncable` interface (`serviceId`, `defaultIntervalMs`, `sync()`), draining the spec's first `*_list` tool. Its `sync()` body **throws** rather than doing anything.
+- **`<name>-mapping.ts`** — a `map<Name>ItemToItem` stub with the expected signature, whose body also **throws**.
+
+Both are **skeletons, not implementations** — deliberately. The Gateway's ~98 real `*-sync.ts` files are not one formulaic shape: the "drain a list tool and upsert" assembly this project could plausibly generate appears in exactly 2 of them; the rest (including this project's own four golden fixtures) are hand-authored with direct `fetch` calls, cursor pagination, and connector-specific option objects. Generating a working `sync()` would mean reproducing AGPL source nearly verbatim in an MIT repository, and asserting a shape that fits 2 of 98 connectors. So the tool emits only what the type system dictates — the shape, not anyone's implementation choices — plus a TODO comment, and leaves the real work to a human. It saves the boilerplate of the two files' scaffolding; it does not produce a working syncable.
+
+`<name>-mapping.ts`'s body is unknowable from a connector spec for the same reason: no spec field describes a service's API response shape.
+
+**Writing refuses to overwrite an existing target file** unless `--force` is passed — Nimbus already ships hand-authored files such as `newrelic-sync.ts` and `datadog-sync.ts`, and an unguarded write on a connector reusing one of those names would destroy it.
+
+**Two files are never written, only printed**: `platform/assemble-sync-registrations.ts` (93+ entries) and `connectors/connector-catalog.ts` (`CONNECTOR_SERVICE_IDS` plus the `tsc`-enforced matching `CONNECTOR_SYNC_INTERVAL_MS` entry). The CLI prints the exact lines to paste into each, rather than editing either — patching a large file it does not own, in another repository under another licence, risks silent corruption; a two-line paste the author controls is the safer trade.
 
 ## The golden-fixture diff harness
 

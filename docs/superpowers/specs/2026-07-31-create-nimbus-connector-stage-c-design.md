@@ -276,3 +276,160 @@ Step 6 is the only item whose value lies entirely outside this repository, and i
 - Editing Nimbus registration files automatically (D8).
 - Changing what the Gateway *does* with `hitlRequired`. Stage C emits accurate metadata; making it enforce anything is a Gateway change, not a generator change (§1.1).
 - Fixing `nimbus scaffold extension`'s legacy `permissions` array (§1.6). Noted, not owned here.
+
+---
+
+## 9. Acceptance results
+
+Recorded 2026-07-31, on `stage-c-writes`, Task 11. Every command below was run in this
+session against this branch; output is pasted as observed, not summarized or copied from a
+plan. `C:\gitrep\Nimbus` and `C:\gitrep\nimbus-sdk` were confirmed clean (`git status --short`)
+both before and after the run — `Nimbus` carries only its pre-existing untracked
+`facebook-post.txt`, which this project does not own and left alone. No `cnc-*` directory
+remained under `%TEMP%` afterward.
+
+**1. `bun test`**
+
+```
+bun test v1.3.14 (0d9b296a)
+
+ 374 pass
+ 0 fail
+ 672 expect() calls
+Ran 374 tests across 25 files. [3.25s]
+```
+
+Includes `test/golden/snapshots.test.ts` (11 pass), which is Task 11's §5.2 evidence: it
+asserts the snapshot file set is non-empty and matches what `generate()` produces for
+`zzwrite` and `zzwriterest` before comparing contents, so neither failure mode named in §5.2
+(reflexive updating, vacuous pass) is silently possible here.
+
+**2. `bunx tsc --noEmit`**
+
+No output, exit 0.
+
+**3. `bunx biome check src/ test/ scripts/`**
+
+Exit 0. Five pre-existing `lint/complexity/useLiteralKeys` and `lint/style/useTemplate`
+**infos** (not errors — `Found 5 infos.`) in `scripts/diff-golden.ts`,
+`scripts/standalone-acceptance.ts` and `test/format.test.ts`, unrelated to this task's
+changes and unchanged by it.
+
+**4. `bun run diff:golden --nimbus-root C:/gitrep/Nimbus`**
+
+```
+PASS  datadog  6/6 files identical
+PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))
+PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))
+PASS  grafana  6/6 files identical
+PASS  newrelic  6/6 files identical
+PASS  sentry  6/6 files identical
+PASS  zzscratch  0/6 files identical (expected partial)
+PASS  zzstandalone  0/6 files identical (expected partial)
+PASS  zzstandalonehand  0/6 files identical (expected partial)
+PASS  zzwrite  0/6 files identical (expected partial)
+PASS  zzwriterest  0/6 files identical (expected partial)
+
+All fixtures match their declared expectations.
+```
+
+11 fixtures, matching §5.1's count exactly (9 carried over from Stage A/B plus the 2 new
+write fixtures). This is §5.1's claim, and it is met exactly as scoped: the four hand-rolled
+read fixtures (`datadog`, `grafana`, `newrelic`, `sentry`) stay at 6/6; the two write
+fixtures (`zzwrite`, `zzwriterest`) are declared `[]` and land at 0/6 — no hand-written
+Nimbus connector matches generated write output, which is the expected and correct result,
+not a gap.
+
+**5. `bun run acceptance C:/gitrep/Nimbus`**
+
+```
+PASS  tsc --noEmit
+PASS  biome check
+PASS  audit:package-readmes
+PASS  monorepo working tree clean
+```
+
+**6. `bun run standalone-acceptance --registry`**
+
+```
+Mode:        registry (@nimbus-dev/sdk resolved from npm, generated dependency unmodified)
+Fixtures:    zzstandalone, zzstandalonehand, zzwrite, zzwriterest
+
+  zzstandalone: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzstandalonehand: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzwrite: installing @nimbus-dev/sdk ^1.11.0 as emitted
+  zzwriterest: installing @nimbus-dev/sdk ^1.11.0 as emitted
+PASS  [zzstandalone] bun install
+PASS  [zzstandalone] connector-kit present in node_modules
+PASS  [zzstandalone] tsc --noEmit
+PASS  [zzstandalone] bun run typecheck
+PASS  [zzstandalone] bun run lint
+PASS  [zzstandalone] no relative import escapes the package
+PASS  [zzstandalone] tools/list over stdio (src)
+PASS  [zzstandalone] bun run build
+PASS  [zzstandalone] dist/server.js exists after build
+PASS  [zzstandalone] tools/list over stdio (dist/server.js)
+PASS  [zzstandalonehand] bun install
+PASS  [zzstandalonehand] connector-kit present in node_modules
+PASS  [zzstandalonehand] tsc --noEmit
+PASS  [zzstandalonehand] bun run typecheck
+PASS  [zzstandalonehand] bun run lint
+PASS  [zzstandalonehand] no relative import escapes the package
+PASS  [zzstandalonehand] tools/list over stdio (src)
+PASS  [zzstandalonehand] bun run build
+PASS  [zzstandalonehand] dist/server.js exists after build
+PASS  [zzstandalonehand] tools/list over stdio (dist/server.js)
+PASS  [zzwrite] bun install
+PASS  [zzwrite] connector-kit present in node_modules
+PASS  [zzwrite] tsc --noEmit
+PASS  [zzwrite] bun run typecheck
+PASS  [zzwrite] bun run lint
+PASS  [zzwrite] no relative import escapes the package
+PASS  [zzwrite] tools/list over stdio (src)
+PASS  [zzwrite] bun run build
+PASS  [zzwrite] dist/server.js exists after build
+PASS  [zzwrite] tools/list over stdio (dist/server.js)
+PASS  [zzwriterest] bun install
+PASS  [zzwriterest] connector-kit present in node_modules
+PASS  [zzwriterest] tsc --noEmit
+PASS  [zzwriterest] bun run typecheck
+PASS  [zzwriterest] bun run lint
+PASS  [zzwriterest] no relative import escapes the package
+PASS  [zzwriterest] tools/list over stdio (src)
+PASS  [zzwriterest] bun run build
+PASS  [zzwriterest] dist/server.js exists after build
+PASS  [zzwriterest] tools/list over stdio (dist/server.js)
+
+All standalone acceptance checks passed.
+```
+
+Four fixtures × 10 checks = 40, confirming §5.3's "40 checks across four fixtures" against
+the **published** SDK tarball — the strongest of the two modes, per the existing README
+section "Two modes".
+
+**7. `bun run standalone-acceptance C:/gitrep/nimbus-sdk`**
+
+Same 4×10 = 40 checks, all `PASS`, against a **local checkout** of the SDK
+(`C:\gitrep\nimbus-sdk\sdks\typescript`) rather than the registry tarball — the pre-release
+gate mode. Included here because Task 11's brief lists it explicitly; it is not part of the
+top-level task instructions' command list, and running it is what "confirm
+`C:\gitrep\nimbus-sdk` has a clean working tree" in that instruction presupposes.
+
+### Where a claim had to be qualified rather than asserted outright
+
+- **Snapshots (§5.2) prove non-regression, not resemblance to hand-written code.** The 11
+  passing snapshot tests prove `zzwrite` and `zzwriterest` generate byte-identically to their
+  checked-in snapshots — i.e., that this project's own output hasn't drifted. They prove
+  nothing about whether that output resembles how a human at Nimbus would write the same
+  connector, because §1.3 already established there is no single reference shape to compare
+  against: normalizing every real write helper in the corpus yields 18 distinct skeletons from
+  18 helpers, no two alike. "Passes its own snapshot" and "looks like a real Nimbus write
+  connector" are different claims, and only the first is tested.
+- **Gateway wiring (§6) is scaffolding, not a working syncable.** `--gateway-wiring` was not
+  re-exercised live in this results section (it is covered by `bun test`'s existing CLI/wiring
+  suites, part of the 374 passing above); what is recorded here is the honest limit already
+  stated in §6 and repeated in the README's new "Gateway wiring" section: both emitted files'
+  bodies **throw**. The feature saves the boilerplate of getting the `Syncable` interface shape
+  and the two files' scaffolding right; it does not produce a connector that syncs. Anyone
+  running it still has to write `sync()` and the mapping function by hand before the
+  connector does anything.
