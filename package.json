@@ -22,6 +22,7 @@
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
     "diff:golden": "bun scripts/diff-golden.ts",
+    "snapshot:update": "bun scripts/snapshot-update.ts",
     "acceptance": "bun scripts/acceptance.ts",
     "standalone-acceptance": "bun scripts/standalone-acceptance.ts"
   },
