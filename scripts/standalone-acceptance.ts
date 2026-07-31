@@ -23,15 +23,36 @@ import { parseSpec } from "../src/spec.ts";
 
 const NAME = "zzstandalone";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const sdkRoot = resolveSdkRoot({
-  ...parseSdkArgs(process.argv.slice(2)),
-  env: process.env["NIMBUS_SDK_ROOT"],
-  scriptDir,
-});
-const sdkPkg = join(sdkRoot, "sdks", "typescript");
+const { registry, flag } = parseSdkArgs(process.argv.slice(2));
 
-// The SDK must be built before any of this runs: `bunx tsc --noEmit` below resolves the
-// kit's types from dist/connector-kit/index.d.ts, and the node_modules existence check
+/**
+ * Two modes, answering two different questions. Both run the identical check list.
+ *
+ *   local checkout (default) — rewrite the generated dependency to
+ *     file:<sdk-root>/sdks/typescript. Answers "does an unreleased SDK branch satisfy the
+ *     contract?", which is the pre-release gate: it can be pointed at a branch that is not
+ *     on npm and cannot be, so it stays useful after every future SDK change.
+ *
+ *   --registry — leave the generated "^1.11.0" alone and let bun resolve it from npm.
+ *     Answers "does the artifact actually on the registry satisfy the contract?" — which
+ *     the local mode cannot, because a local checkout has files the published tarball may
+ *     not. A `dist` missing from the published `files` array surfaces here and nowhere
+ *     else.
+ */
+const sdkPkg = registry
+  ? undefined
+  : join(
+      resolveSdkRoot({
+        ...(flag === undefined ? {} : { flag }),
+        env: process.env["NIMBUS_SDK_ROOT"],
+        scriptDir,
+      }),
+      "sdks",
+      "typescript",
+    );
+
+// The local SDK must be built before any of this runs: `bunx tsc --noEmit` below resolves
+// the kit's types from dist/connector-kit/index.d.ts, and the node_modules existence check
 // below needs dist/connector-kit/index.js on disk. That is genuine dist coverage for
 // types and for install-time existence — but NOT for runtime JS execution: the two
 // tools/list checks spawn `bun`, and Bun applies the SDK's "bun" export condition, which
@@ -40,8 +61,9 @@ const sdkPkg = join(sdkRoot, "sdks", "typescript");
 // the kit from source, not from the built dist JS. The dist JS runtime path a Node
 // consumer takes is exercised by the SDK's own node-smoke CI job
 // (sdks/typescript/scripts/smoke-esm.mjs, run under Node via .github/workflows/ci.yml),
-// not by this harness.
-if (!existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
+// not by this harness. In --registry mode there is nothing local to build: the published
+// tarball either carries dist or it does not, which the node_modules check below decides.
+if (sdkPkg !== undefined && !existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
   throw new Error(
     `${sdkPkg}/dist/connector-kit/index.js is missing — run \`bun run build\` in the SDK first. ` +
       "`bunx tsc --noEmit` below resolves the kit's types from dist/connector-kit/index.d.ts, " +
@@ -68,18 +90,28 @@ try {
   );
   await writeFiles(formatAll(generate(spec, { target: "standalone" })), outDir);
 
-  // Point the generated dependency at the local checkout until 1.11.0 is on the registry.
   const pkgPath = join(outDir, "package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
-  writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
+  const declaredSdkDep = JSON.parse(readFileSync(pkgPath, "utf8")).dependencies["@nimbus-dev/sdk"];
 
-  // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
-  // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
-  checks.push({ name: "bun install", ...run(["bun", "install", "--force"], outDir) });
+  if (sdkPkg === undefined) {
+    // --registry: install exactly what the generator emitted. No rewrite, so a failure
+    // here is a real consumer's failure.
+    console.log(`Mode:        registry (@nimbus-dev/sdk ${declaredSdkDep}, unmodified)\n`);
+    checks.push({ name: "bun install", ...run(["bun", "install"], outDir) });
+  } else {
+    console.log(`Mode:        local checkout (${sdkPkg})\n`);
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
+    writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
 
-  // Do not trust --force to have worked — prove the built kit actually landed. A stale or
-  // partial install would otherwise surface as a confusing tsc error about missing types.
+    // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
+    // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
+    checks.push({ name: "bun install", ...run(["bun", "install", "--force"], outDir) });
+  }
+
+  // Prove the built kit actually landed. In local mode this catches a stale --force; in
+  // registry mode it is the check that catches `dist` missing from the published tarball's
+  // `files` array, which nothing else in this project can see.
   const installedKit = join(
     outDir,
     "node_modules",

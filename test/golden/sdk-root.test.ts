@@ -66,17 +66,32 @@ describe("resolveSdkRoot", () => {
 
 describe("parseSdkArgs", () => {
   it("accepts the bare positional form README.md documents", () => {
-    expect(parseSdkArgs(["/c/gitrep/nimbus-sdk"])).toEqual({ flag: "/c/gitrep/nimbus-sdk" });
+    expect(parseSdkArgs(["/c/gitrep/nimbus-sdk"])).toEqual({
+      flag: "/c/gitrep/nimbus-sdk",
+      registry: false,
+    });
   });
 
   it("accepts the --sdk-root form the design doc's pre-release gate table documents", () => {
     expect(parseSdkArgs(["--sdk-root", "/c/gitrep/nimbus-sdk"])).toEqual({
       flag: "/c/gitrep/nimbus-sdk",
+      registry: false,
     });
   });
 
   it("returns no flag when nothing is passed, leaving env/sibling probing to resolve", () => {
-    expect(parseSdkArgs([])).toEqual({});
+    expect(parseSdkArgs([])).toEqual({ registry: false });
+  });
+
+  it("selects registry mode, which carries no SDK root at all", () => {
+    expect(parseSdkArgs(["--registry"])).toEqual({ registry: true });
+  });
+
+  it("rejects --registry combined with an SDK root, in either order", () => {
+    // Not a precedence question: the two resolve @nimbus-dev/sdk from different places and
+    // answer different questions, so silently preferring one would misreport what ran.
+    expect(() => parseSdkArgs(["--registry", "/c/gitrep/nimbus-sdk"])).toThrow(/--registry/);
+    expect(() => parseSdkArgs(["--sdk-root", "/x", "--registry"])).toThrow(/takes no SDK root/i);
   });
 
   it("rejects an unknown flag rather than resolving it as a directory", () => {

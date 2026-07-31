@@ -218,7 +218,7 @@ The advice is to format the *output*, not to install Biome into the caller's env
 
 `bin` points at the CLI's TypeScript entry, which gains a `#!/usr/bin/env bun` shebang — Bun runs TypeScript directly, so no build step is needed (B6). `files` limits the tarball to `src` and `README.md`; `fixtures/` stays out, since those specs describe monorepo connectors and are development artefacts rather than examples a consumer can run. Biome moves to `optionalDependencies`.
 
-The package is **not** published until SDK 1.11.0 exists, since a generated standalone connector would otherwise depend on an export nobody can install.
+The package is **not yet published.** The original blocker — SDK 1.11.0 not existing, so a generated standalone connector would depend on an export nobody could install — is now cleared: 1.11.0 is on the registry (verified `npm view @nimbus-dev/sdk@1.11.0 version` → `1.11.0`). Publishing this CLI is a remaining step in its own right, not a consequence of the SDK release.
 
 ## Acceptance
 
@@ -247,12 +247,20 @@ Step 5 runs with **no credentials set**. Env accessors are only called inside to
 
 ### Acceptance criteria — results
 
-Recorded 2026-07-31, on `stage-b-standalone`. **Caveat that applies to criteria 1–3 as a
-whole, stated once here rather than repeated per criterion:** `bun run standalone-acceptance`
-resolves `@nimbus-dev/sdk` from a **local checkout** (`C:\gitrep\nimbus-sdk`, branch
-`feat/connector-kit-export`, unreleased) via a `file:` dependency rewrite, not from the npm
-registry — SDK 1.11.0 does not exist on npm yet (that is Task 8). These results therefore say
-nothing about a published artifact, because none exists yet.
+Recorded 2026-07-31, on `stage-b-standalone`. **Scope note applying to criteria 1–3 as a
+whole, stated once here rather than repeated per criterion:** these results were first
+recorded with `bun run standalone-acceptance` resolving `@nimbus-dev/sdk` from a **local
+checkout** (`C:\gitrep\nimbus-sdk`, branch `feat/connector-kit-export`, unreleased at the
+time) via a `file:` dependency rewrite, not from the npm registry — a mode that says nothing
+about a published artifact, because a local checkout contains files a published tarball may
+not. **Updated 2026-07-31: SDK 1.11.0 is now published** (`npm view
+@nimbus-dev/sdk@1.11.0 version` → `1.11.0`), and `bun run standalone-acceptance --registry`
+re-runs the identical check list against the registry tarball with the generated `^1.11.0`
+dependency unmodified. All ten checks pass in that mode, including `connector-kit present in
+node_modules` — which is what proves `dist` is actually inside the published `files` array,
+something a local checkout can never show. Both modes are kept deliberately: the
+local-checkout mode remains the pre-release gate, since it can be pointed at an SDK branch
+that is not on npm and cannot be.
 
 **A second, narrower caveat, corrected 2026-07-31 after an initial overstatement:** "exercises
 `dist`" does not mean the same thing for every check below. `bunx tsc --noEmit` (criterion 1)
@@ -378,8 +386,8 @@ this session — noted here rather than silently claimed as freshly re-run.
 Three PRs, one hard ordering constraint:
 
 1. **`create-nimbus-connector`** — everything above, developed against the local SDK checkout. Blocked on nothing.
-2. **`nimbus-sdk`** — move the three modules in, add the `./connector-kit` export and its `dist` build, update the API surface snapshot, release 1.11.0. Blocked only on the contract above being agreed. Note this repo is currently mid-work on `docs/release-pipeline-loose-ends-spec`.
-3. **`Nimbus`** — convert the three `shared/*.ts` files to named re-exports. **Blocked on SDK 1.11.0 being published.** Must keep all 99 import sites working and Stage A's fixtures at 6/6.
+2. **`nimbus-sdk`** — move the three modules in, add the `./connector-kit` export and its `dist` build, update the API surface snapshot, release 1.11.0. **Done** — merged and released 2026-07-31; 1.11.0 is on the registry.
+3. **`Nimbus`** — convert the three `shared/*.ts` files to named re-exports. Was blocked on SDK 1.11.0 being published; **now unblocked.** Must keep all 99 import sites working and Stage A's fixtures at 6/6.
 
 ### Verifying the contract before each step
 
@@ -387,9 +395,9 @@ Nothing automatically checks a contract that spans three repositories, so each s
 
 | Before | Run | Proves |
 |---|---|---|
-| releasing SDK 1.11.0 | `bun run standalone-acceptance --sdk-root /c/gitrep/nimbus-sdk` from this repo, against the SDK branch | the export resolves, typechecks against `dist`'s type declarations, and runs correctly under Bun from source — catching a wrong export map or missing build output *before* a release that cannot be withdrawn. (The built `dist` JS executing correctly at runtime is proven separately, by the SDK's own `node-smoke` CI job, not by this gate.) |
+| releasing an SDK version (1.11.0 and every one after) | `bun run standalone-acceptance --sdk-root /c/gitrep/nimbus-sdk` from this repo, against the SDK branch | the export resolves, typechecks against `dist`'s type declarations, and runs correctly under Bun from source — catching a wrong export map or missing build output *before* a release that cannot be withdrawn. (The built `dist` JS executing correctly at runtime is proven separately, by the SDK's own `node-smoke` CI job, not by this gate.) |
 | merging the Nimbus PR | `bun run diff:golden --nimbus-root /c/gitrep/Nimbus` against the modified monorepo | the re-export refactor did not change a single generated byte; all four hand-rolled fixtures still 6/6 |
-| publishing this CLI | both of the above, plus SDK 1.11.0 actually on the registry | a `bunx` user can install what the generated `package.json` asks for |
+| publishing this CLI | both of the above, plus `bun run standalone-acceptance --registry` | a `bunx` user can install what the generated `package.json` asks for — proven against the published tarball, not a local checkout. The SDK half of this gate is satisfied: 1.11.0 is on the registry and the registry-mode run passes all ten checks. |
 
 The first gate needs no new machinery: the acceptance script already resolves the SDK root from a flag, so pointing it at an unreleased branch is the intended use.
 

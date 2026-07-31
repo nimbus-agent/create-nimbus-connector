@@ -27,7 +27,9 @@ The standalone `src/server.ts` imports its helpers from a single published entry
 
 **This CLI, and every connector it generates, is Bun-only** (design doc decisions B6 and B7): `nimbus.extension.json` declares `"runtime": "bun"` for every connector, `test/sandbox.test.ts` imports `bun:test`, and the standalone `build` script targets Bun. `src/cli.ts` carries a `#!/usr/bin/env bun` shebang. There is no Node, npm, or pnpm path anywhere in this project or its output.
 
-**⚠ `@nimbus-dev/sdk` 1.11.0 does not exist on npm yet** — it ships the `./connector-kit` export a standalone connector's `package.json` depends on, and is a separate, not-yet-completed piece of work (Stage B, task 8). Consequently **this CLI is not published yet either**: publishing it now would let someone generate a standalone connector whose only dependency cannot be installed. Until 1.11.0 is released, run standalone generation from a checkout of this repo (`bun src/cli.ts <name> --standalone`), and verify it against a local, built SDK checkout with `bun run standalone-acceptance <sdk-root>` (see below) rather than a real `bun install`.
+**`@nimbus-dev/sdk` 1.11.0 is published.** It ships the `./connector-kit` export a standalone connector's `package.json` depends on, so `bun install` in a generated standalone package resolves that dependency from the registry with no local checkout and no rewrite. `bun run standalone-acceptance --registry` (see below) proves it end to end against the published tarball.
+
+**This CLI is not published yet.** That is now a separate, remaining step rather than something blocked on the SDK — run standalone generation from a checkout of this repo (`bun src/cli.ts <name> --standalone`) until it is.
 
 ## Usage
 
@@ -37,7 +39,7 @@ bun src/cli.ts <name>
 
 Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory), or to `<name>/` when `--standalone` is passed.
 
-The package is not yet published (see the SDK-dependency note above), so `bunx create-nimbus-connector <name>` does not work yet. Run from a checkout of this repo with `bun src/cli.ts` in the meantime.
+This CLI is not published to npm yet, so `bunx create-nimbus-connector <name>` does not work. Run from a checkout of this repo with `bun src/cli.ts` in the meantime. (The connectors it *generates* have no such constraint — their `@nimbus-dev/sdk` dependency is on the registry.)
 
 ### Flags
 
@@ -95,15 +97,25 @@ bun run acceptance C:\gitrep\Nimbus
 
 ## The standalone acceptance harness
 
-Stage A's acceptance harness proves a monorepo-target connector against a live Nimbus checkout. There is no equivalent live ground truth for standalone connectors — no standalone Nimbus connector exists yet — so `bun run standalone-acceptance <sdk-root>` substitutes a live end-to-end run: generate a `--standalone` connector into a temp directory outside the monorepo, point its `@nimbus-dev/sdk` dependency at a local, **built** SDK checkout (`file:<sdk-root>/sdks/typescript`, since 1.11.0 is not on npm yet), `bun install`, `bunx tsc --noEmit`, run the generated package's own `bun run typecheck` and `bun run lint` scripts (which resolve `tsc` and `biome` through its own `node_modules`, and re-check the emitted formatting and import order against the emitted `biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio (`initialize` → `tools/list`, no credentials in the environment) against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the temp directory whether or not any step threw.
+Stage A's acceptance harness proves a monorepo-target connector against a live Nimbus checkout. There is no equivalent live ground truth for standalone connectors — no standalone Nimbus connector exists yet — so `bun run standalone-acceptance` substitutes a live end-to-end run: generate a `--standalone` connector into a temp directory outside the monorepo, resolve its `@nimbus-dev/sdk` dependency (see the two modes below), `bun install`, `bunx tsc --noEmit`, run the generated package's own `bun run typecheck` and `bun run lint` scripts (which resolve `tsc` and `biome` through its own `node_modules`, and re-check the emitted formatting and import order against the emitted `biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio (`initialize` → `tools/list`, no credentials in the environment) against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the temp directory whether or not any step threw.
+
+### Two modes
+
+They resolve `@nimbus-dev/sdk` from different places and answer different questions, so both are kept. Passing both is an error, not a precedence question.
 
 ```
-bun run standalone-acceptance C:\gitrep\nimbus-sdk
+bun run standalone-acceptance --registry                      # the published tarball
+bun run standalone-acceptance C:\gitrep\nimbus-sdk            # a local SDK checkout
+bun run standalone-acceptance --sdk-root C:\gitrep\nimbus-sdk
 ```
+
+**`--registry`** installs exactly what the generator emitted — `"@nimbus-dev/sdk": "^1.11.0"`, unmodified — from npm. This is the strongest proof Stage B can offer, because it verifies the artifact real consumers actually get: a `dist` missing from the published `files` array surfaces here and nowhere else in this project. Run it before publishing this CLI.
+
+**Local checkout** (the default) rewrites the dependency to `file:<sdk-root>/sdks/typescript` first. This is the **pre-release gate**: it can be pointed at an SDK branch that is not on npm and cannot be, so it stays useful for every future SDK change. Run it before releasing an SDK version.
 
 `<sdk-root>` may be given positionally or as `--sdk-root <path>`, and resolves the same way `--nimbus-root` does: the argument, then `$NIMBUS_SDK_ROOT`, then a sibling directory of this repo named `nimbus-sdk`, requiring the marker file `sdks/typescript/package.json`.
 
-The SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness.
+In local-checkout mode the SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness — and that stays true in `--registry` mode, which changes where the package comes from, not which export condition Bun applies to it. What `--registry` adds is proof that the published tarball *contains* `dist` at all.
 
 ## Development
 
