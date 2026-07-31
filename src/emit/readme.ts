@@ -40,7 +40,19 @@ AGPL-3.0
 
 function standaloneReadme(spec: ConnectorSpec, t: string): string {
   const vars = spec.env.flatMap((e) => e.vars);
-  const exportLines = vars.map((v) => `export ${v}=...`).join("\n");
+  // A hand-rolled spec with `env: []` and literal inlineHeaders is valid and reads nothing
+  // from the environment. Emitting the sentence plus an empty ```bash fence would tell the
+  // reader to set credentials and then show them none.
+  const credentials =
+    vars.length === 0
+      ? ""
+      : `Set the credentials this connector reads from the environment:
+
+\`\`\`bash
+${vars.map((v) => `export ${v}=...`).join("\n")}
+\`\`\`
+
+`;
   return `# ${t} Connector
 
 ## What this is
@@ -56,13 +68,7 @@ bun run build
 
 ## Quickstart
 
-Set the credentials this connector reads from the environment:
-
-\`\`\`bash
-${exportLines}
-\`\`\`
-
-Then register it with Nimbus, or run it directly over stdio:
+${credentials}${vars.length === 0 ? "Register" : "Then register"} it with Nimbus, or run it directly over stdio:
 
 \`\`\`bash
 bun src/server.ts

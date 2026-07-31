@@ -52,6 +52,34 @@ describe("standalone README", () => {
 
   it("names the credential env var the connector actually reads", () => {
     expect(md()).toContain("NEW_RELIC_API_KEY");
+    expect(md()).toContain("Set the credentials this connector reads from the environment:");
+    expect(md()).toContain("export NEW_RELIC_API_KEY=...");
+  });
+
+  it("omits the credential sentence and its fence when the spec reads no env vars", () => {
+    // `env: []` with literal inlineHeaders passes validation, and previously produced
+    // "Set the credentials this connector reads from the environment:" above an empty
+    // ```bash block.
+    const envless = parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [],
+      fetchHelper: {
+        local: "acmeGet",
+        base: "https://api.acme.test",
+        inlineHeaders: { Accept: "application/json" },
+      },
+    });
+    const out = emitReadme(envless, "standalone").content;
+    expect(out).not.toContain("Set the credentials");
+    expect(out).not.toContain("```bash\n```");
+    expect(out).not.toMatch(/```bash\s*```/);
+    expect(out).toContain("Register it with Nimbus, or run it directly over stdio:");
+    // The Quickstart section still has content and the H2s are unchanged.
+    expect(h2s(out)).toEqual(["what this is", "install", "quickstart", "see also", "license"]);
   });
 
   it("leaves the monorepo README unchanged", () => {

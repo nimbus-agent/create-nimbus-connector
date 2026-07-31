@@ -10,3 +10,18 @@ Thumbs.db
 coverage/
 *.tsbuildinfo
 .bun/
+
+# Generated connector output written into this checkout.
+#
+# `bun src/cli.ts <name>` defaults to ./packages/mcp-connectors/<name>/, and
+# `bun src/cli.ts <name> --standalone` defaults to ./<name>/ — an arbitrary directory name
+# that cannot be enumerated. So ignore every top-level directory and re-admit the ones this
+# repo actually owns: an accidental `./slack/` stays untracked, and adding a genuine new
+# top-level directory requires an explicit line here rather than happening by omission.
+/*/
+!/.github/
+!/docs/
+!/fixtures/
+!/scripts/
+!/src/
+!/test/
