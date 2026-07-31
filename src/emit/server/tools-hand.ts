@@ -9,13 +9,14 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const head = `${JSON.stringify(tool.name)}, ${JSON.stringify(tool.description)}, ${schema}`;
 
   if (tool.impl === "stub") {
+    const notImplemented = JSON.stringify(`${tool.name} is not implemented`);
     return [
       "reg(",
       `  ${JSON.stringify(tool.name)},`,
       `  ${JSON.stringify(tool.description)},`,
       `  ${schema},`,
       "  async () => {",
-      `    throw new Error(${JSON.stringify(`${tool.name} is not implemented`)});`,
+      `    throw new Error(${notImplemented});`,
       "  },",
       ");",
     ].join("\n");

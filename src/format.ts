@@ -88,12 +88,13 @@ export async function initFormatter(): Promise<void> {
     // must not lose the generator entirely — but the reason recorded here is what callers
     // report, so case 2 surfaces the underlying error instead of a misdiagnosis.
     available = false;
+    const detail = err instanceof Error ? err.message : String(err);
     unavailableReason = isMissingModule(err, JS_API)
       ? `${JS_API} is not installed. It is an optionalDependency, so the generated files ` +
         "are unformatted; they are valid TypeScript and compile as-is."
       : `${JS_API} is installed but failed to load, so the generated files are unformatted. ` +
         `Reinstalling it alone will not help — check that its ${WASM_BACKEND} backend is ` +
-        `present and intact. Underlying error: ${err instanceof Error ? err.message : String(err)}`;
+        `present and intact. Underlying error: ${detail}`;
     return;
   }
 
@@ -142,7 +143,7 @@ export function formatAll(files: readonly GeneratedFile[]): GeneratedFile[] {
   }
   const { biome, projectKey } = cached;
   return files.map((f) => {
-    const name = f.path[f.path.length - 1] ?? "";
+    const name = f.path.at(-1) ?? "";
     if (!(name.endsWith(".ts") || name.endsWith(".json"))) {
       return { path: f.path, content: f.content };
     }

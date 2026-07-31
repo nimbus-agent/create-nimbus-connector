@@ -2,7 +2,7 @@ import type { ConnectorSpec } from "../../spec.ts";
 
 /** Replace ${env.X} with X() inside a base or header template. */
 function resolveEnvRefs(tpl: string): string {
-  return tpl.replaceAll(/\$\{env\.([A-Za-z0-9_]+)\}/g, "${$1()}");
+  return tpl.replaceAll(/\$\{env\.(\w+)\}/g, "${$1()}");
 }
 
 function headerOption(spec: ConnectorSpec): string {
@@ -11,7 +11,7 @@ function headerOption(spec: ConnectorSpec): string {
     const fields = Object.entries(fh.inlineHeaders)
       .map(([k, v]) => {
         const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
-        const inner = /^\$\{env\.[A-Za-z0-9_]+\}$/.test(v)
+        const inner = /^\$\{env\.\w+\}$/.test(v)
           ? resolveEnvRefs(v).slice(2, -1)
           : JSON.stringify(v);
         return `${key}: ${inner}`;

@@ -13,7 +13,7 @@ export type RenderContext = {
 };
 
 const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
-const PLACEHOLDER = /\$\{([a-z]+)\.([A-Za-z0-9_]+)(?:\|([a-z]+))?\}/g;
+const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
 
 export function parsePathTemplate(tpl: string): PathSegment[] {
   const out: PathSegment[] = [];
