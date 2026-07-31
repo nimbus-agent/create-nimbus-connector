@@ -1,0 +1,15 @@
+{
+  "id": "com.nimbus.zzwrite",
+  "displayName": "ZZ Write",
+  "version": "0.1.0",
+  "description": "Throwaway write-fixture connector, hand-rolled style with client-credentials auth. Exercises write and delete effects end to end.",
+  "author": "Nimbus",
+  "entrypoint": "dist/server.js",
+  "runtime": "bun",
+  "permissions": {
+    "network": ["api.zzwrite.test"]
+  },
+  "hitlRequired": ["delete", "write"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0"
+}

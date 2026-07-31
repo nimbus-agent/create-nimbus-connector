@@ -32,7 +32,7 @@ import { parseSpec } from "../src/spec.ts";
  * user — every generated file is emitted from the same code path, so "one style works"
  * says nothing about the other.
  */
-const FIXTURES = ["zzstandalone", "zzstandalonehand"] as const;
+const FIXTURES = ["zzstandalone", "zzstandalonehand", "zzwrite", "zzwriterest"] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const { registry, flag } = parseSdkArgs(process.argv.slice(2));
 

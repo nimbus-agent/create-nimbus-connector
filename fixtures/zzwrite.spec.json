@@ -1,0 +1,46 @@
+{
+  "name": "zzwrite",
+  "title": "Zzwrite",
+  "displayName": "ZZ Write",
+  "description": "Throwaway write-fixture connector, hand-rolled style with client-credentials auth. Exercises write and delete effects end to end.",
+  "serviceLabel": "ZZ Write",
+  "style": "hand-rolled",
+  "network": ["api.zzwrite.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+      "local": "authHeaders",
+      "bindings": ["id", "secret"],
+      "auth": "client-credentials",
+      "tokenUrl": "https://api.zzwrite.test/oauth/token",
+      "scope": "items:readwrite",
+      "credentialsIn": "basic"
+    }
+  ],
+  "fetchHelper": {
+    "local": "zzwriteGet",
+    "base": "https://api.zzwrite.test",
+    "headers": "authHeaders"
+  },
+  "tools": [
+    { "name": "zzwrite_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzwrite_item_create",
+      "description": "Create an item.",
+      "method": "POST",
+      "effect": "write",
+      "args": { "title": { "type": "string", "min": 1 } },
+      "path": "/v1/items"
+    },
+    {
+      "name": "zzwrite_item_delete",
+      "description": "Delete an item by id.",
+      "method": "DELETE",
+      "effect": "delete",
+      "args": { "itemId": { "type": "string", "min": 1 } },
+      "path": "/v1/items/${arg.itemId|enc}"
+    }
+  ]
+}
