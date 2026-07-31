@@ -59,7 +59,9 @@ None reads `expires_in`. All cache for the process lifetime.
 
 The `*-mapping.ts` half is bespoke — it maps a service's API response shape into the local index, and no connector spec contains that information.
 
-93 syncables are registered in a single file, `platform/assemble-sync-registrations.ts`, with a parallel id list in `connectors/gateway-syncable-ids.ts`.
+93 syncables are registered in a single file, `platform/assemble-sync-registrations.ts`, and each API-backed connector also needs an id in `connectors/connector-catalog.ts` (`CONNECTOR_SERVICE_IDS`, alongside a `CONNECTOR_SYNC_INTERVAL_MS` entry that `tsc` enforces stays in step).
+
+`connectors/gateway-syncable-ids.ts` is **not** that list, despite the similar name: it holds four ids — `blame`, `filesystem`, `obsidian`, `openapi` — for local filesystem-backed syncables that have no catalog entry at all.
 
 ### 1.6 Two latent defects found while measuring
 
@@ -236,7 +238,9 @@ Opt-in via `--gateway-wiring <nimbus-root>`; never part of normal generation. St
 - `connectors/<name>-sync.ts` — the formulaic `createXSyncable()` draining one list tool.
 - `connectors/<name>-mapping.ts` — **a stub that throws**, with the expected signature and a comment naming what must be supplied. The mapping depends on the service's API response shape, which no spec contains. A plausible-looking guess would be worse than nothing.
 
-**Not emitted (edits to existing files):** `platform/assemble-sync-registrations.ts` and `connectors/gateway-syncable-ids.ts`. The generator prints the exact lines to paste. Patching a 93-entry file it does not own, in another repository under another licence, risks silent corruption of someone else's source; a two-line paste is a worse UX and a much better trade.
+**Not emitted (edits to existing files):** `platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The generator prints the exact lines to paste.
+
+An earlier draft of this spec named `connectors/gateway-syncable-ids.ts` as the second file. That was wrong, and Task 10 caught it: that file holds exactly four ids — `blame`, `filesystem`, `obsidian`, `openapi` — for **local, filesystem-backed** syncables with no catalog entry, and is never consulted for an API-backed connector. Its own header says so. The file a generated connector actually needs an entry in is `connector-catalog.ts` (`CONNECTOR_SERVICE_IDS`, plus the mapped-type `CONNECTOR_SYNC_INTERVAL_MS` that `tsc` enforces stays in step with it). Patching a 93-entry file it does not own, in another repository under another licence, risks silent corruption of someone else's source; a two-line paste is a worse UX and a much better trade.
 
 The licensing boundary holds: output is written into a path the user supplies, and no monorepo source enters this MIT repository.
 
