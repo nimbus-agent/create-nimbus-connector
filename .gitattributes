@@ -1,0 +1,8 @@
+# Normalise line endings in the repository to LF.
+#
+# biome.json sets lineEnding: "lf", so with core.autocrlf=true on Windows a
+# plain git checkout produces a CRLF working tree that iome check then
+# reports as ~50 format errors. Linux CI checks out LF, so the gate passes
+# there and fails only locally — which makes the local gate untrustworthy
+# rather than merely noisy.
+* text=auto eol=lf
