@@ -22,7 +22,17 @@ import { run } from "../src/golden/run.ts";
 import { parseSdkArgs, resolveSdkRoot } from "../src/golden/sdk-root.ts";
 import { parseSpec } from "../src/spec.ts";
 
-const NAME = "zzstandalone";
+/**
+ * Both emission styles, because they import the kit differently and only one of them was
+ * ever proven against a real SDK.
+ *
+ * rest-kit imports `makeRestToolRegistrar`; hand-rolled imports `mcpJsonResult as
+ * jsonResult` and builds its own fetch helper. A kit export that the hand-rolled branch
+ * needs and the rest-kit branch does not would have typechecked here and failed for a
+ * user — every generated file is emitted from the same code path, so "one style works"
+ * says nothing about the other.
+ */
+const FIXTURES = ["zzstandalone", "zzstandalonehand"] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const { registry, flag } = parseSdkArgs(process.argv.slice(2));
 
@@ -73,118 +83,141 @@ if (sdkPkg !== undefined && !existsSync(join(sdkPkg, "dist", "connector-kit", "i
   );
 }
 
-// realpathSync normalises a Windows short (8.3) path such as C:\Users\ASAFG~1\... to its
-// long form. It does not differ on every machine — it did not on the one this plan was
-// written on — but a mismatch between the path we write to and the path tooling resolves
-// shows up as confusing module-resolution failures, and one call removes the class.
-const outDir = realpathSync(mkdtempSync(join(tmpdir(), "cnc-standalone-")));
-const checks: { name: string; ok: boolean; output: string }[] = [];
+type Check = { name: string; ok: boolean; output: string };
 
-try {
-  await initFormatter();
-  if (!formatterAvailable()) {
-    throw new Error(`@biomejs/biome is required for this check. ${formatterUnavailableReason()}`);
+/** Generate, install, build and drive one fixture. Its temp tree is removed either way. */
+async function runFixture(NAME: string): Promise<Check[]> {
+  // realpathSync normalises a Windows short (8.3) path such as C:\Users\ASAFG~1\... to its
+  // long form. It does not differ on every machine — it did not on the one this plan was
+  // written on — but a mismatch between the path we write to and the path tooling resolves
+  // shows up as confusing module-resolution failures, and one call removes the class.
+  const outDir = realpathSync(mkdtempSync(join(tmpdir(), "cnc-standalone-")));
+  const checks: Check[] = [];
+
+  try {
+    await initFormatter();
+    if (!formatterAvailable()) {
+      throw new Error(`@biomejs/biome is required for this check. ${formatterUnavailableReason()}`);
+    }
+
+    const spec = parseSpec(
+      JSON.parse(await Bun.file(join(scriptDir, "..", "fixtures", `${NAME}.spec.json`)).text()),
+    );
+    await writeFiles(formatAll(generate(spec, { target: "standalone" })), outDir);
+
+    const pkgPath = join(outDir, "package.json");
+    const declaredSdkDep = JSON.parse(readFileSync(pkgPath, "utf8")).dependencies[
+      "@nimbus-dev/sdk"
+    ];
+
+    if (sdkPkg === undefined) {
+      // --registry: install exactly what the generator emitted. No rewrite, so a failure
+      // here is a real consumer's failure.
+      console.log(`  ${NAME}: installing @nimbus-dev/sdk ${declaredSdkDep} as emitted`);
+      checks.push({ name: "bun install", ...run(["bun", "install"], outDir) });
+    } else {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
+      writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
+
+      // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
+      // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
+      checks.push({ name: "bun install", ...run(["bun", "install", "--force"], outDir) });
+    }
+
+    // Prove the built kit actually landed. In local mode this catches a stale --force; in
+    // registry mode it is the check that catches `dist` missing from the published tarball's
+    // `files` array, which nothing else in this project can see.
+    const installedKit = join(
+      outDir,
+      "node_modules",
+      "@nimbus-dev",
+      "sdk",
+      "dist",
+      "connector-kit",
+      "index.js",
+    );
+    checks.push({
+      name: "connector-kit present in node_modules",
+      ok: existsSync(installedKit),
+      output: existsSync(installedKit)
+        ? installedKit
+        : `${installedKit} is missing — the SDK installed without the connector-kit build output`,
+    });
+
+    checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
+
+    // Run the generated package's OWN scripts, not equivalents. Both were unrunnable in a
+    // standalone package until the emitted devDependencies and biome.json landed, and this
+    // harness did not notice: it resolves them through node_modules, exactly as a consumer
+    // does. `bun run lint` additionally re-checks the emitted formatting and import order
+    // against the emitted biome.json, so a drift between the two fails here.
+    checks.push(
+      { name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) },
+      { name: "bun run lint", ...run(["bun", "run", "lint"], outDir) },
+    );
+
+    // Scoped to src/ specifically, not the whole package: the generated test/sandbox.test.ts
+    // legitimately contains "../../" (it resolves from test/ up to the package root), so
+    // scanning outDir as a whole would flag correct code. src/ is where an escaping relative
+    // import would actually matter.
+    const escaping = findEscapingImports(join(outDir, "src"));
+    checks.push({
+      name: "no relative import escapes the package",
+      ok: escaping.trim() === "",
+      output: escaping,
+    });
+
+    const expectedTools = spec.tools.map((t) => t.name);
+
+    // src/server.ts is what `bun run dev` runs — worth proving on its own, independent of
+    // the bundler.
+    checks.push({
+      name: "tools/list over stdio (src)",
+      ...(await toolsListCheck(outDir, "src/server.ts", expectedTools)),
+    });
+
+    // nimbus.extension.json declares entrypoint: "dist/server.js", which is what the Nimbus
+    // Gateway actually launches. Nothing else in this project builds or runs that artifact,
+    // so prove `bun run build` produces it before trusting the source-level checks above.
+    checks.push({ name: "bun run build", ...run(["bun", "run", "build"], outDir) });
+    const builtServer = join(outDir, "dist", "server.js");
+    checks.push({
+      name: "dist/server.js exists after build",
+      ok: existsSync(builtServer),
+      output: existsSync(builtServer)
+        ? builtServer
+        : `${builtServer} is missing — \`bun run build\` did not produce the entrypoint the Gateway launches`,
+    });
+
+    // The build check above only proves the artifact exists, not that it runs. A bundler
+    // can externalize or strip an import in a way that leaves every source-level check
+    // green while dist/server.js is broken — so drive the actual Gateway-launched file
+    // over stdio too, not just the unbundled source.
+    checks.push({
+      name: "tools/list over stdio (dist/server.js)",
+      ...(await toolsListCheck(outDir, "dist/server.js", expectedTools)),
+    });
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
   }
 
-  const spec = parseSpec(
-    JSON.parse(await Bun.file(join(scriptDir, "..", "fixtures", `${NAME}.spec.json`)).text()),
-  );
-  await writeFiles(formatAll(generate(spec, { target: "standalone" })), outDir);
+  return checks;
+}
 
-  const pkgPath = join(outDir, "package.json");
-  const declaredSdkDep = JSON.parse(readFileSync(pkgPath, "utf8")).dependencies["@nimbus-dev/sdk"];
+console.log(
+  sdkPkg === undefined
+    ? "Mode:        registry (@nimbus-dev/sdk resolved from npm, generated dependency unmodified)"
+    : `Mode:        local checkout (${sdkPkg})`,
+);
+console.log(`Fixtures:    ${FIXTURES.join(", ")}\n`);
 
-  if (sdkPkg === undefined) {
-    // --registry: install exactly what the generator emitted. No rewrite, so a failure
-    // here is a real consumer's failure.
-    console.log(`Mode:        registry (@nimbus-dev/sdk ${declaredSdkDep}, unmodified)\n`);
-    checks.push({ name: "bun install", ...run(["bun", "install"], outDir) });
-  } else {
-    console.log(`Mode:        local checkout (${sdkPkg})\n`);
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
-    writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
-
-    // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
-    // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
-    checks.push({ name: "bun install", ...run(["bun", "install", "--force"], outDir) });
-  }
-
-  // Prove the built kit actually landed. In local mode this catches a stale --force; in
-  // registry mode it is the check that catches `dist` missing from the published tarball's
-  // `files` array, which nothing else in this project can see.
-  const installedKit = join(
-    outDir,
-    "node_modules",
-    "@nimbus-dev",
-    "sdk",
-    "dist",
-    "connector-kit",
-    "index.js",
-  );
-  checks.push({
-    name: "connector-kit present in node_modules",
-    ok: existsSync(installedKit),
-    output: existsSync(installedKit)
-      ? installedKit
-      : `${installedKit} is missing — the SDK installed without the connector-kit build output`,
-  });
-
-  checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
-
-  // Run the generated package's OWN scripts, not equivalents. Both were unrunnable in a
-  // standalone package until the emitted devDependencies and biome.json landed, and this
-  // harness did not notice: it resolves them through node_modules, exactly as a consumer
-  // does. `bun run lint` additionally re-checks the emitted formatting and import order
-  // against the emitted biome.json, so a drift between the two fails here.
-  checks.push(
-    { name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) },
-    { name: "bun run lint", ...run(["bun", "run", "lint"], outDir) },
-  );
-
-  // Scoped to src/ specifically, not the whole package: the generated test/sandbox.test.ts
-  // legitimately contains "../../" (it resolves from test/ up to the package root), so
-  // scanning outDir as a whole would flag correct code. src/ is where an escaping relative
-  // import would actually matter.
-  const escaping = findEscapingImports(join(outDir, "src"));
-  checks.push({
-    name: "no relative import escapes the package",
-    ok: escaping.trim() === "",
-    output: escaping,
-  });
-
-  const expectedTools = spec.tools.map((t) => t.name);
-
-  // src/server.ts is what `bun run dev` runs — worth proving on its own, independent of
-  // the bundler.
-  checks.push({
-    name: "tools/list over stdio (src)",
-    ...(await toolsListCheck(outDir, "src/server.ts", expectedTools)),
-  });
-
-  // nimbus.extension.json declares entrypoint: "dist/server.js", which is what the Nimbus
-  // Gateway actually launches. Nothing else in this project builds or runs that artifact,
-  // so prove `bun run build` produces it before trusting the source-level checks above.
-  checks.push({ name: "bun run build", ...run(["bun", "run", "build"], outDir) });
-  const builtServer = join(outDir, "dist", "server.js");
-  checks.push({
-    name: "dist/server.js exists after build",
-    ok: existsSync(builtServer),
-    output: existsSync(builtServer)
-      ? builtServer
-      : `${builtServer} is missing — \`bun run build\` did not produce the entrypoint the Gateway launches`,
-  });
-
-  // The build check above only proves the artifact exists, not that it runs. A bundler
-  // can externalize or strip an import in a way that leaves every source-level check
-  // green while dist/server.js is broken — so drive the actual Gateway-launched file
-  // over stdio too, not just the unbundled source.
-  checks.push({
-    name: "tools/list over stdio (dist/server.js)",
-    ...(await toolsListCheck(outDir, "dist/server.js", expectedTools)),
-  });
-} finally {
-  rmSync(outDir, { recursive: true, force: true });
+const checks: Check[] = [];
+for (const fixture of FIXTURES) {
+  const result = await runFixture(fixture);
+  // Prefixed so a failure names the style that produced it. Both fixtures emit the same
+  // check list, so an unprefixed report would show two identically-named failures.
+  checks.push(...result.map((c) => ({ ...c, name: `[${fixture}] ${c.name}` })));
 }
 
 for (const c of checks) {
