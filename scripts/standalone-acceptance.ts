@@ -88,6 +88,15 @@ try {
     output: escaping.output,
   });
 
+  const expectedTools = spec.tools.map((t) => t.name);
+
+  // src/server.ts is what `bun run dev` runs — worth proving on its own, independent of
+  // the bundler.
+  checks.push({
+    name: "tools/list over stdio (src)",
+    ...(await toolsListCheck(outDir, "src/server.ts", expectedTools)),
+  });
+
   // nimbus.extension.json declares entrypoint: "dist/server.js", which is what the Nimbus
   // Gateway actually launches. Nothing else in this project builds or runs that artifact,
   // so prove `bun run build` produces it before trusting the source-level checks above.
@@ -101,7 +110,14 @@ try {
       : `${builtServer} is missing — \`bun run build\` did not produce the entrypoint the Gateway launches`,
   });
 
-  checks.push({ name: "tools/list over stdio", ...(await toolsListCheck(outDir)) });
+  // The build check above only proves the artifact exists, not that it runs. A bundler
+  // can externalize or strip an import in a way that leaves every source-level check
+  // green while dist/server.js is broken — so drive the actual Gateway-launched file
+  // over stdio too, not just the unbundled source.
+  checks.push({
+    name: "tools/list over stdio (dist/server.js)",
+    ...(await toolsListCheck(outDir, "dist/server.js", expectedTools)),
+  });
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }
@@ -114,8 +130,12 @@ for (const c of checks) {
 if (checks.some((c) => !c.ok)) process.exit(1);
 console.log("\nAll standalone acceptance checks passed.");
 
-async function toolsListCheck(cwd: string): Promise<{ ok: boolean; output: string }> {
-  const proc = Bun.spawn(["bun", "src/server.ts"], {
+async function toolsListCheck(
+  cwd: string,
+  entryPath: string,
+  expected: readonly string[],
+): Promise<{ ok: boolean; output: string }> {
+  const proc = Bun.spawn(["bun", entryPath], {
     cwd,
     stdin: "pipe",
     stdout: "pipe",
@@ -171,7 +191,6 @@ async function toolsListCheck(cwd: string): Promise<{ ok: boolean; output: strin
 
         if (msg.id === 2) {
           const names = (msg.result?.tools ?? []).map((t) => t.name);
-          const expected = ["zzstandalone_item_list", "zzstandalone_item_get"];
           const missing = expected.filter((n) => !names.includes(n));
           return {
             ok: missing.length === 0,
