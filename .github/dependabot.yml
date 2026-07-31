@@ -1,6 +1,11 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
+  # "bun", not "npm". This project's lockfile is bun.lock, and the npm ecosystem
+  # does not know it exists: it edits package.json alone, so every PR it opened
+  # died at `bun install --frozen-lockfile` with "lockfile had changes, but
+  # lockfile is frozen" — before any dependency was even evaluated. Dependabot
+  # has supported Bun since v1.1.39; this repo runs 1.3.14.
+  - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "weekly"
