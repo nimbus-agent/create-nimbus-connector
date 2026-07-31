@@ -67,6 +67,9 @@ const manifest = readJson<Record<string, string>>(".release-please-manifest.json
 const config = readJson<ReleasePleaseConfig>("release-please-config.json");
 const release = Bun.YAML.parse(read(".github/workflows/release.yml")) as Workflow;
 const ci = Bun.YAML.parse(read(".github/workflows/ci.yml")) as Workflow;
+const dependabot = Bun.YAML.parse(
+  read(".github/workflows/dependabot-auto-merge.yml"),
+) as Workflow & { on?: Record<string, unknown> };
 
 /** The manifest key for a single-package repo: release-please's root path. */
 const ROOT = ".";
@@ -261,5 +264,31 @@ describe("provenance metadata", () => {
   it("the published package name is the one the verifier checks", () => {
     const step = releaseSteps("publish").find((s) => s.uses?.includes("verify-npm-provenance"));
     expect(step?.with?.package).toBe(pkg.name);
+  });
+});
+
+describe("dependabot auto-merge workflow", () => {
+  // `pull_request_target` runs with the BASE repository's permissions and secrets.
+  // Combined with checking out the pull request's code, that is the canonical GitHub
+  // Actions privilege-escalation shape: untrusted code executing with write access to
+  // the repository it is proposing changes to.
+  //
+  // This workflow is safe *because* it never checks anything out — it reads metadata
+  // and calls the API. That is a property of the file, not of anyone's intention, so
+  // it is asserted here: a future edit that adds a checkout step fails this test
+  // rather than shipping quietly.
+  it("never checks out code, because it runs as pull_request_target", () => {
+    const triggers = Object.keys(dependabot.on ?? {});
+    expect(triggers).toContain("pull_request_target");
+
+    const steps = Object.values(dependabot.jobs).flatMap((j) => j.steps ?? []);
+    expect(steps.length).toBeGreaterThan(0); // not vacuous: there are steps to inspect
+    expect(steps.filter((s) => s.uses?.startsWith("actions/checkout"))).toHaveLength(0);
+  });
+
+  it("grants nothing workflow-wide", () => {
+    // Job-scoped permissions only, so the metadata step cannot write anything.
+    expect(dependabot.env === undefined || Object.keys(dependabot.env).length === 0).toBe(true);
+    expect(Object.keys(dependabot.jobs)).toHaveLength(1);
   });
 });

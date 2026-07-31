@@ -1,0 +1,67 @@
+name: Dependabot auto-merge
+
+# `pull_request_target`, not `pull_request`: Dependabot's PRs run with a read-only
+# token and no access to secrets, so a `pull_request` job cannot enable auto-merge
+# on its own PR. `pull_request_target` runs the workflow definition from the BASE
+# branch with the base repository's permissions instead.
+#
+# That trigger is dangerous when combined with checking out the PR's code, because
+# untrusted code would then run with those elevated permissions. This workflow
+# never checks anything out. It reads metadata and calls the API — nothing from the
+# pull request is executed. Keep it that way.
+on:
+  pull_request_target:
+
+permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Belt and braces: the actor check gates the job, and fetch-metadata below
+    # fails on a non-Dependabot PR anyway. A workflow that can enable auto-merge
+    # should not rely on a single condition.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Patch and minor only. A major bump is exactly the case that needs a human:
+      # Dependabot's first PR here proposed TypeScript 5.9 -> 7.0, which happened to
+      # typecheck cleanly but could as easily not have. Auto-merging majors would
+      # make that a coin toss run weekly.
+      #
+      # This does NOT bypass any gate. Auto-merge waits for every required status
+      # check — check, cla, and Analyze (javascript-typescript) — and for the branch
+      # to be up to date, because the ruleset sets a strict policy. It only removes
+      # the final click.
+      - name: Enable auto-merge for patch and minor updates
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      - name: Explain why a major update was left alone
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        env:
+          UPDATE: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          echo "::notice::Major update to ${UPDATE} left for manual review — auto-merge covers patch and minor only."
