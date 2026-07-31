@@ -113,6 +113,22 @@ describe("parseCliArgs", () => {
     it("rejects --gateway-wiring with no following value", () => {
       expect(() => parseCliArgs(["acme", "--gateway-wiring"])).toThrow(/--gateway-wiring/);
     });
+
+    // Final fix wave, MINOR 2. The README calls this flag monorepo-target only, and every
+    // other conflict in this CLI already errors; this pairing was the one silently accepted.
+    it("rejects --gateway-wiring with --standalone rather than accepting it silently", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--gateway-wiring", "C:/x"])).toThrow(
+        /monorepo target only/,
+      );
+      // Order-independent: the check runs after the whole argv is parsed.
+      expect(() => parseCliArgs(["acme", "--gateway-wiring", "C:/x", "--standalone"])).toThrow(
+        /monorepo target only/,
+      );
+    });
+
+    it("still accepts --gateway-wiring on its own", () => {
+      expect(() => parseCliArgs(["acme", "--gateway-wiring", "C:/x"])).not.toThrow();
+    });
   });
 
   describe("--force", () => {

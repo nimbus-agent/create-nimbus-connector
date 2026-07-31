@@ -77,6 +77,19 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   if (opts.force && opts.gatewayWiring === undefined) {
     throw new Error("--force only applies to --gateway-wiring output. Add it, or drop --force.");
   }
+  // --gateway-wiring is monorepo-target only, as the README says, and it was the one flag
+  // conflict in this CLI that was silently accepted instead. It is not merely ineffective
+  // under --standalone: it would still write two files into the Nimbus checkout, importing
+  // "../sync/types.ts" and registering a Syncable, for a connector deliberately generated to
+  // live outside that repository.
+  if (opts.gatewayWiring !== undefined && opts.standalone) {
+    throw new Error(
+      "--gateway-wiring applies to the monorepo target only, and was not ignored: it writes " +
+        "<name>-sync.ts and <name>-mapping.ts into the Nimbus Gateway, which a --standalone " +
+        "connector does not live in and is not registered with. Drop --standalone, or drop " +
+        "--gateway-wiring.",
+    );
+  }
   return opts;
 }
 

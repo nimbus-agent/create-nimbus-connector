@@ -83,7 +83,7 @@ This CLI is not published to npm yet, so `bunx create-nimbus-connector <name>` d
 - `--dry-run` — don't write anything; print the file tree that would be created (path + byte size per file).
 - `--out-dir <path>` — write to a directory other than the default.
 - `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
-- `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit two Gateway-side scaffold files into `<nimbus-root>/packages/gateway/src/connectors/`. See "Gateway wiring" below. Off by default; normal generation is unaffected by its absence.
+- `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit two Gateway-side scaffold files into `<nimbus-root>/packages/gateway/src/connectors/`. See "Gateway wiring" below. Off by default; normal generation is unaffected by its absence. Passing it with `--standalone` is an **error**, not a silent no-op: a standalone connector does not live in the Nimbus repo and is not registered with its Gateway.
 - `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts` in the target directory. An **error** when passed without `--gateway-wiring`. Without `--force`, `--gateway-wiring` refuses to write over a file it did not create — including a real, hand-authored sync file already in the monorepo.
 
 ### Licensing of generated connectors

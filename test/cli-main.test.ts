@@ -242,6 +242,18 @@ describe("bun src/cli.ts (the real binary)", () => {
     });
   });
 
+  it("rejects --standalone with --gateway-wiring, writing nothing anywhere", () => {
+    withTempDir((dir) => {
+      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const { exitCode, output } = runCli(["--standalone", "--gateway-wiring", nimbusRoot], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("monorepo target only");
+      // Neither the connector package nor anything inside the Nimbus root.
+      expect(existsSync(nimbusRoot)).toBe(false);
+      expect(existsSync(join(dir, CONNECTOR))).toBe(false);
+    });
+  });
+
   it("rejects --force without --gateway-wiring, writing nothing", () => {
     withTempDir((dir) => {
       const { exitCode, output } = runCli(["--force"], dir);
