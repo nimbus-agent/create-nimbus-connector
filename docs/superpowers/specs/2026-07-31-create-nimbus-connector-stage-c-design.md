@@ -55,7 +55,14 @@ None reads `expires_in`. All cache for the process lifetime.
 
 ### 1.5 Gateway wiring lives in the monorepo, and half of it is not generatable
 
-`packages/gateway/src/connectors/` holds 98 `*-sync.ts` files totalling 17,636 lines. The simplest are ~42 lines and follow one shape: `createXSyncable()` returning a `Syncable` whose `sync()` drains a single list tool via `listConnectorItems` and upserts each item through a per-connector `mapXToItem`.
+`packages/gateway/src/connectors/` holds 98 `*-sync.ts` files totalling 17,636 lines. The simplest are ~42 lines: `createXSyncable()` returning a `Syncable` whose `sync()` drains a single list tool via `listConnectorItems` and upserts each item through a per-connector `mapXToItem`.
+
+**Correction, from Task 10's review.** An earlier draft called that "one shape" and treated it as formulaic. It is not: the `listConnectorItems`-draining assembly appears in **exactly two** of the ~98 files (`monte-carlo-sync.ts`, `bigeye-sync.ts`). This spec's original claim came from sampling the shortest files and generalising. The four connectors this project uses as golden fixtures — `newrelic`, `datadog`, `grafana`, `sentry` — are hand-authored with a different structure entirely: direct `fetch`, `readConnectorSecret`, cursor pagination, and an options-object factory.
+
+Two consequences, both applied in §6:
+
+- Emitting a *working* sync implementation would reproduce two specific AGPL files nearly verbatim, which an MIT repository must not do.
+- It would also imply a shape that fits 2 of 98 connectors, which is worse than emitting nothing where the answer is unknown.
 
 The `*-mapping.ts` half is bespoke — it maps a service's API response shape into the local index, and no connector spec contains that information.
 
@@ -234,8 +241,9 @@ Runtime roughly doubles, to ~40s. That is the cost of covering both styles on bo
 
 Opt-in via `--gateway-wiring <nimbus-root>`; never part of normal generation. Stage B's premise is that a generated connector needs no Nimbus checkout.
 
-**Emitted (new files):**
-- `connectors/<name>-sync.ts` — the formulaic `createXSyncable()` draining one list tool.
+**Emitted (new files), both skeletons rather than implementations:**
+- `connectors/<name>-sync.ts` — the `createXSyncable(): Syncable` interface, with `serviceId`, `defaultIntervalMs` and a `sync()` whose **body throws** and documents what must be written. The interface is dictated by the Gateway's own `Syncable` type; the body is deliberately not supplied, because supplying one would reproduce AGPL source and assert a shape that fits 2 of 98 connectors (§1.5).
+- Writing refuses if either target file already exists, unless `--force` is passed. `newrelic-sync.ts` and `datadog-sync.ts` are real hand-authored files in the monorepo today, so an unguarded write could destroy one — the same class of silent damage this feature cites as its reason not to auto-edit the registration files.
 - `connectors/<name>-mapping.ts` — **a stub that throws**, with the expected signature and a comment naming what must be supplied. The mapping depends on the service's API response shape, which no spec contains. A plausible-looking guess would be worse than nothing.
 
 **Not emitted (edits to existing files):** `platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The generator prints the exact lines to paste.
