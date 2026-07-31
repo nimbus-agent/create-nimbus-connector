@@ -46,12 +46,46 @@ describe("emitWiring", () => {
     expect(sync!.content).not.toContain("newrelic_alert_violations");
   });
 
-  it("the sync file drains the list tool via listConnectorItems and upserts through the mapping fn", () => {
+  it("the sync body is a skeleton, not a working implementation — no corpus control-flow vocabulary", () => {
     const [sync] = emitWiring(spec);
-    expect(sync!.content).toContain("import { listConnectorItems } from ");
-    expect(sync!.content).toContain("listConnectorItems(ctx, SERVICE_ID, LIST_TOOL_ID)");
-    expect(sync!.content).toContain("mapNewrelicItemToItem(rawItem, { syncedAt: now })");
-    expect(sync!.content).toContain("upsertIndexedItemForSync(ctx, mapped)");
+    // Fix round 1, CRITICAL 1: the sync body used to be a find/replace over monte-carlo-sync.ts
+    // / bigeye-sync.ts's exact control flow. None of that vocabulary may appear again.
+    expect(sync!.content).not.toContain("listConnectorItems");
+    expect(sync!.content).not.toContain("upsertIndexedItemForSync");
+    expect(sync!.content).not.toContain("performance.now()");
+    expect(sync!.content).not.toContain("for (const");
+    expect(sync!.content).not.toContain("let upserted");
+    // It still says, in prose, what an implementer must do.
+    expect(sync!.content).toContain("TODO");
+    expect(sync!.content).toMatch(/drain/i);
+    expect(sync!.content).toMatch(/map each raw item/i);
+    expect(sync!.content).toMatch(/upsert/i);
+  });
+
+  it("createXSyncable()'s sync() throws when called — an unfilled skeleton cannot look like a working syncable", async () => {
+    const [sync] = emitWiring(spec);
+    // Same model as the mapping-stub test below: write the emitted source to a real file and
+    // import it, so this exercises the REAL generated code path. sync.ts's only import is
+    // `import type { ... } from "../sync/types.ts"`, which is erased at runtime, so it runs
+    // standalone outside Nimbus exactly like mapping.ts does.
+    const dir = tmp.make("cnc-wiring-");
+    const file = join(dir, "newrelic-sync.ts");
+    writeFileSync(file, sync!.content, "utf8");
+    const mod = (await import(pathToFileURL(file).href)) as {
+      createNewrelicSyncable: () => {
+        serviceId: string;
+        defaultIntervalMs: number;
+        initialSyncDepthDays: number;
+        sync: (ctx: unknown, cursor: string | null) => unknown;
+      };
+    };
+    const syncable = mod.createNewrelicSyncable();
+    expect(syncable.serviceId).toBe("newrelic");
+    expect(syncable.defaultIntervalMs).toBe(300000);
+    expect(syncable.initialSyncDepthDays).toBe(30);
+    expect(() => syncable.sync(undefined, null)).toThrow(
+      /createNewrelicSyncable\(\)\.sync is unimplemented/,
+    );
   });
 
   it("the mapping file is a stub naming what must be implemented", () => {
@@ -105,12 +139,16 @@ describe("emitWiring", () => {
 });
 
 describe("renderWiringInstructions", () => {
-  it("prints the exact import and register lines for assemble-sync-registrations.ts", () => {
+  it("prints the exact import line and BOTH registration shapes for assemble-sync-registrations.ts", () => {
     const text = renderWiringInstructions(spec);
     expect(text).toContain(
       'import { createNewrelicSyncable } from "../connectors/newrelic-sync.ts";',
     );
+    // Fix round 1, IMPORTANT: newrelic/datadog/grafana/sentry — this project's own four golden
+    // fixtures — all register with an options object in the real file; only montecarlo/bigeye
+    // use zero-arg. Both shapes must be shown rather than asserting the minority one.
     expect(text).toContain("syncScheduler.register(createNewrelicSyncable());");
+    expect(text).toContain("createNewrelicSyncable({");
     expect(text).toContain("platform/assemble-sync-registrations.ts");
   });
 

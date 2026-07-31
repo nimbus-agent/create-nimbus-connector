@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";
@@ -23,6 +24,11 @@ export type CliOptions = {
   standalone: boolean;
   /** --gateway-wiring <nimbus-root>: opt-in, off by default. See emitWiring's module doc. */
   gatewayWiring?: string;
+  /**
+   * Fix round 1, CRITICAL 2: --gateway-wiring refuses to overwrite an existing target file
+   * (a hand-authored real connector, or Gateway wiring already filled in) unless this is set.
+   */
+  force: boolean;
 };
 
 /** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
@@ -35,11 +41,12 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 }
 
 export function parseCliArgs(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false, standalone: false };
+  const opts: CliOptions = { dryRun: false, standalone: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--standalone") opts.standalone = true;
+    else if (a === "--force") opts.force = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
@@ -65,6 +72,11 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
         `--license.`,
     );
   }
+  // Same rationale as --license above: a flag with no effect is a worse outcome silently
+  // ignored than loudly rejected.
+  if (opts.force && opts.gatewayWiring === undefined) {
+    throw new Error("--force only applies to --gateway-wiring output. Add it, or drop --force.");
+  }
   return opts;
 }
 
@@ -72,6 +84,36 @@ export function renderTree(files: readonly GeneratedFile[]): string {
   return files
     .map((f) => `  ${displayPath(f.path).padEnd(28)} ${Buffer.byteLength(f.content)} bytes`)
     .join("\n");
+}
+
+/**
+ * Fix round 1, CRITICAL 2: writeFiles() overwrites unconditionally, and re-running
+ * --gateway-wiring reused it — silently reverting a hand-filled mapping back to a throwing
+ * stub, or worse, destroying a real hand-authored connector: Nimbus already ships
+ * newrelic-sync.ts and datadog-sync.ts, with a completely different shape, so
+ * --gateway-wiring on a connector named "newrelic" would have overwritten one. That is
+ * exactly the "silent bad patch to a file this project does not own" risk that is this
+ * feature's own reason for refusing to edit the registration files — writeFiles() must not
+ * reintroduce it for the two files it DOES write. Checked, not caught: existsSync is
+ * synchronous, so this runs to completion (and can throw) before any write begins.
+ */
+export function assertWiringTargetsAbsent(
+  dir: string,
+  files: readonly GeneratedFile[],
+  force: boolean,
+): void {
+  if (force) return;
+  for (const f of files) {
+    const target = join(dir, ...f.path);
+    if (existsSync(target)) {
+      throw new Error(
+        `${target} already exists. --gateway-wiring refuses to overwrite a file it did not ` +
+          "create — it may be a hand-authored real connector, or Gateway wiring already " +
+          "filled in. Pass --force to overwrite it anyway, or remove --gateway-wiring to skip " +
+          "this output.",
+      );
+    }
+  }
 }
 
 /** Exported for scripts/acceptance.ts (Task 18) — must stay side-effect-free besides disk I/O. */
@@ -119,6 +161,10 @@ export async function main(argv: readonly string[]): Promise<void> {
   // main package, before either is written, so a spec that cannot be wired fails loudly
   // rather than leaving the connector package written and its wiring silently skipped.
   const wiringFiles = gatewayWiringDir === undefined ? undefined : formatAll(emitWiring(spec));
+  // Checked before dry-run too, so a preview accurately reports what a real run would do.
+  if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
+    assertWiringTargetsAbsent(gatewayWiringDir, wiringFiles, opts.force);
+  }
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./support/tmp.ts";
 
@@ -200,6 +200,54 @@ describe("bun src/cli.ts (the real binary)", () => {
       expect(exitCode).toBe(0);
       expect(output).not.toContain("Gateway wiring");
       expect(output).not.toContain("assemble-sync-registrations.ts");
+    });
+  });
+
+  it("--gateway-wiring refuses to overwrite an existing target file, and writes nothing else", () => {
+    withTempDir((dir) => {
+      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const connectorsDir = join(nimbusRoot, "packages", "gateway", "src", "connectors");
+      mkdirSync(connectorsDir, { recursive: true });
+      // Stand in for a hand-authored real connector (or previously filled-in wiring) sitting
+      // where this run would write — exactly the newrelic-sync.ts / datadog-sync.ts collision
+      // CRITICAL 2 named.
+      const preexisting = join(connectorsDir, "zzstandalone-sync.ts");
+      writeFileSync(preexisting, "// hand-authored, do not touch\n", "utf8");
+
+      const { exitCode, output } = runCli(["--gateway-wiring", nimbusRoot], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("zzstandalone-sync.ts");
+      expect(output).toContain("already exists");
+      expect(output).toContain("--force");
+      // Untouched — refusal happens before any write, including the connector package itself.
+      expect(readFileSync(preexisting, "utf8")).toBe("// hand-authored, do not touch\n");
+      expect(existsSync(join(connectorsDir, "zzstandalone-mapping.ts"))).toBe(false);
+      expect(existsSync(join(dir, "packages", "mcp-connectors", CONNECTOR))).toBe(false);
+    });
+  });
+
+  it("--gateway-wiring --force overwrites an existing target file", () => {
+    withTempDir((dir) => {
+      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const connectorsDir = join(nimbusRoot, "packages", "gateway", "src", "connectors");
+      mkdirSync(connectorsDir, { recursive: true });
+      const preexisting = join(connectorsDir, "zzstandalone-sync.ts");
+      writeFileSync(preexisting, "// stale content\n", "utf8");
+
+      const { exitCode } = runCli(["--gateway-wiring", nimbusRoot, "--force"], dir);
+      expect(exitCode).toBe(0);
+      const rewritten = readFileSync(preexisting, "utf8");
+      expect(rewritten).not.toBe("// stale content\n");
+      expect(rewritten).toContain("export function createZzstandaloneSyncable(): Syncable");
+    });
+  });
+
+  it("rejects --force without --gateway-wiring, writing nothing", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--force"], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("--gateway-wiring");
+      expect(existsSync(join(dir, "packages"))).toBe(false);
     });
   });
 

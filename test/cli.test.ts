@@ -6,7 +6,12 @@ import { registrarName } from "../src/spec.ts";
 
 describe("parseCliArgs", () => {
   it("reads a positional name", () => {
-    expect(parseCliArgs(["slack"])).toEqual({ name: "slack", dryRun: false, standalone: false });
+    expect(parseCliArgs(["slack"])).toEqual({
+      name: "slack",
+      dryRun: false,
+      standalone: false,
+      force: false,
+    });
   });
 
   it("reads --spec and --dry-run", () => {
@@ -14,6 +19,7 @@ describe("parseCliArgs", () => {
       specPath: "fixtures/sentry.spec.json",
       dryRun: true,
       standalone: false,
+      force: false,
     });
   });
 
@@ -23,6 +29,7 @@ describe("parseCliArgs", () => {
       outDir: "/tmp/x",
       dryRun: false,
       standalone: false,
+      force: false,
     });
   });
 
@@ -87,6 +94,7 @@ describe("parseCliArgs", () => {
         outDir: "/tmp/x",
         standalone: true,
         dryRun: false,
+        force: false,
       });
     });
   });
@@ -104,6 +112,22 @@ describe("parseCliArgs", () => {
 
     it("rejects --gateway-wiring with no following value", () => {
       expect(() => parseCliArgs(["acme", "--gateway-wiring"])).toThrow(/--gateway-wiring/);
+    });
+  });
+
+  describe("--force", () => {
+    it("defaults to false", () => {
+      expect(parseCliArgs(["acme"]).force).toBe(false);
+    });
+
+    it("is set by the flag when combined with --gateway-wiring", () => {
+      expect(parseCliArgs(["acme", "--gateway-wiring", "C:/gitrep/Nimbus", "--force"]).force).toBe(
+        true,
+      );
+    });
+
+    it("rejects --force without --gateway-wiring rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--force"])).toThrow(/--gateway-wiring/);
     });
   });
 });
