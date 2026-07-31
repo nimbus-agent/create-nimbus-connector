@@ -31,15 +31,26 @@ type Step = {
   uses?: string;
   run?: string;
   with?: Record<string, string>;
+  env?: Record<string, string>;
 };
 
 type Job = {
   if?: string;
   outputs?: Record<string, string>;
   steps?: Step[];
+  env?: Record<string, string>;
 };
 
-type Workflow = { jobs: Record<string, Job> };
+type Workflow = { jobs: Record<string, Job>; env?: Record<string, string> };
+
+/** Every environment variable name a workflow sets, at any of the three levels. */
+const envNames = (w: Workflow): string[] => [
+  ...Object.keys(w.env ?? {}),
+  ...Object.values(w.jobs).flatMap((job) => [
+    ...Object.keys(job.env ?? {}),
+    ...(job.steps ?? []).flatMap((step) => Object.keys(step.env ?? {})),
+  ]),
+];
 
 type PackageJson = {
   name: string;
@@ -203,6 +214,30 @@ describe("the release workflow", () => {
     const step = publishStep();
     expect(step?.run).toContain("--provenance");
     expect(step?.run).toContain("--access public");
+  });
+
+  it("never authenticates with a token", () => {
+    // release.yml authenticates solely through npm trusted publishing (GitHub OIDC).
+    // A NODE_AUTH_TOKEN here would be a *silent* fallback: if the OIDC binding were
+    // ever removed or misconfigured, publishing would keep working via the token and
+    // nothing would report that the guarantee had been lost. Failing closed is the
+    // entire value of the binding, so the absence of a token is a property worth
+    // asserting rather than a thing to remember.
+    //
+    // bootstrap-publish.yml deliberately DOES carry a token — it is the one-time
+    // publish that claims the name so the binding can exist at all. That file is
+    // temporary and is deleted once the trusted publisher is configured; this
+    // assertion is scoped to release.yml on purpose.
+    // Structural, not textual. release.yml *documents* its own absence of a token in a
+    // comment ("No NODE_AUTH_TOKEN: the trusted-publisher binding authenticates ..."),
+    // so a `toContain` on the file body matches the explanation and fails on a correct
+    // workflow. That is the same mention-vs-use trap `invokes()` above exists for, and
+    // the first version of this assertion fell into it.
+    // Proves the detector is not vacuous before trusting its negative: a broken
+    // envNames() returning [] would satisfy the assertion below while seeing nothing.
+    expect(envNames(release)).toContain("PUBLISHED_VERSION");
+
+    expect(envNames(release)).not.toContain("NODE_AUTH_TOKEN");
   });
 });
 
