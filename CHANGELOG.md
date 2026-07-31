@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.1...create-nimbus-connector-v0.2.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* address SonarCloud findings ([#18](https://github.com/nimbus-agent/create-nimbus-connector/issues/18)) ([4ddb372](https://github.com/nimbus-agent/create-nimbus-connector/commit/4ddb372012c7c255354b300bee31b696841c82d3))
+
 ## [0.2.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.0...create-nimbus-connector-v0.2.1) (2026-07-31)
 
 
