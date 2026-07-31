@@ -99,6 +99,14 @@ try {
 
   checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
 
+  // Run the generated package's OWN scripts, not equivalents. Both were unrunnable in a
+  // standalone package until the emitted devDependencies and biome.json landed, and this
+  // harness did not notice: it resolves them through node_modules, exactly as a consumer
+  // does. `bun run lint` additionally re-checks the emitted formatting and import order
+  // against the emitted biome.json, so a drift between the two fails here.
+  checks.push({ name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) });
+  checks.push({ name: "bun run lint", ...run(["bun", "run", "lint"], outDir) });
+
   const escaping = run(["grep", "-rn", "\\.\\./\\.\\.", "src"], outDir);
   checks.push({
     name: "no relative import escapes the package",
