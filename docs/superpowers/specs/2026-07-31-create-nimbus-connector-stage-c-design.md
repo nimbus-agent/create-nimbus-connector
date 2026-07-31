@@ -301,6 +301,8 @@ Step 6 is the only item whose value lies entirely outside this repository, and i
 - Changing what the Gateway *does* with `hitlRequired`. Stage C emits accurate metadata; making it enforce anything is a Gateway change, not a generator change (§1.1).
 - Fixing `nimbus scaffold extension`'s legacy `permissions` array (§1.6). Noted, not owned here.
 
+**Known asymmetry, deliberately left alone.** An *optional boolean with no default* renders `false` in the URL — the hoist maps `undefined → "false"` — but is **omitted** from the JSON body. So one argument, unset, reads as explicitly-false to the query string and as absent to the body. Both halves behaved this way before Stage C and neither was changed by it, so fixing it here would be an unreviewed behaviour change to the read path that the golden fixtures cannot see. It is the only URL/body disagreement left after §4.4's serialisation rules: a boolean's two renderings (string in the URL, real JSON boolean in the body) are intentional and correct, but its two *unset* renderings are not obviously either. Worth a follow-up that decides which one is right.
+
 ---
 
 ## 9. Acceptance results
