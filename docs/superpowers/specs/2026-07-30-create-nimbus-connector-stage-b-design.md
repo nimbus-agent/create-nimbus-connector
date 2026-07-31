@@ -181,7 +181,7 @@ Stated explicitly rather than as "mirror the base", since the base file is in an
 }
 ```
 
-Two deliberate differences from `tsconfig.base.json`. **`customConditions` is omitted**, so the SDK resolves to `dist` exactly as a real npm consumer does — the base sets `["bun"]` to get TS source, which a standalone package must not do. **`allowImportingTsExtensions` is omitted**, because no generated import carries a `.ts` extension once the relative `shared/*` imports are gone. `target` stays `ESNext` rather than a pinned year, matching the monorepo; deviating would be gratuitous.
+Two deliberate differences from `tsconfig.base.json`. **`customConditions` is omitted**, so **`tsc`'s own module resolution** resolves the SDK to `dist` exactly as a real npm consumer's typechecker does — the base sets `["bun"]` to get TS source, which a standalone package's *typecheck* must not do. This setting governs only how `tsc` resolves imports for typechecking; it says nothing about how `bun` resolves the same import at runtime, which is governed independently by the SDK's own package.json export conditions (see the Acceptance section's note on the `"bun"` condition). **`allowImportingTsExtensions` is omitted**, because no generated import carries a `.ts` extension once the relative `shared/*` imports are gone. `target` stays `ESNext` rather than a pinned year, matching the monorepo; deviating would be gratuitous.
 
 ### Biome becomes optional without breaking the synchronous contract
 
@@ -229,7 +229,7 @@ Stage A's bar was a byte diff against 94 real connectors. Stage B has no such gr
 1. Generate with `target: "standalone"` into a temp directory **outside** the monorepo.
 2. Install, resolving `@nimbus-dev/sdk` from the local checkout. Concretely: the acceptance script rewrites the generated `package.json`'s dependency to `"@nimbus-dev/sdk": "file:<sdk-root>/sdks/typescript"` before running `bun install`, and the SDK root resolves the same way the golden harness resolves the Nimbus root — an explicit flag, then an environment variable, then a sibling probe, failing loudly with the paths it tried rather than falling through. This sidesteps the chicken-and-egg, since the export does not exist on npm until the SDK ships. Once 1.11.0 is published the rewrite is dropped and the generated `^1.11.0` dependency is installed from the registry unmodified.
 
-   Because a `file:` dependency installs the SDK's *built* output, the acceptance script must build the SDK first (or fail with a clear message if `dist` is missing) — which is what makes step 3 genuinely exercise the `dist` resolution path a real consumer takes.
+   Because a `file:` dependency installs the SDK's *built* output, the acceptance script must build the SDK first (or fail with a clear message if `dist` is missing). This is what makes step 3's `bunx tsc --noEmit` genuinely resolve the kit's *types* from `dist/connector-kit/index.d.ts`, and what makes the `node_modules` check genuinely prove `dist/connector-kit/index.js` *exists* — both real `dist` coverage. It does **not** make step 5 exercise `dist` at runtime: step 5 spawns `bun`, and Bun applies the SDK's own `"bun"` export condition, which resolves `@nimbus-dev/sdk/connector-kit` (like every other entry point) to TypeScript source, not `dist`. The `dist` JS's runtime behavior — the path a Node consumer takes — is exercised by the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`, run under Node per `.github/workflows/ci.yml`), not by this script.
 3. `bunx tsc --noEmit` must pass.
 4. Assert **no relative import escapes the package**: no `../../` anywhere under `src/`.
 5. Spawn `bun src/server.ts`, complete the MCP `initialize` handshake, send `tools/list`, and assert the generated tool names come back.
@@ -251,10 +251,21 @@ Recorded 2026-07-31, on `stage-b-standalone`. **Caveat that applies to criteria 
 whole, stated once here rather than repeated per criterion:** `bun run standalone-acceptance`
 resolves `@nimbus-dev/sdk` from a **local checkout** (`C:\gitrep\nimbus-sdk`, branch
 `feat/connector-kit-export`, unreleased) via a `file:` dependency rewrite, not from the npm
-registry — SDK 1.11.0 does not exist on npm yet (that is Task 8). These results prove the
-`./connector-kit` export map and the generated package work against the SDK's **built
-`dist`**, exactly the resolution path a real npm consumer takes once 1.11.0 ships. They do
-**not** prove anything about a published artifact, because none exists yet.
+registry — SDK 1.11.0 does not exist on npm yet (that is Task 8). These results therefore say
+nothing about a published artifact, because none exists yet.
+
+**A second, narrower caveat, corrected 2026-07-31 after an initial overstatement:** "exercises
+`dist`" does not mean the same thing for every check below. `bunx tsc --noEmit` (criterion 1)
+genuinely resolves the kit's *types* from `dist/connector-kit/index.d.ts`, and the
+`node_modules` check genuinely proves `dist/connector-kit/index.js` *exists* — real `dist`
+coverage, for types and for install-time existence. But the `tools/list` runtime checks
+(criterion 3) spawn `bun`, and Bun applies the SDK's own `"bun"` export condition, which
+resolves every entry point — including `./connector-kit` — to TypeScript **source**, not
+`dist`. So this harness proves the kit runs correctly under Bun **from source**; it does not
+prove the built `dist` JS executes correctly at runtime. That half of the contract — the path
+a Node consumer takes — is covered by the SDK's own `node-smoke` CI job
+(`sdks/typescript/scripts/smoke-esm.mjs`, run under Node per `.github/workflows/ci.yml`), not
+by anything in this repository.
 
 **1. A connector generated into an empty directory outside the monorepo typechecks with no manual edits.**
 
@@ -269,7 +280,8 @@ PASS  connector-kit present in node_modules
 PASS  tsc --noEmit
 ```
 
-Met, subject to the caveat above.
+Met, subject to the local-checkout caveat above. The `dist` coverage here is genuine: `tsc`
+resolves the kit's types from `dist/connector-kit/index.d.ts`, per the narrower caveat above.
 
 **2. No relative import escapes the generated package.**
 
@@ -298,7 +310,10 @@ PASS  tools/list over stdio (dist/server.js)
 `toolsListCheck` in `scripts/standalone-acceptance.ts` spawns the server with no credential
 environment variables set; a successful `tools/list` response (matched by JSON-RPC `id`, not
 merely "the process didn't crash") proves the generated tool names come back without secrets
-present. Met, subject to the caveat above.
+present. Met, subject to the local-checkout caveat above — and, per the narrower caveat above,
+this proves the kit runs correctly under Bun **from source** (the `bun` export condition), not
+that the built `dist` JS executes correctly at runtime; that is exercised by the SDK's own
+`node-smoke` CI job, not this harness.
 
 **4. Stage A's four hand-rolled fixtures still report 6/6, and the full harness still exits 0.**
 
@@ -372,7 +387,7 @@ Nothing automatically checks a contract that spans three repositories, so each s
 
 | Before | Run | Proves |
 |---|---|---|
-| releasing SDK 1.11.0 | `bun run standalone-acceptance --sdk-root /c/gitrep/nimbus-sdk` from this repo, against the SDK branch | the export resolves, typechecks and runs from `dist` — catching a wrong export map or missing build output *before* a release that cannot be withdrawn |
+| releasing SDK 1.11.0 | `bun run standalone-acceptance --sdk-root /c/gitrep/nimbus-sdk` from this repo, against the SDK branch | the export resolves, typechecks against `dist`'s type declarations, and runs correctly under Bun from source — catching a wrong export map or missing build output *before* a release that cannot be withdrawn. (The built `dist` JS executing correctly at runtime is proven separately, by the SDK's own `node-smoke` CI job, not by this gate.) |
 | merging the Nimbus PR | `bun run diff:golden --nimbus-root /c/gitrep/Nimbus` against the modified monorepo | the re-export refactor did not change a single generated byte; all four hand-rolled fixtures still 6/6 |
 | publishing this CLI | both of the above, plus SDK 1.11.0 actually on the registry | a `bunx` user can install what the generated `package.json` asks for |
 
@@ -386,7 +401,7 @@ The first gate needs no new machinery: the acceptance script already resolves th
 |---|---|
 | Moving the kit makes 317 lines a versioned public API with compatibility obligations | Accepted deliberately, and the reason B2 was chosen over two copies. The SDK's `api:surface` guard makes any future change to that surface visible in review rather than silent. |
 | The Nimbus re-export changes behaviour subtly for 99 import sites | Re-exports name symbols explicitly, so each file's surface is unchanged. Stage A's byte-diff harness is the regression detector: run it against the modified monorepo before merging the Nimbus PR. |
-| Standalone consumers resolve the SDK to `dist`, which may lag `src` | The contract requires the kit to build to `dist`; the acceptance test installs from the local checkout and typechecks, which exercises exactly that resolution path. |
+| Standalone consumers resolve the SDK to `dist` for typechecking, which may lag `src` | The contract requires the kit to build to `dist`; the acceptance test installs from the local checkout and typechecks, which exercises exactly that *type*-resolution path. It does not exercise `dist`'s JS at runtime: connectors run under Bun, which applies the SDK's `"bun"` export condition and resolves to source instead. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job, not this repository's acceptance test. |
 | Optional Biome means two output shapes | Only the published CLI degrades. The harness and monorepo generation fail without Biome rather than silently producing unformatted output. Criterion 5 tests both paths. |
 | A released SDK export cannot easily be withdrawn | The three modules have been stable in the monorepo since at least the June 2026 dedup wave, and are dependency-free by design. |
 

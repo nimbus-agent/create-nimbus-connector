@@ -25,8 +25,17 @@ const sdkRoot = resolveSdkRoot({
 });
 const sdkPkg = join(sdkRoot, "sdks", "typescript");
 
-// A file: dependency installs BUILT output, which is what makes step 3 exercise
-// the same dist resolution a real npm consumer takes.
+// The SDK must be built before any of this runs: `bunx tsc --noEmit` below resolves the
+// kit's types from dist/connector-kit/index.d.ts, and the node_modules existence check
+// below needs dist/connector-kit/index.js on disk. That is genuine dist coverage for
+// types and for install-time existence — but NOT for runtime JS execution: the two
+// tools/list checks spawn `bun`, and Bun applies the SDK's "bun" export condition, which
+// points every entry point (including ./connector-kit) at TypeScript source
+// (src/connector-kit/index.ts). So both `bun src/server.ts` and `bun dist/server.js` run
+// the kit from source, not from the built dist JS. The dist JS runtime path a Node
+// consumer takes is exercised by the SDK's own node-smoke CI job
+// (sdks/typescript/scripts/smoke-esm.mjs, run under Node via .github/workflows/ci.yml),
+// not by this harness.
 if (!existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
   throw new Error(
     `${sdkPkg}/dist/connector-kit/index.js is missing — run \`bun run build\` in the SDK first. ` +
