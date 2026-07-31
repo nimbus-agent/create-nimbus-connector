@@ -55,9 +55,16 @@ function renderSync(spec: ConnectorSpec, listTool: ToolSpec): string {
   const svc = serviceId(spec);
   const mappingFn = `map${id}ItemToItem`;
   const defaultIntervalMs = spec.syncInterval * 1000;
-  const message = JSON.stringify(
-    `create${id}Syncable().sync is unimplemented — see the TODO comment in this function.`,
-  );
+  // Final fix wave, IMPORTANT 1: LIST_TOOL_ID used to be referenced only from the TODO
+  // comment below. Nimbus's tsconfig.base.json sets `noUnusedLocals: true` and its
+  // biome.json sets lint/correctness/noUnusedVariables to "error", so this file failed
+  // `bun run typecheck` and `bun run lint` in packages/gateway the moment it landed there —
+  // a comment is not a consumer. The thrown message now interpolates it, which is both a
+  // real reference and more useful than restating the tool name: an unfilled skeleton that
+  // throws should say which tool it was going to drain.
+  const message =
+    `\`create${id}Syncable().sync is unimplemented (it must drain \${LIST_TOOL_ID}) — see the ` +
+    "TODO comment in this function.`";
   return `import type { Syncable, SyncContext, SyncResult } from "../sync/types.ts";
 
 const SERVICE_ID = ${JSON.stringify(svc)};
@@ -77,7 +84,7 @@ export function create${id}Syncable(): Syncable {
       // TODO: implement this connector's sync. Roughly, in whatever shape this connector's
       // spawn/session mechanism requires (see an existing *-sync.ts in this directory for a
       // pattern matching this connector's kind — several exist, they are not interchangeable):
-      //   1. Drain LIST_TOOL_ID (${JSON.stringify(listTool.name)}).
+      //   1. Drain LIST_TOOL_ID.
       //   2. Map each raw item to a local index item with ${mappingFn} (also unimplemented,
       //      in ${spec.name}-mapping.ts), skipping any item that does not map.
       //   3. Upsert every mapped item into the local index.
