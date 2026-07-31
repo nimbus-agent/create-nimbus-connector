@@ -1,11 +1,14 @@
-import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, it } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseSdkArgs, resolveSdkRoot } from "../../src/golden/sdk-root.ts";
+import { tempDirs } from "../support/tmp.ts";
+
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 function fakeSdk(): string {
-  const root = mkdtempSync(join(tmpdir(), "nimbus-sdk-"));
+  const root = tmp.make("nimbus-sdk-");
   mkdirSync(join(root, "sdks", "typescript"), { recursive: true });
   writeFileSync(join(root, "sdks", "typescript", "package.json"), "");
   return root;
@@ -23,7 +26,7 @@ describe("resolveSdkRoot", () => {
   });
 
   it("rejects a path that exists but lacks the marker file", () => {
-    const empty = mkdtempSync(join(tmpdir(), "empty-"));
+    const empty = tmp.make("empty-");
     expect(() => resolveSdkRoot({ flag: empty, scriptDir: "/nowhere" })).toThrow(/marker/i);
   });
 
@@ -33,7 +36,7 @@ describe("resolveSdkRoot", () => {
     // find it, then prove an explicit bogus --sdk-root still fails loudly instead of
     // silently falling through to that valid sibling. Fully hermetic: no dependency on
     // this machine's actual checkout layout.
-    const workspace = mkdtempSync(join(tmpdir(), "workspace-"));
+    const workspace = tmp.make("workspace-");
     const validSibling = join(workspace, "nimbus-sdk");
     mkdirSync(join(validSibling, "sdks", "typescript"), { recursive: true });
     writeFileSync(join(validSibling, "sdks", "typescript", "package.json"), "");

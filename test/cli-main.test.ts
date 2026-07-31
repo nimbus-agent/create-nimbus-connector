@@ -1,7 +1,12 @@
-import { describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, it } from "bun:test";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tempDirs } from "./support/tmp.ts";
+
+// withTempDir already removes each directory in a finally; this is the backstop for a
+// directory that outlives it (a rmSync that lost a race with a still-open handle).
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 /**
  * End-to-end coverage for main() in src/cli.ts — specifically the two lines where
@@ -39,7 +44,7 @@ function runCli(args: readonly string[], cwd: string): { exitCode: number; outpu
 }
 
 function withTempDir<T>(fn: (dir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), "cnc-cli-"));
+  const dir = tmp.make("cnc-cli-");
   try {
     return fn(dir);
   } finally {

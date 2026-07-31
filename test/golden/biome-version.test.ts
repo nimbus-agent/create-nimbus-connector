@@ -1,11 +1,15 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkBiomeVersion } from "../../src/golden/biome-version.ts";
+import { tempDirs } from "../support/tmp.ts";
+
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 function fakeRoot(pkg: unknown): string {
-  const root = mkdtempSync(join(tmpdir(), "nimbus-biome-"));
+  const root = tmp.make("nimbus-biome-");
   writeFileSync(join(root, "package.json"), JSON.stringify(pkg), "utf8");
   return root;
 }
@@ -14,7 +18,6 @@ describe("checkBiomeVersion", () => {
   it("returns undefined when the pin (stripped of its range prefix) matches", () => {
     const root = fakeRoot({ devDependencies: { "@biomejs/biome": "^2.5.6" } });
     expect(checkBiomeVersion(root, "2.5.6")).toBeUndefined();
-    rmSync(root, { recursive: true, force: true });
   });
 
   it("warns, without throwing, when the pin differs from the resolved version", () => {
@@ -23,7 +26,6 @@ describe("checkBiomeVersion", () => {
     expect(warning).toBeDefined();
     expect(warning).toContain("2.5.6");
     expect(warning).toContain("2.4.0");
-    rmSync(root, { recursive: true, force: true });
   });
 
   it("warns, without throwing, when package.json cannot be read", () => {
@@ -38,6 +40,5 @@ describe("checkBiomeVersion", () => {
     const warning = checkBiomeVersion(root, "2.5.6");
     expect(warning).toBeDefined();
     expect(warning).toMatch(/declares no/i);
-    rmSync(root, { recursive: true, force: true });
   });
 });

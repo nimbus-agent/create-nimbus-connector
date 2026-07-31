@@ -1,8 +1,12 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify, loadExpectations } from "../../src/golden/expectations.ts";
+import { tempDirs } from "../support/tmp.ts";
+
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 const SIX = [
   "README.md",
@@ -63,7 +67,7 @@ describe("classify", () => {
 });
 
 function writeExpectations(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "expectations-"));
+  const dir = tmp.make("expectations-");
   const path = join(dir, "expectations.json");
   writeFileSync(path, content);
   return path;
