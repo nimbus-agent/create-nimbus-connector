@@ -1,8 +1,17 @@
 import { z } from "zod";
 
-/** Keys that belong to a later Stage C task. Detected before Zod so the error explains the boundary. */
+/**
+ * Tool keys rejected with a targeted message rather than Zod's generic "unrecognized key".
+ * Detected before Zod so the error explains the boundary and names the alternative.
+ *
+ * The message used to read "is not supported in Stage A (… a later Stage C task)". Stage C
+ * happened, and it did not add `hitl` — the manifest's `hitlRequired` array is computed from
+ * each tool's `effect` instead, deliberately (see the Stage C design doc §1.1: `hitlRequired`
+ * is a manifest-level capability array in all 94 corpus connectors, never per-tool). The
+ * message now says what is true and what to write instead, and does not promise a stage.
+ */
 const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
-  hitl: "HITL declaration is a later Stage C task",
+  hitl: 'HITL is not declared per tool; use "effect": "write" | "delete", which is what the manifest\'s hitlRequired array is computed from',
 };
 
 /**
@@ -271,7 +280,7 @@ function preflightOutOfScope(input: unknown): void {
     if (typeof t !== "object" || t === null) continue;
     for (const [key, why] of Object.entries(OUT_OF_SCOPE_TOOL_KEYS)) {
       if (key in t) {
-        throw new Error(`"${key}" is not supported in Stage A (${why}).`);
+        throw new Error(`"${key}" is not a supported tool field: ${why}.`);
       }
     }
   }

@@ -886,3 +886,32 @@ describe("at most one client-credentials env entry", () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * Final fix wave, MINOR 3. `preflightOutOfScope` runs before Zod so a known-future key gets
+ * a targeted message rather than Zod's generic "unrecognized key". Task 1 rewrote its only
+ * test into an accept-test for `effect`, leaving the sole remaining key with zero coverage —
+ * and with a message that had gone stale ("a later Stage C task", written on the Stage C
+ * branch, which did not add it).
+ */
+describe("preflightOutOfScope", () => {
+  it('rejects a tool declaring "hitl" and points at "effect" instead', () => {
+    const bad = stageCTool({ path: "/a", hitl: true });
+    expect(() => parseSpec(bad)).toThrow(/"hitl" is not a supported tool field/);
+    expect(() => parseSpec(bad)).toThrow(/"effect"/);
+    // The stale promise is gone: Stage C shipped and did not add per-tool HITL.
+    expect(() => parseSpec(bad)).not.toThrow(/Stage [ABC]/);
+  });
+
+  it("fires before Zod, so the message is the targeted one and not 'unrecognized key'", () => {
+    // Two problems at once: an out-of-scope key AND a genuinely invalid field. The preflight
+    // message is what surfaces, which is the whole reason it runs first.
+    expect(() => parseSpec(stageCTool({ path: "/a", hitl: true, method: "TRACE" }))).toThrow(
+      /"hitl" is not a supported tool field/,
+    );
+  });
+
+  it("ignores a non-array tools value rather than throwing on it — Zod reports that", () => {
+    expect(() => parseSpec({ ...stageCBase, tools: "nope" })).toThrow(/Invalid connector spec/);
+  });
+});
