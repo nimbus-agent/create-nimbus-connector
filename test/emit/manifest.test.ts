@@ -65,13 +65,28 @@ describe("hitlRequired", () => {
     ).toEqual(["write"]);
   });
 
-  it("sorts delete before write, matching all 37 manifests that declare them", () => {
+  it("orders write before delete, matching all 23 manifests that declare both (zero declare delete first)", () => {
     expect(
       hitl([
         { name: "a", description: "A.", path: "/a", method: "POST", effect: "write" },
         { name: "b", description: "B.", path: "/b", method: "DELETE", effect: "delete" },
       ]),
-    ).toEqual(["delete", "write"]);
+    ).toEqual(["write", "delete"]);
+  });
+
+  it("uses the fixed capability order regardless of declaration order — a delete tool declared first still emits write first", () => {
+    expect(
+      hitl([
+        { name: "a", description: "A.", path: "/a", method: "DELETE", effect: "delete" },
+        { name: "b", description: "B.", path: "/b", method: "POST", effect: "write" },
+      ]),
+    ).toEqual(["write", "delete"]);
+  });
+
+  it("collects delete alone", () => {
+    expect(
+      hitl([{ name: "a", description: "A.", path: "/a", method: "DELETE", effect: "delete" }]),
+    ).toEqual(["delete"]);
   });
 
   it("deduplicates", () => {

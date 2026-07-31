@@ -9,7 +9,7 @@
   "permissions": {
     "network": ["api.zzwrite.test"]
   },
-  "hitlRequired": ["delete", "write"],
+  "hitlRequired": ["write", "delete"],
   "syncInterval": 300,
   "minNimbusVersion": "0.2.0"
 }

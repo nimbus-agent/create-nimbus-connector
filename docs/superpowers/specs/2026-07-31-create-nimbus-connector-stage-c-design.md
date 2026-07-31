@@ -140,7 +140,18 @@ Following the Stage A precedent that the schema must reject anything the emitter
 
 ### 3.3 Manifest
 
-`hitlRequired` is the sorted unique set of non-`read` effects across the tools, `delete` before `write` — matching all 37 manifests that declare them. A read-only spec yields `[]`, byte-identical to today.
+`hitlRequired` is the unique set of non-`read` effects across the tools, emitted in a **fixed capability order — `write` before `delete`** — filtered to those actually present. A read-only spec yields `[]`, byte-identical to today.
+
+The order is a convention of the corpus, not a sort. Re-measured across all 94 manifests (§1.1):
+
+| Value | Connectors |
+| --- | --- |
+| `[]` | 57 |
+| `["write", "delete"]` | 23 |
+| `["write"]` | 14 |
+| `["delete", "write"]` | **0** |
+
+An earlier draft of this section claimed `delete` before `write` and an alphabetical `.sort()` implemented it. That is wrong in every one of the 23 manifests that declare both, and it would have made this project's headline property — byte-reproducing a real connector — unreachable for every mutating connector in the corpus. The emitter therefore filters a declared `["write", "delete"]` constant rather than sorting; a comparator that "happens to" produce the right order is the defect that was just removed.
 
 ---
 
