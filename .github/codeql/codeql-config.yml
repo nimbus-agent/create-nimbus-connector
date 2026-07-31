@@ -1,0 +1,10 @@
+name: create-nimbus-connector CodeQL config
+
+# Analyze source only; skip dependencies and any local build output.
+#
+# `fixtures/` is deliberately NOT ignored. Those are hand-written connector specs
+# (JSON), not code, so they contribute no results — but excluding a directory to
+# quieten a scanner is how a real finding later gets excluded by accident.
+paths-ignore:
+  - dist
+  - node_modules
