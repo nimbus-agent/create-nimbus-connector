@@ -1,6 +1,6 @@
 # create-nimbus-connector — Stage C design
 
-**Status:** approved, not yet implemented
+**Status:** implemented on `stage-c-writes`; acceptance results in §9. Three claims in §1 and §4–6 were corrected mid-implementation when measurement contradicted them — each correction is recorded inline rather than rewritten away.
 **Date:** 2026-07-31
 **Predecessors:** Stage A (generator, monorepo target), Stage B (standalone target, published as `create-nimbus-connector@0.2.2`)
 
