@@ -1,0 +1,113 @@
+import { describe, expect, it } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * End-to-end coverage for main() in src/cli.ts — specifically the two lines where
+ * --standalone stops being a parsed boolean and becomes behaviour:
+ *
+ *   const target = opts.standalone ? "standalone" : "monorepo";
+ *   const outDir = opts.outDir ?? (opts.standalone ? spec.name : join("packages", ...));
+ *
+ * Nothing else reaches them. test/cli.test.ts imports parseCliArgs and renderTree only,
+ * and both acceptance scripts import writeFiles/generate and pass {target} themselves.
+ * So these tests spawn the real binary and assert on the bytes it puts on disk.
+ *
+ * Every expected path below is written out literally rather than derived from the
+ * expression under test — a helper that recomputed `join("packages", ...)` would pass
+ * just as happily with the ternary inverted.
+ */
+
+const repoRoot = join(import.meta.dir, "..");
+const cliPath = join(repoRoot, "src", "cli.ts");
+/** A rest-kit spec whose "name" field is "zzstandalone" — the default out-dir depends on it. */
+const specPath = join(repoRoot, "fixtures", "zzstandalone.spec.json");
+const CONNECTOR = "zzstandalone";
+
+function runCli(args: readonly string[], cwd: string): { exitCode: number; output: string } {
+  // process.execPath is the bun binary already running this test — no PATH assumption.
+  const r = Bun.spawnSync([process.execPath, cliPath, "--spec", specPath, ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: r.exitCode,
+    output: `${r.stdout.toString()}${r.stderr.toString()}`.trim(),
+  };
+}
+
+function withTempDir<T>(fn: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "cnc-cli-"));
+  try {
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("bun src/cli.ts (the real binary)", () => {
+  it("--standalone writes a package that imports the published kit", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--standalone"], dir);
+      expect(output).not.toContain("create-nimbus-connector:");
+      expect(exitCode).toBe(0);
+
+      const server = join(dir, CONNECTOR, "src", "server.ts");
+      expect(existsSync(server)).toBe(true);
+      const src = readFileSync(server, "utf8");
+      expect(src).toContain('from "@nimbus-dev/sdk/connector-kit"');
+      expect(src).not.toContain("../../shared/");
+      // biome.json is standalone-only, so its presence is a second, independent witness
+      // that main() actually selected target: "standalone".
+      expect(existsSync(join(dir, CONNECTOR, "biome.json"))).toBe(true);
+    });
+  });
+
+  it("without --standalone writes a monorepo package with relative shared imports", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli([], dir);
+      expect(output).not.toContain("create-nimbus-connector:");
+      expect(exitCode).toBe(0);
+
+      const server = join(dir, "packages", "mcp-connectors", CONNECTOR, "src", "server.ts");
+      expect(existsSync(server)).toBe(true);
+      const src = readFileSync(server, "utf8");
+      expect(src).toContain('from "../../shared/');
+      expect(src).not.toContain("@nimbus-dev/sdk/connector-kit");
+      expect(existsSync(join(dir, "packages", "mcp-connectors", CONNECTOR, "biome.json"))).toBe(
+        false,
+      );
+    });
+  });
+
+  it("defaults the out-dir to <name>/ for standalone and packages/mcp-connectors/<name>/ otherwise", () => {
+    withTempDir((dir) => {
+      expect(runCli(["--standalone"], dir).exitCode).toBe(0);
+      // The standalone run must not have created the monorepo tree...
+      expect(existsSync(join(dir, CONNECTOR, "package.json"))).toBe(true);
+      expect(existsSync(join(dir, "packages"))).toBe(false);
+    });
+
+    withTempDir((dir) => {
+      expect(runCli([], dir).exitCode).toBe(0);
+      // ...and the monorepo run must not have created the standalone one.
+      expect(existsSync(join(dir, "packages", "mcp-connectors", CONNECTOR, "package.json"))).toBe(
+        true,
+      );
+      expect(existsSync(join(dir, CONNECTOR))).toBe(false);
+    });
+  });
+
+  it("--out-dir overrides the default for both targets, without changing the target", () => {
+    withTempDir((dir) => {
+      const explicit = join(dir, "elsewhere");
+      expect(runCli(["--standalone", "--out-dir", explicit], dir).exitCode).toBe(0);
+      expect(readFileSync(join(explicit, "src", "server.ts"), "utf8")).toContain(
+        "@nimbus-dev/sdk/connector-kit",
+      );
+      expect(existsSync(join(dir, CONNECTOR))).toBe(false);
+    });
+  });
+});
