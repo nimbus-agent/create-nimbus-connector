@@ -24,8 +24,16 @@ import { tempDirs } from "../support/tmp.ts";
  *
  * The wiring pair is compiled here, in full, because it is the one emitted artifact this
  * project writes into a foreign package and never installs anything for: its sole import is
- * type-only, so a small locally-written stand-in is all it needs to compile exactly as it
- * will in `packages/gateway`.
+ * type-only, so a small locally-written stand-in is all it needs to compile.
+ *
+ * What that stand-in does and does not prove: it is written from the shape the skeleton
+ * uses, NOT copied from the real `packages/gateway/src/sync/types.ts` — this repository is
+ * MIT and the Nimbus monorepo is AGPL-3.0-only — so its member names are ours, not theirs
+ * (the real `SyncResult` spells them `itemsUpserted`/`itemsDeleted`). This test therefore
+ * proves the emitted skeleton is internally well-typed and free of unread declarations. It
+ * cannot prove the skeleton matches Nimbus's current interface; the emitted bodies only
+ * throw, so there is nothing here for a member-name mismatch to break, and a real drift in
+ * `Syncable` would have to be caught by regenerating against the monorepo.
  *
  * A generated *connector package* is not typechecked here. It imports the SDK, the MCP SDK
  * and zod, and stubbing all three would mean asserting against a surface this project made

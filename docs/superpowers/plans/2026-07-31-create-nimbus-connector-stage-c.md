@@ -898,8 +898,8 @@ Add `"zzwrite"` and `"zzwriterest"` to `FIXTURES` in `scripts/standalone-accepta
 bun test
 bunx tsc --noEmit
 bunx biome check src/ test/ scripts/
-bun run diff:golden --nimbus-root C:/gitrep/Nimbus    # 11/11
-bun run standalone-acceptance --registry              # 40 checks across 4 fixtures
+bun run diff:golden --nimbus-root C:/gitrep/Nimbus    # 12/12
+bun run standalone-acceptance --registry              # 50 checks across 5 fixtures
 ```
 
 Confirm zero `cnc-*` directories remain in `%TEMP%`.

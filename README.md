@@ -48,6 +48,12 @@ An env entry may declare `"auth": "client-credentials"` instead of `"bearer"` or
 
 This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches the token for the process's lifetime — it is never refreshed and `expires_in` is never read, which is correct only because a generated connector is spawned per invocation and is short-lived. `credentialsIn` controls how the client id/secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` connector does); `"body"` puts `client_id`/`client_secret` in the form body (as Nimbus's `looker`, `powerbi`, `teams` and `wiz` connectors do). `scope` is optional; the two `vars` and `style: "hand-rolled"` are required — `client-credentials` is **hand-rolled only** (`style: "rest-kit"` is a validation error), because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
 
+### Reserved identifiers
+
+The emitter introduces module-scope names of its own, so a spec may not reuse them. `local` names, `registrar` names and similar spec-supplied identifiers are validated against `RESERVED_IDENTIFIERS` in `src/validate.ts`, which is the authoritative list; reusing one is a validation error rather than a package that emits two declarations of the same name and fails its own `typecheck`.
+
+`client-credentials` added `token`, `cachedToken` and `encodeBasicAuthHeader` to that list, and the write path added `URLSearchParams` and `<local>Send`. `token` and `cachedToken` are reserved unconditionally, not only for `client-credentials` specs — **a spec that named an env `local` `"token"` and validated under 0.2.2 will now be rejected.** Rename the local; nothing else changes.
+
 ## Stage B: standalone connectors
 
 By default, generated connectors are **monorepo-internal**: they live at `packages/mcp-connectors/<name>/` inside a Nimbus checkout, where the `../../shared/*` relative imports (`mcp-tool-kit.ts`, `rest-tool-kit.ts`, etc.) resolve as-is.

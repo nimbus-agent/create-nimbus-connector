@@ -253,11 +253,11 @@ Two failure modes are designed against explicitly, both of which this project ha
 
 ### 5.3 Standalone acceptance
 
-Two write fixtures join the two existing ones: **40 checks across four fixtures**, proving generated write connectors typecheck, build, and answer `tools/list` against the published SDK.
+Three write fixtures join the two existing ones: **50 checks across five fixtures**, proving generated write connectors typecheck, build, and answer `tools/list` against the published SDK.
 
-**New fixtures:** `zzwrite` (hand-rolled — second helper and `client-credentials`) and `zzwriterest` (rest-kit — `init` passthrough). Both carry a `delete`-effect tool so the `["delete","write"]` manifest path is covered. Both also appear in the snapshot set (§5.2) and in the monorepo golden harness with expectation `[]` (§5.1).
+**New fixtures:** `zzwrite` (hand-rolled — second helper, `client-credentials`, and a `delete`-effect tool, so the `["write","delete"]` manifest path of §3.3 is covered), `zzwriterest` (rest-kit — `init` passthrough), and `zzwriteonly` (hand-rolled, POST only). `zzwriteonly` exists because nothing in the project had ever put a write-only package in front of a real `tsc`: with the read helper emitted unconditionally, such a package emitted an uncalled `async function <local>(path)` and failed its own `typecheck`. Substring assertions could not see it. All three appear in the snapshot set (§5.2) and in the monorepo golden harness with expectation `[]` (§5.1).
 
-Runtime roughly doubles, to ~40s. That is the cost of covering both styles on both paths, and it is paid by a script run on demand rather than by CI (which runs neither acceptance harness — see `ci.yml`).
+Runtime grows roughly linearly with the fixture count — each fixture installs the published SDK and runs a real `tsc` and `bun build`. That is the cost of covering both styles on both paths, and it is paid by a script run on demand rather than by CI (which runs neither acceptance harness — see `ci.yml`).
 
 ---
 
