@@ -119,6 +119,30 @@ export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
   ].join("\n");
 }
 
+/**
+ * The read helper, or undefined when nothing the emitted server contains would call it.
+ *
+ * Final fix wave, IMPORTANT 3: the read helper used to be emitted unconditionally, which is
+ * exactly the defect `renderWriteHelper`'s own guard above exists to prevent, mirrored. A
+ * hand-rolled spec whose only tool is a POST emits `async function <local>(path)` that
+ * nothing calls — a write tool routes through `<local>Send`, a different function — and the
+ * generated package's own tsconfig (`noUnusedLocals`) and biome.json (`noUnusedVariables`)
+ * both reject it. The same holds for a hand-rolled spec that is all stubs, or has no tools:
+ * a stub handler only throws.
+ *
+ * rest-kit is unconditional, and not for symmetry's sake: `makeRestToolRegistrar` is handed
+ * the helper as its `fetch:` option, so the factory line references it whatever the tools
+ * do — including for a spec with no tools at all.
+ *
+ * Read-only and mixed specs are unaffected, which is what keeps newrelic/datadog/grafana/
+ * sentry byte-identical.
+ */
+export function renderReadHelper(spec: ConnectorSpec): string | undefined {
+  if (spec.style === "rest-kit") return renderFetchHelper(spec);
+  const called = spec.tools.some((t) => t.method === "GET" && t.impl !== "stub");
+  return called ? renderFetchHelper(spec) : undefined;
+}
+
 export function renderFetchHelper(spec: ConnectorSpec): string {
   if (spec.style === "rest-kit") return renderRestKitFetchHelper(spec);
 

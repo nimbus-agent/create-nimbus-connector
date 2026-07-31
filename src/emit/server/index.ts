@@ -2,7 +2,7 @@ import type { ConnectorSpec } from "../../spec.ts";
 import type { GeneratedFile } from "../../types.ts";
 import type { GenerateTarget } from "../index.ts";
 import { renderEnvAccessors } from "./env.ts";
-import { renderFetchHelper, renderWriteHelper } from "./fetch-helper.ts";
+import { renderReadHelper, renderWriteHelper } from "./fetch-helper.ts";
 import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
@@ -94,6 +94,7 @@ function tail(spec: ConnectorSpec): string {
 
 export function emitServer(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const isHand = spec.style === "hand-rolled";
+  const readHelper = renderReadHelper(spec);
   const writeHelper = renderWriteHelper(spec);
   const sections = [
     imports(spec, target),
@@ -101,9 +102,12 @@ export function emitServer(spec: ConnectorSpec, target: GenerateTarget): Generat
     // resolves the credential itself via requireProcessEnv(cfg.tokenEnv), so an accessor
     // would never be called; calling renderEnvAccessors unconditionally would emit dead code.
     ...(isHand && spec.env.length > 0 ? [renderEnvAccessors(spec)] : []),
-    renderFetchHelper(spec),
-    // Emitted only when the spec has a non-GET tool (see renderWriteHelper) — a read-only
-    // spec never reaches this, which is what keeps newrelic/datadog/grafana/sentry byte-safe.
+    // Both helpers are conditional, on the same rule stated twice: emit it only if the
+    // emitted server calls it. The read helper is skipped when no non-stub GET tool exists
+    // (see renderReadHelper); the write helper is skipped when no non-GET tool exists (see
+    // renderWriteHelper). A read-only spec reaches neither branch, which is what keeps
+    // newrelic/datadog/grafana/sentry byte-safe.
+    ...(readHelper === undefined ? [] : [readHelper]),
     ...(writeHelper === undefined ? [] : [writeHelper]),
     wiring(spec),
     isHand ? renderHandRolledTools(spec) : renderRestKitTools(spec),
