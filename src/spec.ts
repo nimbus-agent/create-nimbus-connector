@@ -76,7 +76,7 @@ export const ToolSchema = z
   .refine((t) => !(t.impl === "stub" && (t.method !== "GET" || t.body !== undefined)), {
     message: 'a "stub" tool issues no request, so "method" and "body" have nothing to describe',
   })
-  .refine((t) => !(t.method === "GET" && t.effect !== "read"), {
+  .refine((t) => !(t.method === "GET" && t.effect !== "read" && t.impl !== "stub"), {
     message:
       'a GET tool cannot have effect "write" or "delete" — a REST GET that mutates is a bug, ' +
       "not a design. Set the method the API actually requires.",
