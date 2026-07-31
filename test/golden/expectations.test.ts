@@ -132,6 +132,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       "zzstandalone",
       "zzstandalonehand",
       "zzwrite",
+      "zzwriteonly",
       "zzwriterest",
     ]);
     // The two partial fixtures are the reason the shape changed; assert their sets, not

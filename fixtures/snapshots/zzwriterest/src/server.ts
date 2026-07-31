@@ -45,9 +45,24 @@ registerZzwriterestTool("zzwriterest_item_list", "List items.", z.object({}), ()
 registerZzwriterestTool(
   "zzwriterest_item_update",
   "Update an item's title.",
-  z.object({ itemId: z.string().min(1), title: z.string().min(1) }),
-  (parsed) => `/v1/items/${encodeURIComponent(parsed.itemId)}`,
-  (parsed) => ({ method: "PATCH", body: JSON.stringify({ title: parsed.title }) }),
+  z.object({
+    itemId: z.string().min(1),
+    title: z.string().min(1),
+    mode: z.string().optional(),
+    notify: z.boolean().optional(),
+  }),
+  (parsed) => {
+    const mode = parsed.mode ?? "merge";
+    return `/v1/items/${encodeURIComponent(parsed.itemId)}?mode=${mode}`;
+  },
+  (parsed) => ({
+    method: "PATCH",
+    body: JSON.stringify({
+      title: parsed.title,
+      mode: parsed.mode ?? "merge",
+      notify: parsed.notify,
+    }),
+  }),
 );
 
 const transport = new StdioServerTransport();

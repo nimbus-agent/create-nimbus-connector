@@ -31,8 +31,13 @@
       "description": "Create an item.",
       "method": "POST",
       "effect": "write",
-      "args": { "title": { "type": "string", "min": 1 } },
-      "path": "/v1/items"
+      "args": {
+        "title": { "type": "string", "min": 1 },
+        "scope": { "type": "string", "optional": true, "default": "all" },
+        "draft": { "type": "boolean", "optional": true }
+      },
+      "body": { "title": "title", "scope": "scope", "draft": "draft" },
+      "path": "/v1/items?scope=${arg.scope}"
     },
     {
       "name": "zzwrite_item_delete",

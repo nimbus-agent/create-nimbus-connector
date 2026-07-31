@@ -37,11 +37,24 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const hoisted = hoistedLocals(tool.args);
   const segments = parsePathTemplate(path);
   const pathExpr = renderPath(segments, { param: PARAM, hoisted });
+
+  // Only the path can consume a hoist here: the hoists are emitted inside the path callback,
+  // and the init callback below is a separate arrow with its own scope. A hoisted const no
+  // path segment names would be a TS6133 in the generated package — reachable from a
+  // rest-kit POST with one boolean arg and a fully static path.
+  const used = new Set<string>();
+  for (const s of segments) {
+    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
+  }
   const needsParam =
-    hoisted.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
+    used.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
   const param = needsParam ? `(${PARAM})` : "()";
 
-  const bodyExpr = renderBodyExpr(tool, PARAM);
+  // Empty `hoisted`, deliberately: nothing the path callback declares is in scope inside the
+  // init callback, so renderBodyExpr inlines any `?? default` itself rather than naming a
+  // const that does not exist there. The value is identical to the path's.
+  const body = renderBodyExpr(tool, { param: PARAM, hoisted: new Map() });
+  const bodyExpr = body?.expr;
   // A GET emits no 5th argument at all, so read-only rest-kit output is unchanged. A non-GET
   // with no body (e.g. a DELETE whose only arg is in the path) still needs its method conveyed,
   // but the arrow it's built from must take no parameter — the generated package's tsconfig
@@ -54,14 +67,14 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
         (bodyExpr === undefined ? "" : `, body: ${bodyExpr}`) +
         " }),";
 
-  if (hoisted.size === 0) {
+  if (used.size === 0) {
     const lines = [...head, `  ${param} => ${pathExpr},`];
     if (initArg !== undefined) lines.push(initArg);
     lines.push(");");
     return lines.join("\n");
   }
 
-  const hoists = renderHoists(tool.args, PARAM).map((l) => `    ${l}`);
+  const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
   const lines = [...head, `  ${param} => {`, ...hoists, `    return ${pathExpr};`, "  },"];
   if (initArg !== undefined) lines.push(initArg);
   lines.push(");");

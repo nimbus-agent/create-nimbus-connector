@@ -248,4 +248,108 @@ describe("hand-rolled write support", () => {
     expect(out).toContain("async (p) =>");
     expect(out).toContain('zzGetSend(`/items/${p.id}`, "DELETE", undefined)');
   });
+
+  /**
+   * Final fix wave, IMPORTANT 2. The body used to emit `p.<arg>` unconditionally, ignoring
+   * the hoisted-locals map this call site already computes.
+   */
+  describe("hoisted args in a write body", () => {
+    it("references the hoisted const, so the URL and the body carry the same value (silent case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i?scope=${arg.scope}",
+            method: "POST",
+            effect: "write",
+            args: {
+              title: { type: "string" },
+              scope: { type: "string", optional: true, default: "all" },
+            },
+            body: { title: "title", scope: "scope" },
+          },
+        ]),
+      );
+      expect(out).toContain('const scope = p.scope ?? "all";');
+      expect(out).toContain(
+        'zzGetSend(`/i?scope=${scope}`, "POST", JSON.stringify({ title: p.title, scope }))',
+      );
+      // The defect: `scope: p.scope` sent undefined in the body while the URL carried "all".
+      expect(out).not.toContain("scope: p.scope");
+    });
+
+    it("emits no unread hoist for a defaulted arg the path never names (loud case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i",
+            method: "POST",
+            effect: "write",
+            args: { limit: { type: "number", optional: true, default: 20, local: "lim" } },
+          },
+        ]),
+      );
+      // The hoist IS emitted here, because the body consumes it.
+      expect(out).toContain("const lim = p.limit ?? 20;");
+      expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ limit: lim }))');
+    });
+
+    it("drops the hoist entirely for a boolean arg nothing reads — a plain POST with one boolean arg (loud case)", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i",
+            method: "POST",
+            effect: "write",
+            args: { draft: { type: "boolean" } },
+          },
+        ]),
+      );
+      // `const draft = p.draft === true ? "true" : "false";` had no consumer: the body used
+      // p.draft, so the const was a TS6133 and a biome noUnusedVariables error.
+      expect(out).not.toContain("const draft =");
+      // And the body sends a real JSON boolean, not the hoist's string.
+      expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ draft: p.draft }))');
+    });
+
+    it("keeps a boolean's hoist for the URL while the body still sends a real boolean", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_create",
+            description: "C.",
+            path: "/i?draft=${arg.draft|bool}",
+            method: "POST",
+            effect: "write",
+            args: { title: { type: "string" }, draft: { type: "boolean" } },
+            body: { title: "title", draft: "draft" },
+          },
+        ]),
+      );
+      expect(out).toContain('const draft = p.draft === true ? "true" : "false";');
+      expect(out).toContain(
+        'zzGetSend(`/i?draft=${draft}`, "POST", JSON.stringify({ title: p.title, draft: p.draft }))',
+      );
+    });
+
+    it("emits no unread hoist on a GET whose defaulted arg the path never names", () => {
+      const out = renderHandRolledTools(
+        spec([
+          {
+            name: "zz_list",
+            description: "L.",
+            path: "/i",
+            args: { limit: { type: "number", optional: true, default: 20, local: "lim" } },
+          },
+        ]),
+      );
+      expect(out).not.toContain("const lim =");
+      expect(out).toContain('jsonResult(await zzGet("/i"))');
+    });
+  });
 });

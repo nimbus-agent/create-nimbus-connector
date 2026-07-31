@@ -21,9 +21,12 @@
       "effect": "write",
       "args": {
         "itemId": { "type": "string", "min": 1 },
-        "title": { "type": "string", "min": 1 }
+        "title": { "type": "string", "min": 1 },
+        "mode": { "type": "string", "optional": true, "default": "merge" },
+        "notify": { "type": "boolean", "optional": true }
       },
-      "path": "/v1/items/${arg.itemId|enc}"
+      "body": { "title": "title", "mode": "mode", "notify": "notify" },
+      "path": "/v1/items/${arg.itemId|enc}?mode=${arg.mode}"
     }
   ]
 }

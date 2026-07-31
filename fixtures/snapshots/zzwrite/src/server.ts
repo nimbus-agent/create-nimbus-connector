@@ -81,8 +81,24 @@ reg("zzwrite_item_list", "List items.", z.object({}), async () =>
   jsonResult(await zzwriteGet("/v1/items")),
 );
 
-reg("zzwrite_item_create", "Create an item.", z.object({ title: z.string().min(1) }), async (p) =>
-  jsonResult(await zzwriteGetSend("/v1/items", "POST", JSON.stringify({ title: p.title }))),
+reg(
+  "zzwrite_item_create",
+  "Create an item.",
+  z.object({
+    title: z.string().min(1),
+    scope: z.string().optional(),
+    draft: z.boolean().optional(),
+  }),
+  async (p) => {
+    const scope = p.scope ?? "all";
+    return jsonResult(
+      await zzwriteGetSend(
+        `/v1/items?scope=${scope}`,
+        "POST",
+        JSON.stringify({ title: p.title, scope, draft: p.draft }),
+      ),
+    );
+  },
 );
 
 reg(

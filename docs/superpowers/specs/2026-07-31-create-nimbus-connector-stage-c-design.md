@@ -200,6 +200,17 @@ The middle and bottom rows are the two commonest REST write shapes, and the orig
 
 A `DELETE` whose only arg is a path parameter therefore emits neither a `body` field nor a `Content-Type` header.
 
+#### Hoisted args in a body
+
+An arg with a `default`, or of type `boolean`, is *hoisted*: the handler lifts a `const` above the request so the path template can interpolate it. The body has to take a position on those consts, and it is not one position but two.
+
+- **A `default` is a value.** The body must carry the defaulted value, not the raw arg. The first implementation emitted `p.<arg>` unconditionally, so a defaulted arg named in both the path and an explicit `body` mapping put `"all"` in the URL and `undefined` in the JSON — one argument, one call, two values, compiling and running. The body now references the hoisted const where it is in scope.
+- **A `boolean`'s hoist is a URL serialisation.** It renders the *string* `"true"`/`"false"`, which is what a query parameter needs and precisely wrong for JSON, where the API distinguishes `true` from `"true"`. The body therefore reaches past the hoist to the raw arg. A boolean in both the path and the body deliberately emits two different expressions; that is one value serialised two ways, not a disagreement.
+
+Scope is not uniform between the two styles, and the rule follows scope rather than style. Hand-rolled builds the body inside the same handler block as the hoists, so they are in scope and are referenced. rest-kit builds it in the registrar's *second* callback — `(parsed) => ({ method, body })` — while the hoists live in the first, so nothing is in scope and the `?? default` is inlined instead. Same value; naming the const there would emit an undeclared identifier.
+
+Finally, **a hoisted const is emitted only if something reads it.** The path reports the args it interpolates, the body reports the hoists it referenced, and only the union is rendered. Without that, a plain `POST` with one `boolean` arg emitted a const no expression read — a `TS6133` under the generated package's own `noUnusedLocals`, and a `noUnusedVariables` error under its own `biome.json`. Both write fixtures now carry a defaulted arg and a boolean arg for exactly this reason: neither did before, so the standalone acceptance run — which is where the generated package's `tsc` and `biome` actually execute — could not see any of this.
+
 ### 4.5 `client-credentials`
 
 ```jsonc
@@ -223,7 +234,9 @@ Emits the shape all five share: form-encoded POST with `grant_type=client_creden
 
 ### 5.1 The monorepo golden harness is untouched
 
-It still byte-diffs generated output against the real 94. It currently passes 9 fixtures; the two new write fixtures bring it to **11**, each declared with expectation `[]` — no hand-written connector should match a generated write connector, and if one ever did, the harness would report it as "improved" and fail, which is the correct response to an expectation that has gone stale.
+It still byte-diffs generated output against the real 94. It currently passes 9 fixtures; the two new write fixtures bring it to **11**, and the final fix wave adds `zzwriteonly` for **12** — each declared with expectation `[]`, because no hand-written connector should match a generated write connector, and if one ever did, the harness would report it as "improved" and fail, which is the correct response to an expectation that has gone stale.
+
+`zzwriteonly` is a hand-rolled connector whose only tool mutates. It exists because that is the one shape which must *not* emit a read fetch helper, and nothing else in the project compiled such a package — which is how an unread `async function <local>(path)` shipped. It carries a boolean arg for the same reason. What matters for byte-safety is unchanged by its addition: `newrelic`, `datadog`, `grafana` and `sentry` remain at 6/6.
 
 This remains the strongest evidence the project has, and Stage C's first obligation is not to disturb it.
 

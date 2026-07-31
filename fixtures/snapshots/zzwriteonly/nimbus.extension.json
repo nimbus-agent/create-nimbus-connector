@@ -1,0 +1,15 @@
+{
+  "id": "com.nimbus.zzwriteonly",
+  "displayName": "ZZ Write Only",
+  "version": "0.1.0",
+  "description": "Throwaway write-fixture connector whose only tool mutates. Exists so the acceptance run compiles a hand-rolled package that must NOT emit a read fetch helper.",
+  "author": "Nimbus",
+  "entrypoint": "dist/server.js",
+  "runtime": "bun",
+  "permissions": {
+    "network": ["api.zzwriteonly.test"]
+  },
+  "hitlRequired": ["write"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0"
+}

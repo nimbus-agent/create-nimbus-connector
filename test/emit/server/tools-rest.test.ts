@@ -156,21 +156,76 @@ describe("rest-kit writes", () => {
 
   // Pins the ordering in the hoisted-args return path specifically: buildInit must be
   // appended after the multi-line buildPath arrow's closing "},", not folded inside it.
+  //
+  // This case used to be written with `flag` absent from the path, which produced the
+  // multi-line form only because the boolean's hoist was emitted — unread, i.e. the very
+  // TS6133 the final fix wave removed. The path now names the hoisted arg, so the hoist has
+  // a genuine consumer and the multi-line form is reached honestly.
   it("appends buildInit after the hoisted buildPath closes", () => {
     const out = renderRestKitTools(
       restSpec([
         {
           name: "zz_hoisted_write",
           description: "H.",
-          path: "/i/${arg.id|enc}",
+          path: "/i/${arg.id|enc}?draft=${arg.flag|bool}",
           method: "PATCH",
           effect: "write",
-          args: { id: { type: "string" }, flag: { type: "boolean" } },
+          args: {
+            id: { type: "string" },
+            flag: { type: "boolean" },
+            title: { type: "string" },
+          },
         },
       ]),
     );
+    expect(out).toContain('    const flag = parsed.flag === true ? "true" : "false";');
     expect(out).toContain(
-      '  },\n  (parsed) => ({ method: "PATCH", body: JSON.stringify({ flag: parsed.flag }) }),',
+      '  },\n  (parsed) => ({ method: "PATCH", body: JSON.stringify({ title: parsed.title }) }),',
+    );
+  });
+
+  // Final fix wave, IMPORTANT 2 (the "loud" half), for rest-kit.
+  it("emits no hoist for a boolean arg the path never names — the init callback uses the raw arg", () => {
+    const out = renderRestKitTools(
+      restSpec([
+        {
+          name: "zz_flag_write",
+          description: "F.",
+          path: "/i",
+          method: "POST",
+          effect: "write",
+          args: { draft: { type: "boolean" } },
+        },
+      ]),
+    );
+    expect(out).not.toContain("const draft =");
+    expect(out).toContain('  () => "/i",');
+    expect(out).toContain('({ method: "POST", body: JSON.stringify({ draft: parsed.draft }) })');
+  });
+
+  // Final fix wave, IMPORTANT 2 (the "silent" half), for rest-kit. The hoisted const lives
+  // in the buildPath callback and is out of scope in buildInit, so the default is inlined
+  // there rather than referenced — same value, two expressions.
+  it("applies a defaulted arg's default in the body too, not just in the path", () => {
+    const out = renderRestKitTools(
+      restSpec([
+        {
+          name: "zz_scoped_write",
+          description: "S.",
+          path: "/i?scope=${arg.scope}",
+          method: "POST",
+          effect: "write",
+          args: {
+            title: { type: "string" },
+            scope: { type: "string", optional: true, default: "all" },
+          },
+          body: { title: "title", scope: "scope" },
+        },
+      ]),
+    );
+    expect(out).toContain('    const scope = parsed.scope ?? "all";');
+    expect(out).toContain(
+      'body: JSON.stringify({ title: parsed.title, scope: parsed.scope ?? "all" })',
     );
   });
 });
