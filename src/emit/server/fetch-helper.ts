@@ -19,7 +19,13 @@ function headerOption(spec: ConnectorSpec): string {
       .join(", ");
     return `headers: { ${fields} }`;
   }
-  return `headers: ${fh.headers}()`;
+  // A client-credentials accessor is `async` (it awaits the cached token exchange), so its
+  // call must be awaited — every call site of headerOption is itself inside an `async`
+  // function ($fh.local and $fh.localSend), so `await` is always valid here. Every other
+  // auth mode's accessor is synchronous and unaffected.
+  const entry = spec.env.find((e) => e.local === fh.headers);
+  const call = entry?.auth === "client-credentials" ? `await ${fh.headers}()` : `${fh.headers}()`;
+  return `headers: ${call}`;
 }
 
 /**

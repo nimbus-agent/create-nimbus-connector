@@ -108,9 +108,14 @@ export const EnvSchema = z
     transform: z.enum(["stripTrailingSlash"]).optional(),
     prefix: z.string().optional(),
     suffix: z.string().optional(),
-    auth: z.enum(["bearer", "headers"]).optional(),
+    auth: z.enum(["bearer", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
+    /** Token endpoint, required when auth === "client-credentials". */
+    tokenUrl: z.string().url().optional(),
+    scope: z.string().min(1).optional(),
+    /** ramp sends Basic; powerbi, looker and teams put client_secret in the body. */
+    credentialsIn: z.enum(["basic", "body"]).optional(),
   })
   .refine((e) => !(e.required && e.default !== undefined), {
     message:
@@ -131,8 +136,27 @@ export const EnvSchema = z
         'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value',
     },
   )
-  .refine((e) => e.vars.length === 1 || e.auth === "headers", {
-    message: 'only an entry with auth: "headers" may declare multiple "vars"',
+  .refine((e) => e.vars.length === 1 || e.auth === "headers" || e.auth === "client-credentials", {
+    message:
+      'only an entry with auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
+    message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.tokenUrl !== undefined, {
+    message: '"tokenUrl" is required when auth is "client-credentials"',
+  })
+  .refine((e) => e.auth !== "client-credentials" || e.credentialsIn !== undefined, {
+    message: '"credentialsIn" is required when auth is "client-credentials"',
+  })
+  .refine((e) => e.tokenUrl === undefined || e.auth === "client-credentials", {
+    message: '"tokenUrl" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.scope === undefined || e.auth === "client-credentials", {
+    message: '"scope" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
+    message: '"credentialsIn" is only valid when auth is "client-credentials"',
   });
 
 export const FetchHelperSchema = z.strictObject({
@@ -192,6 +216,11 @@ export const ConnectorSpecSchema = z
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
     },
   )
+  .refine((s) => s.style !== "rest-kit" || !s.env.some((e) => e.auth === "client-credentials"), {
+    message:
+      'style "rest-kit" cannot use client-credentials: makeRestToolRegistrar resolves a single ' +
+      'bearer credential itself and has no seam for a token exchange. Use style "hand-rolled".',
+  })
   .refine(
     (s) =>
       s.style !== "rest-kit" ||

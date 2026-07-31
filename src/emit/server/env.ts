@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { EnvSchema } from "../../spec.ts";
+import type { ConnectorSpec, EnvSchema } from "../../spec.ts";
 
 type EnvEntry = z.infer<typeof EnvSchema>;
 
@@ -72,7 +72,91 @@ function returnLines(e: EnvEntry): string[] {
   return [`  return ${wrapped(e, transformed(e, bindingOf(e, 0)))};`];
 }
 
-export function renderEnvAccessor(e: EnvEntry): string {
+/**
+ * The token exchange, hoisted to module scope so `cachedToken` survives across calls.
+ * Self-contained: it reads and guards its own two vars rather than sharing the accessor's
+ * locals, because `token()` is called as `await token()` — no arguments — everywhere it is
+ * used (the accessor below, and nowhere else). Cached for the process lifetime and never
+ * refreshed, matching ramp and wiz. Correct only because connectors are spawned per
+ * invocation and are short-lived — no connector in the corpus reads expires_in. A
+ * long-lived connector would use a stale token.
+ */
+function renderTokenFunction(e: EnvEntry, serviceLabel: string): string {
+  const idBinding = bindingOf(e, 0);
+  const secretBinding = bindingOf(e, 1);
+  const credentialsIn = e.credentialsIn!;
+
+  // Built incrementally, not as an object literal: URLSearchParams stringifies its
+  // values, so `{ scope: undefined }` would send the literal `scope=undefined` to the
+  // token endpoint. The `set` lines are emitted only when the spec actually declares them.
+  const bodyLines = [
+    `  const body = new URLSearchParams({ grant_type: "client_credentials" });`,
+    ...(e.scope === undefined ? [] : [`  body.set("scope", ${JSON.stringify(e.scope)});`]),
+    ...(credentialsIn === "body"
+      ? [`  body.set("client_id", ${idBinding});`, `  body.set("client_secret", ${secretBinding});`]
+      : []),
+  ];
+
+  const headerLines =
+    credentialsIn === "basic"
+      ? [
+          "    headers: {",
+          '      "Content-Type": "application/x-www-form-urlencoded",',
+          '      Accept: "application/json",',
+          `      Authorization: encodeBasicAuthHeader(${idBinding}, ${secretBinding}),`,
+          "    },",
+        ]
+      : [
+          '    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },',
+        ];
+
+  return [
+    "let cachedToken: string | null = null;",
+    "",
+    "async function token(): Promise<string> {",
+    "  if (cachedToken !== null) return cachedToken;",
+    ...readLines(e),
+    ...guardLines(e),
+    ...bodyLines,
+    `  const res = await fetch(${JSON.stringify(e.tokenUrl)}, {`,
+    '    method: "POST",',
+    ...headerLines,
+    "    body: body.toString(),",
+    "  });",
+    "  const text = await res.text();",
+    "  if (!res.ok) {",
+    `    throw new Error(\`${serviceLabel} token exchange \${String(res.status)}: \${text.slice(0, 400)}\`);`,
+    "  }",
+    "  const parsed = JSON.parse(text) as { access_token?: unknown };",
+    '  if (typeof parsed.access_token !== "string" || parsed.access_token === "") {',
+    `    throw new Error(${JSON.stringify(`${serviceLabel} token response missing access_token`)});`,
+    "  }",
+    "  cachedToken = parsed.access_token;",
+    "  return cachedToken;",
+    "}",
+  ].join("\n");
+}
+
+function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
+  return [
+    renderTokenFunction(e, serviceLabel),
+    "",
+    `async function ${e.local}(): Promise<Record<string, string>> {`,
+    '  return { Authorization: `Bearer ${await token()}`, Accept: "application/json" };',
+    "}",
+  ].join("\n");
+}
+
+/**
+ * `serviceLabel` is only read for the `auth: "client-credentials"` branch, where it names
+ * the token-exchange error messages the same way `renderFetchHelper`'s error messages are
+ * named. It defaults so every other call site — including every existing test — is
+ * unaffected.
+ */
+export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): string {
+  if (e.auth === "client-credentials") {
+    return renderClientCredentials(e, serviceLabel);
+  }
   const returnType = e.auth === undefined ? "string" : "Record<string, string>";
   return [
     `function ${e.local}(): ${returnType} {`,
@@ -81,4 +165,9 @@ export function renderEnvAccessor(e: EnvEntry): string {
     ...returnLines(e),
     "}",
   ].join("\n");
+}
+
+/** Renders every env accessor for a spec, in declaration order. */
+export function renderEnvAccessors(spec: ConnectorSpec): string {
+  return spec.env.map((e) => renderEnvAccessor(e, spec.serviceLabel)).join("\n\n");
 }
