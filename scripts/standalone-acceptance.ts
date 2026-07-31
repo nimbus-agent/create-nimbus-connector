@@ -334,5 +334,10 @@ async function toolsListCheck(
   } finally {
     clearTimeout(timer);
     proc.kill();
+    // kill() only signals. Without awaiting exit, this returns while the server is still
+    // running, and the caller's `rmSync(outDir)` races it — on Windows, removing a
+    // directory whose files a live process still holds open fails outright. Four servers
+    // are spawned per run now that both fixtures are exercised.
+    await proc.exited;
   }
 }
