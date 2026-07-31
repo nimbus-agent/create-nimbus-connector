@@ -1,0 +1,295 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The org blocks GITHUB_TOKEN from creating pull requests, so release-please
+    # opens its release PR with a token minted from the "Nimbus Release Bot"
+    # GitHub App — the same App nimbus-sdk, the monorepo and nimbus-client use.
+    # App tokens are minted per-run and expire in ~1h.
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      # This repo is a SINGLE package at the manifest root ("."), and
+      # release-please-action leaves root-component outputs unprefixed — a
+      # monorepo path like sdks/typescript would be read as
+      # steps.release.outputs['sdks/typescript--release_created'] instead.
+      # release-workflow-guard.test.ts asserts the config still declares exactly
+      # one package keyed "." so this bare name cannot silently start reading an
+      # output that no longer exists (an undefined output is '', which is never
+      # 'true', so the publish job would skip in silence rather than fail).
+      release_created: ${{ steps.release.outputs.release_created }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Mint release-bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: nimbus-agent
+          repositories: create-nimbus-connector
+          permission-contents: write
+          permission-pull-requests: write
+          # release-please creates its autorelease:* label definitions via the
+          # Issues API; see nimbus-client#8.
+          permission-issues: write
+
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.app-token.outputs.token }}
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Required for npm provenance + token-less OIDC trusted publishing.
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # Publishing reaches npm + the sigstore provenance endpoints; audit
+          # (not block) avoids brittle allowlist drift on the signing chain.
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned to the same Bun as ci.yml. The published `bin` is a TypeScript
+      # file executed by Bun, so the version that validates the artifact here
+      # should be the version that validates it on every PR.
+      # release-workflow-guard.test.ts asserts the two stay equal.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Install
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # THE Bun-only exception. This project is Bun-only by design (design doc
+      # decisions B6/B7): no Node, npm or pnpm path exists in src/, scripts/,
+      # test/ or the connectors it generates. This job is the single documented
+      # exception, and it is narrow: `npm publish --provenance` is the only way
+      # to attach a sigstore provenance attestation to an npm tarball — Bun's
+      # `bun publish` does not produce one. Node exists here solely to carry
+      # that npm. Nothing built, tested or shipped runs on it, and the artifact
+      # this job verifies below is still executed by Bun.
+      - name: Setup Node (for npm publish --provenance)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm trusted publishing (token-less OIDC) requires npm >= 11.5.1, newer
+      # than the version bundled with Node 22.
+      #
+      # Pinned rather than `@latest`: this step installs the tool that then
+      # publishes, so an unpinned upgrade lets a newly released npm change
+      # publish behaviour with no commit here. The preflight below re-checks the
+      # 11.5.1 floor, so bumping this pin can never silently drop below it.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@12.0.2 --ignore-scripts
+
+      # release.yml and ci.yml fire independently off the same push, so this job
+      # cannot trust that CI already ran against this exact tree.
+      # There is no build step: the package ships TypeScript source verbatim and
+      # is run by Bun, so `files` + the bin entry ARE the build — which is what
+      # the pack-and-execute check below exercises.
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint and format
+        run: bun run lint
+
+      - name: Test
+        run: bun test
+        env:
+          CI: "true"
+
+      # Catch the two dominant causes of silent provenance degradation BEFORE
+      # publishing. npm cannot unpublish after 72h, so a post-publish failure
+      # reports damage rather than preventing it.
+      - name: Preflight — OIDC available and npm meets the trusted-publishing floor
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_TOKEN is unset — the job lacks 'id-token: write'."
+            echo "::error::Publishing now would succeed WITHOUT provenance and cannot be undone after 72h."
+            exit 1
+          fi
+          have="$(npm --version)"
+          need="11.5.1"
+          # `sort -V` is a GNU coreutils extension, guaranteed on ubuntu-24.04.
+          # If this job is ever moved to a macOS runner, BSD sort has no -V and
+          # this comparison breaks — switch to `gsort` or a Node one-liner then.
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
+            echo "::error::npm $have is below the $need floor required for OIDC trusted publishing."
+            exit 1
+          fi
+          echo "preflight ok: OIDC token present, npm $have >= $need"
+
+      # The second irreversible-mistake gate, and the one specific to this
+      # package. `bin` points at ./src/cli.ts — a TypeScript file with a
+      # `#!/usr/bin/env bun` shebang — and `files` is ["src", "README.md"].
+      # That is deliberate (the CLI is Bun-only), but it means the usual signals
+      # are all blind to the failure that matters: `npm pack` happily builds a
+      # tarball whose bin target was excluded by `files`, `npm install` happily
+      # installs it, and the breakage surfaces the first time a user runs
+      # `bunx create-nimbus-connector`. Every unit test in this repo runs
+      # against the working tree, where src/ obviously exists, so none of them
+      # can see it either.
+      #
+      # So: pack the real tarball, install THAT into a scratch consumer, and
+      # drive the installed bin end to end through Bun. Proves the artifact is
+      # functional, not merely well-formed. Runs before publish because npm
+      # cannot unpublish after 72h.
+      - name: Verify the packed tarball actually runs
+        run: |
+          set -euo pipefail
+          repo="$PWD"
+          work="$(mktemp -d)"
+          # `finally`: the scratch tree goes away even when an assertion below
+          # exits non-zero, so a failed run leaves no half-installed consumer.
+          trap 'rm -rf "$work"' EXIT
+
+          # `npm pack`, not `bun pm pack`: this must be the exact packer
+          # `npm publish` will use, or the check proves something else.
+          npm pack --pack-destination "$work" >/dev/null
+          count="$(find "$work" -maxdepth 1 -name '*.tgz' | wc -l)"
+          if [ "$count" != 1 ]; then
+            echo "::error::expected exactly one packed tarball, found $count"
+            exit 1
+          fi
+          tarball="$(find "$work" -maxdepth 1 -name '*.tgz')"
+          echo "packed: $(basename "$tarball") ($(wc -c <"$tarball") bytes)"
+
+          consumer="$work/consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          # --ignore-scripts does not weaken this check: create-nimbus-connector
+          # declares no lifecycle scripts, so a real consumer's install runs none
+          # either. What is being proven here is that `files` shipped `bin`'s
+          # target and that Bun can execute it.
+          npm install --no-audit --no-fund --ignore-scripts "$tarball"
+
+          # Through node_modules/.bin — the real `bunx create-nimbus-connector`
+          # path, shebang and all — rather than `bun path/to/cli.ts`, which
+          # would still pass if the `bin` entry were wrong.
+          out="$consumer/generated"
+          ./node_modules/.bin/create-nimbus-connector \
+            --spec "$repo/fixtures/zzstandalone.spec.json" \
+            --standalone \
+            --out-dir "$out"
+
+          # A zero exit with an empty output directory is the exact failure a
+          # naive smoke test misses, so assert on the files themselves.
+          missing=0
+          for f in src/server.ts test/sandbox.test.ts package.json \
+                   nimbus.extension.json tsconfig.json README.md biome.json; do
+            if [ ! -s "$out/$f" ]; then
+              echo "::error::generated output is missing or empty: $f"
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          echo "pack-and-execute ok: installed tarball generated 7 files via Bun"
+
+      # No NODE_AUTH_TOKEN: the npm trusted-publisher binding for
+      # create-nimbus-connector authenticates this workflow via GitHub OIDC and
+      # attaches provenance.
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
+
+      - name: Resolve published version
+        id: published
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # `npm audit signatures` verifies the registry signatures of the packages
+      # in the CURRENT tree. Run in the repo root it would audit our own
+      # dependencies — which never includes the package we just shipped. To
+      # cryptographically verify the published artifact it must be installed
+      # from the registry into a clean tree first.
+      - name: Verify the published tarball's registry signature (cryptographic)
+        env:
+          PUBLISHED_VERSION: ${{ steps.published.outputs.version }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          # Pin the exact published version in a manifest rather than passing a
+          # spec to `npm install`. The lockfile generated from it resolves
+          # deterministically, so the install that actually places files is
+          # `npm ci` — a locked install — not an unlocked `npm install <spec>`.
+          printf '{"name":"provenance-verify","version":"0.0.0","private":true,"dependencies":{"create-nimbus-connector":"%s"}}\n' \
+            "${PUBLISHED_VERSION}" > package.json
+          # A publish is followed by TWO independent propagation lags, and each
+          # has already turned a good nimbus-sdk release red:
+          #
+          #   * packument lag — lockfile resolution fails ETARGET "No matching
+          #     version found" while the version is still propagating.
+          #   * attestation lag — the tarball installs fine while
+          #     `/-/npm/v1/attestations/...` still 404s, so `npm audit
+          #     signatures` fails on a package that is live and correctly
+          #     attested.
+          #
+          # So install and audit must retry TOGETHER — a loop that breaks on
+          # install alone and audits once afterwards reads attestation lag as a
+          # supply-chain failure. `--prefer-online` is also required: npm caches
+          # the negative packument, so plain retries re-read the same cached 404
+          # instead of asking the registry again.
+          verified=""
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if npm install --package-lock-only --prefer-online \
+                 --no-audit --no-fund --ignore-scripts \
+              && npm ci --no-audit --no-fund --ignore-scripts \
+              && npm audit signatures; then
+              verified=1
+              break
+            fi
+            if [ "$attempt" != 8 ]; then
+              sleep $(( attempt * 10 ))
+            fi
+          done
+          if [ -z "$verified" ]; then
+            echo "::error::create-nimbus-connector@${PUBLISHED_VERSION} could not be installed and signature-verified from the registry after 8 attempts (~4.5 min)."
+            exit 1
+          fi
+
+      - name: Verify provenance names this repo, workflow and commit
+        uses: nimbus-agent/.github/actions/verify-npm-provenance@5fb42792fa88287048fd24f704183b9a9b807a67
+        with:
+          package: "create-nimbus-connector"
+          version: ${{ steps.published.outputs.version }}
+          expected-repo: nimbus-agent/create-nimbus-connector
+          expected-workflow: .github/workflows/release.yml
+          expected-sha: ${{ github.sha }}
+          severity: gate

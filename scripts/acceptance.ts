@@ -18,7 +18,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 const root = resolveNimbusRoot({
   flag: process.argv[2],
-  env: process.env["NIMBUS_ROOT"],
+  env: process.env.NIMBUS_ROOT,
   scriptDir,
 });
 const outDir = join(root, "packages", "mcp-connectors", NAME);

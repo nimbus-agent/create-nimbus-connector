@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nimbus-agent/create-nimbus-connector.git"
+  },
   "bin": { "create-nimbus-connector": "./src/cli.ts" },
   "files": ["src", "README.md"],
   "publishConfig": { "access": "public" },
