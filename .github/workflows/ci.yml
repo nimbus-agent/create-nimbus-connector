@@ -4,14 +4,41 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+
+# Least privilege by default. Nothing in this workflow writes to the repository;
+# release.yml is the only workflow that needs more, and it declares its own.
+permissions:
+  contents: read
+
+# A rapid series of pushes to the same ref should leave one running check, not a
+# queue of superseded ones.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: `latest` moves under you, so a green run
+    # today and a red one tomorrow can differ by nothing this repo controls.
+    # release.yml pins the same image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
+      # audit rather than block: this job reaches GitHub, the Bun install
+      # endpoints and the npm registry (bunx resolves tsc and biome), and an
+      # allowlist that drifts fails the build for reasons unrelated to the change
+      # under test. release.yml makes the same trade for the same reason.
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
       # This org requires every action pinned to a full-length commit SHA.
       # Tag comments record what each SHA resolves to; re-resolve before bumping.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
