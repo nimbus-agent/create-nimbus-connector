@@ -1,10 +1,21 @@
+import { DEFAULT_STANDALONE_LICENSE, defaultLicenseFor } from "../license.ts";
 import type { ConnectorSpec } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import type { GenerateTarget } from "./index.ts";
 
-export function emitReadme(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
+/**
+ * `license` affects the standalone README only. The monorepo README's License section is
+ * byte-locked against the real connectors and stays the literal "AGPL-3.0" those files
+ * carry — note that is the section heading text, not the SPDX id in package.json.
+ */
+export function emitReadme(
+  spec: ConnectorSpec,
+  target: GenerateTarget,
+  license: string = defaultLicenseFor(target),
+): GeneratedFile {
   const t = spec.title;
-  const content = target === "standalone" ? standaloneReadme(spec, t) : monorepoReadme(spec, t);
+  const content =
+    target === "standalone" ? standaloneReadme(spec, t, license) : monorepoReadme(spec, t);
   return { path: ["README.md"], content };
 }
 
@@ -38,7 +49,14 @@ AGPL-3.0
 `;
 }
 
-function standaloneReadme(spec: ConnectorSpec, t: string): string {
+function standaloneReadme(spec: ConnectorSpec, t: string, license: string): string {
+  // UNLICENSED means "no license granted", which is easy to ship by accident. Say what it
+  // implies and how to change it rather than leaving a bare word under the heading.
+  const licenseText =
+    license === DEFAULT_STANDALONE_LICENSE
+      ? `${DEFAULT_STANDALONE_LICENSE} — no license is granted for this package. Regenerate with ` +
+        "`--license <spdx>`, or edit `package.json` and this section, to publish under one."
+      : license;
   const vars = spec.env.flatMap((e) => e.vars);
   // A hand-rolled spec with `env: []` and literal inlineHeaders is valid and reads nothing
   // from the environment. Emitting the sentence plus an empty ```bash fence would tell the
@@ -82,6 +100,6 @@ bun src/server.ts
 
 ## License
 
-AGPL-3.0
+${licenseText}
 `;
 }

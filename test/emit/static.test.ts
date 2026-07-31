@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { BIOME_VERSION, emitBiomeJson } from "../../src/emit/biome-json.ts";
+import { generate } from "../../src/emit/index.ts";
 import { emitPackageJson } from "../../src/emit/package-json.ts";
+import { emitReadme } from "../../src/emit/readme.ts";
 import { emitSandboxTest } from "../../src/emit/sandbox-test.ts";
 import { emitTsconfig } from "../../src/emit/tsconfig.ts";
 import { FORMATTER_CONFIG } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
+import { displayPath } from "../../src/types.ts";
 
 const spec = parseSpec({
   name: "newrelic",
@@ -98,6 +101,45 @@ describe("standalone package.json", () => {
     expect(mono.scripts.build).toBeUndefined();
     // The workspace root supplies both — declaring them here would change golden bytes.
     expect(mono.devDependencies).toEqual({ "@types/bun": "latest" });
+  });
+});
+
+describe("license stamping", () => {
+  it("defaults a standalone package to UNLICENSED, not the monorepo's AGPL stamp", () => {
+    expect(JSON.parse(emitPackageJson(spec, "standalone").content).license).toBe("UNLICENSED");
+  });
+
+  it("keeps the monorepo package on AGPL-3.0-only", () => {
+    expect(JSON.parse(emitPackageJson(spec, "monorepo").content).license).toBe("AGPL-3.0-only");
+  });
+
+  it("stamps an explicit license into package.json and the standalone README", () => {
+    const files = generate(spec, { target: "standalone", license: "MIT" });
+    const pkg = JSON.parse(files.find((f) => displayPath(f.path) === "package.json")!.content);
+    const readme = files.find((f) => displayPath(f.path) === "README.md")!.content;
+    expect(pkg.license).toBe("MIT");
+    expect(readme).toContain("## License\n\nMIT\n");
+    expect(readme).not.toContain("AGPL");
+  });
+
+  it("explains UNLICENSED in the README rather than leaving a bare word", () => {
+    const readme = generate(spec, { target: "standalone" }).find(
+      (f) => displayPath(f.path) === "README.md",
+    )!.content;
+    expect(readme).toContain("UNLICENSED — no license is granted");
+    expect(readme).toContain("--license <spdx>");
+  });
+
+  it("refuses a license on the monorepo target instead of silently dropping it", () => {
+    expect(() => generate(spec, { target: "monorepo", license: "MIT" })).toThrow(
+      /only configurable for the standalone target/i,
+    );
+    expect(() => generate(spec, { license: "MIT" })).toThrow(/AGPL-3\.0-only unconditionally/);
+  });
+
+  it("leaves the monorepo README's byte-locked License section alone", () => {
+    // The real connectors' README.md says "AGPL-3.0" under the heading, not the SPDX id.
+    expect(emitReadme(spec, "monorepo").content).toContain("## License\n\nAGPL-3.0\n");
   });
 });
 

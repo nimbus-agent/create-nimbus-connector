@@ -59,6 +59,28 @@ describe("parseCliArgs", () => {
       expect(parseCliArgs(["acme", "--standalone"]).standalone).toBe(true);
     });
 
+    it("carries --license through when standalone", () => {
+      expect(parseCliArgs(["acme", "--standalone", "--license", "MIT"]).license).toBe("MIT");
+    });
+
+    it("leaves license undefined when the flag is absent", () => {
+      expect(parseCliArgs(["acme", "--standalone"]).license).toBeUndefined();
+    });
+
+    it("rejects --license without --standalone rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--license", "MIT"])).toThrow(/--standalone/);
+      expect(() => parseCliArgs(["acme", "--license", "MIT"])).toThrow(/AGPL-3\.0-only/);
+    });
+
+    it("rejects --license with no following value", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--license"])).toThrow(/--license/);
+    });
+
+    it("rejects a malformed --license at parse time, before any file is emitted", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--license", "  "])).toThrow(/non-empty/i);
+      expect(() => parseCliArgs(["acme", "--standalone", "--license", "MIT!"])).toThrow(/"!"/);
+    });
+
     it("combines with --spec and --out-dir", () => {
       expect(parseCliArgs(["--spec", "x.json", "--standalone", "--out-dir", "/tmp/x"])).toEqual({
         specPath: "x.json",

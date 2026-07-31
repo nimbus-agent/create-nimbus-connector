@@ -105,6 +105,60 @@ describe("bun src/cli.ts (the real binary)", () => {
     });
   });
 
+  it("stamps standalone output UNLICENSED by default, not the monorepo's AGPL", () => {
+    withTempDir((dir) => {
+      expect(runCli(["--standalone"], dir).exitCode).toBe(0);
+      const pkg = JSON.parse(readFileSync(join(dir, CONNECTOR, "package.json"), "utf8"));
+      expect(pkg.license).toBe("UNLICENSED");
+      const readme = readFileSync(join(dir, CONNECTOR, "README.md"), "utf8");
+      expect(readme).toContain("UNLICENSED");
+      expect(readme).not.toContain("AGPL");
+    });
+  });
+
+  it("--license lands in both package.json and the README", () => {
+    withTempDir((dir) => {
+      expect(runCli(["--standalone", "--license", "MIT"], dir).exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(join(dir, CONNECTOR, "package.json"), "utf8")).license).toBe(
+        "MIT",
+      );
+      expect(readFileSync(join(dir, CONNECTOR, "README.md"), "utf8")).toContain(
+        "## License\n\nMIT\n",
+      );
+    });
+  });
+
+  it("leaves monorepo output on AGPL-3.0-only", () => {
+    withTempDir((dir) => {
+      expect(runCli([], dir).exitCode).toBe(0);
+      const base = join(dir, "packages", "mcp-connectors", CONNECTOR);
+      expect(JSON.parse(readFileSync(join(base, "package.json"), "utf8")).license).toBe(
+        "AGPL-3.0-only",
+      );
+      expect(readFileSync(join(base, "README.md"), "utf8")).toContain("## License\n\nAGPL-3.0\n");
+    });
+  });
+
+  it("fails loudly on --license without --standalone, writing nothing", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--license", "MIT"], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("--license applies to --standalone output only");
+      expect(output).toContain("AGPL-3.0-only");
+      // Not silently ignored, and nothing was written before the error.
+      expect(existsSync(join(dir, "packages"))).toBe(false);
+    });
+  });
+
+  it("rejects a malformed --license value before anything is written", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--standalone", "--license", "MIT or Apache-2.0"], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toMatch(/uppercase/);
+      expect(existsSync(join(dir, CONNECTOR))).toBe(false);
+    });
+  });
+
   it("--out-dir overrides the default for both targets, without changing the target", () => {
     withTempDir((dir) => {
       const explicit = join(dir, "elsewhere");

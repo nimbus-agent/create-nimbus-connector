@@ -45,6 +45,21 @@ The package is not yet published (see the SDK-dependency note above), so `bunx c
 - `--standalone` — generate a self-contained connector (imports `@nimbus-dev/sdk/connector-kit`, gains `dev`/`build` scripts) instead of the default monorepo-internal shape. Defaults the output directory to `<name>/` instead of `packages/mcp-connectors/<name>/`.
 - `--dry-run` — don't write anything; print the file tree that would be created (path + byte size per file).
 - `--out-dir <path>` — write to a directory other than the default.
+- `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
+
+### Licensing of generated connectors
+
+A **monorepo** connector is `AGPL-3.0-only`. It lives inside the AGPL Nimbus repo and imports AGPL code through `../../shared/*`, and its `package.json` is byte-diffed against 94 real connectors — so this is fixed, not a default.
+
+A **standalone** connector is none of those things: it is your own code, produced by an MIT-licensed tool, depending only on the MIT `@nimbus-dev/sdk`. Nothing about it obliges copyleft, so it is **not** stamped AGPL. It defaults to `UNLICENSED` — npm's marker for "no license granted" — which is a deliberate non-choice rather than a wrong choice made on your behalf. Pass `--license <spdx>` to set a real one:
+
+```
+bun src/cli.ts acme --standalone --license MIT
+bun src/cli.ts acme --standalone --license "Apache-2.0"
+bun src/cli.ts acme --standalone --license "MIT OR Apache-2.0"
+```
+
+The value is validated as an SPDX identifier or expression before anything is written; a malformed one fails at parse time rather than landing in a `package.json` npm will later reject. This is a syntax check, not a lookup against the SPDX license list — `LicenseRef-<name>` is accepted deliberately.
 
 Examples:
 

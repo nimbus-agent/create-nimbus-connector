@@ -1,15 +1,26 @@
+import { defaultLicenseFor } from "../license.ts";
 import type { ConnectorSpec } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import { BIOME_VERSION } from "./biome-json.ts";
 import type { GenerateTarget } from "./index.ts";
 
-export function emitPackageJson(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
+/**
+ * `license` defaults to the target's own default — AGPL-3.0-only for monorepo (fixed, the
+ * package sits inside an AGPL repo and is byte-locked against 94 real connectors),
+ * UNLICENSED for standalone. Only generate() may override it, and only for standalone;
+ * that invariant is enforced there.
+ */
+export function emitPackageJson(
+  spec: ConnectorSpec,
+  target: GenerateTarget,
+  license: string = defaultLicenseFor(target),
+): GeneratedFile {
   const standalone = target === "standalone";
   const pkg = {
     name: `nimbus-mcp-${spec.name}`,
     version: "0.1.0",
     private: false,
-    license: "AGPL-3.0-only",
+    license,
     type: "module",
     scripts: {
       ...(standalone ? { dev: "bun run --watch src/server.ts" } : {}),
