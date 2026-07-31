@@ -3,7 +3,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
-import { formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
+import {
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../src/format.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { run } from "../src/golden/run.ts";
 import { parseSpec } from "../src/spec.ts";
@@ -25,7 +30,7 @@ if (!formatterAvailable()) {
   throw new Error(
     "@biomejs/biome is required here — byte-exactness is the point of this check, and " +
       "unformatted output would produce spurious diffs that look like emitter regressions. " +
-      "Run `bun install` to restore the optional dependency.",
+      formatterUnavailableReason(),
   );
 }
 

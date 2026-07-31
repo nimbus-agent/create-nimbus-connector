@@ -11,7 +11,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
-import { formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
+import {
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../src/format.ts";
 import { run } from "../src/golden/run.ts";
 import { parseSdkArgs, resolveSdkRoot } from "../src/golden/sdk-root.ts";
 import { parseSpec } from "../src/spec.ts";
@@ -54,7 +59,9 @@ const checks: { name: string; ok: boolean; output: string }[] = [];
 
 try {
   await initFormatter();
-  if (!formatterAvailable()) throw new Error("@biomejs/biome is required for this check.");
+  if (!formatterAvailable()) {
+    throw new Error(`@biomejs/biome is required for this check. ${formatterUnavailableReason()}`);
+  }
 
   const spec = parseSpec(
     JSON.parse(await Bun.file(join(scriptDir, "..", "fixtures", `${NAME}.spec.json`)).text()),

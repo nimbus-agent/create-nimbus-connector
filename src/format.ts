@@ -38,6 +38,29 @@ export const FORMATTER_CONFIG = {
 let cached: Instance | undefined;
 let initialised = false;
 let available = false;
+let unavailableReason: string | undefined;
+
+const JS_API = "@biomejs/js-api/nodejs";
+/** The wasm backend @biomejs/js-api imports; a separate optionalDependency of this repo. */
+const WASM_BACKEND = "@biomejs/wasm-nodejs";
+
+/**
+ * True only when `err` is a module-resolution failure for `specifier` itself.
+ *
+ * Under Bun a failed dynamic import rejects with a ResolveMessage carrying `code`
+ * ERR_MODULE_NOT_FOUND / MODULE_NOT_FOUND and a `specifier` field naming the module that
+ * could not be found — which is the *inner* specifier when a package resolves but one of
+ * its own imports does not. That difference is exactly what separates "@biomejs/js-api is
+ * not installed" from "@biomejs/js-api is installed but its wasm backend is missing".
+ */
+function isMissingModule(err: unknown, specifier: string): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; specifier?: unknown; message?: unknown };
+  if (e.code !== "ERR_MODULE_NOT_FOUND" && e.code !== "MODULE_NOT_FOUND") return false;
+  // Prefer the structured field; fall back to the message only if a runtime omits it.
+  if (typeof e.specifier === "string") return e.specifier === specifier;
+  return typeof e.message === "string" && e.message.includes(specifier);
+}
 
 /**
  * Load Biome if it is installed. Idempotent, and never throws for a missing
@@ -50,12 +73,27 @@ export async function initFormatter(): Promise<void> {
 
   let BiomeCtor: new () => BiomeLike;
   try {
-    ({ Biome: BiomeCtor } = (await import("@biomejs/js-api/nodejs")) as {
+    ({ Biome: BiomeCtor } = (await import(JS_API)) as {
       Biome: new () => BiomeLike;
     });
-  } catch {
-    // The ONLY tolerated failure: the optional dependency is not installed.
+  } catch (err) {
+    // Two very different failures land here, and conflating them sends the user to fix a
+    // package that is already installed:
+    //   1. the optional dependency is genuinely absent — the tolerated case, since a
+    //      `bunx create-nimbus-connector` consumer may not have it;
+    //   2. it is present but could not load, most plausibly because its @biomejs/wasm-nodejs
+    //      backend (a separate optionalDependency) is missing or corrupt.
+    // Both still degrade to unformatted output rather than throwing — that is what
+    // optionalDependencies are for, and a platform that cannot install the wasm backend
+    // must not lose the generator entirely — but the reason recorded here is what callers
+    // report, so case 2 surfaces the underlying error instead of a misdiagnosis.
     available = false;
+    unavailableReason = isMissingModule(err, JS_API)
+      ? `${JS_API} is not installed. It is an optionalDependency, so the generated files ` +
+        "are unformatted; they are valid TypeScript and compile as-is."
+      : `${JS_API} is installed but failed to load, so the generated files are unformatted. ` +
+        `Reinstalling it alone will not help — check that its ${WASM_BACKEND} backend is ` +
+        `present and intact. Underlying error: ${err instanceof Error ? err.message : String(err)}`;
     return;
   }
 
@@ -66,10 +104,20 @@ export async function initFormatter(): Promise<void> {
   biome.applyConfiguration(projectKey, FORMATTER_CONFIG);
   cached = { biome, projectKey };
   available = true;
+  unavailableReason = undefined;
 }
 
 export function formatterAvailable(): boolean {
   return available;
+}
+
+/**
+ * Why formatting is unavailable, or undefined when it is available (or before
+ * initFormatter() has run). Callers print this instead of assuming "not installed" —
+ * see the two cases enumerated in initFormatter().
+ */
+export function formatterUnavailableReason(): string | undefined {
+  return available ? undefined : unavailableReason;
 }
 
 /** Returns "unknown" rather than throwing when the backend is not installed. */

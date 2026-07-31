@@ -129,7 +129,7 @@ describe("the checked-in fixtures/expectations.json", () => {
     ]);
     // The two partial fixtures are the reason the shape changed; assert their sets, not
     // their sizes, so a count-preserving swap fails here too.
-    expect([...loaded["discord"]!].sort()).toEqual([
+    expect([...loaded.discord!].sort()).toEqual([
       "README.md",
       "test/sandbox.test.ts",
       "tsconfig.json",

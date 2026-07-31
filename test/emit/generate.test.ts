@@ -231,7 +231,7 @@ describe("generate target", () => {
       const lines = server(spec, "standalone").split("\n");
       const kit = lines.findIndex((l) => l.includes("@nimbus-dev/sdk/connector-kit"));
       const stdio = lines.findIndex((l) => l.includes("server/stdio.js"));
-      const zod = lines.findIndex((l) => l === 'import { z } from "zod";');
+      const zod = lines.indexOf('import { z } from "zod";');
       expect(stdio).toBeGreaterThanOrEqual(0);
       expect(zod).toBeGreaterThanOrEqual(0);
       expect(kit).toBeGreaterThan(stdio);
@@ -243,20 +243,26 @@ describe("generate target", () => {
 
   it("keeps the monorepo import block in its two-group shape", () => {
     const lines = server(handRolled).split("\n");
-    const zod = lines.findIndex((l) => l === 'import { z } from "zod";');
+    const zod = lines.indexOf('import { z } from "zod";');
     expect(lines[zod + 1]).toBe("");
     expect(lines[zod + 2]).toContain("import {");
   });
 
   it("sandbox tests are identical for both targets", () => {
     for (const spec of [handRolled, restKit]) {
-      const monorepoSandbox = generate(spec).find(
-        (f) => displayPath(f.path) === "test/sandbox.test.ts",
-      )?.content;
-      const standaloneSandbox = generate(spec, { target: "standalone" }).find(
-        (f) => displayPath(f.path) === "test/sandbox.test.ts",
-      )?.content;
-      expect(monorepoSandbox).toBe(standaloneSandbox);
+      const find = (target?: "standalone") =>
+        generate(spec, target === undefined ? undefined : { target }).find(
+          (f) => displayPath(f.path) === "test/sandbox.test.ts",
+        );
+      const monorepoSandbox = find();
+      const standaloneSandbox = find("standalone");
+      // Assert the file exists first. Comparing `?.content` alone passed as
+      // `undefined === undefined` if emitSandboxTest were dropped from generate()
+      // entirely — the exact deletion this test is supposed to catch.
+      expect(monorepoSandbox).toBeDefined();
+      expect(standaloneSandbox).toBeDefined();
+      expect(monorepoSandbox?.content).toContain("runSandboxContractTests");
+      expect(monorepoSandbox?.content).toBe(standaloneSandbox?.content);
     }
   });
 });

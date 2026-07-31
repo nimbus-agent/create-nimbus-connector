@@ -2,7 +2,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";
-import { formatAll, formatterAvailable, initFormatter } from "./format.ts";
+import {
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "./format.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
@@ -73,8 +78,8 @@ export async function main(argv: readonly string[]): Promise<void> {
   await initFormatter();
   if (!formatterAvailable()) {
     console.error(
-      "note: @biomejs/js-api is not installed, so the generated files are unformatted.\n" +
-        "      they are valid TypeScript and will compile as-is. to format them:\n\n" +
+      `note: ${formatterUnavailableReason() ?? "the formatter is unavailable."}\n` +
+        "      to format the output afterwards:\n\n" +
         `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
     );
   }

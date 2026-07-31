@@ -3,7 +3,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeValue } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
-import { biomeVersion, formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
+import {
+  biomeVersion,
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../src/format.ts";
 import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { classify, loadExpectations } from "../src/golden/expectations.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
@@ -64,7 +70,7 @@ async function main(): Promise<void> {
     throw new Error(
       "@biomejs/biome is required here — byte-exactness is the point of this check, and " +
         "unformatted output would produce spurious diffs that look like emitter regressions. " +
-        "Run `bun install` to restore the optional dependency.",
+        formatterUnavailableReason(),
     );
   }
 
