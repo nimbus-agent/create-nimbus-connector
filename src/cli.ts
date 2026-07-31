@@ -11,6 +11,7 @@ export type CliOptions = {
   specPath?: string;
   outDir?: string;
   dryRun: boolean;
+  standalone: boolean;
 };
 
 /** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
@@ -23,10 +24,11 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 }
 
 export function parseCliArgs(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false };
+  const opts: CliOptions = { dryRun: false, standalone: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
+    else if (a === "--standalone") opts.standalone = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
@@ -63,7 +65,9 @@ export async function main(argv: readonly string[]): Promise<void> {
       ? parseSpec(JSON.parse(await Bun.file(opts.specPath).text()))
       : promptForSpec(opts.name);
 
-  const outDir = opts.outDir ?? join("packages", "mcp-connectors", spec.name);
+  const target = opts.standalone ? "standalone" : "monorepo";
+  const outDir =
+    opts.outDir ?? (opts.standalone ? spec.name : join("packages", "mcp-connectors", spec.name));
 
   await initFormatter();
   if (!formatterAvailable()) {
@@ -75,7 +79,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   }
 
   // generate() and formatAll() are synchronous — do not await them.
-  const files = formatAll(generate(spec));
+  const files = formatAll(generate(spec, { target }));
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);
