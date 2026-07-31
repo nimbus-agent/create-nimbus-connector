@@ -131,4 +131,46 @@ describe("rest-kit writes", () => {
     const out = renderRestKitTools(restSpec([{ name: "zz_a", description: "A.", path: "/a" }]));
     expect(out).not.toContain("method:");
   });
+
+  // Regression test for a bug the brief's own Step 3 snippet contained: an unconditional
+  // `(parsed) => ({ ... })` buildInit arrow declares an unused "parsed" whenever the tool's
+  // body is undefined. A DELETE whose only arg is in the path is exactly that case —
+  // renderBodyExpr excludes the path arg, leaving no body, so the buildInit arrow must take
+  // no parameter at all or the generated package's noUnusedParameters tsconfig rejects it.
+  it("emits a parameterless buildInit for a DELETE whose only arg is in the path", () => {
+    const out = renderRestKitTools(
+      restSpec([
+        {
+          name: "zz_delete",
+          description: "D.",
+          path: "/i/${arg.id|enc}",
+          method: "DELETE",
+          effect: "delete",
+          args: { id: { type: "string" } },
+        },
+      ]),
+    );
+    expect(out).toContain('() => ({ method: "DELETE" })');
+    expect(out).not.toContain("body:");
+  });
+
+  // Pins the ordering in the hoisted-args return path specifically: buildInit must be
+  // appended after the multi-line buildPath arrow's closing "},", not folded inside it.
+  it("appends buildInit after the hoisted buildPath closes", () => {
+    const out = renderRestKitTools(
+      restSpec([
+        {
+          name: "zz_hoisted_write",
+          description: "H.",
+          path: "/i/${arg.id|enc}",
+          method: "PATCH",
+          effect: "write",
+          args: { id: { type: "string" }, flag: { type: "boolean" } },
+        },
+      ]),
+    );
+    expect(out).toContain(
+      '  },\n  (parsed) => ({ method: "PATCH", body: JSON.stringify({ flag: parsed.flag }) }),',
+    );
+  });
 });
