@@ -281,7 +281,7 @@ Whichever candidate is chosen must contain the marker file `packages/mcp-connect
 
 **If no candidate resolves, the harness prints every path it tried, states which check each one failed, and exits 1.** It is a standalone script, not a `bun:test` file, deliberately: `test/sandbox.test.ts` in the monorepo is wrapped in `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])` and that variable is set nowhere in `.github/`, `scripts/`, or `package.json` — all 79 of those tests skip on every CI run. That is the exact false-green this harness must not reproduce.
 
-Per fixture it reports each of the six files as identical / differing (with a unified diff) / missing, plus a stub count, and compares the identical-file count against `fixtures/expectations.json`. It exits non-zero if any fixture **diverges from its declared expectation in either direction** — a regression, or an unexpected improvement that means the expectations file and the criterion-2 gap report have gone stale. A fixture with no declared expectation throws rather than defaulting to a passing value. This is an expectation check, not an allow-list: nothing is forgiven, only recorded.
+Per fixture it reports each of the six files as identical / differing (with a unified diff) / missing, plus a stub count, and compares the *set* of byte-identical file paths against `fixtures/expectations.json`. It exits non-zero if any fixture **diverges from its declared expectation in either direction** — a file that stopped matching, or one that newly matches without being declared, either of which means the expectations file and the criterion-2 gap report have gone stale. Comparing the set rather than a count is what makes a count-preserving swap (one file newly matching while another breaks) a failure instead of a silent PASS. A fixture with no declared expectation throws rather than defaulting to a passing value. This is an expectation check, not an allow-list: nothing is forgiven, only recorded.
 
 ## Acceptance criteria
 
@@ -301,7 +301,7 @@ Measured against `C:\gitrep\Nimbus`, Biome `2.5.6`, Bun `1.3.14`.
 
 **Criterion 1 — PASS.** `bun run diff:golden --nimbus-root C:\gitrep\Nimbus`. `newrelic`, `datadog`, `grafana`, and `sentry` each report `PASS  <name>  6/6 files identical` with no residual diff.
 
-**Criterion 2 — PASS (gap documented, not closed).** Same command; `discord` reports `PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))` and `google-meet` reports `PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))`, matching the counts declared in `fixtures/expectations.json` and the per-file gap tables below. The harness would fail the run if either count drifted in either direction; it did not.
+**Criterion 2 — PASS (gap documented, not closed).** Same command; `discord` reports `PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))` and `google-meet` reports `PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))`, matching the file sets declared in `fixtures/expectations.json` and the per-file gap tables below. The harness would fail the run if either set drifted in either direction; it did not.
 
 **Criterion 3 — PASS.** `bun run acceptance C:\gitrep\Nimbus` (`scripts/acceptance.ts`) generates the `zzscratch` fixture (`fixtures/zzscratch.spec.json`) into `packages/mcp-connectors/zzscratch/` inside the live monorepo and runs the monorepo's own toolchain against it, with a `try/finally` that removes the scratch connector regardless of outcome:
 
@@ -320,13 +320,13 @@ Cleanup-under-failure was verified separately, not assumed: a temporary `throw` 
 
 **Criterion 5 — PASS.** `bun test` — 174 pass, 0 fail, across 17 files, with no `NIMBUS_ROOT` set and no Nimbus checkout required (the golden-harness and acceptance scripts are separate entry points, not part of the `bun:test` suite).
 
-**On `fixtures/zzscratch.spec.json` and the golden harness:** this fixture is purpose-built for criterion 3, not criterion 1 — there is no real `zzscratch` connector in the monorepo to diff against. Rather than exempting it from `scripts/diff-golden.ts`'s directory scan (which would let an undeclared fixture silently bypass the expectations check the harness exists to enforce), it is declared in `fixtures/expectations.json` as `"zzscratch": 0`. The harness reports it as `PASS  zzscratch  0/6 files identical (expected partial)` with all six files listed `MISSING — not present in the real connector`, which is the correct and expected verdict for a fixture with no real counterpart, not a bypass.
+**On `fixtures/zzscratch.spec.json` and the golden harness:** this fixture is purpose-built for criterion 3, not criterion 1 — there is no real `zzscratch` connector in the monorepo to diff against. Rather than exempting it from `scripts/diff-golden.ts`'s directory scan (which would let an undeclared fixture silently bypass the expectations check the harness exists to enforce), it is declared in `fixtures/expectations.json` as `"zzscratch": []`. The harness reports it as `PASS  zzscratch  0/6 files identical (expected partial)` with all six files listed `MISSING — not present in the real connector`, which is the correct and expected verdict for a fixture with no real counterpart, not a bypass.
 
 ### Criterion 2: `discord` and `google-meet` gap report
 
 Both fixtures (`fixtures/discord.spec.json`, `fixtures/google-meet.spec.json`) are `style: "rest-kit"`, modelled directly on `packages/mcp-connectors/{discord,google-meet}/src/server.ts` and `nimbus.extension.json` in the monorepo. Neither reaches zero diff, by design — Task 16 exists to characterise the gap, not close it. `bun run diff:golden discord google-meet --nimbus-root <root>` reports:
 
-The exact identical-file counts below (3/6 and 2/6) are checked in as machine-readable expectations in `fixtures/expectations.json`. The harness (`scripts/diff-golden.ts`) fails the run if reality diverges from a declared count **in either direction** — including an unexpected improvement — so this table cannot silently drift out of date; closing any part of the gap requires updating both the expectation and this section in the same change.
+The exact sets of byte-identical files below (3/6 and 2/6) are checked in as machine-readable expectations in `fixtures/expectations.json`. The harness (`scripts/diff-golden.ts`) fails the run if reality diverges from a declared set **in either direction** — including an unexpected improvement, and including a swap that leaves the count unchanged — so this table cannot silently drift out of date; closing any part of the gap requires updating both the expectation and this section in the same change.
 
 **`discord` — 3/6 files identical, 1 stub tool**
 

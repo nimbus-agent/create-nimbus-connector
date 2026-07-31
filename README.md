@@ -66,7 +66,9 @@ bun run diff:golden sentry datadog --nimbus-root D:\Nimbus
 
 `--nimbus-root <path>` points at a Nimbus checkout explicitly. Resolution order if omitted: `--nimbus-root` flag, then `$NIMBUS_ROOT`, then a sibling directory of this repo named `Nimbus` or `nimbus`. A resolved path must contain the marker file `packages/mcp-connectors/shared/mcp-tool-kit.ts`, or resolution fails loudly rather than producing a wall of missing-file errors.
 
-Each fixture's expected identical-file count (out of 6) is checked in at `fixtures/expectations.json`. The harness fails if reality diverges from that count **in either direction** — a regression, or an unannounced improvement that would leave the expectations file and the design doc's gap report stale.
+Each fixture's expected set of byte-identical file paths (out of 6) is checked in at `fixtures/expectations.json`. The harness fails if reality diverges from that set **in either direction** — a file that stopped matching, or one that newly matches without being declared, which would leave the expectations file and the design doc's gap report stale.
+
+It records *which* files match rather than how many, deliberately: for a partial fixture such as `discord` (3 of 6), a count alone reports PASS when a change newly matches `README.md` while breaking `package.json`.
 
 ## The acceptance harness
 
