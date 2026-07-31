@@ -81,6 +81,17 @@ describe("renderBodyExpr", () => {
     expect(renderBodyExpr(t, "p")).toBe('JSON.stringify({ "issue-title": p.title })');
   });
 
+  it("keeps a path arg when the mapping names it explicitly — the default excludes it, an explicit request does not", () => {
+    const t = toolOf({
+      path: "/a/${arg.id|enc}",
+      method: "PATCH",
+      effect: "write",
+      args: { id: { type: "string" }, title: { type: "string" } },
+      body: { id: "item_id", title: "t" },
+    });
+    expect(renderBodyExpr(t, "p")).toBe("JSON.stringify({ item_id: p.id, t: p.title })");
+  });
+
   it("omits args that the mapping does not name", () => {
     const t = toolOf({
       path: "/a",
