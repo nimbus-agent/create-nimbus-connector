@@ -1,2 +1,13 @@
+# fixtures/snapshots/ holds complete generated connector packages, checked in as byte-exact
+# golden data — including each one's own test/sandbox.test.ts. Those are snapshot DATA, not
+# this project's own tests: they import "@nimbus-dev/sdk/testing", which is not a dependency
+# of this repo (it only resolves once a real SDK is installed into that generated package,
+# e.g. by standalone-acceptance in a temp dir). Without this, Bun's default recursive `bun
+# test` discovery sweeps those files in and fails them with "Cannot find module". Excluding
+# only fixtures/** (rather than restricting discovery to test/ repo-wide) is deliberate: a
+# `root` restriction would also silently skip any future test file placed outside test/ —
+# no error, just never run — which is exactly the "passes without asserting anything" failure
+# mode this project has been guarding against elsewhere. If you add a test somewhere new and
+# it isn't running, this is why.
 [test]
-root = "test"
+pathIgnorePatterns = ["fixtures/**"]
