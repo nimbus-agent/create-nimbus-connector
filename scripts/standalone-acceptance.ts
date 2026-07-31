@@ -1,13 +1,14 @@
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
@@ -139,11 +140,15 @@ try {
   checks.push({ name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) });
   checks.push({ name: "bun run lint", ...run(["bun", "run", "lint"], outDir) });
 
-  const escaping = run(["grep", "-rn", "\\.\\./\\.\\.", "src"], outDir);
+  // Scoped to src/ specifically, not the whole package: the generated test/sandbox.test.ts
+  // legitimately contains "../../" (it resolves from test/ up to the package root), so
+  // scanning outDir as a whole would flag correct code. src/ is where an escaping relative
+  // import would actually matter.
+  const escaping = findEscapingImports(join(outDir, "src"));
   checks.push({
     name: "no relative import escapes the package",
-    ok: escaping.output.trim() === "",
-    output: escaping.output,
+    ok: escaping.trim() === "",
+    output: escaping,
   });
 
   const expectedTools = spec.tools.map((t) => t.name);
@@ -187,6 +192,34 @@ for (const c of checks) {
 
 if (checks.some((c) => !c.ok)) process.exit(1);
 console.log("\nAll standalone acceptance checks passed.");
+
+/**
+ * Pure-Bun replacement for `grep -rn "\.\./\.\." <dir>`: no external binary, so it works
+ * identically under PowerShell and Git Bash. Recurses through dir and returns one
+ * "path:line:content" entry per matching line (grep's -n format), or "" if none match.
+ */
+function findEscapingImports(dir: string): string {
+  const matches: string[] = [];
+
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        const lines = readFileSync(full, "utf8").split("\n");
+        for (const [i, line] of lines.entries()) {
+          if (line.includes("../..")) {
+            matches.push(`${relative(dir, full).replaceAll("\\", "/")}:${i + 1}:${line}`);
+          }
+        }
+      }
+    }
+  };
+
+  if (existsSync(dir)) walk(dir);
+  return matches.join("\n");
+}
 
 async function toolsListCheck(
   cwd: string,
