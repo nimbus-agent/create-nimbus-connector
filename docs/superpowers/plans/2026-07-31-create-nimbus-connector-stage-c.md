@@ -385,9 +385,13 @@ const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 /**
  * The JSON body expression for a tool, or undefined when it sends none.
  *
- * The args object IS the body by default, which is the shape the corpus uses
- * (`JSON.stringify({ issueId, status })`). Arg values are referenced directly rather
+ * Args NOT referenced in the path are the body by default, which is the shape the corpus
+ * uses (`JSON.stringify({ issueId, status })`). Arg values are referenced directly rather
  * than interpolated into a string, so a number arg stays a number in the JSON.
+ *
+ * Path args are excluded because including them sends a PATCH's path parameter twice and
+ * gives a DELETE a body it should not have — see the spec's §4.4 table. An explicit `body`
+ * mapping still wins entirely: naming a path arg there is a deliberate request.
  */
 export function renderBodyExpr(tool: ToolSpec, param: string): string | undefined {
   if (tool.method === "GET") return undefined;

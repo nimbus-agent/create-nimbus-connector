@@ -81,7 +81,7 @@ The 94 are unaffected in practice — they are workspace packages that never tra
 | D2 | Separate `method` and `effect` fields | §1.2 — method does not imply write-intent |
 | D3 | `effect` is three-valued, not two booleans | Maps onto the only two `hitlRequired` values observed; two booleans admit nonsense states |
 | D4 | `hitlRequired` computed from `effect`, never declared | §1.2 — hand-declared capability drifts from the tools; 32 of 94 already have |
-| D5 | Args are the body by default, explicit mapping optional | Matches the observed `JSON.stringify({ issueId, status })` shape |
+| D5 | Args **not referenced in the path** are the body by default; explicit mapping optional and overriding | Matches the observed `JSON.stringify({ issueId, status })` shape. Amended after Task 4's review: the original "all args are the body" sent path parameters in the body too — see §4.4 |
 | D6 | Writes verified by golden snapshots of our own output | §1.3 — byte-matching hand-written writers is unachievable |
 | D7 | Nimbus accepts `entrypoint` as a fallback for `entry` | Fixes the 94, `nimbus scaffold`, and generated connectors at once |
 | D8 | Gateway wiring is opt-in and emits new files only | Editing a 93-entry file in another repository risks silent corruption |
@@ -166,9 +166,19 @@ async function zzSend(path: string, method: string, body: unknown): Promise<unkn
 
 ### 4.4 Bodies
 
-The args object becomes the body directly, preserving Zod types — `JSON.stringify({ title, body })` for args `title` and `body`. An explicit mapping changes key names only: `{ issue_title: title }`.
+The args **not referenced in the path** become the body, preserving Zod types. An explicit mapping changes key names only: `{ issue_title: title }`, and wins entirely where present — an author who names a path arg there has asked for it deliberately.
 
-A `DELETE` with no body emits neither a `body` field nor a `Content-Type` header.
+Excluding path args was not in the first draft of this spec, which said simply "the args object becomes the body". Reviewing Task 4 exposed what that produces:
+
+| Tool | "args are the body" | Excluding path args |
+| --- | --- | --- |
+| `POST /items` args `{title}` | `{ title }` | `{ title }` — unchanged |
+| `PATCH /items/${arg.id}` args `{id, title}` | `{ id, title }` | `{ title }` |
+| `DELETE /items/${arg.id}` args `{id}` | `{ id }` | no body at all |
+
+The middle and bottom rows are the two commonest REST write shapes, and the original rule got both wrong: a PATCH sent its path parameter twice, and a DELETE sent a body it should not have. `parsePathTemplate` already yields which args a path references, so the exclusion is mechanical.
+
+A `DELETE` whose only arg is a path parameter therefore emits neither a `body` field nor a `Content-Type` header.
 
 ### 4.5 `client-credentials`
 
