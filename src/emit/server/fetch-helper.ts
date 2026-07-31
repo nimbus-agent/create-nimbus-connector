@@ -71,6 +71,48 @@ function renderRestKitFetchHelper(spec: ConnectorSpec): string {
   ].join("\n");
 }
 
+/**
+ * The write helper, or undefined when the spec has no non-GET tool.
+ *
+ * Emitting it conditionally is what makes Stage C byte-safe: a read-only spec never
+ * reaches this function, so newrelic/datadog/grafana/sentry cannot move. It also mirrors
+ * the corpus — argocd has agPost because argocd posts.
+ */
+export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
+  if (!spec.tools.some((t) => t.method !== "GET")) return undefined;
+  if (spec.style === "rest-kit") return undefined; // the registrar's buildInit carries it
+
+  const fh = spec.fetchHelper;
+  const url = `\`${resolveEnvRefs(fh.base)}\${path}\``;
+  // headerOption(spec) returns "headers: <expr>" where <expr> is either an inline object
+  // literal or an accessor call (see FetchHelperSchema — headers and inlineHeaders are
+  // mutually exclusive). Strip the "headers: " prefix and spread the expression so the
+  // write helper gets the same headers as the read helper, plus Content-Type.
+  const headerExpr = headerOption(spec).replace(/^headers: /, "");
+  return [
+    `async function ${fh.local}Send(`,
+    "  path: string,",
+    "  method: string,",
+    "  body: string | undefined,",
+    "): Promise<unknown> {",
+    `  const res = await fetch(${url}, {`,
+    "    method,",
+    `    headers: { ...${headerExpr}, "Content-Type": "application/json" },`,
+    "    ...(body === undefined ? {} : { body }),",
+    "  });",
+    "  const text = await res.text();",
+    "  if (!res.ok) {",
+    `    throw new Error(\`${spec.serviceLabel} \${String(res.status)}: \${text.slice(0, 400)}\`);`,
+    "  }",
+    "  try {",
+    "    return JSON.parse(text) as unknown;",
+    "  } catch {",
+    "    return null;",
+    "  }",
+    "}",
+  ].join("\n");
+}
+
 export function renderFetchHelper(spec: ConnectorSpec): string {
   if (spec.style === "rest-kit") return renderRestKitFetchHelper(spec);
 

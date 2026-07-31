@@ -2,7 +2,7 @@ import type { ConnectorSpec } from "../../spec.ts";
 import type { GeneratedFile } from "../../types.ts";
 import type { GenerateTarget } from "../index.ts";
 import { renderEnvAccessor } from "./env.ts";
-import { renderFetchHelper } from "./fetch-helper.ts";
+import { renderFetchHelper, renderWriteHelper } from "./fetch-helper.ts";
 import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
@@ -81,6 +81,7 @@ function tail(spec: ConnectorSpec): string {
 
 export function emitServer(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const isHand = spec.style === "hand-rolled";
+  const writeHelper = renderWriteHelper(spec);
   const sections = [
     imports(spec, target),
     // Env accessors are emitted for hand-rolled ONLY. Rest-kit's makeRestToolRegistrar
@@ -88,6 +89,9 @@ export function emitServer(spec: ConnectorSpec, target: GenerateTarget): Generat
     // would never be called; mapping renderEnvAccessor unconditionally would emit dead code.
     ...(isHand ? spec.env.map((e) => renderEnvAccessor(e)) : []),
     renderFetchHelper(spec),
+    // Emitted only when the spec has a non-GET tool (see renderWriteHelper) — a read-only
+    // spec never reaches this, which is what keeps newrelic/datadog/grafana/sentry byte-safe.
+    ...(writeHelper === undefined ? [] : [writeHelper]),
     wiring(spec),
     isHand ? renderHandRolledTools(spec) : renderRestKitTools(spec),
     tail(spec),

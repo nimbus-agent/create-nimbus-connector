@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { renderWriteHelper } from "../../../src/emit/server/fetch-helper.ts";
 import { renderHandRolledTools } from "../../../src/emit/server/tools-hand.ts";
 import { parseSpec } from "../../../src/spec.ts";
 
@@ -154,5 +155,61 @@ describe("renderHandRolledTools", () => {
     );
     expect(out).toContain("async () =>");
     expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
+  });
+});
+
+describe("hand-rolled write support", () => {
+  const spec = (tools: unknown[]) =>
+    parseSpec({
+      name: "zz",
+      title: "Zz",
+      displayName: "Zz",
+      description: "d.",
+      serviceLabel: "Zz",
+      style: "hand-rolled",
+      network: ["api.zz.test"],
+      syncInterval: 300,
+      minNimbusVersion: "0.2.0",
+      env: [{ vars: ["ZZ_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+      fetchHelper: { local: "zzGet", base: "https://api.zz.test", headers: "headers" },
+      tools,
+    });
+
+  it("emits NO write helper for a read-only spec — this is what keeps the 6/6 fixtures byte-identical", () => {
+    expect(renderWriteHelper(spec([{ name: "a", description: "A.", path: "/a" }]))).toBeUndefined();
+  });
+
+  it("emits a write helper when any tool is non-GET", () => {
+    const out = renderWriteHelper(
+      spec([{ name: "a", description: "A.", path: "/a", method: "POST", effect: "write" }]),
+    );
+    expect(out).toContain("async function zzGetSend(");
+    expect(out).toContain("method,");
+    expect(out).toContain('"Content-Type": "application/json"');
+  });
+
+  it("routes a write tool through the write helper with method and body", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "zz_create",
+          description: "C.",
+          path: "/i",
+          method: "POST",
+          effect: "write",
+          args: { title: { type: "string" } },
+        },
+      ]),
+    );
+    // pathExpr follows the same renderPath contract as the read path: a fully static
+    // path renders as a plain double-quoted string, not a template literal.
+    expect(out).toContain('zzGetSend("/i", "POST", JSON.stringify({ title: p.title }))');
+  });
+
+  it("sends no body on a DELETE with no args", () => {
+    const out = renderHandRolledTools(
+      spec([{ name: "zz_rm", description: "R.", path: "/i", method: "DELETE", effect: "delete" }]),
+    );
+    expect(out).toContain('zzGetSend("/i", "DELETE", undefined)');
   });
 });

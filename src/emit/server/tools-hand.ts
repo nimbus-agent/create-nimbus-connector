@@ -1,5 +1,6 @@
 import type { ConnectorSpec } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
+import { renderBodyExpr } from "./body.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
 
 const PARAM = "p";
@@ -28,11 +29,27 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
 
   const hoisted = hoistedLocals(tool.args);
   const segments = parsePathTemplate(path);
-  const needsParam =
-    hoisted.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
-
   const pathExpr = renderPath(segments, { param: PARAM, hoisted });
-  const call = `jsonResult(await ${spec.fetchHelper.local}(${pathExpr}))`;
+
+  // A non-GET tool routes through the write helper (`${local}Send`) with its method and
+  // JSON body; renderBodyExpr returns undefined for a tool that sends no body (e.g. a
+  // DELETE with no args), which becomes a literal `undefined` argument rather than
+  // `JSON.stringify({})`.
+  const bodyExpr = tool.method === "GET" ? undefined : renderBodyExpr(tool, PARAM);
+  const call =
+    tool.method === "GET"
+      ? `jsonResult(await ${spec.fetchHelper.local}(${pathExpr}))`
+      : `jsonResult(await ${spec.fetchHelper.local}Send(${pathExpr}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+
+  // The body only ever references PARAM through renderBodyExpr's own param.field
+  // expressions, so a defined bodyExpr always needs the parameter — even when the path
+  // itself does not. Without this, a write tool whose path is fully static (e.g. a
+  // POST to a fixed collection endpoint) would emit an unused `p`, which the generated
+  // package's own noUnusedParameters tsconfig setting rejects.
+  const needsParam =
+    hoisted.size > 0 ||
+    segments.some((s) => s.kind === "arg" && !hoisted.has(s.name)) ||
+    bodyExpr !== undefined;
 
   if (hoisted.size === 0) {
     const param = needsParam ? `(${PARAM})` : "()";
