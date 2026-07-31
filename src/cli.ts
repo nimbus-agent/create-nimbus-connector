@@ -1,7 +1,14 @@
+#!/usr/bin/env bun
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generate } from "./emit/index.ts";
-import { formatAll } from "./format.ts";
+import {
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "./format.ts";
+import { MONOREPO_LICENSE, validateLicense } from "./license.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
@@ -10,7 +17,9 @@ export type CliOptions = {
   name?: string;
   specPath?: string;
   outDir?: string;
+  license?: string;
   dryRun: boolean;
+  standalone: boolean;
 };
 
 /** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
@@ -23,12 +32,14 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 }
 
 export function parseCliArgs(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false };
+  const opts: CliOptions = { dryRun: false, standalone: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
+    else if (a === "--standalone") opts.standalone = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
+    else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
     else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
     else opts.name = a;
   }
@@ -36,6 +47,17 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     throw new Error(
       "--spec supplies the connector name from the spec file; a positional name is redundant " +
         "and was probably a mistake — remove one.",
+    );
+  }
+  // Fail loudly rather than ignoring the flag. A user who believes they set a license and
+  // did not is a worse outcome than an error, and every other flag conflict in this CLI
+  // (a positional name alongside --spec, an unknown flag, a valueless flag) already errors.
+  if (opts.license !== undefined && !opts.standalone) {
+    throw new Error(
+      `--license applies to --standalone output only, and was not ignored: a monorepo-target ` +
+        `connector is ${MONOREPO_LICENSE} unconditionally, because it lives inside the AGPL ` +
+        `Nimbus repo and imports AGPL code from ../../shared/*. Add --standalone, or drop ` +
+        `--license.`,
     );
   }
   return opts;
@@ -63,9 +85,25 @@ export async function main(argv: readonly string[]): Promise<void> {
       ? parseSpec(JSON.parse(await Bun.file(opts.specPath).text()))
       : promptForSpec(opts.name);
 
+  const target = opts.standalone ? "standalone" : "monorepo";
+  const outDir =
+    opts.outDir ?? (opts.standalone ? spec.name : join("packages", "mcp-connectors", spec.name));
+
+  await initFormatter();
+  if (!formatterAvailable()) {
+    console.error(
+      `note: ${formatterUnavailableReason() ?? "the formatter is unavailable."}\n` +
+        "      to format the output afterwards:\n\n" +
+        `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
+    );
+  }
+
   // generate() and formatAll() are synchronous — do not await them.
-  const files = formatAll(generate(spec));
-  const outDir = opts.outDir ?? join("packages", "mcp-connectors", spec.name);
+  // exactOptionalPropertyTypes: spread rather than pass `license: undefined`, which would
+  // trip generate()'s monorepo guard on `!== undefined`.
+  const files = formatAll(
+    generate(spec, { target, ...(opts.license === undefined ? {} : { license: opts.license }) }),
+  );
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);

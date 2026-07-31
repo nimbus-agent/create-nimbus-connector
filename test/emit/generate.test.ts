@@ -1,6 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { generate } from "../../src/emit/index.ts";
-import { formatAll } from "../../src/format.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
@@ -27,6 +27,9 @@ const spec = parseSpec({
 });
 
 describe("generate", () => {
+  beforeAll(async () => {
+    await initFormatter();
+  });
   it("emits exactly the six-file connector tree", () => {
     expect(
       generate(spec)
@@ -126,5 +129,140 @@ describe("generate", () => {
     );
     expect(src.endsWith("await mcp.connect(transport);\n")).toBe(true);
     expect(src).not.toContain("\n\n\n");
+  });
+});
+
+const handRolled = parseSpec({
+  name: "acme",
+  displayName: "Acme",
+  description: "d.",
+  serviceLabel: "Acme",
+  style: "hand-rolled",
+  env: [{ vars: ["ACME_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "headers" },
+  tools: [{ name: "acme_item_list", description: "List items.", path: "/v1/items" }],
+});
+
+const restKit = parseSpec({
+  name: "acme",
+  displayName: "Acme",
+  description: "d.",
+  serviceLabel: "Acme",
+  style: "rest-kit",
+  env: [{ vars: ["ACME_TOKEN"], local: "hdrs", bindings: ["t"], auth: "bearer" }],
+  fetchHelper: { local: "acmeFetch", base: "https://api.acme.test" },
+  tools: [{ name: "acme_item_list", description: "List items.", path: "/v1/items" }],
+});
+
+function server(spec: Parameters<typeof generate>[0], target?: "monorepo" | "standalone"): string {
+  const opts = target === undefined ? undefined : { target };
+  return generate(spec, opts).find((f) => displayPath(f.path) === "src/server.ts")!.content;
+}
+
+describe("generate target", () => {
+  it("defaults to monorepo, keeping relative shared imports", () => {
+    expect(server(handRolled)).toContain('} from "../../shared/mcp-tool-kit.ts";');
+    expect(server(handRolled)).not.toContain("@nimbus-dev/sdk/connector-kit");
+  });
+
+  it("emits one kit import for standalone hand-rolled", () => {
+    const src = server(handRolled, "standalone");
+    expect(src).toContain('} from "@nimbus-dev/sdk/connector-kit";');
+    expect(src).not.toContain("../../shared/");
+    expect(src.match(/@nimbus-dev\/sdk\/connector-kit/g)).toHaveLength(1);
+  });
+
+  it("emits one kit import for standalone rest-kit, including makeRestToolRegistrar", () => {
+    const src = server(restKit, "standalone");
+    expect(src).toContain("makeRestToolRegistrar,");
+    expect(src).not.toContain("../../shared/");
+    expect(src.match(/@nimbus-dev\/sdk\/connector-kit/g)).toHaveLength(1);
+  });
+
+  it("omits jsonResult for an all-stub standalone hand-rolled spec", () => {
+    const allStub = parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "headers" },
+      tools: [{ name: "acme_write", description: "Write.", impl: "stub" }],
+    });
+    const src = server(allStub, "standalone");
+    expect(src).not.toContain("jsonResult");
+    expect(src).toContain(
+      'import { createRegisterSimpleTool, createZodToolRegistrar } from "@nimbus-dev/sdk/connector-kit";',
+    );
+  });
+
+  it("no relative import escapes a standalone package", () => {
+    for (const spec of [handRolled, restKit]) {
+      const srcFiles = generate(spec, { target: "standalone" }).filter((f) => f.path[0] === "src");
+      expect(srcFiles.length).toBeGreaterThan(0);
+      for (const f of srcFiles) {
+        // Only import specifiers matter. A filesystem path such as
+        // resolve(fileURLToPath(import.meta.url), "../../nimbus.extension.json") is not an
+        // import and is legitimate inside the package — the manifest sits at the package root
+        // in both targets.
+        const specifiers = [...f.content.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+        for (const s of specifiers) {
+          expect(s?.startsWith("..")).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("adds biome.json to the standalone tree and only there", () => {
+    const standalone = generate(handRolled, { target: "standalone" }).map((f) =>
+      displayPath(f.path),
+    );
+    expect(standalone).toContain("biome.json");
+    expect(generate(handRolled).map((f) => displayPath(f.path))).not.toContain("biome.json");
+  });
+
+  it("sorts the standalone import block the way `biome check` demands", () => {
+    // The kit is a package specifier, so it sorts with the other packages — after
+    // "@modelcontextprotocol/*" and before "zod" — not into the trailing relative-import
+    // group where the monorepo target's "../../shared/*" import lives. Getting this wrong
+    // makes every generated package fail its own `bun run lint` on the first run.
+    for (const spec of [handRolled, restKit]) {
+      const lines = server(spec, "standalone").split("\n");
+      const kit = lines.findIndex((l) => l.includes("@nimbus-dev/sdk/connector-kit"));
+      const stdio = lines.findIndex((l) => l.includes("server/stdio.js"));
+      const zod = lines.indexOf('import { z } from "zod";');
+      expect(stdio).toBeGreaterThanOrEqual(0);
+      expect(zod).toBeGreaterThanOrEqual(0);
+      expect(kit).toBeGreaterThan(stdio);
+      expect(kit).toBeLessThan(zod);
+      // No blank line anywhere inside the import block.
+      expect(lines.slice(0, zod + 1).some((l) => l === "")).toBe(false);
+    }
+  });
+
+  it("keeps the monorepo import block in its two-group shape", () => {
+    const lines = server(handRolled).split("\n");
+    const zod = lines.indexOf('import { z } from "zod";');
+    expect(lines[zod + 1]).toBe("");
+    expect(lines[zod + 2]).toContain("import {");
+  });
+
+  it("sandbox tests are identical for both targets", () => {
+    for (const spec of [handRolled, restKit]) {
+      const find = (target?: "standalone") =>
+        generate(spec, target === undefined ? undefined : { target }).find(
+          (f) => displayPath(f.path) === "test/sandbox.test.ts",
+        );
+      const monorepoSandbox = find();
+      const standaloneSandbox = find("standalone");
+      // Assert the file exists first. Comparing `?.content` alone passed as
+      // `undefined === undefined` if emitSandboxTest were dropped from generate()
+      // entirely — the exact deletion this test is supposed to catch.
+      expect(monorepoSandbox).toBeDefined();
+      expect(standaloneSandbox).toBeDefined();
+      expect(monorepoSandbox?.content).toContain("runSandboxContractTests");
+      expect(monorepoSandbox?.content).toBe(standaloneSandbox?.content);
+    }
   });
 });

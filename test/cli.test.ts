@@ -6,13 +6,14 @@ import { registrarName } from "../src/spec.ts";
 
 describe("parseCliArgs", () => {
   it("reads a positional name", () => {
-    expect(parseCliArgs(["slack"])).toEqual({ name: "slack", dryRun: false });
+    expect(parseCliArgs(["slack"])).toEqual({ name: "slack", dryRun: false, standalone: false });
   });
 
   it("reads --spec and --dry-run", () => {
     expect(parseCliArgs(["--spec", "fixtures/sentry.spec.json", "--dry-run"])).toEqual({
       specPath: "fixtures/sentry.spec.json",
       dryRun: true,
+      standalone: false,
     });
   });
 
@@ -21,6 +22,7 @@ describe("parseCliArgs", () => {
       name: "x",
       outDir: "/tmp/x",
       dryRun: false,
+      standalone: false,
     });
   });
 
@@ -46,6 +48,47 @@ describe("parseCliArgs", () => {
 
   it("still accepts --spec alone with a value", () => {
     expect(() => parseCliArgs(["--spec", "x.json"])).not.toThrow();
+  });
+
+  describe("--standalone", () => {
+    it("defaults to false", () => {
+      expect(parseCliArgs(["acme"]).standalone).toBe(false);
+    });
+
+    it("is set by the flag", () => {
+      expect(parseCliArgs(["acme", "--standalone"]).standalone).toBe(true);
+    });
+
+    it("carries --license through when standalone", () => {
+      expect(parseCliArgs(["acme", "--standalone", "--license", "MIT"]).license).toBe("MIT");
+    });
+
+    it("leaves license undefined when the flag is absent", () => {
+      expect(parseCliArgs(["acme", "--standalone"]).license).toBeUndefined();
+    });
+
+    it("rejects --license without --standalone rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--license", "MIT"])).toThrow(/--standalone/);
+      expect(() => parseCliArgs(["acme", "--license", "MIT"])).toThrow(/AGPL-3\.0-only/);
+    });
+
+    it("rejects --license with no following value", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--license"])).toThrow(/--license/);
+    });
+
+    it("rejects a malformed --license at parse time, before any file is emitted", () => {
+      expect(() => parseCliArgs(["acme", "--standalone", "--license", "  "])).toThrow(/non-empty/i);
+      expect(() => parseCliArgs(["acme", "--standalone", "--license", "MIT!"])).toThrow(/"!"/);
+    });
+
+    it("combines with --spec and --out-dir", () => {
+      expect(parseCliArgs(["--spec", "x.json", "--standalone", "--out-dir", "/tmp/x"])).toEqual({
+        specPath: "x.json",
+        outDir: "/tmp/x",
+        standalone: true,
+        dryRun: false,
+      });
+    });
   });
 });
 
@@ -120,7 +163,7 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
       headerName: "",
     });
     expect(spec.title).toBe("Google Meet");
-    expect(emitReadme(spec).content).toContain("# Google Meet Connector");
+    expect(emitReadme(spec, "monorepo").content).toContain("# Google Meet Connector");
     expect(registrarName(spec)).toBe("registerGoogleMeetTool");
   });
 

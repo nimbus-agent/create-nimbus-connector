@@ -2,7 +2,7 @@
 
 A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages. Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary. This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files, run through the same Biome formatter the real connectors are formatted with.
 
-Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md).
+Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation) and [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing).
 
 ## Stage A boundary
 
@@ -10,9 +10,26 @@ This is **Stage A** — deliberately narrow:
 
 - **One GET per tool.** Every tool is a single HTTP GET against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No request bodies, no non-GET methods, no pagination, no multi-step or multi-fetch tools.
 - **Read tools only.** No write tools, no HITL-gated actions, no `hitlRequired` population.
-- **Monorepo-internal.** Generated connectors are meant to live at `packages/mcp-connectors/<name>/` inside the Nimbus monorepo, where the `../../shared/*` relative imports (`mcp-tool-kit.ts`, `rest-tool-kit.ts`, etc.) resolve as-is. There is no standalone/`bunx`-distributable output yet — that is Stage B.
 
 A tool spec that can't be expressed under these constraints sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Non-GET methods and other out-of-scope fields are a **hard validation error**, not an automatic downgrade to a stub — see the design doc's "Strict schemas" section.
+
+## Stage B: standalone connectors
+
+By default, generated connectors are **monorepo-internal**: they live at `packages/mcp-connectors/<name>/` inside a Nimbus checkout, where the `../../shared/*` relative imports (`mcp-tool-kit.ts`, `rest-tool-kit.ts`, etc.) resolve as-is.
+
+Pass `--standalone` to generate a connector that is self-contained instead — installable and runnable anywhere, with no Nimbus checkout required:
+
+```
+bun src/cli.ts <name> --standalone
+```
+
+The standalone `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, instead of `../../shared/*`. Its generated `package.json` depends on `"@nimbus-dev/sdk": "^1.11.0"` (see `src/emit/package-json.ts`), and it gains `dev` and `build` scripts (`bun build src/server.ts --outdir dist --target bun`) that monorepo-target output does not have.
+
+**This CLI, and every connector it generates, is Bun-only** (design doc decisions B6 and B7): `nimbus.extension.json` declares `"runtime": "bun"` for every connector, `test/sandbox.test.ts` imports `bun:test`, and the standalone `build` script targets Bun. `src/cli.ts` carries a `#!/usr/bin/env bun` shebang. There is no Node, npm, or pnpm path anywhere in this project or its output.
+
+**`@nimbus-dev/sdk` 1.11.0 is published.** It ships the `./connector-kit` export a standalone connector's `package.json` depends on, so `bun install` in a generated standalone package resolves that dependency from the registry with no local checkout and no rewrite. `bun run standalone-acceptance --registry` (see below) proves it end to end against the published tarball.
+
+**This CLI is not published yet.** That is now a separate, remaining step rather than something blocked on the SDK — run standalone generation from a checkout of this repo (`bun src/cli.ts <name> --standalone`) until it is.
 
 ## Usage
 
@@ -20,23 +37,38 @@ A tool spec that can't be expressed under these constraints sets `"impl": "stub"
 bun src/cli.ts <name>
 ```
 
-Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory).
+Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory), or to `<name>/` when `--standalone` is passed.
 
-The package is not yet published, so `bunx create-nimbus-connector <name>` does not work — that
-form is what Stage B (standalone distribution) will enable. Run from a checkout of this repo
-with `bun src/cli.ts` in the meantime.
+This CLI is not published to npm yet, so `bunx create-nimbus-connector <name>` does not work. Run from a checkout of this repo with `bun src/cli.ts` in the meantime. (The connectors it *generates* have no such constraint — their `@nimbus-dev/sdk` dependency is on the registry.)
 
 ### Flags
 
 - `--spec <path>` — skip the interactive prompts and load a `ConnectorSpec` JSON file instead (see `fixtures/*.spec.json` for examples, e.g. `fixtures/sentry.spec.json`). Mutually exclusive with a positional `<name>` — the name comes from the spec file.
+- `--standalone` — generate a self-contained connector (imports `@nimbus-dev/sdk/connector-kit`, gains `dev`/`build` scripts) instead of the default monorepo-internal shape. Defaults the output directory to `<name>/` instead of `packages/mcp-connectors/<name>/`.
 - `--dry-run` — don't write anything; print the file tree that would be created (path + byte size per file).
-- `--out-dir <path>` — write to a directory other than the default `packages/mcp-connectors/<name>/`.
+- `--out-dir <path>` — write to a directory other than the default.
+- `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
+
+### Licensing of generated connectors
+
+A **monorepo** connector is `AGPL-3.0-only`. It lives inside the AGPL Nimbus repo and imports AGPL code through `../../shared/*`, and its `package.json` is byte-diffed against 94 real connectors — so this is fixed, not a default.
+
+A **standalone** connector is none of those things: it is your own code, produced by an MIT-licensed tool, depending only on the MIT `@nimbus-dev/sdk`. Nothing about it obliges copyleft, so it is **not** stamped AGPL. It defaults to `UNLICENSED` — npm's marker for "no license granted" — which is a deliberate non-choice rather than a wrong choice made on your behalf. Pass `--license <spdx>` to set a real one:
+
+```
+bun src/cli.ts acme --standalone --license MIT
+bun src/cli.ts acme --standalone --license "Apache-2.0"
+bun src/cli.ts acme --standalone --license "MIT OR Apache-2.0"
+```
+
+The value is validated as an SPDX identifier or expression before anything is written; a malformed one fails at parse time rather than landing in a `package.json` npm will later reject. This is a syntax check, not a lookup against the SPDX license list — `LicenseRef-<name>` is accepted deliberately.
 
 Examples:
 
 ```
 bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
 bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
+bun src/cli.ts --spec fixtures/zzstandalone.spec.json --standalone --out-dir /tmp/zzstandalone-preview
 ```
 
 ## The golden-fixture diff harness
@@ -51,7 +83,9 @@ bun run diff:golden sentry datadog --nimbus-root D:\Nimbus
 
 `--nimbus-root <path>` points at a Nimbus checkout explicitly. Resolution order if omitted: `--nimbus-root` flag, then `$NIMBUS_ROOT`, then a sibling directory of this repo named `Nimbus` or `nimbus`. A resolved path must contain the marker file `packages/mcp-connectors/shared/mcp-tool-kit.ts`, or resolution fails loudly rather than producing a wall of missing-file errors.
 
-Each fixture's expected identical-file count (out of 6) is checked in at `fixtures/expectations.json`. The harness fails if reality diverges from that count **in either direction** — a regression, or an unannounced improvement that would leave the expectations file and the design doc's gap report stale.
+Each fixture's expected set of byte-identical file paths (out of 6) is checked in at `fixtures/expectations.json`. The harness fails if reality diverges from that set **in either direction** — a file that stopped matching, or one that newly matches without being declared, which would leave the expectations file and the design doc's gap report stale.
+
+It records *which* files match rather than how many, deliberately: for a partial fixture such as `discord` (3 of 6), a count alone reports PASS when a change newly matches `README.md` while breaking `package.json`.
 
 ## The acceptance harness
 
@@ -60,6 +94,28 @@ Each fixture's expected identical-file count (out of 6) is checked in at `fixtur
 ```
 bun run acceptance C:\gitrep\Nimbus
 ```
+
+## The standalone acceptance harness
+
+Stage A's acceptance harness proves a monorepo-target connector against a live Nimbus checkout. There is no equivalent live ground truth for standalone connectors — no standalone Nimbus connector exists yet — so `bun run standalone-acceptance` substitutes a live end-to-end run: generate a `--standalone` connector into a temp directory outside the monorepo, resolve its `@nimbus-dev/sdk` dependency (see the two modes below), `bun install`, `bunx tsc --noEmit`, run the generated package's own `bun run typecheck` and `bun run lint` scripts (which resolve `tsc` and `biome` through its own `node_modules`, and re-check the emitted formatting and import order against the emitted `biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio (`initialize` → `tools/list`, no credentials in the environment) against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the temp directory whether or not any step threw.
+
+### Two modes
+
+They resolve `@nimbus-dev/sdk` from different places and answer different questions, so both are kept. Passing both is an error, not a precedence question.
+
+```
+bun run standalone-acceptance --registry                      # the published tarball
+bun run standalone-acceptance C:\gitrep\nimbus-sdk            # a local SDK checkout
+bun run standalone-acceptance --sdk-root C:\gitrep\nimbus-sdk
+```
+
+**`--registry`** installs exactly what the generator emitted — `"@nimbus-dev/sdk": "^1.11.0"`, unmodified — from npm. This is the strongest proof Stage B can offer, because it verifies the artifact real consumers actually get: a `dist` missing from the published `files` array surfaces here and nowhere else in this project. Run it before publishing this CLI.
+
+**Local checkout** (the default) rewrites the dependency to `file:<sdk-root>/sdks/typescript` first. This is the **pre-release gate**: it can be pointed at an SDK branch that is not on npm and cannot be, so it stays useful for every future SDK change. Run it before releasing an SDK version.
+
+`<sdk-root>` may be given positionally or as `--sdk-root <path>`, and resolves the same way `--nimbus-root` does: the argument, then `$NIMBUS_SDK_ROOT`, then a sibling directory of this repo named `nimbus-sdk`, requiring the marker file `sdks/typescript/package.json`.
+
+In local-checkout mode the SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness — and that stays true in `--registry` mode, which changes where the package comes from, not which export condition Bun applies to it. What `--registry` adds is proof that the published tarball *contains* `dist` at all.
 
 ## Development
 

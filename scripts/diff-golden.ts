@@ -3,7 +3,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeValue } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
-import { biomeVersion, formatAll } from "../src/format.ts";
+import {
+  biomeVersion,
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../src/format.ts";
 import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { classify, loadExpectations } from "../src/golden/expectations.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
@@ -50,7 +56,24 @@ function passNote(expected: number, total: number, stubs: number): string {
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-function main(): void {
+/** Names the files that entered or left the identical set, so a FAIL is actionable. */
+function deltaNote(lost: readonly string[], gained: readonly string[]): string {
+  const parts: string[] = [];
+  if (lost.length > 0) parts.push(`no longer matching ${lost.join(", ")}`);
+  if (gained.length > 0) parts.push(`newly matching ${gained.join(", ")}`);
+  return parts.join("; ");
+}
+
+async function main(): Promise<void> {
+  await initFormatter();
+  if (!formatterAvailable()) {
+    throw new Error(
+      "@biomejs/biome is required here — byte-exactness is the point of this check, and " +
+        "unformatted output would produce spurious diffs that look like emitter regressions. " +
+        formatterUnavailableReason(),
+    );
+  }
+
   const { names, nimbusRoot } = parseArgs(process.argv.slice(2));
   const root = resolveNimbusRoot({
     flag: nimbusRoot,
@@ -101,7 +124,7 @@ function main(): void {
     const realDir = join(root, "packages", "mcp-connectors", name);
 
     const stubs = spec.tools.filter((t) => t.impl === "stub").length;
-    let identical = 0;
+    const identicalPaths: string[] = [];
     const problems: string[] = [];
 
     for (const f of files) {
@@ -114,38 +137,38 @@ function main(): void {
         continue;
       }
       if (expectedContent === f.content) {
-        identical++;
+        identicalPaths.push(rel);
       } else {
         problems.push(`  DIFF     ${rel}\n${unifiedDiff(expectedContent, f.content)}`);
       }
     }
 
     const total = files.length;
-    const expectedCount = expectations[name];
-    if (expectedCount === undefined) {
+    const identical = identicalPaths.length;
+    const expectedPaths = expectations[name];
+    if (expectedPaths === undefined) {
       throw new Error(
         `No expectation declared for fixture "${name}" in ${expectationsPath}. ` +
-          `Add an entry recording its current identical-file count (out of ${total}) before ` +
-          "running the harness — an undeclared fixture must not be able to pass by accident.",
+          `Add an entry listing the file paths that are currently byte-identical (out of ` +
+          `${total}) before running the harness — an undeclared fixture must not be able to ` +
+          "pass by accident.",
       );
     }
 
-    const verdict = classify(identical, expectedCount);
+    const { verdict, lost, gained } = classify(identicalPaths, expectedPaths);
     if (verdict !== "pass") failures++;
 
     const stubNote = stubs > 0 ? `, ${stubs} stub tool(s)` : "";
     let line: string;
     if (verdict === "pass") {
-      line = `PASS  ${name}  ${identical}/${total} files identical${passNote(expectedCount, total, stubs)}`;
-    } else if (verdict === "regressed") {
-      line =
-        `FAIL  ${name}  ${identical}/${total} files identical${stubNote} — ` +
-        `regressed from ${expectedCount}/${total} to ${identical}/${total}`;
+      line = `PASS  ${name}  ${identical}/${total} files identical${passNote(expectedPaths.length, total, stubs)}`;
     } else {
       line =
         `FAIL  ${name}  ${identical}/${total} files identical${stubNote} — ` +
-        `improved from ${expectedCount}/${total} to ${identical}/${total}; update ` +
-        "fixtures/expectations.json and the design doc's criterion-2 gap report";
+        `${verdict}: ${deltaNote(lost, gained)}` +
+        (verdict === "regressed"
+          ? ""
+          : "; update fixtures/expectations.json and the design doc's criterion-2 gap report");
     }
     console.log(line);
     for (const p of problems) console.log(p);
@@ -158,4 +181,4 @@ function main(): void {
   console.log("\nAll fixtures match their declared expectations.");
 }
 
-main();
+await main();

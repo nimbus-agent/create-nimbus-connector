@@ -1,11 +1,14 @@
-import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, it } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveNimbusRoot } from "../../src/golden/resolve.ts";
+import { tempDirs } from "../support/tmp.ts";
+
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 function fakeNimbus(): string {
-  const root = mkdtempSync(join(tmpdir(), "nimbus-"));
+  const root = tmp.make("nimbus-");
   mkdirSync(join(root, "packages", "mcp-connectors", "shared"), { recursive: true });
   writeFileSync(join(root, "packages", "mcp-connectors", "shared", "mcp-tool-kit.ts"), "");
   return root;
@@ -23,7 +26,7 @@ describe("resolveNimbusRoot", () => {
   });
 
   it("rejects a path that exists but lacks the marker file", () => {
-    const empty = mkdtempSync(join(tmpdir(), "empty-"));
+    const empty = tmp.make("empty-");
     expect(() => resolveNimbusRoot({ flag: empty, scriptDir: "/nowhere" })).toThrow(/marker/i);
   });
 
@@ -33,7 +36,7 @@ describe("resolveNimbusRoot", () => {
     // would find it, then prove an explicit bogus --nimbus-root still fails loudly
     // instead of silently falling through to that valid sibling. Fully hermetic: no
     // dependency on this machine's actual checkout layout.
-    const workspace = mkdtempSync(join(tmpdir(), "workspace-"));
+    const workspace = tmp.make("workspace-");
     const validSibling = join(workspace, "Nimbus");
     mkdirSync(join(validSibling, "packages", "mcp-connectors", "shared"), { recursive: true });
     writeFileSync(

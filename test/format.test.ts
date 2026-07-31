@@ -1,5 +1,175 @@
-import { describe, expect, it } from "bun:test";
-import { biomeVersion, formatAll } from "../src/format.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import {
+  biomeVersion,
+  formatAll,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initFormatter,
+} from "../src/format.ts";
+
+beforeAll(async () => {
+  await initFormatter();
+});
+
+describe("initFormatter", () => {
+  it("is idempotent", async () => {
+    await initFormatter();
+    await initFormatter();
+    expect(formatterAvailable()).toBe(true);
+  });
+
+  it("reports the formatter as available in this repo", () => {
+    expect(formatterAvailable()).toBe(true);
+  });
+
+  // Strengthens "is idempotent" above: that test alone would also pass if the second call
+  // silently re-ran the whole load. This proves re-entry does NOT happen, by observing the
+  // seam directly — mock.module replaces "@biomejs/js-api/nodejs" with a fake Biome whose
+  // constructor increments a shared counter, then calls initFormatter() twice and asserts
+  // the constructor ran exactly once. Run in a subprocess: a fresh module registry, and
+  // mock.module's effect is process-global, so isolating it from the rest of the suite
+  // matters. No test-only reset/call-count export is added to production code.
+  it("does not re-run the loader on a second call (observed via a counting mock)", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      "let constructCount = 0;" +
+      'mock.module("@biomejs/js-api/nodejs", () => ({' +
+      "  Biome: class {" +
+      "    constructor() { constructCount++; }" +
+      "    openProject() { return { projectKey: 1 }; }" +
+      "    applyConfiguration() {}" +
+      "  }," +
+      "}));" +
+      'const { initFormatter, formatterAvailable } = await import("./src/format.ts");' +
+      "await initFormatter();" +
+      "await initFormatter();" +
+      'if (constructCount !== 1) throw new Error("constructCount=" + constructCount);' +
+      'if (!formatterAvailable()) throw new Error("formatterAvailable() was false");' +
+      'console.log("ok");';
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: import.meta.dir + "/..",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toMatch(/ok/);
+  });
+});
+
+describe("initFormatter surfaces configuration bugs", () => {
+  // Pins the distinction the review flagged: a failure past the dynamic import (e.g. a
+  // typo in the hardcoded applyConfiguration() call) is a programming error and must
+  // reject initFormatter(), not be swallowed into formatterAvailable() === false. Proven
+  // at the seam via bun:test's mock.module, which replaces "@biomejs/js-api/nodejs" with a
+  // fake Biome whose applyConfiguration() throws. Run in a subprocess (same rationale as
+  // "formatAll before init" above): a fresh module registry, and mock.module's effect is
+  // process-global, so isolating it from the rest of the suite matters.
+  it("rejects instead of reporting unavailable when applyConfiguration throws", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/js-api/nodejs", () => ({' +
+      "  Biome: class {" +
+      "    openProject() { return { projectKey: 1 }; }" +
+      '    applyConfiguration() { throw new Error("boom: injected config bug"); }' +
+      "  }," +
+      "}));" +
+      'const { initFormatter } = await import("./src/format.ts");' +
+      "await initFormatter();";
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: import.meta.dir + "/..",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toMatch(/boom: injected config bug/);
+  });
+});
+
+describe("initFormatter distinguishes an absent optional dependency from a broken one", () => {
+  // Both cases degrade to unformatted output — that is what optionalDependencies are for —
+  // but the *reason* differs, and reporting "not installed" for a package that is installed
+  // sends the user to run an install that cannot fix anything. The seam is the dynamic
+  // import: mock.module replaces "@biomejs/js-api/nodejs" with a factory that throws the
+  // module-resolution error each case would really produce. Subprocess, same rationale as
+  // the mocking tests above: mock.module's effect is process-global.
+  function reasonWhenImportThrows(code: string, specifier: string, message: string): string {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/js-api/nodejs", () => {' +
+      `  const e = new Error(${JSON.stringify(message)});` +
+      `  e.code = ${JSON.stringify(code)};` +
+      `  e.specifier = ${JSON.stringify(specifier)};` +
+      "  throw e;" +
+      "});" +
+      'const f = await import("./src/format.ts");' +
+      "await f.initFormatter();" +
+      'if (f.formatterAvailable()) throw new Error("expected the formatter to be unavailable");' +
+      "console.log(f.formatterUnavailableReason());";
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: `${import.meta.dir}/..`,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.stderr.toString()).toBe("");
+    expect(r.exitCode).toBe(0);
+    return r.stdout.toString();
+  }
+
+  it("reports the optional dependency as absent when it is the module that is missing", () => {
+    const reason = reasonWhenImportThrows(
+      "ERR_MODULE_NOT_FOUND",
+      "@biomejs/js-api/nodejs",
+      "Cannot find module '@biomejs/js-api/nodejs' from '/x'",
+    );
+    expect(reason).toMatch(/is not installed/);
+    expect(reason).toMatch(/optionalDependency/);
+  });
+
+  it("reports a load failure, not 'not installed', when a sibling module is what is missing", () => {
+    const reason = reasonWhenImportThrows(
+      "MODULE_NOT_FOUND",
+      "@biomejs/wasm-nodejs",
+      "Cannot find module '@biomejs/wasm-nodejs' from '/x/js-api/dist/nodejs.js'",
+    );
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/installed but failed to load/);
+    expect(reason).toMatch(/@biomejs\/wasm-nodejs/);
+    // The underlying error must be surfaced, not replaced by a diagnosis.
+    expect(reason).toMatch(/Cannot find module '@biomejs\/wasm-nodejs' from/);
+  });
+
+  it("reports a load failure for a non-resolution error too", () => {
+    const reason = reasonWhenImportThrows("EACCES", "", "EACCES: permission denied");
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/EACCES: permission denied/);
+  });
+
+  it("has no reason to report while the formatter is available", () => {
+    expect(formatterAvailable()).toBe(true);
+    expect(formatterUnavailableReason()).toBeUndefined();
+  });
+});
+
+describe("formatAll before init", () => {
+  // Run in a subprocess with a pristine module registry. A query-string import
+  // (`../src/format.ts?x=1`) does currently give a fresh module in Bun 1.3.14 — verified —
+  // but that is loader behaviour, not a documented contract, and this test exists precisely
+  // to pin a guarantee. A subprocess also tests what a real caller hits: a program that
+  // forgot to init. No test-only reset export is added to production code.
+  it("throws a message naming initFormatter", () => {
+    const r = Bun.spawnSync(
+      [
+        "bun",
+        "-e",
+        'const { formatAll } = await import("./src/format.ts");' +
+          'formatAll([{ path: ["a.ts"], content: "const x=1\\n" }]);',
+      ],
+      { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toMatch(/initFormatter/);
+  });
+});
 
 describe("formatAll", () => {
   it("formats TypeScript to the Nimbus house style", () => {
@@ -45,9 +215,13 @@ describe("formatAll", () => {
   });
 
   it("formats valid code with no error diagnostics normally", () => {
-    const valid = "const x: number = 42;\n";
-    const [out] = formatAll([{ path: ["valid.ts"], content: valid }]);
-    expect(out?.content).toBeDefined();
+    // The counterpart to the invalid-TypeScript test above: valid input must come back
+    // formatted, not merely come back. `toBeDefined()` alone passed even for input that
+    // was never routed through Biome at all.
+    const valid = "const  x :number=42\n";
+    const out = formatAll([{ path: ["valid.ts"], content: valid }])[0];
+    expect(out?.path).toEqual(["valid.ts"]);
+    expect(out?.content).toBe("const x: number = 42;\n");
   });
 
   it("collapses a short JSON array onto one line", () => {

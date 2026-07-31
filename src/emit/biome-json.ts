@@ -1,0 +1,31 @@
+import { FORMATTER_CONFIG } from "../format.ts";
+import type { GeneratedFile } from "../types.ts";
+
+/**
+ * The Biome release a generated standalone package pins. Shared with
+ * src/emit/package-json.ts so the emitted `$schema` URL and the emitted
+ * `@biomejs/biome` devDependency range cannot drift apart.
+ */
+export const BIOME_VERSION = "2.5.6";
+
+/**
+ * Standalone target only. A monorepo-target connector inherits the workspace root's
+ * biome.json; a standalone package has no root, so without this file `biome check src/`
+ * falls back to Biome's tab-indent defaults and reports a whole-file format diff against
+ * the two-space output the generator just produced.
+ *
+ * The `formatter` and `javascript.formatter` blocks mirror the configuration applied in
+ * src/format.ts exactly — the settings the generator itself formats with — so a freshly
+ * generated package passes its own `lint` script with no edits.
+ */
+export function emitBiomeJson(): GeneratedFile {
+  const cfg = {
+    $schema: `https://biomejs.dev/schemas/${BIOME_VERSION}/schema.json`,
+    formatter: FORMATTER_CONFIG.formatter,
+    // Biome's own default, restated so the emitted `lint` script is a real lint gate and
+    // its behaviour is visible in the generated file rather than implied by omission.
+    linter: { enabled: true, rules: { recommended: true } },
+    javascript: FORMATTER_CONFIG.javascript,
+  };
+  return { path: ["biome.json"], content: `${JSON.stringify(cfg, undefined, 2)}\n` };
+}

@@ -4,17 +4,22 @@
   "type": "module",
   "license": "MIT",
   "bin": { "create-nimbus-connector": "./src/cli.ts" },
+  "files": ["src", "README.md"],
+  "publishConfig": { "access": "public" },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
     "diff:golden": "bun scripts/diff-golden.ts",
-    "acceptance": "bun scripts/acceptance.ts"
+    "acceptance": "bun scripts/acceptance.ts",
+    "standalone-acceptance": "bun scripts/standalone-acceptance.ts"
   },
   "dependencies": {
-    "@biomejs/js-api": "^6.0.0",
-    "@biomejs/wasm-nodejs": "^2.5.6",
     "zod": "^4.4.2"
+  },
+  "optionalDependencies": {
+    "@biomejs/js-api": "^6.0.0",
+    "@biomejs/wasm-nodejs": "^2.5.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",

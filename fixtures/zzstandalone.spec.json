@@ -1,0 +1,24 @@
+{
+  "name": "zzstandalone",
+  "title": "Zzstandalone",
+  "displayName": "ZZ Standalone",
+  "description": "Throwaway standalone acceptance connector. Read-focused.",
+  "serviceLabel": "ZZ Standalone",
+  "style": "rest-kit",
+  "network": ["api.zzstandalone.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZSTANDALONE_TOKEN"], "local": "authHeaders", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzFetch", "base": "https://api.zzstandalone.test" },
+  "tools": [
+    { "name": "zzstandalone_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzstandalone_item_get",
+      "description": "Get one item by id.",
+      "args": { "itemId": { "type": "string", "min": 1 } },
+      "path": "/v1/items/${arg.itemId|enc}"
+    }
+  ]
+}
