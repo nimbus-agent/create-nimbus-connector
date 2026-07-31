@@ -9,7 +9,8 @@
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
     "diff:golden": "bun scripts/diff-golden.ts",
-    "acceptance": "bun scripts/acceptance.ts"
+    "acceptance": "bun scripts/acceptance.ts",
+    "standalone-acceptance": "bun scripts/standalone-acceptance.ts"
   },
   "dependencies": {
     "zod": "^4.4.2"

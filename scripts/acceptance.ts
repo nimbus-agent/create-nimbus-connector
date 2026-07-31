@@ -5,18 +5,11 @@ import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
 import { formatAll, formatterAvailable, initFormatter } from "../src/format.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
+import { run } from "../src/golden/run.ts";
 import { parseSpec } from "../src/spec.ts";
 
 const NAME = "zzscratch";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-
-function run(cmd: string[], cwd: string): { ok: boolean; output: string } {
-  const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
-  return {
-    ok: r.exitCode === 0,
-    output: `${r.stdout.toString()}${r.stderr.toString()}`.trim(),
-  };
-}
 
 const root = resolveNimbusRoot({
   flag: process.argv[2],
