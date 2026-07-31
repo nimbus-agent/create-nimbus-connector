@@ -715,7 +715,14 @@ describe("Stage C tool fields", () => {
   });
 
   it("rejects a body on GET", () => {
-    expect(() => parseSpec(stageCTool({ path: "/a", body: { x: "x" } }))).toThrow(/body/i);
+    // `x` IS declared, so the undeclared-arg rule cannot fire — the GET+body rule is the
+    // only one left that can reject this. The previous version (`body: { x: "x" }` with no
+    // declared args, asserting the bare word "body") passed for the wrong reason: the
+    // undeclared-arg rule fired instead and its message merely contains "body" too. Mutation
+    // testing (deleting the GET+body refine) proved the old test could not fail.
+    expect(() =>
+      parseSpec(stageCTool({ path: "/a", args: { x: { type: "string" } }, body: { x: "api_x" } })),
+    ).toThrow(/non-GET/);
   });
 
   it("rejects method or body on a stub", () => {
