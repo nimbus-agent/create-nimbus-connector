@@ -164,9 +164,9 @@ export const ToolSchema = z
   .refine((t) => !(t.body !== undefined && t.method === "GET"), {
     message: '"body" requires a non-GET "method"',
   })
-  .refine((t) => t.body === undefined || Object.keys(t.body).every((k) => k in t.args), {
-    message: 'every "body" key must name a declared arg',
-  })
+  // superRefine only, deliberately: a parallel .refine asserting the same condition would
+  // fire alongside this one with a vaguer message, and the test asserts the offending key
+  // name appears in the error. One check, one message, naming the key that is wrong.
   .superRefine((t, ctx) => {
     if (t.body === undefined) return;
     for (const k of Object.keys(t.body)) {
@@ -717,7 +717,11 @@ let cachedToken: string | null = null;
 // in the corpus reads expires_in. A long-lived connector would use a stale token.
 async function token(): Promise<string> {
   if (cachedToken !== null) return cachedToken;
-  const body = new URLSearchParams({ grant_type: "client_credentials", scope: SCOPE });
+  // Built incrementally, not as an object literal: URLSearchParams stringifies its values,
+  // so `{ scope: undefined }` would send the literal `scope=undefined` to the token
+  // endpoint. Emit the `set` line only when the spec declares a scope.
+  const body = new URLSearchParams({ grant_type: "client_credentials" });
+  body.set("scope", SCOPE);
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
@@ -736,7 +740,11 @@ async function token(): Promise<string> {
 }
 ```
 
-For `credentialsIn: "basic"` add `Authorization: \`Basic ${btoa(\`${id()}:${secret()}\`)}\`` to the token request headers; for `"body"` add `client_id` and `client_secret` to the `URLSearchParams`. Omit `scope` from the params when unset.
+For `credentialsIn: "basic"`, emit `Authorization: encodeBasicAuthHeader(id(), secret())` in the token request headers and add `encodeBasicAuthHeader` to the kit import.
+
+**Not `btoa`.** `btoa` throws `InvalidCharacterError` on any character above U+00FF, so a secret containing one would fail at runtime rather than at parse time. `encodeBasicAuthHeader` is already exported by `@nimbus-dev/sdk@1.11.0`, does `Buffer.from(raw, "utf8").toString("base64")`, and returns the complete `Basic <b64>` value. It is also what the corpus does — `ramp` encodes exactly this way, and no connector uses `btoa` at all. Reusing the kit means less emitted code and one less thing to get wrong.
+
+For `credentialsIn: "body"`, add `client_id` and `client_secret` to the `URLSearchParams` via `set` and emit no `Authorization` header on the token request.
 
 - [ ] **Step 5: Run every gate**
 
@@ -773,6 +781,9 @@ only because connectors are short-lived; the comment records that dependency."
 ```ts
 // test/golden/snapshots.test.ts
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { compareSnapshot, loadSnapshot } from "../../src/golden/snapshots.ts";
 
 describe("compareSnapshot", () => {
@@ -793,10 +804,29 @@ describe("compareSnapshot", () => {
     expect(compareSnapshot(new Map([["b.ts", "x"]]), new Map()).unexpected).toEqual(["b.ts"]);
   });
 
-  it("throws on an empty expected tree rather than passing vacuously", () => {
-    // Stage A shipped a harness that printed success on zero fixtures. Not again.
-    expect(() => compareSnapshot(new Map([["a.ts", "x"]]), new Map())).not.toThrow();
+  // Non-emptiness is loadSnapshot's job, not compareSnapshot's. compareSnapshot is a pure
+  // diff over two trees and must stay total — given an empty expected tree it reports every
+  // actual file as `unexpected`, which is a loud, correct answer rather than a throw.
+  //
+  // The vacuous-pass risk lives one level up: a snapshot directory that is absent or empty
+  // must not silently compare nothing and report success. Stage A shipped a harness that
+  // printed "All fixtures byte-identical" on zero fixtures; loadSnapshot is where that is
+  // prevented for snapshots.
+  it("reports every actual file as unexpected against an empty tree, rather than throwing", () => {
+    expect(compareSnapshot(new Map([["a.ts", "x"]]), new Map()).unexpected).toEqual(["a.ts"]);
+  });
+
+  it("refuses to load a missing snapshot directory", () => {
     expect(() => loadSnapshot("does/not/exist")).toThrow(/no snapshot/i);
+  });
+
+  it("refuses to load a snapshot directory containing no files", () => {
+    const empty = mkdtempSync(join(tmpdir(), "cnc-snap-empty-"));
+    try {
+      expect(() => loadSnapshot(empty)).toThrow(/no snapshot/i);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });
 ```
