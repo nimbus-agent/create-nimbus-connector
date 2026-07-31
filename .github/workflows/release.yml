@@ -92,7 +92,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # THE Bun-only exception. This project is Bun-only by design (design doc
       # decisions B6/B7): no Node, npm or pnpm path exists in src/, scripts/,
@@ -110,8 +110,13 @@ jobs:
 
       # npm trusted publishing (token-less OIDC) requires npm >= 11.5.1, newer
       # than the version bundled with Node 22.
+      #
+      # Pinned rather than `@latest`: this step installs the tool that then
+      # publishes, so an unpinned upgrade lets a newly released npm change
+      # publish behaviour with no commit here. The preflight below re-checks the
+      # 11.5.1 floor, so bumping this pin can never silently drop below it.
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.0.2 --ignore-scripts
 
       # release.yml and ci.yml fire independently off the same push, so this job
       # cannot trust that CI already ran against this exact tree.
@@ -190,7 +195,11 @@ jobs:
           mkdir -p "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
-          npm install --no-audit --no-fund "$tarball"
+          # --ignore-scripts does not weaken this check: create-nimbus-connector
+          # declares no lifecycle scripts, so a real consumer's install runs none
+          # either. What is being proven here is that `files` shipped `bin`'s
+          # target and that Bun can execute it.
+          npm install --no-audit --no-fund --ignore-scripts "$tarball"
 
           # Through node_modules/.bin — the real `bunx create-nimbus-connector`
           # path, shebang and all — rather than `bun path/to/cli.ts`, which
@@ -255,7 +264,7 @@ jobs:
           verified=""
           for attempt in 1 2 3 4 5 6 7 8; do
             if npm install "create-nimbus-connector@${PUBLISHED_VERSION}" \
-                 --no-audit --no-fund --prefer-online \
+                 --no-audit --no-fund --prefer-online --ignore-scripts \
               && npm audit signatures; then
               verified=1
               break
