@@ -216,6 +216,17 @@ export const ConnectorSpecSchema = z
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
     },
   )
+  // Not a validate.ts identifier claim, because the colliding names are not spec-authored:
+  // renderTokenFunction emits `cachedToken` and `token` at module scope, hard-coded, once per
+  // client-credentials entry. Two entries emit each name twice. Nothing in the corpus has two
+  // token exchanges, and supporting them would mean parameterising those names — a change to
+  // emitted shape for a case no connector has, so this is rejected instead.
+  .refine((s) => s.env.filter((e) => e.auth === "client-credentials").length <= 1, {
+    message:
+      'a connector may declare at most one env entry with auth: "client-credentials" — the ' +
+      "emitted token exchange declares `token` and `cachedToken` at module scope, so a second " +
+      "entry would redeclare both",
+  })
   .refine((s) => s.style !== "rest-kit" || !s.env.some((e) => e.auth === "client-credentials"), {
     message:
       'style "rest-kit" cannot use client-credentials: makeRestToolRegistrar resolves a single ' +

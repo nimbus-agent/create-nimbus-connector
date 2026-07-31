@@ -845,3 +845,44 @@ describe("client-credentials env validation", () => {
     ).toThrow(/"credentialsIn" is only valid/);
   });
 });
+
+describe("at most one client-credentials env entry", () => {
+  const twoCc = {
+    ...stageCBase,
+    env: [
+      {
+        vars: ["ZZ_A_ID", "ZZ_A_SECRET"],
+        local: "headers",
+        bindings: ["aId", "aSecret"],
+        auth: "client-credentials",
+        tokenUrl: "https://api.zz.test/oauth/a",
+        credentialsIn: "basic",
+      },
+      {
+        vars: ["ZZ_B_ID", "ZZ_B_SECRET"],
+        local: "otherHeaders",
+        bindings: ["bId", "bSecret"],
+        auth: "client-credentials",
+        tokenUrl: "https://api.zz.test/oauth/b",
+        credentialsIn: "body",
+      },
+    ],
+    tools: [{ name: "zz_a", description: "A.", path: "/a" }],
+  };
+
+  it("rejects a second entry — both would emit `token` and `cachedToken` at module scope", () => {
+    expect(() => parseSpec(twoCc)).toThrow(/at most one env entry with auth: "client-credentials"/);
+  });
+
+  it("accepts one client-credentials entry alongside other auth kinds", () => {
+    expect(() =>
+      parseSpec({
+        ...twoCc,
+        env: [
+          twoCc.env[0]!,
+          { vars: ["ZZ_SITE"], local: "siteHost", bindings: ["s"], default: "zz.test" },
+        ],
+      }),
+    ).not.toThrow();
+  });
+});
