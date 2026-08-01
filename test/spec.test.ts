@@ -1008,7 +1008,9 @@ describe("impl: search", () => {
   });
 
   it("rejects a non-identifier filter.export", () => {
-    expect(() => make(tool({ filter: { export: "not a name", fields: ["id"] } }))).toThrow();
+    expect(() =>
+      make(tool({ filter: { export: "not a name", fields: ["id"] } })),
+    ).toThrow(/must be a valid JS identifier/);
   });
 
   it("accepts an ordinary GET tool that never mentions maxLimit", () => {
@@ -1020,5 +1022,17 @@ describe("impl: search", () => {
     }).tools[0]!;
     expect(t.maxLimit).toBe(100);
     expect(t.rows).toBeUndefined();
+  });
+
+  it("rejects rows/maxLimit on a non-search tool", () => {
+    expect(() =>
+      make({
+        name: "mercury_get_account",
+        description: "Get an account.",
+        impl: "rest",
+        path: "/api/v1/accounts/:id",
+        maxLimit: 50,
+      }),
+    ).toThrow(/"rows" and "maxLimit" are only valid on a tool with "impl": "search"/);
   });
 });
