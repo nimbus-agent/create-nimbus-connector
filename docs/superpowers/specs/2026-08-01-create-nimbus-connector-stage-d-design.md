@@ -87,8 +87,10 @@ connector — which is what makes §2 D4 possible.
 The 9 are strikingly uniform: **6 of them are the identical 11-line file** — `bitrise`,
 `codemagic`, `mercury`, `monte-carlo`, `pipedrive`, `zendesk` — one export, no local functions,
 differing only in the key list and an optional `{ tags: true }`. Of the remaining three, `stripe`
-(19) and `raindrop` (20, two exports) are the same shape at greater length, and `workday` (5) is
-the same shape minus the type alias (§1.5.1). `mercury`:
+(19) is the identical shape with a seven-key list the formatter wraps one per line; `workday` (5)
+is the shape minus the type alias (§1.5.1); and `raindrop` (20, two exports) carries a prose doc
+comment on its second filter and is therefore **not** byte-reproducible, despite using
+`fieldsFromKeys` for both. `mercury`:
 
 ```ts
 import {
@@ -132,7 +134,7 @@ converge at all.
 | Axis | Corpus |
 | --- | --- |
 | `searchToolInputSchema(n)` | 100 ×24, 200 ×12, 2000 ×2, 50 ×1 |
-| Search tools per connector | 1 in most; `raindrop` has 2, sharing one filter file |
+| Search tools per connector | 1 in most; `raindrop` has 2, sharing one filter *file* but declaring **two distinct exports** over different key lists — `filterRaindropBookmarks` and `filterRaindropCollections`. No connector reuses one filter across two search tools |
 | Response envelope | `mercury` plucks `root.accounts`; `bitrise` passes the response straight through |
 | Extra arguments | `bitrise` takes an `appSlug` path parameter, so it inlines `z.object({ appSlug, query, limit })` instead of calling `searchToolInputSchema` |
 
@@ -167,7 +169,7 @@ framing this stage started from; the corpus supports only the first half.
 | D2 | The style permits write tools | §1.3 — 9 connectors using it declare `["write"]` |
 | D3 | Search is a tool kind, `impl: "search"`, layered on any style | Additive to Stage C's `impl` enum, as `"rest"` was |
 | D4 | `search-filter` and `matchesResult` move into `@nimbus-dev/sdk/connector-kit`; `searchToolInputSchema` does not | §1.4 — only the last needs zod, and it is four emittable lines. The SDK's `"dependencies": {}` stays literally true |
-| D5 | Flat keys and `tags` render `fieldsFromKeys`; anything else emits a throwing extractor stub | §1.5 — Stage C §6's `*-mapping.ts` precedent: scaffold the hard case, never guess it |
+| D5 | Flat keys and `tags` render `fieldsFromKeys`; anything else emits a throwing **filter** stub | §1.5 — Stage C §6's `*-mapping.ts` precedent: scaffold the hard case, never guess it. The throw sits in the filter, not the extractor, so it cannot be skipped by an empty result set (§4.3.1) |
 | D6 | Emission is target-aware — monorepo emits `searchToolInputSchema(n)` and `../../shared/*`; standalone inlines the zod schema and imports the SDK | The targets already diverge this way, and byte-matching `mercury` requires the former |
 | D7 | The `runReadOnly` glue is emitted inline for standalone, not added to the SDK | §1.2 — its primitives are already SDK exports; the helper itself imports `@modelcontextprotocol/sdk`, which the SDK core must not |
 
@@ -179,6 +181,14 @@ and specs written against `0.3.3` generate byte-identical output.
 explicitly allows to write. The alternative is inventing a name for a helper the emitted code
 calls `runReadOnlyMcpConnector`, which is worse: the spec field would stop describing the output.
 The name is Nimbus's, and it is inaccurate there too.
+
+The warning belongs in the generated `README.md`, under the existing `## What this is` heading,
+and **not** as a comment in `server.ts`. Two reasons. No connector in the corpus carries such a
+comment — verified — so emitting one would forfeit byte-matching for exactly the nine connectors
+that most need the caveat (§1.3), which is the wrong trade in the wrong place. And the README is a
+file this generator authors outright, so a sentence there costs no fidelity at all. A reader or
+auditor who needs to know that `runReadOnly` does not constrain writes is served either way; only
+one of the two options also breaks the diff harness.
 
 ---
 
@@ -285,9 +295,34 @@ The standalone target emits the same file with the import redirected to
 `@nimbus-dev/sdk/connector-kit`. The exported type alias is
 `PascalCase(connector) + "SearchMatchOptions"`, emitted unconditionally per §1.5.1.
 
-With `filter.fields` omitted, the `makeQueryFilter(…)` argument becomes a named extractor whose
-body throws and names what must be supplied — the shape Stage C §6 uses for `*-mapping.ts`.
-Multiple search tools contribute multiple exports to the one file.
+Multiple search tools contribute multiple exports to the one file, each with its own key list;
+no connector in the corpus reuses one filter across two search tools (§1.6).
+
+#### 4.3.1 The stub replaces the filter, not the extractor
+
+With `filter.fields` omitted, the emitted stub is the **filter itself**, and `makeQueryFilter` is
+not called at all:
+
+```ts
+export const filterMercuryAccounts: SearchFilter = () => {
+  throw new Error(
+    "mercury_search: supply the searchable fields for this resource — " +
+      "replace this stub with makeQueryFilter(fieldsFromKeys([...])) or a bespoke extractor.",
+  );
+};
+```
+
+The obvious alternative — keeping `makeQueryFilter(stubExtractor)` and throwing inside the
+extractor — is wrong, and the reason is a property of the shared code rather than a matter of
+taste. `makeQueryFilter` returns a closure that defers to `filterByQuery`, which invokes
+`options.fields(item)` **once per row**. An extractor that throws therefore fires lazily, and on
+an empty result set it never fires at all: the tool returns `{ matches: [] }` and reports success.
+A stub that silently passes whenever the upstream list happens to be empty is the exact failure
+mode Stage A's empty-`checks` array and Stage C §5.2's "vacuous pass" both describe. Throwing from
+the filter position fires on every invocation, regardless of what the API returned.
+
+This costs nothing in fidelity: a stubbed filter byte-matches no corpus connector either way
+(§5.1, expectation `[]`).
 
 ### 4.4 The search tool body
 
@@ -328,11 +363,13 @@ Two synthetic fixtures join at expectation `[]`:
 
 - **`zzsearch`** — standalone search, so the SDK import path and the inlined `runReadOnly` glue
   face a real `tsc`.
-- **`zzsearchstub`** — the throwing-extractor path, and it is not optional. A stub filter imports
-  `FieldExtractor` and not `fieldsFromKeys`, and its body references no parameters: precisely the
-  shape that shipped an unread local in Stage C, invisible to substring assertions and caught only
-  when a package was put in front of its own `tsc` and `biome`. Stage C §5.3 paid for that lesson
-  with `zzwriteonly`; this applies it before the defect rather than after.
+- **`zzsearchstub`** — the throwing-filter path, and it is not optional. Per §4.3.1 a stub file
+  imports the `SearchFilter` type and calls neither `makeQueryFilter` nor `fieldsFromKeys`, and
+  its body references no parameters: precisely the shape that shipped an unread local in Stage C,
+  invisible to substring assertions and caught only when a package was put in front of its own
+  `tsc` and `biome`. A spec mixing one stubbed and one keyed filter must therefore import both
+  sets of symbols and neither more nor less. Stage C §5.3 paid for that lesson with `zzwriteonly`;
+  this applies it before the defect rather than after.
 
 That takes the golden harness from 12 fixtures to 17, and standalone acceptance from four
 fixtures to six. Runtime grows linearly with fixture count, as Stage C §5.3 already recorded —
@@ -382,3 +419,29 @@ imports `../../shared/*` and needs no SDK release.
 - **Making `shared/mcp-search-tool.ts` dependency-free in the monorepo.** D4 routes around its zod
   import rather than changing it; that is Nimbus's call, not this repository's.
 - **Changing what search *does*.** §5.2 limit 3.
+
+### 7.1 Considered and declined
+
+Two suggestions from the design review were measured and rejected. Recorded with their reasoning
+so they are not re-proposed.
+
+**Coercing the row set before `matchesResult` — e.g. `accounts ?? []`.** Declined: the guard
+already exists one level down, and adding a second would cost a fixture. `matchesResult` is
+
+```ts
+const matches = Array.isArray(rows) ? filter(rows, opts) : [];
+```
+
+so `undefined`, `null`, and any non-array already yield an empty match set. `rows` is typed
+`unknown` precisely because external payloads are untyped at the boundary. A `?? []` at the call
+site would be dead code that changes `mercury`'s bytes, and `mercury` is a 7/7 fixture — the
+coercion would trade a real verification signal for a branch that can never be taken.
+
+**A validation-time performance warning on a large `maxLimit`.** Declined: it would measure the
+wrong quantity. `maxLimit` caps how many matches `filterByQuery` *returns*; it has no effect on
+how many rows are *fetched*, because the connector has already awaited the full response before
+the filter runs (§1.8 — there is no pagination). A connector with `maxLimit: 50` against an
+endpoint returning 100,000 rows carries the whole memory cost and would draw no warning, while
+`snowflake` and `tableau` at 2000 would draw one for a cap that costs nothing. Warning on the
+response size would be defensible; warning on `maxLimit` would train authors to lower a number
+that is not the problem.
