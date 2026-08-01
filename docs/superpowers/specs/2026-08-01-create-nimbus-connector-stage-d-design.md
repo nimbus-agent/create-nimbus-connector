@@ -152,7 +152,23 @@ candidates all fail for a structural reason:
 The generator emits a single `src/server.ts`, so none of these is reachable. In the corpus this
 style is overwhelmingly paired with search — 44 of 60. §5 states what that costs in evidence.
 
-### 1.8 Not found: any pagination helper
+### 1.8 `rest-kit` has no seam for a search tool
+
+`makeRestToolRegistrar` takes a path callback and an optional
+`(parsed) => ({ method, body })` init callback, then performs the fetch **and wraps the result**
+itself. A search tool has to intervene between the response and the MCP result — pluck the
+envelope, run the filter, return `{ matches }` — and the registrar exposes no callback at that
+point.
+
+This is the same shape as Stage C's D9, where `client-credentials` was restricted to
+`hand-rolled` because the registrar resolves one bearer credential itself and has no seam for a
+token exchange. The corpus agrees independently: **no connector imports both `rest-tool-kit` and
+`mcp-search-tool`** — the intersection of the 10 rest-kit users and the 45 search users is empty.
+
+`impl: "search"` is therefore rejected on `style: "rest-kit"` (§3.3), and the exclusion is forced
+by the helper's shape rather than chosen for tidiness.
+
+### 1.9 Not found: any pagination helper
 
 `shared/` contains none, and the `limit` argument caps a client-side filter over an
 already-fetched array. `mercury`'s own tool description says it plainly: *"There is no
@@ -167,7 +183,7 @@ framing this stage started from; the corpus supports only the first half.
 | --- | --- | --- |
 | D1 | `style: "read-only-kit"` becomes a third first-class style | §1.1 — 60 of 94 connectors, more than search itself |
 | D2 | The style permits write tools | §1.3 — 9 connectors using it declare `["write"]` |
-| D3 | Search is a tool kind, `impl: "search"`, layered on any style | Additive to Stage C's `impl` enum, as `"rest"` was |
+| D3 | Search is a tool kind, `impl: "search"`, valid on `hand-rolled` and `read-only-kit` but **rejected on `rest-kit`** | Additive to Stage C's `impl` enum, as `"rest"` was. The exclusion is forced by `makeRestToolRegistrar`, not chosen — see §1.8 |
 | D4 | `search-filter` and `matchesResult` move into `@nimbus-dev/sdk/connector-kit`; `searchToolInputSchema` does not | §1.4 — only the last needs zod, and it is four emittable lines. The SDK's `"dependencies": {}` stays literally true |
 | D5 | Flat keys and `tags` render `fieldsFromKeys`; anything else emits a throwing **filter** stub | §1.5 — Stage C §6's `*-mapping.ts` precedent: scaffold the hard case, never guess it. The throw sits in the filter, not the extractor, so it cannot be skipped by an empty result set (§4.3.1) |
 | D6 | Emission is target-aware — monorepo emits `searchToolInputSchema(n)` and `../../shared/*`; standalone inlines the zod schema and imports the SDK | The targets already diverge this way, and byte-matching `mercury` requires the former |
@@ -412,7 +428,7 @@ imports `../../shared/*` and needs no SDK release.
 ## 7. Out of scope
 
 - **Bespoke field extractors** beyond flat keys and `tags` (D5, §5.2 limit 2).
-- **Server-side pagination.** §1.8 — no helper exists, and the corpus does not paginate here.
+- **Server-side pagination.** §1.9 — no helper exists, and the corpus does not paginate here.
 - **Splitting emission into `src/tools.ts`**, the layout `elasticsearch` and `storybook` use. It is
   a real corpus shape and the direct reason §1.7 has no fixture, but it is a file-layout axis
   independent of this one.
@@ -440,7 +456,7 @@ coercion would trade a real verification signal for a branch that can never be t
 **A validation-time performance warning on a large `maxLimit`.** Declined: it would measure the
 wrong quantity. `maxLimit` caps how many matches `filterByQuery` *returns*; it has no effect on
 how many rows are *fetched*, because the connector has already awaited the full response before
-the filter runs (§1.8 — there is no pagination). A connector with `maxLimit: 50` against an
+the filter runs (§1.9 — there is no pagination). A connector with `maxLimit: 50` against an
 endpoint returning 100,000 rows carries the whole memory cost and would draw no warning, while
 `snowflake` and `tableau` at 2000 would draw one for a cap that costs nothing. Warning on the
 response size would be defensible; warning on `maxLimit` would train authors to lower a number
