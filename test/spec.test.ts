@@ -993,9 +993,7 @@ describe("impl: search", () => {
   });
 
   it("rejects an empty fields list", () => {
-    expect(() => make(tool({ filter: { export: "f", fields: [] } }))).toThrow(
-      /at least one field/,
-    );
+    expect(() => make(tool({ filter: { export: "f", fields: [] } }))).toThrow(/at least one field/);
   });
 
   it("rejects method and body", () => {
@@ -1008,9 +1006,9 @@ describe("impl: search", () => {
   });
 
   it("rejects a non-identifier filter.export", () => {
-    expect(() =>
-      make(tool({ filter: { export: "not a name", fields: ["id"] } })),
-    ).toThrow(/must be a valid JS identifier/);
+    expect(() => make(tool({ filter: { export: "not a name", fields: ["id"] } }))).toThrow(
+      /must be a valid JS identifier/,
+    );
   });
 
   it("accepts an ordinary GET tool that never mentions maxLimit", () => {
