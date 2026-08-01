@@ -296,7 +296,37 @@ export const ConnectorSpecSchema = z
       message:
         "a rest-kit connector cannot reference ${env.X} in fetchHelper.base or fetchHelper.inlineHeaders — rest-kit emits no env accessors, so the call would be undefined",
     },
-  );
+  )
+  // Measured: the intersection of the 10 rest-tool-kit users and the 45 mcp-search-tool
+  // users in the corpus is empty, and the code explains why — makeRestToolRegistrar
+  // performs the fetch AND wraps the result, so there is no callback between the response
+  // and the MCP result for the filter to run in. Same shape as the client-credentials
+  // exclusion above.
+  .refine((s) => s.style !== "rest-kit" || !s.tools.some((t) => t.impl === "search"), {
+    message:
+      'style "rest-kit" cannot declare an "impl": "search" tool: makeRestToolRegistrar ' +
+      "performs the request and wraps the result itself, so it has no seam for the filter. " +
+      'Use style "read-only-kit" or "hand-rolled".',
+  })
+  // One emitted `export const` per filter, all in one src/search-filter.ts. Two tools
+  // naming the same export would emit a duplicate declaration. No corpus connector reuses
+  // one filter across two search tools (raindrop's two are distinct exports).
+  .superRefine((s, ctx) => {
+    const seen = new Set<string>();
+    for (const t of s.tools) {
+      const name = t.filter?.export;
+      if (name === undefined) continue;
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `two tools declare "filter.export": "${name}" — each search tool emits its own ` +
+            "export into src/search-filter.ts, so the names must differ",
+        });
+      }
+      seen.add(name);
+    }
+  });
 
 export type EnvSpec = z.infer<typeof EnvSchema>;
 export type ToolSpec = z.infer<typeof ToolSchema>;

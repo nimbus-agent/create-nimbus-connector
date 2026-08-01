@@ -1036,3 +1036,46 @@ describe("impl: search", () => {
     ).toThrow(/"rows" and "maxLimit" are only valid on a tool with "impl": "search"/);
   });
 });
+
+describe("search and style interaction", () => {
+  const searchTool = {
+    name: "s_search",
+    description: "Search.",
+    impl: "search",
+    path: "/items",
+    filter: { export: "filterItems", fields: ["id"] },
+  };
+
+  it("rejects a search tool on style rest-kit", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "rest-kit",
+        env: [{ vars: ["S_TOKEN"], local: "token", auth: "bearer" }],
+        fetchHelper: { local: "sGet", base: "https://api.s.com" },
+        tools: [searchTool],
+      }),
+    ).toThrow(/no seam/);
+  });
+
+  it("rejects two tools sharing one filter.export", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "sGet",
+          base: "https://api.s.com",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [searchTool, { ...searchTool, name: "s_search_two", path: "/others" }],
+      }),
+    ).toThrow(/filterItems/);
+  });
+});
