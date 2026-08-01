@@ -14,9 +14,16 @@ function isHandStyle(spec: ConnectorSpec): boolean {
   return spec.style === "hand-rolled" || spec.style === "read-only-kit";
 }
 
-/** Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool. */
+/**
+ * Stub handlers only throw, and a search tool calls only `matchesResult` (see
+ * renderSearchTool) — jsonResult(...) is emitted only by a hand-style tool whose impl is
+ * "rest" (the transformed enum is "rest" | "stub" | "search", so this is precise, not just
+ * "not stub"). Getting this wrong the other way — counting search tools here — imports
+ * `mcpJsonResult as jsonResult` into a search-only connector that never calls it, an unused
+ * import the generated package's own noUnusedLocals/noUnusedVariables reject.
+ */
 function usesJsonResult(spec: ConnectorSpec): boolean {
-  return isHandStyle(spec) && spec.tools.some((t) => t.impl !== "stub");
+  return isHandStyle(spec) && spec.tools.some((t) => t.impl === "rest");
 }
 
 /**
@@ -108,9 +115,52 @@ function sortedRelativeImportLines(blocks: readonly RelativeImportBlock[]): stri
     .flatMap((b) => b.lines);
 }
 
+/**
+ * Replicates Biome 2.5.6's `assist/source/organizeImports` ordering for the names inside a
+ * single `import { ... } from "@nimbus-dev/sdk/connector-kit";` clause on the standalone
+ * target — confirmed directly against the pinned `@biomejs/biome` binary for every pair this
+ * generator can actually co-emit (see task-7-report.md, "Finding A" verification). It is not
+ * a plain string sort: Biome buckets names by the case-folded first character of their LOCAL
+ * binding (the alias after " as " for `mcpJsonResult as jsonResult`, the name after `type `
+ * for a type-only import), puts every `type` import ahead of every value import that shares
+ * its bucket, and alphabetizes within each of those two subgroups. A single string compare
+ * gets this wrong: "type McpListResult" sorts before "matchesResult" (both bucket on 'm',
+ * and type wins the bucket) despite 'a' < 'c' at the second character, while "type
+ * ZodObjectSchema" sorts after "searchToolInputSchema" (buckets 'z' and 's' don't tie, so
+ * plain alphabetical order applies and type-precedence never enters into it).
+ */
+function biomeNamedImportOrder(names: readonly string[]): string[] {
+  const key = (raw: string): { isType: boolean; local: string } => {
+    const isType = raw.startsWith("type ");
+    const bare = isType ? raw.slice("type ".length) : raw;
+    const asIdx = bare.indexOf(" as ");
+    return { isType, local: asIdx === -1 ? bare : bare.slice(asIdx + 4) };
+  };
+  return [...names].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    const la = ka.local.charAt(0).toLowerCase();
+    const lb = kb.local.charAt(0).toLowerCase();
+    if (la !== lb) return la < lb ? -1 : 1;
+    if (ka.isType !== kb.isType) return ka.isType ? -1 : 1;
+    return ka.local < kb.local ? -1 : ka.local > kb.local ? 1 : 0;
+  });
+}
+
+/**
+ * A non-search tool (rest or stub) always renders a z.object({...}) schema, even an empty
+ * one (see renderZodSchema) — but a search tool only does when it declares its own args
+ * (renderSchema in search.ts); a zero-arg search tool calls searchToolInputSchema(...)
+ * instead and never references `z` at all. A spec whose only tool(s) are zero-arg search
+ * tools is the one shape that must NOT import zod, on pain of the same noUnusedLocals /
+ * noUnusedVariables failure `usesJsonResult` above was fixed for.
+ */
+function usesZod(spec: ConnectorSpec): boolean {
+  return spec.tools.some((t) => t.impl !== "search" || Object.keys(t.args).length > 0);
+}
+
 function imports(spec: ConnectorSpec, target: GenerateTarget): string {
-  // z.object(...) is only emitted per tool — a zero-tool spec never calls it.
-  const usesZod = spec.tools.length > 0;
+  const zodNeeded = usesZod(spec);
 
   const zodImport = 'import { z } from "zod";';
   const head =
@@ -127,16 +177,19 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     // own group behind a blank line — the kit is a package specifier, and
     // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
     // BEFORE "zod". It therefore belongs inside the first group, in that position.
-    const kitNames = [...kitImportNames(spec, true, target), ...searchKitNames(spec)].sort();
+    const kitNames = biomeNamedImportOrder([
+      ...kitImportNames(spec, true, target),
+      ...searchKitNames(spec),
+    ]);
     head.push(...renderNamedImport(kitNames, KIT));
-    if (usesZod) head.push(zodImport);
+    if (zodNeeded) head.push(zodImport);
     const filters = filterImport(spec);
     if (filters !== undefined) head.push("", filters);
     return head.join("\n");
   }
 
   // monorepo — unchanged from Stage A
-  if (usesZod) head.push(zodImport);
+  if (zodNeeded) head.push(zodImport);
 
   const search = searchKitNames(spec);
   const filters = filterImport(spec);

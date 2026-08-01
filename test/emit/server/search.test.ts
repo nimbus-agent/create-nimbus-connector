@@ -128,11 +128,26 @@ describe("emitServer search imports", () => {
     expect(out).not.toContain("searchToolInputSchema");
   });
 
-  it("imports both from the SDK kit on standalone", () => {
+  it("imports both from the SDK kit on standalone, in Biome's real merged order", () => {
     const out = emitServer(specWith([SEARCH]), "standalone").content;
     expect(out).not.toContain("../../shared/");
+    // Pinned, not just toContain("matchesResult") — Biome buckets by the case-folded first
+    // character of each local name and puts `type` imports ahead of value imports within a
+    // shared bucket, so "type McpListResult" sorts before "matchesResult" despite 'a' < 'c'
+    // at the second character. See task-7-report.md, "Finding A".
+    expect(out).toContain(
+      [
+        "import {",
+        "  createRegisterSimpleTool,",
+        "  createZodToolRegistrar,",
+        "  type McpListResult,",
+        "  matchesResult,",
+        "  searchToolInputSchema,",
+        "  type ZodObjectSchema,",
+        '} from "@nimbus-dev/sdk/connector-kit";',
+      ].join("\n"),
+    );
     expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.ts";');
-    expect(out).toContain("matchesResult");
   });
 
   it("emits no search imports for a spec with no search tool", () => {
