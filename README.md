@@ -212,6 +212,21 @@ bun run standalone-acceptance --sdk-root C:\gitrep\nimbus-sdk
 
 In local-checkout mode the SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness — and that stays true in `--registry` mode, which changes where the package comes from, not which export condition Bun applies to it. What `--registry` adds is proof that the published tarball *contains* `dist` at all.
 
+## SonarCloud coverage
+
+SonarCloud reported **0.0% coverage on new code** on every pull request for a long time — not because the code was untested, but because **Automatic Analysis cannot ingest a coverage report**, and none was ever uploaded. `.github/workflows/sonar.yml` replaces it with a CI-based analysis that runs `bun test --coverage --coverage-reporter=lcov` and uploads `coverage/lcov.info`.
+
+The two modes are mutually exclusive: SonarCloud **refuses** a CI analysis while Automatic Analysis is enabled. Switching over therefore has an order, and getting it wrong leaves the project with no analysis at all:
+
+1. Add a `SONAR_TOKEN` repository (or organization) secret — SonarCloud → My Account → Security → Generate Token.
+2. Merge this workflow.
+3. **Then** turn Automatic Analysis off: SonarCloud → the project → Administration → Analysis Method.
+4. Re-run the `sonar` workflow on `main`.
+
+Between steps 2 and 3 the workflow fails with *"You are running CI analysis while Automatic Analysis is enabled"*. That is expected, and is why step 3 follows the merge rather than preceding it.
+
+`bunfig.toml`'s per-file `coverageThreshold` still applies during this run, so the gate does not become advisory just because a reporter was added.
+
 ## Development
 
 ```
