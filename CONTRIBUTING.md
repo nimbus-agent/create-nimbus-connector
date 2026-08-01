@@ -2,6 +2,12 @@
 
 Thanks for considering a contribution. This document covers what is specific to this repository; the [organisation-wide guidance](https://github.com/nimbus-agent/.github/blob/main/CONTRIBUTING.md), code of conduct, and security policy apply as well.
 
+## Questions
+
+There is one Discussions board for the whole organisation — on the [Nimbus repository](https://github.com/nimbus-agent/Nimbus/discussions) — and no satellite repo has its own, so a question belongs there rather than in whichever repo looked closest. That includes "would you accept a PR that does X?", which is a great deal cheaper asked before the PR than after it.
+
+Anything concrete about *this* repository stays here as an issue: a generator that emits the wrong bytes, a spec that should validate and doesn't, a fixture that stopped matching.
+
 ## Before your first PR
 
 You will be asked to sign the [Individual CLA](https://github.com/nimbus-agent/.github/blob/main/CLA/ICLA.md) by commenting on your pull request. Contributing on behalf of an employer? See the [Corporate CLA](https://github.com/nimbus-agent/.github/blob/main/CLA/CCLA.md).
