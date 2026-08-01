@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.1...create-nimbus-connector-v0.3.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **cli:** --version, flag suggestions, and a checkout test for --gateway-wiring ([#31](https://github.com/nimbus-agent/create-nimbus-connector/issues/31)) ([af93ffc](https://github.com/nimbus-agent/create-nimbus-connector/commit/af93ffcf09b1a7b1ab4dd5eb21de6a31b7b2494a))
+* **prompts:** validate each answer where it is given ([#33](https://github.com/nimbus-agent/create-nimbus-connector/issues/33)) ([444b009](https://github.com/nimbus-agent/create-nimbus-connector/commit/444b0092e1c5e5e05e5a099dc60e173db5626755))
+
 ## [0.3.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.0...create-nimbus-connector-v0.3.1) (2026-08-01)
 
 
