@@ -27,13 +27,16 @@ function usesJsonResult(spec: ConnectorSpec): boolean {
 }
 
 /**
- * Only the "basic" branch of the client-credentials token exchange calls
- * encodeBasicAuthHeader — a "body" entry never references it, so gating on credentialsIn
- * (rather than merely "a client-credentials entry exists") is what keeps the import used,
- * satisfying noUnusedLocals.
+ * The two ways an emitted server names encodeBasicAuthHeader: an `auth: "basic"` accessor
+ * always calls it, and the client-credentials token exchange calls it only on its "basic"
+ * branch — a "body" entry never references it, so gating on credentialsIn (rather than
+ * merely "a client-credentials entry exists") is what keeps the import used, satisfying
+ * noUnusedLocals.
  */
-function usesBasicClientCredentials(spec: ConnectorSpec): boolean {
-  return spec.env.some((e) => e.auth === "client-credentials" && e.credentialsIn === "basic");
+function usesEncodeBasicAuthHeader(spec: ConnectorSpec): boolean {
+  return spec.env.some(
+    (e) => e.auth === "basic" || (e.auth === "client-credentials" && e.credentialsIn === "basic"),
+  );
 }
 
 /**
@@ -61,7 +64,7 @@ function kitImportNames(
   if (spec.style === "read-only-kit" && target === "standalone") {
     names.push("type McpListResult", "type ZodObjectSchema");
   }
-  if (usesBasicClientCredentials(spec)) names.push("encodeBasicAuthHeader");
+  if (usesEncodeBasicAuthHeader(spec)) names.push("encodeBasicAuthHeader");
   if (usesJsonResult(spec)) names.push("mcpJsonResult as jsonResult");
   if (withRestRegistrar && spec.style === "rest-kit") names.push("makeRestToolRegistrar");
   return names;

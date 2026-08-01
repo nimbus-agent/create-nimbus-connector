@@ -104,3 +104,32 @@ describe("hitlRequired", () => {
     ]);
   });
 });
+
+describe("emitManifest, permissions.filesystem", () => {
+  const withFs = (filesystem: unknown) =>
+    parseSpec({
+      ...JSON.parse(JSON.stringify(spec)),
+      filesystem,
+    });
+
+  it("omits the key entirely when the spec does not declare it", () => {
+    expect(emitManifest(spec).content).not.toContain("filesystem");
+    expect(JSON.parse(emitManifest(spec).content).permissions).toEqual({
+      network: ["api.newrelic.com", "api.eu.newrelic.com"],
+    });
+  });
+
+  it("writes a declared filesystem block on one line, after network", () => {
+    const out = emitManifest(withFs({ read: [], write: [] })).content;
+    expect(out).toContain('"filesystem": {"read":[],"write":[]}');
+    expect(out.indexOf('"network"')).toBeLessThan(out.indexOf('"filesystem"'));
+  });
+
+  it("keeps the collapsed form parseable, with the paths intact", () => {
+    const out = emitManifest(withFs({ read: ["~/.cache/x"], write: ["/tmp/x"] })).content;
+    expect(JSON.parse(out).permissions.filesystem).toEqual({
+      read: ["~/.cache/x"],
+      write: ["/tmp/x"],
+    });
+  });
+});

@@ -129,6 +129,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       "mercury",
       "newrelic",
       "sentry",
+      "zendesk",
       "zzscratch",
       "zzstandalone",
       "zzstandalonehand",

@@ -30,6 +30,9 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "cachedToken",
   "tokenExpiresAt",
   "encodeBasicAuthHeader",
+  // Stage D's transform: "trimTrailingSlashFn" emits `function trimTrailingSlash` at module
+  // scope (see env.ts), so a `local` of that name would be declared twice.
+  "trimTrailingSlash",
   "URLSearchParams",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits

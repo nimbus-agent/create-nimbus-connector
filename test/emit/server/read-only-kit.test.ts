@@ -61,3 +61,44 @@ describe("emitServer, style read-only-kit, standalone target", () => {
     expect(emitServer(make("read-only-kit", LIST), "standalone").content).toContain(call);
   });
 });
+
+describe("emitServer, encodeBasicAuthHeader import gating", () => {
+  function basicSpec(auth: string) {
+    return parseSpec({
+      name: "zendesk",
+      displayName: "Zendesk",
+      description: "d.",
+      serviceLabel: "Zendesk",
+      style: "read-only-kit",
+      env: [
+        auth === "basic"
+          ? {
+              vars: ["ZENDESK_EMAIL", "ZENDESK_API_TOKEN"],
+              local: "authHeader",
+              bindings: ["email", "token"],
+              auth: "basic",
+            }
+          : {
+              vars: ["ZENDESK_API_TOKEN"],
+              local: "authHeader",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+      ],
+      fetchHelper: { local: "zendeskGet", base: "https://z.test", headers: "authHeader" },
+      tools: [{ name: "zendesk_list", description: "List tickets.", path: "/api/v2/tickets.json" }],
+    });
+  }
+
+  it('imports encodeBasicAuthHeader for an auth: "basic" accessor', () => {
+    const out = emitServer(basicSpec("basic"), "monorepo").content;
+    expect(out).toContain(
+      'import { encodeBasicAuthHeader, mcpJsonResult as jsonResult } from "../../shared/mcp-tool-kit.ts";',
+    );
+  });
+
+  it("does not import it for a connector that never calls it — an unused import fails tsc there", () => {
+    const out = emitServer(basicSpec("bearer"), "monorepo").content;
+    expect(out).not.toContain("encodeBasicAuthHeader");
+  });
+});

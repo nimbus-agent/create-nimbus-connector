@@ -243,3 +243,104 @@ function authHeader(): Record<string, string> {
 }`);
   });
 });
+
+describe("renderEnvAccessor, HTTP Basic", () => {
+  it("reads and guards each variable separately, naming only the missing one", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["AIRFLOW_USERNAME", "AIRFLOW_PASSWORD"],
+        local: "authHeader",
+        bindings: ["user", "password"],
+        auth: "basic",
+      }),
+    );
+    expect(out).toBe(`function authHeader(): Record<string, string> {
+  const user = process.env["AIRFLOW_USERNAME"]?.trim();
+  if (user === undefined || user === "") {
+    throw new Error("AIRFLOW_USERNAME is not set");
+  }
+  const password = process.env["AIRFLOW_PASSWORD"]?.trim();
+  if (password === undefined || password === "") {
+    throw new Error("AIRFLOW_PASSWORD is not set");
+  }
+  return {
+    Authorization: encodeBasicAuthHeader(user, password),
+    Accept: "application/json",
+  };
+}`);
+  });
+
+  it("decorates the username with a suffix, which is what zendesk's /token is", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["ZENDESK_EMAIL", "ZENDESK_API_TOKEN"],
+        local: "authHeader",
+        bindings: ["email", "token"],
+        auth: "basic",
+        suffix: "/token",
+      }),
+    );
+    expect(out).toContain("Authorization: encodeBasicAuthHeader(`${email}/token`, token),");
+  });
+
+  it("requires exactly two vars — a username and a password", () => {
+    expect(() => env({ vars: ["ONLY_ONE"], local: "authHeader", auth: "basic" })).toThrow(
+      /exactly two \\"vars\\"/,
+    );
+  });
+});
+
+describe("renderEnvAccessors, trimTrailingSlashFn", () => {
+  function spec(entries: unknown[]) {
+    return parseSpec({
+      name: "zendesk",
+      displayName: "Zendesk",
+      description: "d.",
+      serviceLabel: "Zendesk",
+      style: "read-only-kit",
+      env: entries,
+      fetchHelper: { local: "zendeskGet", base: "${env.baseUrl}", headers: "baseUrl" },
+    });
+  }
+
+  const URL_ENTRY = {
+    vars: ["ZENDESK_URL"],
+    local: "baseUrl",
+    bindings: ["v"],
+    required: true,
+    transform: "trimTrailingSlashFn",
+  };
+
+  it("emits the shared helper ahead of the accessor that calls it", () => {
+    expect(
+      renderEnvAccessors(spec([URL_ENTRY])),
+    ).toBe(`function trimTrailingSlash(s: string): string {
+  return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+function baseUrl(): string {
+  const v = process.env["ZENDESK_URL"]?.trim();
+  if (v === undefined || v === "") {
+    throw new Error("ZENDESK_URL is not set");
+  }
+  return trimTrailingSlash(v);
+}`);
+  });
+
+  it("emits the helper once however many accessors call it", () => {
+    const out = renderEnvAccessors(
+      spec([
+        URL_ENTRY,
+        { ...URL_ENTRY, vars: ["ZENDESK_ALT_URL"], local: "altUrl", bindings: ["w"] },
+      ]),
+    );
+    expect(out.split("function trimTrailingSlash(").length - 1).toBe(1);
+    expect(out).toContain("return trimTrailingSlash(w);");
+  });
+
+  it("leaves the inline .replace form — grafana's and sentry's — untouched", () => {
+    const out = renderEnvAccessors(spec([{ ...URL_ENTRY, transform: "stripTrailingSlash" }]));
+    expect(out).not.toContain("function trimTrailingSlash(");
+    expect(out).toContain(String.raw`return v.replace(/\/$/, "");`);
+  });
+});

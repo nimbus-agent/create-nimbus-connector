@@ -5,6 +5,18 @@ type EnvEntry = z.infer<typeof EnvSchema>;
 
 const STRIP = String.raw`replace(/\/$/, "")`;
 
+/**
+ * The shared trailing-slash helper, byte-identical in all 13 corpus connectors that use it
+ * (airflow, argocd, dagster, databricks, dbt, dependencytrack, looker, metabase, mlflow,
+ * prefect, superset, tableau, zendesk), hence a constant rather than a template. Emitted
+ * once per connector however many accessors call it — see renderEnvAccessors.
+ */
+export const TRIM_TRAILING_SLASH_FN = [
+  "function trimTrailingSlash(s: string): string {",
+  '  return s.endsWith("/") ? s.slice(0, -1) : s;',
+  "}",
+].join("\n");
+
 function camel(varName: string): string {
   const parts = varName.toLowerCase().split("_");
   return (
@@ -20,9 +32,11 @@ function bindingOf(e: EnvEntry, i: number): string {
   return e.bindings?.[i] ?? camel(e.vars[i]!);
 }
 
-/** `<binding>.replace(...)` when a transform is set, else the bare binding. */
+/** The transform applied to a binding, or the bare binding when none is set. */
 function transformed(e: EnvEntry, binding: string): string {
-  return e.transform === "stripTrailingSlash" ? `${binding}.${STRIP}` : binding;
+  if (e.transform === "stripTrailingSlash") return `${binding}.${STRIP}`;
+  if (e.transform === "trimTrailingSlashFn") return `trimTrailingSlash(${binding})`;
+  return binding;
 }
 
 /** Wrap in a template literal only when a prefix or suffix exists. */
@@ -165,6 +179,39 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
  * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
  * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
  */
+/**
+ * HTTP Basic, the airflow/zendesk shape: each variable read and guarded on its own, with
+ * its own message naming just that variable, then one multi-line header object.
+ *
+ * Deliberately NOT the combined `a === "" || b === ""` guard `guardLines` builds for
+ * auth: "headers". A basic credential is two independently-supplied secrets — telling the
+ * user "ZENDESK_EMAIL and ZENDESK_API_TOKEN must be set" when only one is missing is worse
+ * diagnostics, and it is not what any of the four corpus connectors wrote.
+ */
+function renderBasic(e: EnvEntry): string {
+  const readAndGuard = e.vars.flatMap((v, i) => {
+    const b = bindingOf(e, i);
+    return [
+      `  const ${b} = process.env[${JSON.stringify(v)}]?.trim();`,
+      `  if (${b} === undefined || ${b} === "") {`,
+      `    throw new Error(${JSON.stringify(`${v} is not set`)});`,
+      "  }",
+    ];
+  });
+  // prefix/suffix decorate the username only — see EnvSchema's refine. `wrapped` returns
+  // the bare binding when neither is set, which is airflow's form.
+  const user = wrapped(e, bindingOf(e, 0));
+  return [
+    `function ${e.local}(): Record<string, string> {`,
+    ...readAndGuard,
+    "  return {",
+    `    Authorization: encodeBasicAuthHeader(${user}, ${bindingOf(e, 1)}),`,
+    '    Accept: "application/json",',
+    "  };",
+    "}",
+  ].join("\n");
+}
+
 function renderSplitBearer(e: EnvEntry): string {
   const binding = bindingOf(e, 0);
   return [
@@ -190,6 +237,9 @@ export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): stri
   if (e.auth === "client-credentials") {
     return renderClientCredentials(e, serviceLabel);
   }
+  if (e.auth === "basic") {
+    return renderBasic(e);
+  }
   // EnvSchema guarantees tokenLocal implies auth === "bearer".
   if (e.tokenLocal !== undefined) {
     return renderSplitBearer(e);
@@ -204,7 +254,14 @@ export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): stri
   ].join("\n");
 }
 
-/** Renders every env accessor for a spec, in declaration order. */
+/**
+ * Renders every env accessor for a spec, in declaration order, preceded by the shared
+ * trailing-slash helper when any of them calls it. Emitted once however many accessors do
+ * — two declarations of `trimTrailingSlash` in one module is a redeclaration error, and no
+ * corpus connector emits it twice.
+ */
 export function renderEnvAccessors(spec: ConnectorSpec): string {
-  return spec.env.map((e) => renderEnvAccessor(e, spec.serviceLabel)).join("\n\n");
+  const accessors = spec.env.map((e) => renderEnvAccessor(e, spec.serviceLabel));
+  const needsTrim = spec.env.some((e) => e.transform === "trimTrailingSlashFn");
+  return (needsTrim ? [TRIM_TRAILING_SLASH_FN, ...accessors] : accessors).join("\n\n");
 }

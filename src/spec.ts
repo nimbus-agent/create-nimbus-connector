@@ -145,10 +145,18 @@ export const EnvSchema = z
     bindings: z.array(z.string().min(1)).optional(),
     required: z.boolean().default(false),
     default: z.string().optional(),
-    transform: z.enum(["stripTrailingSlash"]).optional(),
+    /**
+     * How a trailing slash is stripped from a user-supplied base URL. Two conventions, and
+     * the corpus does not choose between them: `"stripTrailingSlash"` inlines
+     * `.replace(/\/$/, "")` (fastmail, grafana, sentry), `"trimTrailingSlashFn"` emits the
+     * shared `function trimTrailingSlash(s: string): string` helper once and calls it
+     * (airflow, argocd, databricks, dbt, zendesk and 8 more). Byte-identical helper text in
+     * all 13, so it is a constant here rather than a template.
+     */
+    transform: z.enum(["stripTrailingSlash", "trimTrailingSlashFn"]).optional(),
     prefix: z.string().optional(),
     suffix: z.string().optional(),
-    auth: z.enum(["bearer", "headers", "client-credentials"]).optional(),
+    auth: z.enum(["bearer", "basic", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
     /**
@@ -182,18 +190,32 @@ export const EnvSchema = z
   .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
     message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
   })
+  // "basic" is the exception, and only for prefix/suffix: those decorate the USERNAME
+  // passed to encodeBasicAuthHeader (zendesk's `${email}/token`), a position the wrapper
+  // does not replace. `transform` has no such position and stays rejected for every mode.
   .refine(
     (e) =>
       e.auth === undefined ||
-      (e.transform === undefined && e.prefix === undefined && e.suffix === undefined),
+      (e.transform === undefined &&
+        (e.auth === "basic" || (e.prefix === undefined && e.suffix === undefined))),
     {
       message:
-        'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value',
+        'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value (auth: "basic" may declare "prefix"/"suffix", which decorate the username)',
     },
   )
-  .refine((e) => e.vars.length === 1 || e.auth === "headers" || e.auth === "client-credentials", {
-    message:
-      'only an entry with auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+  .refine(
+    (e) =>
+      e.vars.length === 1 ||
+      e.auth === "basic" ||
+      e.auth === "headers" ||
+      e.auth === "client-credentials",
+    {
+      message:
+        'only an entry with auth: "basic", auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+    },
+  )
+  .refine((e) => e.auth !== "basic" || e.vars.length === 2, {
+    message: 'auth: "basic" requires exactly two "vars" — a username and a password',
   })
   .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
     message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
@@ -293,6 +315,18 @@ export const ConnectorSpecSchema = z
      */
     argsSchemaStyle: z.enum(["inline", "expanded"]).default("inline"),
     network: z.array(z.string()).default([]),
+    /**
+     * The manifest's `permissions.filesystem`, emitted after `network` when declared. 29 of
+     * the 94 corpus manifests carry it — most, like zendesk, as a pair of empty arrays
+     * stating explicitly that the connector touches no files. Omitted leaves the key out
+     * entirely, which is what the other 65 do, so the existing fixtures cannot move.
+     */
+    filesystem: z
+      .strictObject({
+        read: z.array(z.string()).default([]),
+        write: z.array(z.string()).default([]),
+      })
+      .optional(),
     syncInterval: z.number().int().positive().default(300),
     minNimbusVersion: z.string().default("0.2.0"),
     env: z.array(EnvSchema).default([]),
