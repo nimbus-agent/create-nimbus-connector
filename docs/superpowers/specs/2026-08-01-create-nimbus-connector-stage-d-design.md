@@ -274,12 +274,44 @@ claim survives — with one exception noted at the end.
 | # | Field | Buys | Corpus evidence |
 | --- | --- | --- | --- |
 | F1 | `fetchHelper.baseConst` | **Formatting only** | Hoists a fully static base to `const BASE = "…";` and references it from the helper. `mercury` spells it `BASE`, `bitrise` `BITRISE_API`. Rejected when `base` names `${env.X}` — that resolves to an accessor call, which must not run at module-initialisation time. Gated on a helper actually being emitted, or the const is an unread local |
-| F2 | `env[].tokenLocal` | **Formatting only** | Splits a bearer accessor into a `(): string` reader plus a header wrapper that calls it. **15** connectors write it this way — canva, dagster, figma, hubspot, mercury, miro, netlify, pipedrive, raindrop, readwise, salesforce, stackoverflow, vercel, zoom and one more |
+| F2 | `env[].tokenLocal` | **Formatting only** | Splits a bearer accessor into a `(): string` reader plus a header wrapper that calls it. **12** connectors are byte-reproducible by it — canva, figma, hubspot, mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe, vercel, zoom. The membership rule is narrower than "splits the accessor in two"; see §3.4.1 |
 | F3 | `handlerStyle: "concise" \| "block"` | **Formatting only** | A statement-bodied handler with an explicit `return`, versus an expression-bodied arrow. **57 of the 60** `runReadOnlyMcpConnector` connectors use the block form; firebase, tableau and workday do not |
 | F4 | `argsSchemaStyle: "inline" \| "expanded"` | **Formatting only** | `z.object` on one line or one field per line. Biome preserves whichever the emitter produces, so this is the emitter's decision, not the formatter's. `z.object({})` stays inline under both |
 | F5 | `env[].transform: "trimTrailingSlashFn"` | **Formatting only** | Emits the shared `function trimTrailingSlash(s)` once and calls it, instead of inlining `.replace(/\/$/, "")`. The corpus splits **13 to 3** in the helper's favour — this is not a close call. The inline form is kept only because `grafana` and `sentry` are byte-locked on it |
 | F6 | `env[].auth: "basic"` | **Capability** | HTTP Basic via `encodeBasicAuthHeader`: airflow, greenhouse, lever, zendesk. Nothing before this could emit it. Each variable is read and guarded on its own, naming only the one that is missing — deliberately not the combined guard `auth: "headers"` builds. `prefix`/`suffix` are permitted here alone, decorating the **username** (zendesk's `` `${email}/token` ``), a position the auth wrapper does not replace |
 | F7 | `filesystem` | **Capability** | Emits `permissions.filesystem` into the manifest. **29 of 94** manifests declare it; the other 65 omit the key, and the spec field's optionality is that distinction |
+
+#### 3.4.1 F2's inclusion criterion, and why it needed writing down
+
+This number was wrong three times — first citing testflight and dbt (neither has the split at
+all), then citing 15 with three wrong members and `stripe` missing. The cause was not
+carelessness about connectors; it was that **no inclusion criterion had been stated**, and
+"splits the accessor in two" is fuzzy in exactly the place that decides the answer.
+
+`renderSplitBearer` **hardcodes** its wrapper. A connector counts only if it has all of:
+
+1. a wrapper **function** returning `Record<string, string>` — not an inline use of the reader
+   at a call site;
+2. whose whole body is one `return` of a **one-line** object literal;
+3. with **exactly two** keys, `Authorization` then `Accept: "application/json"`;
+4. whose `Authorization` value is exactly `` `Bearer ${reader()}` `` — the literal `Bearer `
+   prefix, and a **call** to the reader, **in a header**;
+5. plus a reader of that name matching `readLines` + `guardLines` for one required variable.
+
+The five borderline connectors, decided explicitly rather than left to judgement:
+
+| Connector | Has a split? | Verdict | Clause |
+| --- | --- | --- | --- |
+| `intercom` | yes | **out** | (3) — adds a third header, `"Intercom-Version": "2.11"` |
+| `readwise` | yes | **out** | (4) — wrapper emits `` `Token ${apiToken()}` ``, not `Bearer` |
+| `dagster` | reader only | **out** | (1)(4) — `apiToken()` is passed inline to a custom `"Dagster-Cloud-Api-Token"` header |
+| `pipedrive` | reader only | **out** | (4) — `apiToken()` is spliced into a query string, never a header |
+| `mendeley` | reader only | **out** | (1) — `` `Bearer ${accessToken()}` `` is inline in the fetch helper's headers option; no wrapper function |
+
+Counted mechanically across all 95 connector directories, not by eye. The script and its full
+output are in the task-10 report's fix-round-2 section, so the number is reproducible rather
+than asserted — which is the same standard §2's D-decisions and Stage C's `hitlRequired`
+finding are held to.
 
 **So five of the seven are cosmetic.** They exist because this stage's acceptance bar is a byte
 diff against hand-written files, and hand-written files carry their authors' habits. That is a

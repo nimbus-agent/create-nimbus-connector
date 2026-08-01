@@ -164,10 +164,15 @@ export const EnvSchema = z
     /**
      * Split a bearer accessor in two: a `(): string` accessor named by this field, which
      * reads and guards the variable, and `local`, reduced to a wrapper that builds the
-     * header from a call to it. The shape mercury, testflight and dbt hand-write —
-     * `function apiToken(): string` plus `function authHeader(): Record<string, string>`
-     * returning `` `Bearer ${apiToken()}` ``. Omitted keeps the single fused accessor,
-     * which is what newrelic/datadog/grafana/sentry emit.
+     * header from a call to it — `function apiToken(): string` plus
+     * `function authHeader(): Record<string, string>` returning `` `Bearer ${apiToken()}` ``.
+     * Omitted keeps the single fused accessor, which is what newrelic/datadog/grafana/sentry
+     * emit.
+     *
+     * **12** corpus connectors are byte-reproducible by this field. The membership rule is
+     * narrower than "splits the accessor in two", and the difference matters — see
+     * renderSplitBearer in src/emit/server/env.ts, which states the criterion and lists
+     * them.
      */
     tokenLocal: identifierField().optional(),
     /**

@@ -227,12 +227,31 @@ function renderBasic(e: EnvEntry): string {
  * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
  * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
  *
- * 15 corpus connectors write the accessor this way — canva, dagster, figma, hubspot,
- * mercury, miro, netlify, pipedrive, raindrop, readwise, salesforce, stackoverflow, vercel,
- * zoom and one more. (An earlier draft of this comment cited testflight and dbt; neither
- * has the split — testflight calls `signAppStoreConnectJwt(...)` inline, and dbt's
- * `authHeader` reads `DBT_TOKEN` inline while its `apiBase()` is a base-URL accessor, not a
- * token one.)
+ * **12 corpus connectors** are byte-reproducible by `tokenLocal`: canva, figma, hubspot,
+ * mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe, vercel, zoom.
+ *
+ * The criterion is stated here rather than left to the eye, because "splits the accessor in
+ * two" is fuzzy and counting against it produced three wrong numbers in a row (once naming
+ * testflight and dbt, which have no split at all; once naming 15 with three wrong members
+ * and stripe missing). It is the text this function emits, and every clause of it is
+ * hardcoded below, so anything a connector does differently is a byte the field cannot
+ * produce:
+ *
+ *   1. a wrapper FUNCTION returning `Record<string, string>` — not an inline use of the
+ *      reader at a call site (mendeley reads `Bearer ${accessToken()}` straight into the
+ *      fetch helper's headers option, with no wrapper: OUT);
+ *   2. whose entire body is one `return` of a ONE-LINE object literal;
+ *   3. with exactly two keys, `Authorization` then `Accept: "application/json"` — a third
+ *      header cannot be emitted (intercom adds `"Intercom-Version": "2.11"`: OUT);
+ *   4. whose Authorization value is exactly `` `Bearer ${reader()}` `` — the literal
+ *      `Bearer ` prefix (readwise writes `` `Token ${apiToken()}` ``: OUT) and a CALL to
+ *      the reader, in a header (dagster passes `apiToken()` to a custom
+ *      `"Dagster-Cloud-Api-Token"` header and pipedrive splices it into a query string:
+ *      both OUT);
+ *   5. plus a reader of that name matching `readLines` + `guardLines` for one required var.
+ *
+ * Counted mechanically over all 95 connector directories, not by eye; the script and its
+ * output are in the task-10 report's fix-round-2 section.
  */
 function renderSplitBearer(e: EnvEntry): string {
   const binding = bindingOf(e, 0);
