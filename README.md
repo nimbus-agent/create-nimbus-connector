@@ -70,17 +70,18 @@ The standalone `src/server.ts` imports its helpers from a single published entry
 
 **`@nimbus-dev/sdk` 1.11.0 is published.** It ships the `./connector-kit` export a standalone connector's `package.json` depends on, so `bun install` in a generated standalone package resolves that dependency from the registry with no local checkout and no rewrite. `bun run standalone-acceptance --registry` (see below) proves it end to end against the published tarball.
 
-**This CLI is not published yet.** That is now a separate, remaining step rather than something blocked on the SDK — run standalone generation from a checkout of this repo (`bun src/cli.ts <name> --standalone`) until it is.
+**This CLI is published to npm** as `create-nimbus-connector` (latest `0.3.2`), so standalone generation needs no checkout of this repo: `bunx create-nimbus-connector <name> --standalone`. From a checkout, the equivalent is `bun src/cli.ts <name> --standalone`.
 
 ## Usage
 
 ```
-bun src/cli.ts <name>
+bunx create-nimbus-connector <name>   # the published CLI, no checkout needed
+bun src/cli.ts <name>                 # from a checkout of this repo
 ```
 
 Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory), or to `<name>/` when `--standalone` is passed.
 
-This CLI is not published to npm yet, so `bunx create-nimbus-connector <name>` does not work. Run from a checkout of this repo with `bun src/cli.ts` in the meantime. (The connectors it *generates* have no such constraint — their `@nimbus-dev/sdk` dependency is on the registry.)
+The published package's `bin` is `src/cli.ts`, which carries a `#!/usr/bin/env bun` shebang — so Bun is required to run the CLI however it is invoked, `bunx` included. (Generated standalone connectors need no checkout either — their `@nimbus-dev/sdk` dependency resolves from the registry.)
 
 ### Flags
 
