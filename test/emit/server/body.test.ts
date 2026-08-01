@@ -208,3 +208,55 @@ describe("renderBodyExpr and hoisted args", () => {
     expect(expr(t, "parsed")).toBe("JSON.stringify({ limit: parsed.limit ?? 20 })");
   });
 });
+
+/**
+ * The URL and the JSON body render an unset optional boolean differently, on purpose.
+ *
+ * Reachable only when the spec gives an explicit `body` mapping that re-includes an arg the
+ * path already references. With the default body, a path-referenced arg is excluded outright
+ * (D5), so there is nothing for the two halves to disagree about — the divergence exists
+ * only where the author deliberately asked for the value in both places.
+ *
+ * Pinned side by side, because it looks like a bug until you know where each half's rule
+ * comes from, and a future "make these consistent" change would silently break one of them.
+ *
+ * URL — `false`. Not our choice: newrelic is one of the four byte-locked golden fixtures,
+ * and the real hand-written connector emits
+ *   `const only = p.only_open === true ? "true" : "false";`
+ * A query string carries text, and the corpus decided what that text is. Changing it drops
+ * newrelic below 6/6 and the generator stops reproducing the corpus.
+ *
+ * Body — omitted. A JSON body carries types, and every API distinguishes a `false` the
+ * caller asserted from a key the caller never sent. Emitting `false` for an unset optional
+ * would fabricate an assertion the user did not make, and would be wrong in exactly the
+ * cases where the server's own default is `true`.
+ *
+ * So they differ because the media differ, and one of the two is externally fixed. Neither
+ * is the other's bug.
+ */
+describe("an unset optional boolean: URL says false, body says nothing", () => {
+  const tool = toolOf({
+    path: "/x?flag=${arg.flag|bool}",
+    method: "POST",
+    effect: "write",
+    args: { flag: { type: "boolean", optional: true } },
+    // An explicit mapping is required to reach this case at all: with the default body, a
+    // path-referenced arg is excluded outright (D5), so there is nothing to disagree with.
+    body: { flag: "flag" },
+  });
+
+  it("omits it from the body rather than sending false", () => {
+    // p.flag is undefined when unset, and JSON.stringify drops undefined values — so the
+    // key is absent from the wire payload, not present-and-false.
+    expect(expr(tool, "p")).toBe("JSON.stringify({ flag: p.flag })");
+    expect(JSON.stringify({ flag: undefined })).toBe("{}");
+  });
+
+  it('does not reach for the hoisted string, which would send "false" as JSON text', () => {
+    // The hoist exists for the URL and yields the *string* "false". Referencing it here
+    // would put `"false"` in the body — a truthy string — which is the worst of the three
+    // possible answers.
+    expect(expr(tool, "p")).not.toContain('"false"');
+    expect(expr(tool, "p")).not.toMatch(/=== true \?/);
+  });
+});
