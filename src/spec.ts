@@ -152,6 +152,15 @@ export const EnvSchema = z
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
     /**
+     * Split a bearer accessor in two: a `(): string` accessor named by this field, which
+     * reads and guards the variable, and `local`, reduced to a wrapper that builds the
+     * header from a call to it. The shape mercury, testflight and dbt hand-write —
+     * `function apiToken(): string` plus `function authHeader(): Record<string, string>`
+     * returning `` `Bearer ${apiToken()}` ``. Omitted keeps the single fused accessor,
+     * which is what newrelic/datadog/grafana/sentry emit.
+     */
+    tokenLocal: identifierField().optional(),
+    /**
      * Token endpoint, required when auth === "client-credentials".
      *
      * `z.url()` rather than the deprecated `z.string().url()`: in zod 4 the string-method
@@ -203,24 +212,51 @@ export const EnvSchema = z
   })
   .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
     message: '"credentialsIn" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.tokenLocal === undefined || e.auth === "bearer", {
+    message:
+      '"tokenLocal" is only valid when auth is "bearer" — it names the raw-token accessor the ' +
+      "bearer header wrapper calls, and no other auth mode emits one",
+  })
+  .refine((e) => e.tokenLocal === undefined || e.tokenLocal !== e.local, {
+    message:
+      '"tokenLocal" must differ from "local" — the two name two functions declared in the ' +
+      "same module",
   });
 
-export const FetchHelperSchema = z.strictObject({
-  local: identifierField(),
-  /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
-  base: z.string().min(1),
-  /** Name of an env accessor returning the header record. */
-  headers: z.string().min(1).optional(),
-  /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
-  inlineHeaders: z.record(z.string(), z.string()).optional(),
-  normalizeLeadingSlash: z.boolean().default(false),
-  jsonFallbackRaw: z.boolean().default(false),
-  /**
-   * How a fully-static path renders in a fetch-helper call. A per-connector convention:
-   * 17 corpus connectors quote it, 8 use a backtick template literal, none mix.
-   */
-  staticPathStyle: z.enum(["quoted", "template"]).default("quoted"),
-});
+export const FetchHelperSchema = z
+  .strictObject({
+    local: identifierField(),
+    /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
+    base: z.string().min(1),
+    /**
+     * Hoist `base` to a module-scope `const <name> = "<base>";` and reference that const
+     * from the emitted helper(s) instead of inlining the literal. mercury spells it `BASE`,
+     * bitrise `BITRISE_API`. Omitted inlines the literal, which is what
+     * newrelic/datadog/grafana/sentry do.
+     */
+    baseConst: identifierField().optional(),
+    /** Name of an env accessor returning the header record. */
+    headers: z.string().min(1).optional(),
+    /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
+    inlineHeaders: z.record(z.string(), z.string()).optional(),
+    normalizeLeadingSlash: z.boolean().default(false),
+    jsonFallbackRaw: z.boolean().default(false),
+    /**
+     * How a fully-static path renders in a fetch-helper call. A per-connector convention:
+     * 17 corpus connectors quote it, 8 use a backtick template literal, none mix.
+     */
+    staticPathStyle: z.enum(["quoted", "template"]).default("quoted"),
+  })
+  // A `${env.X}` reference resolves to an accessor CALL, and the const is initialised at
+  // module scope, before the process env has been guarded — hoisting it would move the
+  // accessor's throw from the first request to import time, and freeze a value the
+  // accessor is written to recompute. Only a fully static base may be hoisted.
+  .refine((f) => f.baseConst === undefined || !/\$\{env\./.test(f.base), {
+    message:
+      '"baseConst" requires a fully static "base" — a base naming ${env.X} resolves to an ' +
+      "accessor call, which must not run at module-initialisation time",
+  });
 
 /**
  * The two styles that emit their own fetch helper and env accessors. `read-only-kit`
@@ -240,6 +276,22 @@ export const ConnectorSpecSchema = z
     description: z.string().min(1),
     serviceLabel: z.string().min(1),
     style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
+    /**
+     * How a REST tool's handler is written. `"concise"` is an expression-bodied arrow
+     * (`async () => jsonResult(await nrGet(...))`), the form newrelic/datadog/grafana/
+     * sentry use; `"block"` is a statement body with an explicit `return`, which 57 of the
+     * 60 corpus connectors built on `runReadOnlyMcpConnector` use. A per-connector
+     * convention like `fetchHelper.staticPathStyle`, and it never mixes within a connector.
+     * A stub or search handler always has a block body and is unaffected.
+     */
+    handlerStyle: z.enum(["concise", "block"]).default("concise"),
+    /**
+     * How a tool's `z.object({...})` argument schema is printed: on one line, or one field
+     * per line. Biome preserves whichever the emitter produces, so it is the emitter's
+     * choice rather than the formatter's. `z.object({})` is always one line — an empty
+     * object has nothing to break onto.
+     */
+    argsSchemaStyle: z.enum(["inline", "expanded"]).default("inline"),
     network: z.array(z.string()).default([]),
     syncInterval: z.number().int().positive().default(300),
     minNimbusVersion: z.string().default("0.2.0"),

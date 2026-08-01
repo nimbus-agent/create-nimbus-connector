@@ -3,7 +3,7 @@ import { emitServer } from "../../../src/emit/server/index.ts";
 import { renderSearchTool } from "../../../src/emit/server/search.ts";
 import { parseSpec } from "../../../src/spec.ts";
 
-function make(tool: Record<string, unknown>) {
+function make(tool: Record<string, unknown>, over: Record<string, unknown> = {}) {
   const spec = parseSpec({
     name: "mercury",
     displayName: "Mercury",
@@ -21,6 +21,7 @@ function make(tool: Record<string, unknown>) {
       staticPathStyle: "template",
     },
     tools: [tool],
+    ...over,
   });
   return renderSearchTool(spec, spec.tools[0]!);
 }
@@ -80,6 +81,30 @@ describe("renderSearchTool", () => {
     expect(out).toContain("appSlug: z.string().min(1)");
     expect(out).toContain("query: z.string().min(1)");
     expect(out).toContain("limit: z.number().int().min(1).max(100).optional()");
+  });
+
+  it('breaks the merged schema one field per line under argsSchemaStyle "expanded"', () => {
+    // bitrise's real shape: its own arg first, then the two fields searchToolInputSchema
+    // would have supplied, all in one declaration that takes the connector's convention.
+    const out = make(
+      {
+        name: "bitrise_search",
+        description: "Search builds.",
+        impl: "search",
+        args: { appSlug: { type: "string", min: 1 } },
+        maxLimit: 200,
+        path: "/v0.1/apps/${arg.appSlug|enc}/builds?limit=50",
+        filter: { export: "filterBitriseBuilds", fields: ["branch"] },
+      },
+      { argsSchemaStyle: "expanded" },
+    );
+    expect(out).toContain(
+      "  z.object({\n" +
+        "  appSlug: z.string().min(1),\n" +
+        "  query: z.string().min(1),\n" +
+        "  limit: z.number().int().min(1).max(200).optional(),\n" +
+        "}),",
+    );
   });
 });
 

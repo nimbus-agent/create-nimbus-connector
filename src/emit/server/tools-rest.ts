@@ -15,7 +15,7 @@ function tokenEnvVar(spec: ConnectorSpec): string {
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   const name = registrarName(spec);
-  const schema = renderZodSchema(tool.args);
+  const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
   const head = [
     `${name}(`,
     `  ${JSON.stringify(tool.name)},`,

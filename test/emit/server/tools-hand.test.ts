@@ -390,3 +390,55 @@ describe("hand-rolled write support", () => {
     });
   });
 });
+
+describe('renderHandRolledTools, handlerStyle "block"', () => {
+  function blockSpec(tools: unknown[]) {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      handlerStyle: "block",
+      argsSchemaStyle: "expanded",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools,
+    });
+  }
+
+  it("gives a no-arg tool a statement body and no parameter", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        { name: "mercury_list", description: "List accounts.", path: "/api/v1/accounts" },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_list",\n  "List accounts.",\n  z.object({}),\n  async () => {\n' +
+        "    return jsonResult(await mercuryGet(`/api/v1/accounts`));\n  },\n);",
+    );
+  });
+
+  it("gives an arg tool a statement body taking p, with the schema expanded", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        {
+          name: "mercury_get",
+          description: "Fetch one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_get",\n  "Fetch one account.",\n  z.object({\n  id: z.string().min(1),\n}),\n' +
+        "  async (p) => {\n" +
+        "    return jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`));\n" +
+        "  },\n);",
+    );
+  });
+});

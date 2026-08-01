@@ -69,8 +69,17 @@ export function validateSpec(spec: ConnectorSpec): void {
 
   for (const e of spec.env) {
     claim(seen, e.local, `env accessor for ${e.vars.join(", ")}`);
+    // The split-bearer form declares a second function beside `local`; both are module
+    // scope, so both have to be claimed or the collision surfaces only at tsc.
+    if (e.tokenLocal !== undefined) {
+      claim(seen, e.tokenLocal, `the raw-token accessor for ${e.vars.join(", ")}`);
+    }
   }
 
+  // Module-scope `const <baseConst> = "<base>";`, claimed for the same reason.
+  if (spec.fetchHelper.baseConst !== undefined) {
+    claim(seen, spec.fetchHelper.baseConst, "the fetch helper's base const");
+  }
   claim(seen, spec.fetchHelper.local, "the fetch helper");
   // Claimed unconditionally, not only when a non-GET tool exists: the name is derived from
   // fetchHelper.local, so whether it collides is a property of the spec's identifiers, and a

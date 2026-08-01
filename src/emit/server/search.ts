@@ -1,5 +1,5 @@
 import type { ConnectorSpec, ToolSpec } from "../../spec.ts";
-import { renderZodFields } from "./args.ts";
+import { renderZodFieldList } from "./args.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
 
 const PARAM = "p";
@@ -9,14 +9,21 @@ const PARAM = "p";
  * searchToolInputSchema(maxLimit) — the form 44 corpus connectors use, and the one the
  * byte-diff fixtures require. A tool that declares args cannot: the shared helper builds a
  * fixed two-key object, so bitrise inlines the merged shape instead.
+ *
+ * The merged shape honours the connector's `argsSchemaStyle` exactly as a REST tool's
+ * schema does (see renderZodSchema) — the two `query`/`limit` fields the helper would have
+ * supplied are appended to the tool's own, so the whole object is one declaration and takes
+ * one shape.
  */
-function renderSchema(tool: ToolSpec): string {
+function renderSchema(spec: ConnectorSpec, tool: ToolSpec): string {
   if (Object.keys(tool.args).length === 0) return `searchToolInputSchema(${tool.maxLimit})`;
-  const own = renderZodFields(tool.args);
-  return (
-    `z.object({ ${own}, query: z.string().min(1), ` +
-    `limit: z.number().int().min(1).max(${tool.maxLimit}).optional() })`
-  );
+  const fields = [
+    ...renderZodFieldList(tool.args),
+    "query: z.string().min(1)",
+    `limit: z.number().int().min(1).max(${tool.maxLimit}).optional()`,
+  ];
+  if (spec.argsSchemaStyle === "inline") return `z.object({ ${fields.join(", ")} })`;
+  return ["z.object({", ...fields.map((f) => `  ${f},`), "})"].join("\n");
 }
 
 export function renderSearchTool(spec: ConnectorSpec, tool: ToolSpec): string {
@@ -34,7 +41,7 @@ export function renderSearchTool(spec: ConnectorSpec, tool: ToolSpec): string {
     "reg(",
     `  ${JSON.stringify(tool.name)},`,
     `  ${JSON.stringify(tool.description)},`,
-    `  ${renderSchema(tool)},`,
+    `  ${renderSchema(spec, tool)},`,
     `  async (${PARAM}) => {`,
   ];
 

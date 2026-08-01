@@ -25,16 +25,31 @@ function renderOne(a: Arg): string {
   return s;
 }
 
-/** The comma-joined field list of a zod object, with no wrapper. Always one line. */
-export function renderZodFields(args: Args): string {
-  return Object.entries(args)
-    .map(([name, a]) => `${name}: ${renderOne(a)}`)
-    .join(", ");
+/** One `name: z.…()` entry per declared arg, in declaration order, unwrapped and unjoined. */
+export function renderZodFieldList(args: Args): string[] {
+  return Object.entries(args).map(([name, a]) => `${name}: ${renderOne(a)}`);
 }
 
-export function renderZodSchema(args: Args): string {
-  const fields = renderZodFields(args);
-  return fields === "" ? "z.object({})" : `z.object({ ${fields} })`;
+/** The comma-joined field list of a zod object, with no wrapper. Always one line. */
+export function renderZodFields(args: Args): string {
+  return renderZodFieldList(args).join(", ");
+}
+
+/**
+ * The zod object schema for a tool's args.
+ *
+ * `style` is the connector's `argsSchemaStyle` — Biome preserves whichever shape it is
+ * handed, so this is an emitter decision, not a formatter one. The emitted "expanded" form
+ * is deliberately indented as if at column 0: generate() returns unformatted source and
+ * formatAll() reindents it into whatever nesting the call site puts it in.
+ */
+export function renderZodSchema(args: Args, style: "inline" | "expanded" = "inline"): string {
+  const entries = Object.entries(args);
+  // An empty object has no fields to break onto their own lines, and every corpus
+  // connector — in both conventions — spells it `z.object({})`.
+  if (entries.length === 0) return "z.object({})";
+  if (style === "inline") return `z.object({ ${renderZodFields(args)} })`;
+  return ["z.object({", ...renderZodFieldList(args).map((f) => `  ${f},`), "})"].join("\n");
 }
 
 /**

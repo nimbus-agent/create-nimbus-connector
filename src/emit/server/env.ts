@@ -160,6 +160,27 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 }
 
 /**
+ * The two-function form of a bearer accessor: a `(): string` reader named by `tokenLocal`
+ * that carries the read and the guard, and `local` reduced to the header wrapper that calls
+ * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
+ * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
+ */
+function renderSplitBearer(e: EnvEntry): string {
+  const binding = bindingOf(e, 0);
+  return [
+    `function ${e.tokenLocal}(): string {`,
+    ...readLines(e),
+    ...guardLines(e),
+    `  return ${binding};`,
+    "}",
+    "",
+    `function ${e.local}(): Record<string, string> {`,
+    `  return { Authorization: \`Bearer \${${e.tokenLocal}()}\`, Accept: "application/json" };`,
+    "}",
+  ].join("\n");
+}
+
+/**
  * `serviceLabel` is only read for the `auth: "client-credentials"` branch, where it names
  * the token-exchange error messages the same way `renderFetchHelper`'s error messages are
  * named. It defaults so every other call site — including every existing test — is
@@ -168,6 +189,10 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): string {
   if (e.auth === "client-credentials") {
     return renderClientCredentials(e, serviceLabel);
+  }
+  // EnvSchema guarantees tokenLocal implies auth === "bearer".
+  if (e.tokenLocal !== undefined) {
+    return renderSplitBearer(e);
   }
   const returnType = e.auth === undefined ? "string" : "Record<string, string>";
   return [

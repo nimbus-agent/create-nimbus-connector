@@ -253,3 +253,63 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).toThrow(/registerGoogleMeetTool/);
   });
 });
+
+describe("validateSpec, identifiers the new Stage D conventions introduce", () => {
+  it("rejects a base const that collides with an env accessor", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          fetchHelper: {
+            local: "sentryGet",
+            base: "https://sentry.io",
+            baseConst: "org",
+            headers: "org",
+          },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "org"/);
+  });
+
+  it("rejects a raw-token accessor that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["SENTRY_AUTH_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "sentryGet",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: { local: "sentryGet", base: "https://sentry.io", headers: "authHeader" },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "sentryGet"/);
+  });
+
+  it("accepts the mercury shape, where the two names differ", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["MERCURY_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "apiToken",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            baseConst: "BASE",
+            headers: "authHeader",
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+});

@@ -5,6 +5,28 @@ function resolveEnvRefs(tpl: string): string {
   return tpl.replaceAll(/\$\{env\.(\w+)\}/g, "${$1()}");
 }
 
+/**
+ * The module-scope base const, or undefined when the spec does not ask for one.
+ *
+ * Emitted ahead of the env accessors (see emitServer), which is where mercury's `BASE` and
+ * bitrise's `BITRISE_API` sit. FetchHelperSchema guarantees `base` is fully static here, so
+ * no resolveEnvRefs() call is needed or reachable.
+ */
+export function renderBaseConst(spec: ConnectorSpec): string | undefined {
+  const { baseConst, base } = spec.fetchHelper;
+  return baseConst === undefined ? undefined : `const ${baseConst} = ${JSON.stringify(base)};`;
+}
+
+/**
+ * The base as it appears INSIDE a template literal — `${BASE}` when hoisted, the resolved
+ * literal otherwise. One helper so the read helper, the write helper and the rest-kit
+ * helper cannot disagree about which form they use.
+ */
+function baseExpr(spec: ConnectorSpec): string {
+  const { baseConst, base } = spec.fetchHelper;
+  return baseConst === undefined ? resolveEnvRefs(base) : `\${${baseConst}}`;
+}
+
 function headerOption(spec: ConnectorSpec): string {
   const fh = spec.fetchHelper;
   if (fh.inlineHeaders !== undefined) {
@@ -39,7 +61,7 @@ function renderRestKitFetchHelper(spec: ConnectorSpec): string {
   // here — ConnectorSpecSchema's rest-kit refine rejects any such reference at parse
   // time, since rest-kit emits no env accessors and the call would be undefined. No
   // resolveEnvRefs() call is needed or reachable for either.
-  const base = fh.base;
+  const base = baseExpr(spec);
   const extra =
     fh.inlineHeaders === undefined
       ? ""
@@ -89,7 +111,7 @@ export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
   if (spec.style === "rest-kit") return undefined; // the registrar's buildInit carries it
 
   const fh = spec.fetchHelper;
-  const url = `\`${resolveEnvRefs(fh.base)}\${path}\``;
+  const url = `\`${baseExpr(spec)}\${path}\``;
   // headerOption(spec) returns "headers: <expr>" where <expr> is either an inline object
   // literal or an accessor call (see FetchHelperSchema — headers and inlineHeaders are
   // mutually exclusive). Strip the "headers: " prefix and spread the expression so the
@@ -148,7 +170,7 @@ export function renderFetchHelper(spec: ConnectorSpec): string {
 
   const fh = spec.fetchHelper;
   const pathVar = fh.normalizeLeadingSlash ? "pathPart" : "path";
-  const url = `\`${resolveEnvRefs(fh.base)}\${${pathVar}}\``;
+  const url = `\`${baseExpr(spec)}\${${pathVar}}\``;
   const opts = headerOption(spec);
   // Expanded form (matching grafana/newrelic) iff normalizeLeadingSlash asks for it or the
   // headers are an inline object literal; a bare `headers: headers()` accessor call (datadog,

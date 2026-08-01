@@ -205,3 +205,41 @@ describe("client-credentials token expiry", () => {
     expect(renderEnvAccessor(spec(), "X")).toContain("Number.POSITIVE_INFINITY");
   });
 });
+
+describe("renderEnvAccessor, split bearer (tokenLocal)", () => {
+  const split = () =>
+    env({
+      vars: ["MERCURY_TOKEN"],
+      local: "authHeader",
+      tokenLocal: "apiToken",
+      bindings: ["t"],
+      auth: "bearer",
+    });
+
+  it("emits the raw-token accessor and the header wrapper that calls it", () => {
+    expect(renderEnvAccessor(split())).toBe(`function apiToken(): string {
+  const t = process.env["MERCURY_TOKEN"]?.trim();
+  if (t === undefined || t === "") {
+    throw new Error("MERCURY_TOKEN is not set");
+  }
+  return t;
+}
+
+function authHeader(): Record<string, string> {
+  return { Authorization: \`Bearer \${apiToken()}\`, Accept: "application/json" };
+}`);
+  });
+
+  it("leaves the fused single-function form untouched when tokenLocal is absent", () => {
+    const out = renderEnvAccessor(
+      env({ vars: ["GRAFANA_API_TOKEN"], local: "authHeaders", bindings: ["tok"], auth: "bearer" }),
+    );
+    expect(out).toBe(`function authHeaders(): Record<string, string> {
+  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();
+  if (tok === undefined || tok === "") {
+    throw new Error("GRAFANA_API_TOKEN is not set");
+  }
+  return { Authorization: \`Bearer \${tok}\`, Accept: "application/json" };
+}`);
+  });
+});

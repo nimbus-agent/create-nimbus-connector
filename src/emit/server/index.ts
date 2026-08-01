@@ -2,7 +2,7 @@ import type { ConnectorSpec, ToolSpec } from "../../spec.ts";
 import type { GeneratedFile } from "../../types.ts";
 import type { GenerateTarget } from "../index.ts";
 import { renderEnvAccessors } from "./env.ts";
-import { renderReadHelper, renderWriteHelper } from "./fetch-helper.ts";
+import { renderBaseConst, renderReadHelper, renderWriteHelper } from "./fetch-helper.ts";
 import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
@@ -298,8 +298,13 @@ export function emitServer(spec: ConnectorSpec, target: GenerateTarget): Generat
   const isHand = isHandStyle(spec);
   const readHelper = renderReadHelper(spec);
   const writeHelper = renderWriteHelper(spec);
+  const baseConst = renderBaseConst(spec);
   const sections = [
     imports(spec, target),
+    // Ahead of the env accessors, where mercury's `BASE` and bitrise's `BITRISE_API` sit.
+    // Undefined unless fetchHelper.baseConst asks for it, so the existing fixtures cannot
+    // move.
+    ...(baseConst === undefined ? [] : [baseConst]),
     // Env accessors are emitted for hand-rolled and read-only-kit (isHandStyle), never
     // rest-kit. Rest-kit's makeRestToolRegistrar resolves the credential itself via
     // requireProcessEnv(cfg.tokenEnv), so an accessor would never be called; calling
