@@ -188,7 +188,9 @@ This one stands up a `Bun.serve` on an ephemeral loopback port, points a generat
 - a non-2xx response becomes a tool error naming the status
 - `client-credentials` exchanges its token **before** the API call, sends the id and secret where `credentialsIn` says, and **caches** — two tool calls produce one exchange
 
-It needs the SDK installed, so like the other harnesses it is run deliberately rather than in CI.
+It needs the SDK installed from npm, and nothing else — no Nimbus checkout — so unlike `diff:golden` and `wiring:conformance` it **does** run automatically, in `.github/workflows/acceptance.yml`, alongside the standalone acceptance harness: on pull requests that touch `src/`, `scripts/` or `fixtures/`, and daily.
+
+That workflow is deliberately separate from the merge gate. Both harnesses reach the npm registry, so a registry outage would otherwise red-X pull requests that changed nothing related. The daily run exists because the published SDK can change without anything in this repo changing, which is exactly what `--registry` mode is for.
 
 ## The standalone acceptance harness
 
