@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.2...create-nimbus-connector-v0.3.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **golden:** clear 21 SonarCloud issues incl. the unsafe sort comparator ([#37](https://github.com/nimbus-agent/create-nimbus-connector/issues/37)) ([b89e9d9](https://github.com/nimbus-agent/create-nimbus-connector/commit/b89e9d9706b16421dc741f1cd64af304b1d983f8))
+
 ## [0.3.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.1...create-nimbus-connector-v0.3.2) (2026-08-01)
 
 
