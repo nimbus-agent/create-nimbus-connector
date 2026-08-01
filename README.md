@@ -220,12 +220,12 @@ SonarCloud reported **0.0% coverage on new code** on every pull request for a lo
 
 The two modes are mutually exclusive: SonarCloud **refuses** a CI analysis while Automatic Analysis is enabled. Switching over therefore has an order, and getting it wrong leaves the project with no analysis at all:
 
-1. Add a `SONAR_TOKEN` repository (or organization) secret — SonarCloud → My Account → Security → Generate Token.
-2. Merge this workflow.
-3. **Then** turn Automatic Analysis off: SonarCloud → the project → Administration → Analysis Method.
-4. Re-run the `sonar` workflow on `main`.
+1. Add a `SONAR_TOKEN` repository (or organization) secret — SonarCloud → My Account → Security → Generate Token. Without it the scanner cannot authenticate at all: it fails with *"Not authorized or project not found"* before it ever reaches the analysis-mode question.
+2. Turn Automatic Analysis off: SonarCloud → the project → Administration → Analysis Method. SonarCloud refuses a CI analysis while it is on, so this cannot wait until after the merge.
+3. Re-run the `sonar` check on the pull request. It should now pass.
+4. Merge.
 
-Between steps 2 and 3 the workflow fails with *"You are running CI analysis while Automatic Analysis is enabled"*. That is expected, and is why step 3 follows the merge rather than preceding it.
+Both switches precede the merge, deliberately. The alternative — merge first, then disable — means merging a pull request whose own checks are red, which is a habit worth not starting. The cost is a short window between steps 2 and 3 where `main` has no analysis at all; that window is minutes, and the pull request's own run covers the code going into it.
 
 `bunfig.toml`'s per-file `coverageThreshold` still applies during this run, so the gate does not become advisory just because a reporter was added.
 

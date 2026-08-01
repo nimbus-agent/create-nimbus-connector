@@ -4,9 +4,16 @@ name: sonar
 # ingest a coverage report. Until this workflow ran, SonarCloud reported 0.0% coverage on
 # new code for every pull request, while the suite it could not see was at 98.77% lines.
 #
-# REQUIRES Automatic Analysis to be OFF for this project. SonarCloud refuses a CI analysis
-# while it is enabled, and turning it off before this workflow runs leaves the project with
-# no analysis at all — so the order in the README matters.
+# REQUIRES two things that live outside this repository, both before the merge: a
+# SONAR_TOKEN secret, and Automatic Analysis switched OFF for this project. Without the
+# token the scanner cannot authenticate at all ("Not authorized or project not found"), and
+# with Automatic Analysis on SonarCloud refuses a CI analysis outright. The order is in the
+# README.
+#
+# This step is deliberately NOT guarded with `if: env.SONAR_TOKEN != ''`. A guard would make
+# the workflow green while analysing nothing, which is the precise failure this repo keeps
+# removing elsewhere — and it would stay green forever if the secret were never added. A
+# loud failure is the correct behaviour for a workflow whose prerequisites are unmet.
 
 on:
   push:
