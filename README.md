@@ -129,6 +129,18 @@ Both are **skeletons, not implementations** — deliberately. The Gateway's ~98 
 
 `<name>-mapping.ts`'s body is unknowable from a connector spec for the same reason: no spec field describes a service's API response shape.
 
+### Checking the skeleton still fits Nimbus
+
+```
+bun run wiring:conformance --nimbus-root C:\gitrep\Nimbus
+```
+
+`test/emit/emitted-typecheck.test.ts` compiles the emitted pair against a stand-in written *in this repo*, because this repo is MIT and Nimbus is AGPL-3.0-only, so the real `sync/types.ts` cannot be vendored. That proves the skeleton is internally well-typed and free of unread declarations — and proves nothing about whether it still matches Nimbus. Not hypothetical: the stand-in shipped with `upserted`/`deleted` while the real `SyncResult` spells them `itemsUpserted`/`itemsDeleted`.
+
+This script reads the real interface and checks two things: the emitted skeleton supplies every member `Syncable` requires, and the stand-in agrees with the real field names. It reads Nimbus and writes nothing to it.
+
+Like `diff:golden`, it needs a Nimbus checkout and therefore does not run in CI — a test that silently skipped when the root is absent would be green while asserting nothing. Run it before merging a wiring change.
+
 **Writing refuses to overwrite an existing target file** unless `--force` is passed — Nimbus already ships hand-authored files such as `newrelic-sync.ts` and `datadog-sync.ts`, and an unguarded write on a connector reusing one of those names would destroy it.
 
 **Two files are never written, only printed**: `platform/assemble-sync-registrations.ts` (93+ entries) and `connectors/connector-catalog.ts` (`CONNECTOR_SERVICE_IDS` plus the `tsc`-enforced matching `CONNECTOR_SYNC_INTERVAL_MS` entry). The CLI prints the exact lines to paste into each, rather than editing either — patching a large file it does not own, in another repository under another licence, risks silent corruption; a two-line paste the author controls is the safer trade.
