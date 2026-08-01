@@ -152,7 +152,8 @@ export function mcpJsonResult(_data: unknown): unknown {
 }
 `;
 
-const MCP_SEARCH_TOOL_STANDIN = `export function searchToolInputSchema(_maxLimit: number): unknown {
+const MCP_SEARCH_TOOL_STANDIN = `export type SearchFilter = (item: unknown, query: string) => boolean;
+export function searchToolInputSchema(_maxLimit: number): unknown {
   throw new Error("stub");
 }
 export function matchesResult(
@@ -160,6 +161,27 @@ export function matchesResult(
   _filter: (item: unknown, query: string) => boolean,
   _params: unknown,
 ): unknown {
+  throw new Error("stub");
+}
+`;
+
+/**
+ * Stand-in for `packages/mcp-connectors/shared/search-filter.ts`, written from the shapes
+ * src/emit/search-filter.ts assumes — NOT a copy of the real (AGPL-3.0-only) file. Deliberately
+ * does NOT export `SearchFilter` (that lives in mcp-search-tool.ts, per MCP_SEARCH_TOOL_STANDIN
+ * above): the split is the exact thing under test for the stub-filter path.
+ */
+const SEARCH_FILTER_SHARED_STANDIN = `export type SearchMatchOptions = { readonly query: string };
+export type FieldExtractor = (item: unknown) => readonly string[];
+export function fieldsFromKeys(
+  _keys: readonly string[],
+  _opts?: { tags?: boolean },
+): FieldExtractor {
+  throw new Error("stub");
+}
+export function makeQueryFilter(
+  _fields: FieldExtractor,
+): (item: unknown, query: string) => boolean {
   throw new Error("stub");
 }
 `;
@@ -395,6 +417,93 @@ describe("a search-only connector imports only what it calls", () => {
     // `src/server.ts(3,25): error TS6133: 'jsonResult' is declared but its value is never
     // read.`
     expect(output).not.toContain("TS6133");
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a generated package containing a stub filter typechecks", () => {
+  /**
+   * The stub path is the likeliest place for an unused or unresolved import: it is the ONLY
+   * shape that adds a second relative-import line (SearchFilter from mcp-search-tool.ts,
+   * split from SearchMatchOptions in search-filter.ts — see src/emit/search-filter.ts's
+   * top-of-file comment), and it is the only shape that must NOT import fieldsFromKeys /
+   * makeQueryFilter at all. Neither defect is visible to a substring assertion that only
+   * checks for the presence of the correct imports; this compiles the real emitted
+   * src/server.ts + src/search-filter.ts pair, via generate(), against local stand-ins for
+   * every shared module the pair can reach.
+   */
+  const stubSpec = parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "Mercury connector.",
+    serviceLabel: "Mercury",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "mercury_search",
+        description: "Search accounts.",
+        impl: "search",
+        path: "/api/v1/accounts",
+        // fields deliberately omitted — this is the stub-filter shape.
+        filter: { export: "filterMercuryAccounts" },
+      },
+    ],
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions", async () => {
+    const dir = tmp.make("cnc-search-stub-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "mercury", "src"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), MCP_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "mcp-search-tool.ts"), MCP_SEARCH_TOOL_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "search-filter.ts"), SEARCH_FILTER_SHARED_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+
+    await initFormatter();
+    // Only the src/ files generate() returns — package.json, nimbus.extension.json,
+    // tsconfig.json, README.md and test/sandbox.test.ts play no part in this compile.
+    const srcFiles = generate(stubSpec, { target: "monorepo" }).filter((f) => f.path[0] === "src");
+    expect(srcFiles.map((f) => f.path.join("/")).sort()).toEqual([
+      "src/search-filter.ts",
+      "src/server.ts",
+    ]);
+    for (const f of formatAll(srcFiles)) {
+      writeFileSync(join(dir, "mercury", ...f.path), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "mercury", "tsconfig.json");
+    // Same DOM-lib substitution as the search-only compile test above, and for the same
+    // reason: this tsconfig lives in a throwaway temp dir with no node_modules/@types/bun to
+    // resolve `types: ["bun"]` against.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: {
+            ...NIMBUS_COMPILER_OPTIONS,
+            types: [],
+            lib: ["ESNext", "DOM"],
+          },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    expect(output).not.toContain("TS6133"); // declared but never read (unused import)
+    expect(output).not.toContain("TS2307"); // cannot find module (unresolved import)
     expect(output).toBe("");
     expect(ok).toBe(true);
   }, 120_000);
