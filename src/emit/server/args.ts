@@ -25,11 +25,16 @@ function renderOne(a: Arg): string {
   return s;
 }
 
+/** The comma-joined field list of a zod object, with no wrapper. Always one line. */
+export function renderZodFields(args: Args): string {
+  return Object.entries(args)
+    .map(([name, a]) => `${name}: ${renderOne(a)}`)
+    .join(", ");
+}
+
 export function renderZodSchema(args: Args): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "z.object({})";
-  const fields = entries.map(([name, a]) => `${name}: ${renderOne(a)}`).join(", ");
-  return `z.object({ ${fields} })`;
+  const fields = renderZodFields(args);
+  return fields === "" ? "z.object({})" : `z.object({ ${fields} })`;
 }
 
 /**
