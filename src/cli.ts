@@ -148,7 +148,39 @@ export async function writeFiles(files: readonly GeneratedFile[], outDir: string
   }
 }
 
+/**
+ * Usage text. Every flag here is one this CLI actually parses — parseFlags is the source of
+ * truth, and test/cli.test.ts asserts the two agree, so a flag added without a line here is
+ * a failing test rather than an undocumented feature.
+ */
+export const USAGE = `create-nimbus-connector — scaffold a Nimbus MCP connector package
+
+Usage:
+  bunx create-nimbus-connector <name>              interactive, monorepo target
+  bunx create-nimbus-connector --spec <file>       from a connector spec JSON
+
+Flags:
+  --spec <file>            read the connector spec from <file> instead of prompting
+  --out-dir <dir>          where to write (default: <name>/ standalone,
+                           packages/mcp-connectors/<name>/ otherwise)
+  --standalone             emit a self-contained package importing @nimbus-dev/sdk
+  --license <id>           SPDX licence for --standalone output (default: UNLICENSED)
+  --gateway-wiring <root>  also emit Nimbus Gateway sync/mapping skeletons (monorepo only)
+  --force                  allow --gateway-wiring to overwrite existing target files
+  --dry-run                print what would be written, write nothing
+  --help                   show this message
+
+Path templates interpolate \${arg.NAME} and \${env.NAME}, with an optional
+|raw, |enc, |num or |bool mode. OpenAPI's {id} and Express's /:id are rejected
+rather than emitted literally.`;
+
 export async function main(argv: readonly string[]): Promise<void> {
+  // Before parseCliArgs, deliberately: --help must work on its own, and must not be refused
+  // by a flag-combination rule it has nothing to do with.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    return;
+  }
   const opts = parseCliArgs(argv);
   const spec =
     opts.specPath !== undefined

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { parseCliArgs, renderTree } from "../src/cli.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseCliArgs, renderTree, USAGE } from "../src/cli.ts";
 import { emitReadme } from "../src/emit/readme.ts";
 import { buildSpec, type PromptAnswers } from "../src/prompts.ts";
 import { registrarName } from "../src/spec.ts";
@@ -234,5 +236,38 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
       expect((e as Error).message).toContain("not-a-url");
       expect((e as Error).message).toMatch(/base api url/i);
     }
+  });
+});
+
+describe("--help", () => {
+  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+
+  /**
+   * Usage text that drifts from the parser is worse than no usage text: it documents flags
+   * that do not exist, or omits ones that do, and nothing fails. parseFlags is the source of
+   * truth, so the flags it compares against are extracted from the source and required to
+   * appear in USAGE.
+   */
+  it("documents every flag parseFlags accepts", () => {
+    const parsed = [...cliSource.matchAll(/a === "(--[a-z-]+)"/g)].map((m) => m[1]!);
+    expect(parsed.length).toBeGreaterThan(5);
+    for (const flag of parsed) {
+      expect(USAGE).toContain(flag);
+    }
+  });
+
+  it("documents no flag parseFlags would reject", () => {
+    // The reverse direction: a line in USAGE for a flag that does not exist sends the user
+    // to "Unknown flag", which is exactly the experience --help is here to prevent.
+    for (const m of USAGE.matchAll(/^ {2}(--[a-z-]+)/gm)) {
+      const flag = m[1]!;
+      if (flag === "--help") continue; // handled before parseCliArgs, by design
+      expect(() => parseCliArgs([flag, "x"])).not.toThrow(/Unknown flag/);
+    }
+  });
+
+  it("names the path-template syntax, the one thing that fails silently without it", () => {
+    expect(USAGE).toContain("${arg.NAME}");
+    expect(USAGE).toMatch(/\{id\}.*rejected|rejected.*\{id\}/s);
   });
 });
