@@ -261,7 +261,8 @@ describe("--help", () => {
     // to "Unknown flag", which is exactly the experience --help is here to prevent.
     for (const m of USAGE.matchAll(/^ {2}(--[a-z-]+)/gm)) {
       const flag = m[1]!;
-      if (flag === "--help") continue; // handled before parseCliArgs, by design
+      // Handled before parseCliArgs by design, so the parser never sees them.
+      if (flag === "--help" || flag === "--version") continue;
       expect(() => parseCliArgs([flag, "x"])).not.toThrow(/Unknown flag/);
     }
   });
