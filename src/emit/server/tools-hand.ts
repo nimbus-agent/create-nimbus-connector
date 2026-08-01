@@ -31,7 +31,11 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
 
   const hoisted = hoistedLocals(tool.args);
   const segments = parsePathTemplate(path);
-  const pathExpr = renderPath(segments, { param: PARAM, hoisted });
+  const pathExpr = renderPath(segments, {
+    param: PARAM,
+    hoisted,
+    staticStyle: spec.fetchHelper.staticPathStyle,
+  });
 
   // A non-GET tool routes through the write helper (`${local}Send`) with its method and
   // JSON body; renderBodyExpr returns undefined for a tool that sends no body (e.g. a

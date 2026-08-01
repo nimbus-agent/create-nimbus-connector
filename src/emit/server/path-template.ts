@@ -10,6 +10,13 @@ export type RenderContext = {
   readonly param: string;
   /** argName -> hoisted const name, for args lifted above the return. */
   readonly hoisted: ReadonlyMap<string, string>;
+  /**
+   * How a fully-static path (no `${...}` placeholders) renders: a quoted string (the
+   * default) or a backtick template literal. Per-connector convention — see
+   * `FetchHelperSchema.staticPathStyle`. Has no effect on a path with any dynamic segment,
+   * which always renders as a template literal regardless of this setting.
+   */
+  readonly staticStyle?: "quoted" | "template";
 };
 
 const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
@@ -110,6 +117,9 @@ export function renderPath(segments: readonly PathSegment[], ctx: RenderContext)
   const dynamic = segments.some((s) => s.kind !== "literal");
   if (!dynamic) {
     const text = segments.map((s) => (s.kind === "literal" ? s.text : "")).join("");
+    if (ctx.staticStyle === "template") {
+      return `\`${text.replaceAll("\\", "\\\\").replaceAll("`", "\\`")}\``;
+    }
     return JSON.stringify(text);
   }
   const body = segments

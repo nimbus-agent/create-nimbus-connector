@@ -156,6 +156,43 @@ describe("renderHandRolledTools", () => {
     expect(out).toContain("async () =>");
     expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
   });
+
+  it("renders a static path as a template literal end-to-end when fetchHelper.staticPathStyle is 'template'", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "hand-rolled",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools: [
+        {
+          name: "mercury_list",
+          description: "List accounts.",
+          path: "/api/v1/accounts",
+        },
+        {
+          name: "mercury_get",
+          description: "Get one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ],
+    });
+    const out = renderHandRolledTools(spec);
+    // Static path: template style overrides renderPath's quoted default.
+    expect(out).toContain("jsonResult(await mercuryGet(`/api/v1/accounts`))");
+    expect(out).not.toContain('mercuryGet("/api/v1/accounts")');
+    // Dynamic path: already a template literal under the default, unaffected either way.
+    expect(out).toContain(
+      "jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`))",
+    );
+  });
 });
 
 describe("hand-rolled write support", () => {

@@ -13,6 +13,11 @@ function make(tool: Record<string, unknown>) {
       local: "mercuryGet",
       base: "https://api.mercury.com",
       inlineHeaders: { Accept: "application/json" },
+      // Mercury is one of the 8 corpus connectors that render a fully-static path as a
+      // backtick template literal (mercury_list, mercury_get, mercury_search all do this) —
+      // a per-connector convention, not a search-tool property. See path-template.test.ts's
+      // "staticStyle" suite for the default ("quoted") behaviour this overrides.
+      staticPathStyle: "template",
     },
     tools: [tool],
   });

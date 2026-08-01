@@ -215,6 +215,11 @@ export const FetchHelperSchema = z.strictObject({
   inlineHeaders: z.record(z.string(), z.string()).optional(),
   normalizeLeadingSlash: z.boolean().default(false),
   jsonFallbackRaw: z.boolean().default(false),
+  /**
+   * How a fully-static path renders in a fetch-helper call. A per-connector convention:
+   * 17 corpus connectors quote it, 8 use a backtick template literal, none mix.
+   */
+  staticPathStyle: z.enum(["quoted", "template"]).default("quoted"),
 });
 
 /**
