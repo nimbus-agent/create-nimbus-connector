@@ -387,6 +387,32 @@ async function callTools(
   }
 }
 
+/**
+ * Describes a credential-bearing header WITHOUT reproducing it.
+ *
+ * CodeQL flagged the original of this file for clear-text logging of sensitive information,
+ * and it was right about more than the line it pointed at: six checks echoed bearer tokens,
+ * an API key, and a `client_secret=` form body straight to stdout. The values here are
+ * synthetic, but a harness whose output is safe only because its inputs are fake is one
+ * edit away from not being, and this output lands in CI logs.
+ *
+ * Nothing derived from the credential is returned — not the value, not a prefix, not its
+ * length — so there is no taint path to the log at all. What a failure needs is which
+ * expectation broke, and that is what the check names already say.
+ */
+function describeAuth(value: string | undefined, expected: string): string {
+  if (value === undefined) return "absent";
+  if (value === expected) return "present, as expected";
+  const scheme = /^(\w+)\s/.exec(value)?.[1];
+  return scheme === undefined ? "present, unexpected value" : `${scheme}, unexpected value`;
+}
+
+/** The form-field NAMES in a token-exchange body, never their values. */
+function formFieldNames(body: string | undefined): string {
+  if (body === undefined || body === "") return "(empty)";
+  return [...new URLSearchParams(body).keys()].join(", ");
+}
+
 const find = (rec: readonly Recorded[], pred: (r: Recorded) => boolean): Recorded | undefined =>
   rec.find(pred);
 
@@ -413,7 +439,7 @@ async function main(): Promise<void> {
     check(
       "bearer token reaches the wire as an Authorization header",
       list?.auth === "Bearer tok-123",
-      `Authorization: ${list?.auth ?? "(none)"}`,
+      `Authorization: ${describeAuth(list?.auth, "Bearer tok-123")}`,
     );
 
     // Spec §8's decision, finally observed rather than argued.
@@ -490,12 +516,12 @@ async function main(): Promise<void> {
       "credentialsIn: body puts the id and secret in the form body",
       exchanges[0]?.body.includes("client_id=id-1") === true &&
         exchanges[0].body.includes("client_secret=secret-1"),
-      `token body: ${exchanges[0]?.body ?? "(none)"}`,
+      `token body fields: ${formFieldNames(exchanges[0]?.body)}`,
     );
     check(
       "the exchanged token is used for the API call",
       cc[1]?.auth === "Bearer exchanged-token-abc",
-      `Authorization: ${cc[1]?.auth ?? "(none)"}`,
+      `Authorization: ${describeAuth(cc[1]?.auth, "Bearer exchanged-token-abc")}`,
     );
     check(
       "the token is cached — two tool calls, one exchange",
@@ -522,7 +548,7 @@ async function main(): Promise<void> {
     check(
       "rest-kit sends the bearer token the registrar resolves itself",
       find(rest, (r) => r.method === "GET")?.auth === "Bearer rest-tok",
-      `Authorization: ${find(rest, (r) => r.method === "GET")?.auth ?? "(none)"}`,
+      `Authorization: ${describeAuth(find(rest, (r) => r.method === "GET")?.auth, "Bearer rest-tok")}`,
     );
     check(
       "rest-kit buildInit produces the declared method and a JSON body",
@@ -544,7 +570,7 @@ async function main(): Promise<void> {
     check(
       'auth: "headers" sends the named header, not Authorization',
       hdr?.apiKey === "key-9" && hdr.auth === undefined,
-      `X-Api-Key: ${hdr?.apiKey ?? "(none)"} / Authorization: ${hdr?.auth ?? "(none)"}`,
+      `X-Api-Key: ${describeAuth(hdr?.apiKey, "key-9")} / Authorization: ${describeAuth(hdr?.auth, "")}`,
     );
 
     // ---- token expiry ----------------------------------------------------------------
@@ -573,7 +599,8 @@ async function main(): Promise<void> {
       'credentialsIn: "basic" sends the credentials as an Authorization: Basic header',
       shortExchanges[0]?.auth?.startsWith("Basic ") === true &&
         !shortExchanges[0].body.includes("client_secret"),
-      `token auth: ${shortExchanges[0]?.auth ?? "(none)"} body: ${shortExchanges[0]?.body ?? ""}`,
+      `token auth scheme: ${/^(\w+)\s/.exec(shortExchanges[0]?.auth ?? "")?.[1] ?? "(none)"}; ` +
+        `body fields: ${formFieldNames(shortExchanges[0]?.body)}`,
     );
     check(
       "an expired token is re-exchanged rather than reused",
@@ -583,7 +610,7 @@ async function main(): Promise<void> {
     check(
       "the API call after re-exchange carries the NEW token",
       apiCalls.at(-1)?.auth !== apiCalls[0]?.auth,
-      `first: ${apiCalls[0]?.auth ?? "?"} / last: ${apiCalls.at(-1)?.auth ?? "?"}`,
+      `first and last Authorization differ: ${apiCalls.at(-1)?.auth !== apiCalls[0]?.auth}`,
     );
   } finally {
     server.stop(true);
