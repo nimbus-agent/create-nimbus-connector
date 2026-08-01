@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.2...create-nimbus-connector-v0.3.0) (2026-08-01)
+
+
+### Features
+
+* Stage C — write tools, hitlRequired, client-credentials OAuth, Gateway wiring ([#23](https://github.com/nimbus-agent/create-nimbus-connector/issues/23)) ([0a122aa](https://github.com/nimbus-agent/create-nimbus-connector/commit/0a122aa13a81bd5dd016dd9beedd4ccde5d77f4a))
+
 ## [0.2.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.1...create-nimbus-connector-v0.2.2) (2026-07-31)
 
 
