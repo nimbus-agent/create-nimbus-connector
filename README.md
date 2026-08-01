@@ -169,6 +169,27 @@ It records *which* files match rather than how many, deliberately: for a partial
 bun run acceptance C:\gitrep\Nimbus
 ```
 
+## The runtime acceptance harness
+
+```
+bun run runtime:acceptance --registry          # or --sdk-root <path> for a local SDK
+```
+
+Every other check in this repo is **static**: string assertions, `tsc`, `biome`, a byte-diff against the corpus, and `tools/list` — which proves a generated server starts and describes itself, but never *invokes* a tool. Until this harness existed, no generated connector's `fetch` had ever run, and every belief about runtime behaviour was inference from reading the emitted text.
+
+This one stands up a `Bun.serve` on an ephemeral loopback port, points a generated connector's base URL at it, drives the connector over stdio with real `tools/call` requests, and asserts on the traffic it actually produces:
+
+- the bearer token arrives as `Authorization: Bearer …`
+- an unset optional boolean is `?flag=false` in the URL and **absent** from the JSON body — the decision in the Stage C spec §8, which had been reached by argument and never executed
+- a boolean in a body is a real JSON `true`, not the string `"true"`
+- a defaulted arg is sent with its default applied
+- path args are percent-encoded, and excluded from the default write body (D5)
+- a `DELETE` whose only arg is in the path sends no body at all
+- a non-2xx response becomes a tool error naming the status
+- `client-credentials` exchanges its token **before** the API call, sends the id and secret where `credentialsIn` says, and **caches** — two tool calls produce one exchange
+
+It needs the SDK installed, so like the other harnesses it is run deliberately rather than in CI.
+
 ## The standalone acceptance harness
 
 Stage A's acceptance harness proves a monorepo-target connector against a live Nimbus checkout. There is no equivalent live ground truth for standalone connectors — no standalone Nimbus connector exists yet — so `bun run standalone-acceptance` substitutes a live end-to-end run: generate a `--standalone` connector into a temp directory outside the monorepo, resolve its `@nimbus-dev/sdk` dependency (see the two modes below), `bun install`, `bunx tsc --noEmit`, run the generated package's own `bun run typecheck` and `bun run lint` scripts (which resolve `tsc` and `biome` through its own `node_modules`, and re-check the emitted formatting and import order against the emitted `biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio (`initialize` → `tools/list`, no credentials in the environment) against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the temp directory whether or not any step threw.
