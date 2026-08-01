@@ -5,6 +5,9 @@ type EnvEntry = z.infer<typeof EnvSchema>;
 
 const STRIP = String.raw`replace(/\/$/, "")`;
 
+/** A header name that needs no quotes as an object key. */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 /**
  * The shared trailing-slash helper, byte-identical in all 13 corpus connectors that use it
  * (airflow, argocd, dagster, databricks, dbt, dependencytrack, looker, metabase, mlflow,
@@ -77,10 +80,22 @@ function returnLines(e: EnvEntry): string[] {
     return [`  return { Authorization: \`Bearer \${${b}}\`, Accept: "application/json" };`];
   }
   if (e.auth === "headers") {
-    const entries = e.vars.map((_, i) => {
+    // A key that is a valid identifier is emitted bare, the way `Authorization` and
+    // `Accept` are written everywhere in the corpus; `"DD-API-KEY"` and `"x-auth-token"`
+    // have to stay quoted.
+    const field = (i: number) => {
       const header = e.headerNames![i]!;
-      return `    ${JSON.stringify(header)}: ${bindingOf(e, i)},`;
-    });
+      const key = IDENTIFIER_RE.test(header) ? header : JSON.stringify(header);
+      return `${key}: ${bindingOf(e, i)}`;
+    };
+    // One custom header plus Accept fits on one line, and that is what every corpus
+    // connector with a single header writes (bitrise's `{ Authorization: t, … }`,
+    // `{ "x-api-key": k, … }`, `{ "X-Api-Key": k, … }`). Two or more expand — datadog,
+    // intercom, snowflake — with no counterexample either way.
+    if (e.vars.length === 1) {
+      return [`  return { ${field(0)}, Accept: "application/json" };`];
+    }
+    const entries = e.vars.map((_, i) => `    ${field(i)},`);
     return ["  return {", ...entries, `    Accept: "application/json",`, "  };"];
   }
   return [`  return ${wrapped(e, transformed(e, bindingOf(e, 0)))};`];

@@ -94,6 +94,38 @@ describe("renderEnvAccessor", () => {
     expect(out).toContain('"DD-APPLICATION-KEY": app,');
     expect(out).toContain('Accept: "application/json",');
   });
+
+  it("keeps a single-header accessor on one line, bitrise's shape", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["BITRISE_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["Authorization"],
+      }),
+    );
+    expect(out).toBe(`function authHeader(): Record<string, string> {
+  const t = process.env["BITRISE_TOKEN"]?.trim();
+  if (t === undefined || t === "") {
+    throw new Error("BITRISE_TOKEN is not set");
+  }
+  return { Authorization: t, Accept: "application/json" };
+}`);
+  });
+
+  it("quotes a single header name that is not a bare identifier", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["X_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["x-auth-token"],
+      }),
+    );
+    expect(out).toContain('return { "x-auth-token": t, Accept: "application/json" };');
+  });
 });
 
 describe("client-credentials", () => {

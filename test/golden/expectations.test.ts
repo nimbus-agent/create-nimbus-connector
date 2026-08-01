@@ -122,6 +122,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       join(import.meta.dir, "..", "..", "fixtures", "expectations.json"),
     );
     expect(Object.keys(loaded).sort()).toEqual([
+      "bitrise",
       "datadog",
       "discord",
       "google-meet",

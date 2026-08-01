@@ -47,6 +47,12 @@
     "test/sandbox.test.ts",
     "tsconfig.json"
   ],
+  "bitrise": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "tsconfig.json"
+  ],
   "discord": ["README.md", "test/sandbox.test.ts", "tsconfig.json"],
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
   "zzscratch": [],
