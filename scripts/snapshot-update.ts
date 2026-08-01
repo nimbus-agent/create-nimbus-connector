@@ -9,7 +9,12 @@ import {
   formatterUnavailableReason,
   initFormatter,
 } from "../src/format.ts";
-import { compareSnapshot, listWriteFixtures, loadSnapshot } from "../src/golden/snapshots.ts";
+import {
+  compareSnapshot,
+  listWriteFixtures,
+  loadSnapshot,
+  type SnapshotDiff,
+} from "../src/golden/snapshots.ts";
 import { parseSpec } from "../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../src/types.ts";
 
@@ -24,6 +29,35 @@ function loadExistingSnapshot(dir: string): Map<string, string> {
   } catch {
     return new Map();
   }
+}
+
+/** Regenerate one fixture's snapshot tree, reporting what moved. */
+async function updateOne(name: string): Promise<SnapshotDiff> {
+  const spec = parseSpec(JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")));
+  const files: GeneratedFile[] = formatAll(generate(spec, { target: "standalone" }));
+  const actual = new Map(files.map((f) => [displayPath(f.path), f.content]));
+  const outDir = join(snapshotsDir, name);
+
+  const diff = compareSnapshot(actual, loadExistingSnapshot(outDir));
+  const { missing, unexpected, changed } = diff;
+
+  console.log(`${name}:`);
+  if (missing.length === 0 && unexpected.length === 0 && changed.length === 0) {
+    console.log("  (no changes)");
+  } else {
+    for (const p of unexpected) console.log(`  + ${p}`);
+    for (const p of changed) console.log(`  ~ ${p}`);
+    for (const p of missing) console.log(`  - ${p}`);
+  }
+
+  // Rewrite every current file (idempotent for the unchanged ones) and delete whatever the
+  // generator stopped emitting, so the checked-in tree ends up exactly matching `files`
+  // regardless of which of the three buckets above it fell into.
+  await writeFiles(files, outDir);
+  for (const p of missing) {
+    rmSync(join(outDir, ...p.split("/")), { force: true });
+  }
+  return diff;
 }
 
 async function main(): Promise<void> {
@@ -50,33 +84,7 @@ async function main(): Promise<void> {
   let totalRemoved = 0;
 
   for (const name of names) {
-    const spec = parseSpec(
-      JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")),
-    );
-    const files: GeneratedFile[] = formatAll(generate(spec, { target: "standalone" }));
-    const actual = new Map(files.map((f) => [displayPath(f.path), f.content]));
-    const outDir = join(snapshotsDir, name);
-    const existing = loadExistingSnapshot(outDir);
-
-    const { missing, unexpected, changed } = compareSnapshot(actual, existing);
-
-    console.log(`${name}:`);
-    if (missing.length === 0 && unexpected.length === 0 && changed.length === 0) {
-      console.log("  (no changes)");
-    } else {
-      for (const p of unexpected) console.log(`  + ${p}`);
-      for (const p of changed) console.log(`  ~ ${p}`);
-      for (const p of missing) console.log(`  - ${p}`);
-    }
-
-    // Rewrite every current file (idempotent for the unchanged ones) and delete whatever
-    // the generator stopped emitting, so the checked-in tree ends up exactly matching
-    // `files` regardless of which of the three buckets above it fell into.
-    await writeFiles(files, outDir);
-    for (const p of missing) {
-      rmSync(join(outDir, ...p.split("/")), { force: true });
-    }
-
+    const { missing, unexpected, changed } = await updateOne(name);
     totalAdded += unexpected.length;
     totalChanged += changed.length;
     totalRemoved += missing.length;

@@ -110,6 +110,10 @@ function renderTokenFunction(e: EnvEntry, serviceLabel: string): string {
           '    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },',
         ];
 
+  // Built here rather than inline at its use site: nesting a template literal inside a
+  // JSON.stringify() inside the emitted line's own template is unreadable three ways.
+  const missingTokenMessage = JSON.stringify(`${serviceLabel} token response missing access_token`);
+
   return [
     "let cachedToken: string | null = null;",
     "",
@@ -129,7 +133,7 @@ function renderTokenFunction(e: EnvEntry, serviceLabel: string): string {
     "  }",
     "  const parsed = JSON.parse(text) as { access_token?: unknown };",
     '  if (typeof parsed.access_token !== "string" || parsed.access_token === "") {',
-    `    throw new Error(${JSON.stringify(`${serviceLabel} token response missing access_token`)});`,
+    `    throw new Error(${missingTokenMessage});`,
     "  }",
     "  cachedToken = parsed.access_token;",
     "  return cachedToken;",

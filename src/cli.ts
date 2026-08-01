@@ -40,7 +40,8 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
   return value;
 }
 
-export function parseCliArgs(argv: readonly string[]): CliOptions {
+/** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
+function parseFlags(argv: readonly string[]): CliOptions {
   const opts: CliOptions = { dryRun: false, standalone: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -55,15 +56,21 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     } else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
     else opts.name = a;
   }
+  return opts;
+}
+
+/**
+ * Every flag combination this CLI refuses, all instances of one rule: a flag that would
+ * have no effect is a worse outcome silently ignored than loudly rejected.
+ */
+function assertFlagCombination(opts: CliOptions): void {
   if (opts.name !== undefined && opts.specPath !== undefined) {
     throw new Error(
       "--spec supplies the connector name from the spec file; a positional name is redundant " +
         "and was probably a mistake — remove one.",
     );
   }
-  // Fail loudly rather than ignoring the flag. A user who believes they set a license and
-  // did not is a worse outcome than an error, and every other flag conflict in this CLI
-  // (a positional name alongside --spec, an unknown flag, a valueless flag) already errors.
+  // A user who believes they set a license and did not is a worse outcome than an error.
   if (opts.license !== undefined && !opts.standalone) {
     throw new Error(
       `--license applies to --standalone output only, and was not ignored: a monorepo-target ` +
@@ -72,14 +79,12 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
         `--license.`,
     );
   }
-  // Same rationale as --license above: a flag with no effect is a worse outcome silently
-  // ignored than loudly rejected.
   if (opts.force && opts.gatewayWiring === undefined) {
     throw new Error("--force only applies to --gateway-wiring output. Add it, or drop --force.");
   }
   // --gateway-wiring is monorepo-target only, as the README says, and it was the one flag
-  // conflict in this CLI that was silently accepted instead. It is not merely ineffective
-  // under --standalone: it would still write two files into the Nimbus checkout, importing
+  // conflict here that was silently accepted instead. It is not merely ineffective under
+  // --standalone: it would still write two files into the Nimbus checkout, importing
   // "../sync/types.ts" and registering a Syncable, for a connector deliberately generated to
   // live outside that repository.
   if (opts.gatewayWiring !== undefined && opts.standalone) {
@@ -90,6 +95,11 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
         "--gateway-wiring.",
     );
   }
+}
+
+export function parseCliArgs(argv: readonly string[]): CliOptions {
+  const opts = parseFlags(argv);
+  assertFlagCombination(opts);
   return opts;
 }
 

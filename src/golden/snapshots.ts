@@ -20,7 +20,10 @@ export type SnapshotDiff = {
   readonly changed: string[];
 };
 
-const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const byCodeUnit = (a: string, b: string): number => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
 
 /**
  * A total pure diff over two in-memory trees. Deliberately never throws: given an empty
@@ -43,11 +46,10 @@ export function compareSnapshot(
   }
   const unexpected = [...actual.keys()].filter((path) => !expected.has(path));
 
-  return {
-    missing: missing.sort(byCodeUnit),
-    unexpected: unexpected.sort(byCodeUnit),
-    changed: changed.sort(byCodeUnit),
-  };
+  missing.sort(byCodeUnit);
+  unexpected.sort(byCodeUnit);
+  changed.sort(byCodeUnit);
+  return { missing, unexpected, changed };
 }
 
 /**
