@@ -370,6 +370,8 @@ git commit -m "feat(emit): emit the read-only-kit server prologue and epilogue"
 - Consumes: Task 2's `renderTools` and `imports`.
 - Produces: the standalone target emits a local `runReadOnlyMcpConnector` definition, so the call site in `renderTools` is identical across targets.
 
+**Already verified — do not re-derive.** Both types the glue's signature names, `McpListResult` and `ZodObjectSchema`, are already exported from `sdks/typescript/src/connector-kit/index.ts` (`export type { HttpJsonBodyResponse, HttpTextResponse, McpListResult, RegisterSimpleToolFn, ZodObjectSchema } from "./mcp-tool-kit.js";`). Task 12 does not need to add them.
+
 - [ ] **Step 1: Write the failing test**
 
 Append to `test/emit/server/read-only-kit.test.ts`:
@@ -761,12 +763,13 @@ git commit -m "feat(spec): reject search on rest-kit and duplicate filter export
 
 **Files:**
 - Create: `src/emit/server/search.ts`
+- Modify: `src/emit/server/args.ts:28-33` (Step 3a)
 - Modify: `src/emit/server/tools-hand.ts:8-30`
 - Test: `test/emit/server/search.test.ts` (create)
 
 **Interfaces:**
-- Consumes: `ToolSpec` from Task 4; `renderZodSchema(tool.args)` from `src/emit/server/args.ts`; `parsePathTemplate` / `renderPath` from `src/emit/server/path-template.ts`.
-- Produces: `renderSearchTool(spec: ConnectorSpec, tool: ToolSpec): string`, called by `renderTool` in `tools-hand.ts`.
+- Consumes: `ToolSpec` from Task 4; `renderZodFields(tool.args)` from `src/emit/server/args.ts` (extracted in Step 3a below); `parsePathTemplate` / `renderPath` from `src/emit/server/path-template.ts`.
+- Produces: `renderSearchTool(spec: ConnectorSpec, tool: ToolSpec): string`, called by `renderTool` in `tools-hand.ts`. Also `renderZodFields(args: Args): string` from `args.ts`, which nothing else consumes yet.
 
 Target output for `mercury` (no args, `rows: "accounts"`):
 
@@ -877,13 +880,38 @@ describe("renderSearchTool", () => {
 Run: `bun test test/emit/server/search.test.ts`
 Expected: FAIL — `src/emit/server/search.ts` does not exist.
 
+- [ ] **Step 3a: Extract the field renderer from `renderZodSchema`**
+
+The inline-schema case needs the *fields* of a `z.object({ … })`, not the wrapper. Taking them by stripping the wrapper back off with a regex would couple this module to another module's output formatting, so expose the inner renderer instead.
+
+In `src/emit/server/args.ts`, split the existing `renderZodSchema` (lines 28-33) into two:
+
+```ts
+/** The comma-joined field list of a zod object, with no wrapper. Always one line. */
+export function renderZodFields(args: Args): string {
+  return Object.entries(args)
+    .map(([name, a]) => `${name}: ${renderOne(a)}`)
+    .join(", ");
+}
+
+export function renderZodSchema(args: Args): string {
+  const fields = renderZodFields(args);
+  return fields === "" ? "z.object({})" : `z.object({ ${fields} })`;
+}
+```
+
+This is a pure refactor: `renderZodSchema`'s output is unchanged for every input, including the empty case.
+
+Run: `bun test test/emit/server/args.test.ts && bun run diff:golden --nimbus-root C:/gitrep/Nimbus`
+Expected: PASS, and the four read fixtures still `6/6` — proof the refactor moved no bytes.
+
 - [ ] **Step 3: Implement the renderer**
 
 Create `src/emit/server/search.ts`:
 
 ```ts
 import type { ConnectorSpec, ToolSpec } from "../../spec.ts";
-import { renderZodSchema } from "./args.ts";
+import { renderZodFields } from "./args.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
 
 const PARAM = "p";
@@ -896,10 +924,9 @@ const PARAM = "p";
  */
 function renderSchema(tool: ToolSpec): string {
   if (Object.keys(tool.args).length === 0) return `searchToolInputSchema(${tool.maxLimit})`;
-  const own = renderZodSchema(tool.args).replace(/^z\.object\(\{/, "").replace(/\}\)$/, "").trim();
-  const ownPart = own === "" ? "" : `${own.replace(/,$/, "")}, `;
+  const own = renderZodFields(tool.args);
   return (
-    `z.object({ ${ownPart}query: z.string().min(1), ` +
+    `z.object({ ${own}, query: z.string().min(1), ` +
     `limit: z.number().int().min(1).max(${tool.maxLimit}).optional() })`
   );
 }
@@ -1271,7 +1298,19 @@ import type { GeneratedFile } from "../types.ts";
 import type { GenerateTarget } from "./index.ts";
 
 const SHARED = "../../shared/search-filter.ts";
+const SEARCH_TOOL = "../../shared/mcp-search-tool.ts";
 const KIT = "@nimbus-dev/sdk/connector-kit";
+
+/** Sort key ignoring the `type ` prefix, which Biome does not consider when ordering. */
+function byBareName(a: string, b: string): number {
+  return a.replace("type ", "").localeCompare(b.replace("type ", ""));
+}
+
+/** A single-name import stays on one line; two or more use the wrapped block form. */
+function renderBlockImport(names: readonly string[], from: string): string {
+  if (names.length === 1) return `import { ${names[0]} } from "${from}";`;
+  return ["import {", ...names.map((n) => `  ${n},`), `} from "${from}";`].join("\n");
+}
 
 function keyedFilter(tool: ToolSpec): string {
   const keys = JSON.stringify(tool.filter!.fields);
@@ -1314,14 +1353,24 @@ export function emitSearchFilter(
 
   // Only the symbols something in this file actually names — an unused import is a
   // noUnusedLocals error in the generated package, and biome's own lint rejects it too.
-  const names: string[] = [];
-  if (anyKeyed) names.push("fieldsFromKeys", "makeQueryFilter");
-  if (anyStub) names.push("type SearchFilter");
-  names.push("type SearchMatchOptions");
-  names.sort((a, b) => a.replace("type ", "").localeCompare(b.replace("type ", "")));
+  const filterNames: string[] = [];
+  if (anyKeyed) filterNames.push("fieldsFromKeys", "makeQueryFilter");
+  filterNames.push("type SearchMatchOptions");
+  filterNames.sort((a, b) => a.replace("type ", "").localeCompare(b.replace("type ", "")));
 
-  const from = target === "standalone" ? KIT : SHARED;
-  const importLines = ["import {", ...names.map((n) => `  ${n},`), `} from "${from}";`];
+  const importLines =
+    target === "standalone"
+      ? // One barrel, so one import: the SDK's connector-kit re-exports SearchFilter
+        // alongside the rest (Task 12).
+        [renderBlockImport([...filterNames, "type SearchFilter"].sort(byBareName), KIT)]
+      : // Two modules in the monorepo, and the split is not cosmetic: SearchFilter is
+        // declared in shared/mcp-search-tool.ts, NOT in shared/search-filter.ts. Emitting it
+        // from the latter is an unresolved import that fails the connector's own tsc.
+        // Both specifiers are relative, and "mcp-search-tool" sorts before "search-filter".
+        [
+          ...(anyStub ? [renderBlockImport(["type SearchFilter"], SEARCH_TOOL)] : []),
+          renderBlockImport(filterNames, SHARED),
+        ];
 
   const sections = [
     importLines.join("\n"),
@@ -1333,7 +1382,22 @@ export function emitSearchFilter(
 }
 ```
 
-`SearchFilter` is exported by `shared/mcp-search-tool.ts` in the monorepo, not by `search-filter.ts`. Emit it from `SHARED` anyway only if it resolves; if `bun run standalone-acceptance` or the golden diff reports an unresolved import in Task 11, move the `type SearchFilter` name into a second import line from `"../../shared/mcp-search-tool.ts"` for the monorepo target. The standalone kit barrel re-exports both, so `KIT` is correct either way.
+**Verified, so the code above already splits it.** `shared/search-filter.ts` exports `SearchMatchOptions`, `FilterByQueryOptions`, `FieldExtractor`, `asRecord`, `asObjectish`, `stringField`, `tagText`, `tagNamesFromObjects`, `filterByQuery`, `fieldsFromKeys`, `nestedString` and `makeQueryFilter` — and **not** `SearchFilter`, which is declared in `shared/mcp-search-tool.ts`. A monorepo stub file therefore needs two import lines; emitting `type SearchFilter` from `SHARED` would be an unresolved import that fails the connector's own `tsc`. The standalone barrel re-exports both after Task 12, so one import is correct there.
+
+Add this case to the test file for the split, since it is the only thing that pins it:
+
+```ts
+it("imports SearchFilter from mcp-search-tool, not search-filter, on monorepo", () => {
+  const file = emitSearchFilter(
+    make([{ ...KEYED, filter: { export: "filterMercuryAccounts" } }]),
+    "monorepo",
+  )!;
+  expect(file.content).toContain(
+    'import { type SearchFilter } from "../../shared/mcp-search-tool.ts";',
+  );
+  expect(file.content).not.toMatch(/SearchFilter[\s\S]*?from "\.\.\/\.\.\/shared\/search-filter\.ts"/);
+});
+```
 
 - [ ] **Step 4: Wire it into `generate()`**
 
@@ -1748,6 +1812,6 @@ gh pr create --title "feat: Stage D — the read-only-kit style and search tools
 
 **Spec coverage.** D1 → Tasks 1-3. D2 → Task 1 Step 4 (no rule forbids write tools) and Task 9's README caveat. D3 → Tasks 4-7, with the `rest-kit` exclusion in Task 5. D4 → Task 12 for the SDK half, Tasks 7-8 for the import split, Task 9 for the floor. D5 → Task 8 Step 3 `stubFilter`. D6 → Tasks 3, 7, 8 target branches. D7 → Task 3. §4.1's byte-safety invariant → the Global Constraints and every emitter task's golden-harness step. §5.1's five fixtures → Tasks 10-11. §5.2's limits → Task 13 Step 4.
 
-**Known gap, stated rather than hidden.** Task 8 Step 3 leaves one import path unresolved: `SearchFilter` is exported by `shared/mcp-search-tool.ts` in the monorepo but by the barrel in the SDK, so the monorepo stub path may need a second import line. This cannot be settled from the spec — it needs the emitted file in front of `tsc`, which is Task 11 Step 6. The step says so and names the fix.
+**Previously an open gap, now closed.** An earlier draft left Task 8's monorepo import path unresolved, on the grounds that only a real `tsc` in Task 11 could settle it. That was wrong — reading the two shared modules settles it: `shared/search-filter.ts` does not export `SearchFilter` and `shared/mcp-search-tool.ts` does, so the monorepo stub path needs two import lines. Task 8 Step 3 now emits the split and Task 8's test pins it. Task 11 Step 6 remains the check that the whole file typechecks; it is no longer the place a known question gets answered.
 
 **Type consistency.** `renderSearchTool(spec, tool)` is defined in Task 6 and called in Task 6 Step 4. `emitSearchFilter(spec, target)` is defined in Task 8 and called in Task 8 Step 4. `isHandStyle` exists twice deliberately — once in `src/spec.ts` (Task 1, module-private, takes a string) and once in `src/emit/server/index.ts` (Task 2, takes a `ConnectorSpec`); they are in different modules and neither is exported. `searchKitNames` / `filterImport` / `searchTools` are all defined and used within Task 7.
