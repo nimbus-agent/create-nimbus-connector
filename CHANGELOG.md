@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.0...create-nimbus-connector-v0.3.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **cli:** reject {id} and /:id path templates, and add --help ([#27](https://github.com/nimbus-agent/create-nimbus-connector/issues/27)) ([858ef62](https://github.com/nimbus-agent/create-nimbus-connector/commit/858ef62b2b0a05969c38012061165d4220784341))
+
 ## [0.3.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.2.2...create-nimbus-connector-v0.3.0) (2026-08-01)
 
 
