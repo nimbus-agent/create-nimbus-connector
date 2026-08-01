@@ -23,6 +23,7 @@
     "test": "bun test",
     "diff:golden": "bun scripts/diff-golden.ts",
     "wiring:conformance": "bun scripts/wiring-conformance.ts",
+    "runtime:acceptance": "bun scripts/runtime-acceptance.ts",
     "snapshot:update": "bun scripts/snapshot-update.ts",
     "acceptance": "bun scripts/acceptance.ts",
     "standalone-acceptance": "bun scripts/standalone-acceptance.ts"

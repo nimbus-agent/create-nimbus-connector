@@ -9,9 +9,10 @@ import {
 import { z } from "zod";
 
 let cachedToken: string | null = null;
+let tokenExpiresAt = 0;
 
 async function token(): Promise<string> {
-  if (cachedToken !== null) return cachedToken;
+  if (cachedToken !== null && Date.now() < tokenExpiresAt) return cachedToken;
   const id = process.env["ZZWRITE_CLIENT_ID"]?.trim();
   const secret = process.env["ZZWRITE_CLIENT_SECRET"]?.trim();
   if (id === undefined || id === "" || secret === undefined || secret === "") {
@@ -32,11 +33,19 @@ async function token(): Promise<string> {
   if (!res.ok) {
     throw new Error(`ZZ Write token exchange ${String(res.status)}: ${text.slice(0, 400)}`);
   }
-  const parsed = JSON.parse(text) as { access_token?: unknown };
+  const parsed = JSON.parse(text) as { access_token?: unknown; expires_in?: unknown };
   if (typeof parsed.access_token !== "string" || parsed.access_token === "") {
     throw new Error("ZZ Write token response missing access_token");
   }
   cachedToken = parsed.access_token;
+  // Renew a little early so a token cannot expire mid-flight between this check and the
+  // request that uses it. The skew is halved for short-lived tokens, which would
+  // otherwise be treated as already expired and re-exchanged on every call.
+  const ttl =
+    typeof parsed.expires_in === "number" && parsed.expires_in > 0
+      ? parsed.expires_in - Math.min(60, Math.floor(parsed.expires_in / 2))
+      : undefined;
+  tokenExpiresAt = ttl === undefined ? Number.POSITIVE_INFINITY : Date.now() + ttl * 1000;
   return cachedToken;
 }
 

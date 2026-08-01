@@ -71,4 +71,5 @@ jobs:
 #
 #   bun run diff:golden --nimbus-root /path/to/Nimbus
 #   bun run wiring:conformance --nimbus-root /path/to/Nimbus
+#   bun run runtime:acceptance --registry
 #   bun run acceptance  /path/to/Nimbus

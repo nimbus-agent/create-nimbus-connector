@@ -226,7 +226,13 @@ Finally, **a hoisted const is emitted only if something reads it.** The path rep
 
 Emits the shape all five share: form-encoded POST with `grant_type=client_credentials`, credentials as a Basic header (`"basic"`, as `ramp` does) or in the body (`"body"`, as the other four do), then `Authorization: Bearer` on API calls.
 
-**The emitted token cache is module-level and never expires.** This matches `ramp` and `wiz`, and is correct *only because* connectors are spawned per invocation and are short-lived. No connector in the corpus reads `expires_in`. Should connectors ever become long-lived, every one of these silently begins using a stale token. The assumption is recorded here because the code depends on it and does not state it.
+**The emitted token cache honours `expires_in`.** *Superseded.* Stage C originally emitted a module-level cache that never expired, matching `ramp` and `wiz` — correct *only because* connectors are spawned per invocation and are short-lived, which is a property of the caller rather than of this code. That assumption was recorded here rather than relied on silently, and has since been removed: the emitted `token()` reads `expires_in` and renews a little early, so a token cannot lapse mid-flight between the cache check and the request that uses it.
+
+The renewal skew is 60 seconds, halved for tokens shorter than that — a flat 60s skew would treat a 30-second token as already expired and re-exchange on every call. A response with no `expires_in` still caches for the process lifetime, because treating its absence as expiry has the same effect.
+
+Verified by observation, not argument: `scripts/runtime-acceptance.ts` drives a generated connector against a token endpoint minting 2-second tokens and asserts a second exchange occurs, while the long-lived case still yields one exchange for two tool calls. Mutation-tested — restoring the unconditional cache fails exactly those two checks.
+
+There is still no refresh-token flow, and none is planned: no connector in the corpus has one (§1.4).
 
 ---
 
@@ -295,7 +301,6 @@ Step 6 is the only item whose value lies entirely outside this repository, and i
 ## 8. Out of scope
 
 - Authorization-code and refresh-token OAuth flows. No connector in the corpus uses them (§1.4); adding them would be speculative.
-- Token expiry handling (§4.5).
 - Generating `*-mapping.ts` bodies (§1.5).
 - Editing Nimbus registration files automatically (D8).
 - Changing what the Gateway *does* with `hitlRequired`. Stage C emits accurate metadata; making it enforce anything is a Gateway change, not a generator change (§1.1).

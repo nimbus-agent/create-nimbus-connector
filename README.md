@@ -46,7 +46,7 @@ An env entry may declare `"auth": "client-credentials"` instead of `"bearer"` or
 }
 ```
 
-This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches the token for the process's lifetime — it is never refreshed and `expires_in` is never read, which is correct only because a generated connector is spawned per invocation and is short-lived. `credentialsIn` controls how the client id/secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` connector does); `"body"` puts `client_id`/`client_secret` in the form body (as Nimbus's `looker`, `powerbi`, `teams` and `wiz` connectors do). `scope` is optional; the two `vars` and `style: "hand-rolled"` are required — `client-credentials` is **hand-rolled only** (`style: "rest-kit"` is a validation error), because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
+This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches the token until it expires: `expires_in` is read and the token is renewed a little early (the skew is halved for short-lived tokens, which would otherwise be treated as already expired and re-exchanged on every call). A response with no `expires_in` is cached for the process lifetime, since treating its absence as "expired" would re-exchange on every call. There is no refresh-token flow — no connector in the corpus has one. `credentialsIn` controls how the client id/secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` connector does); `"body"` puts `client_id`/`client_secret` in the form body (as Nimbus's `looker`, `powerbi`, `teams` and `wiz` connectors do). `scope` is optional; the two `vars` and `style: "hand-rolled"` are required — `client-credentials` is **hand-rolled only** (`style: "rest-kit"` is a validation error), because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
 
 ### Reserved identifiers
 
@@ -168,6 +168,27 @@ It records *which* files match rather than how many, deliberately: for a partial
 ```
 bun run acceptance C:\gitrep\Nimbus
 ```
+
+## The runtime acceptance harness
+
+```
+bun run runtime:acceptance --registry          # or --sdk-root <path> for a local SDK
+```
+
+Every other check in this repo is **static**: string assertions, `tsc`, `biome`, a byte-diff against the corpus, and `tools/list` — which proves a generated server starts and describes itself, but never *invokes* a tool. Until this harness existed, no generated connector's `fetch` had ever run, and every belief about runtime behaviour was inference from reading the emitted text.
+
+This one stands up a `Bun.serve` on an ephemeral loopback port, points a generated connector's base URL at it, drives the connector over stdio with real `tools/call` requests, and asserts on the traffic it actually produces:
+
+- the bearer token arrives as `Authorization: Bearer …`
+- an unset optional boolean is `?flag=false` in the URL and **absent** from the JSON body — the decision in the Stage C spec §8, which had been reached by argument and never executed
+- a boolean in a body is a real JSON `true`, not the string `"true"`
+- a defaulted arg is sent with its default applied
+- path args are percent-encoded, and excluded from the default write body (D5)
+- a `DELETE` whose only arg is in the path sends no body at all
+- a non-2xx response becomes a tool error naming the status
+- `client-credentials` exchanges its token **before** the API call, sends the id and secret where `credentialsIn` says, and **caches** — two tool calls produce one exchange
+
+It needs the SDK installed, so like the other harnesses it is run deliberately rather than in CI.
 
 ## The standalone acceptance harness
 
