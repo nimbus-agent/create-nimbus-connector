@@ -6,15 +6,25 @@ function resolveEnvRefs(tpl: string): string {
 }
 
 /**
- * The module-scope base const, or undefined when the spec does not ask for one.
+ * The module-scope base const, or undefined when the spec does not ask for one — or when
+ * nothing would read it.
  *
  * Emitted ahead of the env accessors (see emitServer), which is where mercury's `BASE` and
  * bitrise's `BITRISE_API` sit. FetchHelperSchema guarantees `base` is fully static here, so
  * no resolveEnvRefs() call is needed or reachable.
+ *
+ * Gated on the helpers for exactly the reason renderReadHelper and usesJsonResult are: the
+ * const is referenced only from a fetch helper's URL template, so a spec that declares
+ * `baseConst` and whose tools are all stubs would emit a module-scope const nothing reads —
+ * a TS6133 under the generated package's own `noUnusedLocals` and a `noUnusedVariables`
+ * error under its biome.json. The question is asked of the two functions that decide rather
+ * than restated, so the gate cannot drift from what is actually emitted.
  */
 export function renderBaseConst(spec: ConnectorSpec): string | undefined {
   const { baseConst, base } = spec.fetchHelper;
-  return baseConst === undefined ? undefined : `const ${baseConst} = ${JSON.stringify(base)};`;
+  if (baseConst === undefined) return undefined;
+  const emitsHelper = renderReadHelper(spec) !== undefined || renderWriteHelper(spec) !== undefined;
+  return emitsHelper ? `const ${baseConst} = ${JSON.stringify(base)};` : undefined;
 }
 
 /**

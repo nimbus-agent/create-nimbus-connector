@@ -120,8 +120,22 @@ describe("renderBaseConst", () => {
         baseConst: "BASE",
         inlineHeaders: { Accept: "application/json" },
       },
+      tools: [{ name: "m_list", description: "List accounts.", path: "/api/v1/accounts" }],
     });
     expect(renderBaseConst(spec)).toBe('const BASE = "https://api.mercury.com";');
+  });
+
+  it("omits the const when no helper is emitted to read it — an unread const fails tsc there", () => {
+    const spec = make({
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        baseConst: "BASE",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "m_todo", description: "Not implemented yet.", impl: "stub" }],
+    });
+    expect(renderBaseConst(spec)).toBeUndefined();
   });
 
   it("makes the helper reference the const instead of inlining the literal", () => {

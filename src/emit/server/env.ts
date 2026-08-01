@@ -189,12 +189,6 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 }
 
 /**
- * The two-function form of a bearer accessor: a `(): string` reader named by `tokenLocal`
- * that carries the read and the guard, and `local` reduced to the header wrapper that calls
- * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
- * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
- */
-/**
  * HTTP Basic, the airflow/zendesk shape: each variable read and guarded on its own, with
  * its own message naming just that variable, then one multi-line header object.
  *
@@ -227,6 +221,19 @@ function renderBasic(e: EnvEntry): string {
   ].join("\n");
 }
 
+/**
+ * The two-function form of a bearer accessor: a `(): string` reader named by `tokenLocal`
+ * that carries the read and the guard, and `local` reduced to the header wrapper that calls
+ * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
+ * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
+ *
+ * 15 corpus connectors write the accessor this way — canva, dagster, figma, hubspot,
+ * mercury, miro, netlify, pipedrive, raindrop, readwise, salesforce, stackoverflow, vercel,
+ * zoom and one more. (An earlier draft of this comment cited testflight and dbt; neither
+ * has the split — testflight calls `signAppStoreConnectJwt(...)` inline, and dbt's
+ * `authHeader` reads `DBT_TOKEN` inline while its `apiBase()` is a base-URL accessor, not a
+ * token one.)
+ */
 function renderSplitBearer(e: EnvEntry): string {
   const binding = bindingOf(e, 0);
   return [

@@ -146,12 +146,14 @@ export const EnvSchema = z
     required: z.boolean().default(false),
     default: z.string().optional(),
     /**
-     * How a trailing slash is stripped from a user-supplied base URL. Two conventions, and
-     * the corpus does not choose between them: `"stripTrailingSlash"` inlines
-     * `.replace(/\/$/, "")` (fastmail, grafana, sentry), `"trimTrailingSlashFn"` emits the
-     * shared `function trimTrailingSlash(s: string): string` helper once and calls it
-     * (airflow, argocd, databricks, dbt, zendesk and 8 more). Byte-identical helper text in
-     * all 13, so it is a constant here rather than a template.
+     * How a trailing slash is stripped from a user-supplied base URL. The corpus splits 13
+     * to 3 in favour of the helper — `"trimTrailingSlashFn"` emits the shared
+     * `function trimTrailingSlash(s: string): string` once and calls it (airflow, argocd,
+     * databricks, dbt, zendesk and 8 more), `"stripTrailingSlash"` inlines
+     * `.replace(/\/$/, "")` (fastmail, grafana, sentry). Both are kept because the minority
+     * form is byte-locked by the grafana and sentry fixtures, not because the split is
+     * close. Byte-identical helper text in all 13, so it is a constant here rather than a
+     * template.
      */
     transform: z.enum(["stripTrailingSlash", "trimTrailingSlashFn"]).optional(),
     prefix: z.string().optional(),

@@ -261,6 +261,45 @@ Following the Stage A precedent that the schema must reject anything the emitter
   calls `searchToolInputSchema(maxLimit)`; with args, it inlines
   `z.object({ …args, query, limit })`, the `bitrise` shape.
 
+### 3.4 The seven fields Task 10 added, and which of them are cosmetic
+
+Written **after** the fact. §3.1–§3.3 were designed up front; these came out of driving three
+real connectors to a byte diff, and every one of them is a per-connector convention this design
+had not measured. They are recorded here in full, including the judgement that most of them buy
+no capability, because the honest version is more useful to Task 13 than a tidy one.
+
+All seven are additive and default to the pre-Stage-D behaviour, so §2's backward-compatibility
+claim survives — with one exception noted at the end.
+
+| # | Field | Buys | Corpus evidence |
+| --- | --- | --- | --- |
+| F1 | `fetchHelper.baseConst` | **Formatting only** | Hoists a fully static base to `const BASE = "…";` and references it from the helper. `mercury` spells it `BASE`, `bitrise` `BITRISE_API`. Rejected when `base` names `${env.X}` — that resolves to an accessor call, which must not run at module-initialisation time. Gated on a helper actually being emitted, or the const is an unread local |
+| F2 | `env[].tokenLocal` | **Formatting only** | Splits a bearer accessor into a `(): string` reader plus a header wrapper that calls it. **15** connectors write it this way — canva, dagster, figma, hubspot, mercury, miro, netlify, pipedrive, raindrop, readwise, salesforce, stackoverflow, vercel, zoom and one more |
+| F3 | `handlerStyle: "concise" \| "block"` | **Formatting only** | A statement-bodied handler with an explicit `return`, versus an expression-bodied arrow. **57 of the 60** `runReadOnlyMcpConnector` connectors use the block form; firebase, tableau and workday do not |
+| F4 | `argsSchemaStyle: "inline" \| "expanded"` | **Formatting only** | `z.object` on one line or one field per line. Biome preserves whichever the emitter produces, so this is the emitter's decision, not the formatter's. `z.object({})` stays inline under both |
+| F5 | `env[].transform: "trimTrailingSlashFn"` | **Formatting only** | Emits the shared `function trimTrailingSlash(s)` once and calls it, instead of inlining `.replace(/\/$/, "")`. The corpus splits **13 to 3** in the helper's favour — this is not a close call. The inline form is kept only because `grafana` and `sentry` are byte-locked on it |
+| F6 | `env[].auth: "basic"` | **Capability** | HTTP Basic via `encodeBasicAuthHeader`: airflow, greenhouse, lever, zendesk. Nothing before this could emit it. Each variable is read and guarded on its own, naming only the one that is missing — deliberately not the combined guard `auth: "headers"` builds. `prefix`/`suffix` are permitted here alone, decorating the **username** (zendesk's `` `${email}/token` ``), a position the auth wrapper does not replace |
+| F7 | `filesystem` | **Capability** | Emits `permissions.filesystem` into the manifest. **29 of 94** manifests declare it; the other 65 omit the key, and the spec field's optionality is that distinction |
+
+**So five of the seven are cosmetic.** They exist because this stage's acceptance bar is a byte
+diff against hand-written files, and hand-written files carry their authors' habits. That is a
+real cost — five spec fields a user must now choose between, none of which changes what a
+connector can do — and it is the price of the byte-diff bar rather than a design gain. Anyone
+weighing a sixth cosmetic field should weigh it against that sentence.
+
+**Two are per connector where the corpus is per tool.** `argsSchemaStyle` in particular: argocd,
+bigeye, flux, monte-carlo, powerbi, snowflake and tableau each mix both forms across their own
+tools. All three Task 10 fixtures are internally uniform, so a per-tool override was not needed
+and was not guessed at. It will be, for some fourth fixture.
+
+**The one backward-compatibility exception.** A single-variable `auth: "headers"` accessor now
+emits its header object on one line, behind no spec field. This is byte-visible to an existing
+`0.3.3` user regenerating a connector — semantically neutral, but a diff. It is recorded in
+`CHANGELOG.md` under Unreleased as an output change rather than being left for a user to find.
+The four locked fixtures do not move and the reason is structural, not luck: `newrelic` uses
+`inlineHeaders` with no `auth` entry, `grafana` and `sentry` are `auth: "bearer"`, and `datadog`
+is `auth: "headers"` with **two** variables, taking the unchanged multi-variable branch.
+
 ---
 
 ## 4. Emission
@@ -369,11 +408,16 @@ fixtures join, each byte-targeting a full seven-file tree. `expectations.json` l
 expected to match per fixture, so `src/search-filter.ts` simply joins the list and the `n/n`
 denominator follows — no harness change.
 
-| Fixture | Expectation | Covers |
+The table below is the **measured** outcome, not the original prediction. This design planned
+7/7 for all three; none of them reaches it, and §5.2 says why for each. The numbers are left
+corrected in place rather than annotated, because a plan number and a result number in the same
+cell is how a stale document reads as a current one.
+
+| Fixture | Result | Covers |
 | --- | --- | --- |
-| `mercury` | 7/7 | The style, the `rows` pluck, `searchToolInputSchema(100)`, the `fieldsFromKeys` filter |
-| `zendesk` | 7/7 | The same, plus `{ tags: true }` |
-| `bitrise` | 7/7 | The `args`-bearing search — inline `z.object`, no `rows` |
+| `mercury` | **6/7** | The style, the `rows` pluck, `searchToolInputSchema(100)`, the `fieldsFromKeys` filter |
+| `zendesk` | **6/7** | The same, plus `{ tags: true }`, `auth: "basic"`, and `permissions.filesystem` |
+| `bitrise` | **4/7** | The `args`-bearing search — inline `z.object`, `.max(200)`. Note: `bitrise` **does** pluck `rows: "data"`; the "no `rows`" reading of §1.6 was wrong about this connector, and the no-`rows` path is covered by unit tests instead |
 
 Two synthetic fixtures join at expectation `[]`:
 
@@ -391,10 +435,14 @@ That takes the golden harness from 12 fixtures to 17, and standalone acceptance 
 fixtures to six. Runtime grows linearly with fixture count, as Stage C §5.3 already recorded —
 each fixture installs the SDK and runs a real `tsc` and `bun build`.
 
-### 5.2 Three honest limits
+### 5.2 Seven honest limits
+
+The first three were designed in. The last four were **found** by Task 10, and each is a file
+the harness reports as not matching. None of them is hidden by an expectation entry: the entries
+list what genuinely matches, so every gap below is on screen on every run.
 
 1. **The style alone is never byte-proven.** §1.7 is a measured negative result: no plain
-   single-file REST connector uses this style. Every 7/7 fixture above is a search connector, so
+   single-file REST connector uses this style. Every real fixture above is a search connector, so
    "the style renders correctly *without* search" rests on `zzsearch`'s snapshots and its `tsc`,
    not on the corpus. That is weaker evidence, and it is weaker because the corpus is.
 2. **The 40 bespoke filters are not attempted.** D5 emits a stub for them. If anyone adds one as a
@@ -404,6 +452,36 @@ each fixture installs the SDK and runs a real `tsc` and `bun build`.
    case-insensitive substring match over joined fields. Reproducing `mercury` proves we emit that;
    it says nothing about whether substring matching is the right retrieval strategy. That decision
    is Nimbus's, inherited wholesale.
+4. **`README.md` is unreachable for all three, and that is what makes the bar 6/7.** All three
+   connectors carry hand-written prose naming their specific item types (`mercury:account`,
+   `zendesk:ticket`), their three tool names, and their deferred follow-ups. No spec field derives
+   it; the generator emits its own boilerplate, which `newrelic` — a 6/6 fixture — still carries
+   precisely because nobody rewrote it. `README.md` is therefore omitted from all three
+   expectation entries. **This is the only file omitted for a reason other than "it does not
+   match", and the omission is what the 6/7 bar means.** Nothing else may be omitted on those
+   grounds.
+5. **`bitrise` has no `test/sandbox.test.ts` to match.** The real package's `test/` directory
+   holds `search-filter.test.ts` and nothing else — 15 of the 94 connectors lack the sandbox
+   test. The harness reports `MISSING`, not `DIFF`. No spec field can make the generator match a
+   file that is not there, and the only alternative — stopping emitting the sandbox test — would
+   break the four locked fixtures. Irreducible by construction.
+6. **`bitrise`'s `src/server.ts` needs three things the spec language does not have.**
+   `bitrise_list` and `bitrise_get` select their endpoint from whether an optional argument is
+   present, take a `z.enum` argument mapped through a lookup table to an integer, and assemble a
+   query string at runtime. A `ToolSpec` has one `path`, `ArgSchema.type` is
+   `string | number | boolean`, and a path template is a fixed string with placeholders. Both are
+   declared `impl: "stub"` — the same signal `discord_channel_messages` and both of
+   `google-meet`'s tools already carry — and the verdict line prints `2 stub tool(s)`. Closing
+   this means adding conditional-path and enum-argument support: a change to what a connector
+   spec *is*, for two tools, and one connector is not enough evidence to design that syntax
+   against. One consequence worth naming: with both non-search tools stubbed, nothing calls
+   `jsonResult`, so the emitter correctly omits an import the real file has. That is a symptom
+   of the stubs, not a second defect.
+7. **`permissions.filesystem` is always emitted collapsed to one line.** 27 of the 29 manifests
+   that declare it write it that way; the other 2 expand it, and this emitter cannot produce
+   that. No fixture needs it, and a style field for two connectors nobody is reproducing would be
+   speculative. Named here so the next person to hit it knows it was seen and declined, not
+   missed.
 
 ---
 
@@ -450,8 +528,9 @@ const matches = Array.isArray(rows) ? filter(rows, opts) : [];
 
 so `undefined`, `null`, and any non-array already yield an empty match set. `rows` is typed
 `unknown` precisely because external payloads are untyped at the boundary. A `?? []` at the call
-site would be dead code that changes `mercury`'s bytes, and `mercury` is a 7/7 fixture — the
-coercion would trade a real verification signal for a branch that can never be taken.
+site would be dead code that changes `mercury`'s bytes, and `mercury`'s `src/server.ts` is one of
+the six files it byte-matches (§5.1) — the coercion would trade a real verification signal for a
+branch that can never be taken.
 
 **A validation-time performance warning on a large `maxLimit`.** Declined: it would measure the
 wrong quantity. `maxLimit` caps how many matches `filterByQuery` *returns*; it has no effect on

@@ -132,4 +132,16 @@ describe("emitManifest, permissions.filesystem", () => {
       write: ["/tmp/x"],
     });
   });
+
+  // String.prototype.replace expands $&, $`, $', $$ and $n inside a replacement STRING, and
+  // the replacement is built from these paths. Before the replacer function, "$&BAD" spliced
+  // the entire matched block back into the middle of the array and the emitted manifest was
+  // not parseable at all; "A$$B" was silently corrupted to "A$B". Both directions are pinned
+  // here — a throw and a wrong-but-parseable value are different failures.
+  it("does not let a $-bearing path corrupt the emitted JSON", () => {
+    const filesystem = { read: ["$&BAD", "A$$B", "$`x", "$'y", "$1z"], write: ["ok"] };
+    const out = emitManifest(withFs(filesystem)).content;
+    expect(() => JSON.parse(out)).not.toThrow();
+    expect(JSON.parse(out).permissions.filesystem).toEqual(filesystem);
+  });
 });
