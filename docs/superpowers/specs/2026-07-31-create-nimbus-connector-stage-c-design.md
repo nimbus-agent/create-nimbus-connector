@@ -301,7 +301,16 @@ Step 6 is the only item whose value lies entirely outside this repository, and i
 - Changing what the Gateway *does* with `hitlRequired`. Stage C emits accurate metadata; making it enforce anything is a Gateway change, not a generator change (§1.1).
 - Fixing `nimbus scaffold extension`'s legacy `permissions` array (§1.6). Noted, not owned here.
 
-**Known asymmetry, deliberately left alone.** An *optional boolean with no default* renders `false` in the URL — the hoist maps `undefined → "false"` — but is **omitted** from the JSON body. So one argument, unset, reads as explicitly-false to the query string and as absent to the body. Both halves behaved this way before Stage C and neither was changed by it, so fixing it here would be an unreviewed behaviour change to the read path that the golden fixtures cannot see. It is the only URL/body disagreement left after §4.4's serialisation rules: a boolean's two renderings (string in the URL, real JSON boolean in the body) are intentional and correct, but its two *unset* renderings are not obviously either. Worth a follow-up that decides which one is right.
+**Resolved: the URL/body split on an unset optional boolean is correct, and stays.** An *optional boolean with no default* renders `false` in the URL but is **omitted** from the JSON body. Flagged in review as a possible defect; measured, and it is not one.
+
+It is narrower than it first appears. It is reachable only when a spec gives an explicit `body` mapping that re-includes an arg the path already references — with the default body, a path-referenced arg is excluded outright (D5), so the two halves have nothing to disagree about. The divergence exists only where the author deliberately asked for the value in both places.
+
+Each half is right for its medium, and one of them is not ours to choose:
+
+- **URL — `false`.** Byte-locked. `newrelic` is one of the four 6/6 golden fixtures, and the real hand-written connector emits `const only = p.only_open === true ? "true" : "false";`. A query string carries text; the corpus decided what that text is. Changing it drops `newrelic` below 6/6 and the generator stops reproducing the corpus.
+- **Body — omitted.** A JSON body carries types, and every API distinguishes a `false` the caller asserted from a key the caller never sent. Emitting `false` for an unset optional would fabricate an assertion the author never made, and would be wrong in precisely the cases where the server's own default is `true`.
+
+Both halves are pinned in `test/emit/server/body.test.ts` so a future "make these consistent" change fails rather than silently breaking one.
 
 ---
 
