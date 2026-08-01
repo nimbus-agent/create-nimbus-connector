@@ -23,7 +23,7 @@ const fixturesDir = join(scriptDir, "..", "fixtures");
 const snapshotsDir = join(fixturesDir, "snapshots");
 
 /** Like loadSnapshot, but a first run for a brand-new fixture has nothing to load yet. */
-function loadExistingSnapshot(dir: string): Map<string, string> {
+export function loadExistingSnapshot(dir: string): Map<string, string> {
   try {
     return loadSnapshot(dir);
   } catch {
@@ -96,4 +96,8 @@ async function main(): Promise<void> {
   );
 }
 
-await main();
+// Guarded exactly as src/cli.ts is. Importing this module used to rewrite every checked-in
+// snapshot tree; now it only defines. `bun scripts/snapshot-update.ts` is unchanged.
+if (import.meta.main) {
+  await main();
+}

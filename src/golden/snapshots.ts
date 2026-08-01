@@ -95,6 +95,12 @@ export function loadSnapshot(dir: string): Map<string, string> {
  * The sorted names of every fixture under `fixturesDir` that has at least one non-`read`
  * effect tool — the same `effect` field the emitter reads for `hitlRequired`.
  *
+ * Sorted with the same explicit {@link byCodeUnit} comparator the diff above uses, for the
+ * same reason: this list decides which fixtures get a checked-in snapshot directory, so its
+ * order has to be identical on every machine. A bare `.sort()` happens to order strings by
+ * UTF-16 code unit too, but it says so nowhere and reads as an oversight; `localeCompare`
+ * would be an outright regression here, being locale- and ICU-dependent.
+ *
  * Deliberately data-driven rather than a hardcoded list, and deliberately the single
  * definition (imported by both test/golden/snapshots.test.ts and
  * scripts/snapshot-update.ts, not copied into each): neither of those files is on Task 8's
@@ -113,5 +119,5 @@ export function listWriteFixtures(fixturesDir: string): string[] {
       );
       return spec.tools.some((t) => t.effect !== "read");
     })
-    .sort();
+    .sort(byCodeUnit);
 }

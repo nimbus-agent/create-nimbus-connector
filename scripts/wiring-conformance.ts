@@ -32,11 +32,12 @@ import { takeValue } from "../src/cli.ts";
 import { emitWiring } from "../src/emit/wiring.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
+import { interfaceMembers } from "./_lib/interface-members.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
 
-function parseArgs(argv: string[]): { nimbusRoot?: string } {
+export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
   let nimbusRoot: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--nimbus-root") {
@@ -48,36 +49,8 @@ function parseArgs(argv: string[]): { nimbusRoot?: string } {
   return { nimbusRoot };
 }
 
-/**
- * Member names of a `interface X { ... }` block, by brace matching from its opening brace.
- *
- * Regex rather than a TypeScript parser because the shape being read is one flat interface
- * of scalar members, and the failure mode of getting it wrong is loud: an empty member set
- * fails the "found nothing" check below rather than passing vacuously.
- */
-function interfaceMembers(source: string, name: string): string[] {
-  const start = source.indexOf(`interface ${name} {`);
-  if (start === -1) throw new Error(`interface ${name} not found in the real sync/types.ts`);
-  const open = source.indexOf("{", start);
-  let depth = 0;
-  let end = open;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === "{") depth++;
-    else if (source[i] === "}") {
-      depth--;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
-  const body = source.slice(open + 1, end);
-  // `name:` / `name?:` / `name(` at the start of a line, ignoring comments and nesting.
-  return [...body.matchAll(/^\s*(?:readonly\s+)?([A-Za-z_]\w*)\s*\??\s*[:(]/gm)].map((m) => m[1]!);
-}
-
-function main(): void {
-  const { nimbusRoot } = parseArgs(process.argv.slice(2));
+function main(argv: readonly string[]): void {
+  const { nimbusRoot } = parseArgs(argv);
   const root = resolveNimbusRoot({
     flag: nimbusRoot,
     env: process.env["NIMBUS_ROOT"],
@@ -103,7 +76,7 @@ function main(): void {
 
   // 1. Every required Syncable member must be supplied by the emitted object literal.
   for (const member of required) {
-    const supplies = new RegExp(`\\b${member}\\s*[:(]`).test(syncFile.content);
+    const supplies = new RegExp(String.raw`\b${member}\s*[:(]`).test(syncFile.content);
     if (!supplies) failures.push(`emitted skeleton does not supply Syncable.${member}`);
   }
 
@@ -145,4 +118,9 @@ function main(): void {
   console.log(`\nPASS  emitted wiring conforms to ${typesPath}`);
 }
 
-main();
+// Guarded exactly as src/cli.ts is: importing this module used to demand a Nimbus checkout
+// and throw without one, so neither helper above could be reached from a test.
+// `bun scripts/wiring-conformance.ts` is unchanged.
+if (import.meta.main) {
+  main(process.argv.slice(2));
+}

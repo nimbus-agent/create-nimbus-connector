@@ -259,18 +259,54 @@ async function readSpecFile(specPath: string): Promise<unknown> {
   }
 }
 
-export async function main(argv: readonly string[]): Promise<void> {
-  // Before parseCliArgs, deliberately: both must work on their own, and must not be refused
-  // by a flag-combination rule they have nothing to do with.
+/**
+ * --help and --version. Handled before parseCliArgs, deliberately: both must work on their
+ * own, and must not be refused by a flag-combination rule they have nothing to do with.
+ *
+ * Returns true when printing one of them WAS the whole job, so main can stop.
+ */
+async function handleInfoFlags(argv: readonly string[]): Promise<boolean> {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
-    return;
+    return true;
   }
   if (argv.includes("--version") || argv.includes("-v")) {
     const pkg = await Bun.file(join(import.meta.dir, "..", "package.json")).json();
     console.log(pkg.version);
-    return;
+    return true;
   }
+  return false;
+}
+
+/** Where to write, when --out-dir did not say. */
+function resolveOutDir(opts: CliOptions, name: string): string {
+  if (opts.outDir !== undefined) return opts.outDir;
+  return opts.standalone ? name : join("packages", "mcp-connectors", name);
+}
+
+/** Tell the user how to format by hand, but only when we could not do it for them. */
+function warnIfUnformatted(outDir: string): void {
+  if (formatterAvailable()) return;
+  console.error(
+    `note: ${formatterUnavailableReason() ?? "the formatter is unavailable."}\n` +
+      "      to format the output afterwards:\n\n" +
+      `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
+  );
+}
+
+/**
+ * The --gateway-wiring output, or undefined when the flag was not passed.
+ *
+ * Directory and files travel together in one optional object because they are one decision:
+ * previously they were two `undefined`-able locals that were always both set or both unset,
+ * and all three use sites had to re-assert that with `a !== undefined && b !== undefined`
+ * purely to convince the type checker of something the code already guaranteed.
+ */
+type WiringOutput = { readonly dir: string; readonly files: readonly GeneratedFile[] };
+
+export async function main(argv: readonly string[]): Promise<void> {
+  if (await handleInfoFlags(argv)) return;
+
   const opts = parseCliArgs(argv);
   const spec =
     opts.specPath !== undefined
@@ -278,23 +314,18 @@ export async function main(argv: readonly string[]): Promise<void> {
       : promptForSpec(opts.name);
 
   const target = opts.standalone ? "standalone" : "monorepo";
-  const outDir =
-    opts.outDir ?? (opts.standalone ? spec.name : join("packages", "mcp-connectors", spec.name));
+  const outDir = resolveOutDir(opts, spec.name);
   // Opt-in only: undefined unless --gateway-wiring was passed, so normal generation is
   // entirely unaffected — no new console output, no new disk writes, no new failure mode.
-  const gatewayWiringDir =
+  // Resolved here rather than beside the files below so that a --gateway-wiring pointed at
+  // the wrong directory still fails before any generation work, exactly as it used to.
+  const wiringDir =
     opts.gatewayWiring === undefined
       ? undefined
       : join(assertNimbusRoot(opts.gatewayWiring), "packages", "gateway", "src", "connectors");
 
   await initFormatter();
-  if (!formatterAvailable()) {
-    console.error(
-      `note: ${formatterUnavailableReason() ?? "the formatter is unavailable."}\n` +
-        "      to format the output afterwards:\n\n" +
-        `        cd ${outDir} && bunx @biomejs/biome format --write .\n`,
-    );
-  }
+  warnIfUnformatted(outDir);
 
   // generate() and formatAll() are synchronous — do not await them.
   // exactOptionalPropertyTypes: spread rather than pass `license: undefined`, which would
@@ -305,20 +336,19 @@ export async function main(argv: readonly string[]): Promise<void> {
   // emitWiring() throws when the spec has no tool named "*_list". Computed alongside the
   // main package, before either is written, so a spec that cannot be wired fails loudly
   // rather than leaving the connector package written and its wiring silently skipped.
-  const wiringFiles = gatewayWiringDir === undefined ? undefined : formatAll(emitWiring(spec));
+  const wiring: WiringOutput | undefined =
+    wiringDir === undefined ? undefined : { dir: wiringDir, files: formatAll(emitWiring(spec)) };
   // Checked before dry-run too, so a preview accurately reports what a real run would do.
-  if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
-    assertWiringTargetsAbsent(gatewayWiringDir, wiringFiles, opts.force);
-  }
+  if (wiring !== undefined) assertWiringTargetsAbsent(wiring.dir, wiring.files, opts.force);
 
   if (opts.dryRun) {
     console.log(`Would write ${files.length} files to ${outDir}/\n`);
     console.log(renderTree(files));
-    if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
+    if (wiring !== undefined) {
       console.log(
-        `\nWould write ${wiringFiles.length} Gateway wiring file(s) to ${gatewayWiringDir}/\n`,
+        `\nWould write ${wiring.files.length} Gateway wiring file(s) to ${wiring.dir}/\n`,
       );
-      console.log(renderTree(wiringFiles));
+      console.log(renderTree(wiring.files));
       console.log(`\n${renderWiringInstructions(spec)}`);
     }
     return;
@@ -327,9 +357,9 @@ export async function main(argv: readonly string[]): Promise<void> {
   await writeFiles(files, outDir);
   console.log(`Created ${outDir}/ (${files.length} files)`);
 
-  if (wiringFiles !== undefined && gatewayWiringDir !== undefined) {
-    await writeFiles(wiringFiles, gatewayWiringDir);
-    console.log(`\nWrote Gateway wiring for ${spec.name} to ${gatewayWiringDir}/`);
+  if (wiring !== undefined) {
+    await writeFiles(wiring.files, wiring.dir);
+    console.log(`\nWrote Gateway wiring for ${spec.name} to ${wiring.dir}/`);
     console.log(`\n${renderWiringInstructions(spec)}`);
   }
 }

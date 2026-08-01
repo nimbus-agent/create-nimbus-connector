@@ -30,29 +30,32 @@ const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
  */
 const FOREIGN_PLACEHOLDER = /\{([A-Za-z_]\w*)\}|\/:([A-Za-z_]\w*)/;
 
-export function parsePathTemplate(tpl: string): PathSegment[] {
-  const out: PathSegment[] = [];
-  let last = 0;
-  for (const m of tpl.matchAll(PLACEHOLDER)) {
-    const [whole, ns, name, mode] = m;
-    const at = m.index;
-    if (at > last) out.push({ kind: "literal", text: tpl.slice(last, at) });
-    if (ns === "env") {
-      if (mode !== undefined) throw new Error(`env placeholder "${whole}" cannot take a mode`);
-      out.push({ kind: "env", name: name! });
-    } else if (ns === "arg") {
-      const m2 = mode ?? "raw";
-      if (!MODES.has(m2)) throw new Error(`Unknown placeholder mode "${m2}" in "${whole}"`);
-      out.push({ kind: "arg", name: name!, mode: m2 as ArgMode });
-    } else {
-      throw new Error(`Unknown placeholder namespace "${ns}" in "${whole}"`);
-    }
-    last = at + whole.length;
+/** One matched `${ns.name|mode}` placeholder, as the segment it denotes. */
+function toPlaceholderSegment(
+  whole: string,
+  ns: string | undefined,
+  name: string,
+  mode: string | undefined,
+): PathSegment {
+  if (ns === "env") {
+    if (mode !== undefined) throw new Error(`env placeholder "${whole}" cannot take a mode`);
+    return { kind: "env", name };
   }
-  if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+  if (ns !== "arg") {
+    throw new Error(`Unknown placeholder namespace "${ns}" in "${whole}"`);
+  }
+  const m2 = mode ?? "raw";
+  if (!MODES.has(m2)) throw new Error(`Unknown placeholder mode "${m2}" in "${whole}"`);
+  return { kind: "arg", name, mode: m2 as ArgMode };
+}
 
-  // Validate: no unrecognized placeholders in literal segments
-  for (const seg of out) {
+/**
+ * Reject anything left in a literal segment that only *looks* like a placeholder: a `${`
+ * this parser did not consume (wrong case, wrong shape), or one of the two foreign
+ * conventions FOREIGN_PLACEHOLDER describes.
+ */
+function assertNoUnparsedPlaceholders(segments: readonly PathSegment[]): void {
+  for (const seg of segments) {
     if (seg.kind !== "literal") continue;
     if (seg.text.includes("${")) {
       throw new Error(
@@ -71,6 +74,21 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
       );
     }
   }
+}
+
+export function parsePathTemplate(tpl: string): PathSegment[] {
+  const out: PathSegment[] = [];
+  let last = 0;
+  for (const m of tpl.matchAll(PLACEHOLDER)) {
+    const [whole, ns, name, mode] = m;
+    const at = m.index;
+    if (at > last) out.push({ kind: "literal", text: tpl.slice(last, at) });
+    out.push(toPlaceholderSegment(whole, ns, name!, mode));
+    last = at + whole.length;
+  }
+  if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+
+  assertNoUnparsedPlaceholders(out);
 
   return out;
 }

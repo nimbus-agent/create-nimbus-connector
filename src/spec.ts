@@ -120,8 +120,14 @@ export const EnvSchema = z
     auth: z.enum(["bearer", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
-    /** Token endpoint, required when auth === "client-credentials". */
-    tokenUrl: z.string().url().optional(),
+    /**
+     * Token endpoint, required when auth === "client-credentials".
+     *
+     * `z.url()` rather than the deprecated `z.string().url()`: in zod 4 the string-method
+     * form is a deprecated alias for exactly this, same acceptance set and same
+     * `invalid_format`/`format: "url"` issue, so the swap is a rename only.
+     */
+    tokenUrl: z.url().optional(),
     scope: z.string().min(1).optional(),
     /** ramp sends Basic; powerbi, looker and teams put client_secret in the body. */
     credentialsIn: z.enum(["basic", "body"]).optional(),

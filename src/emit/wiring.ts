@@ -47,16 +47,21 @@ function otherListTools(spec: ConnectorSpec, chosen: ToolSpec): ToolSpec[] {
  * two specific AGPL files landing in an MIT repository, not "how the corpus does it".
  *
  * This now emits only what the Gateway's own `Syncable` type dictates (the shape, not
- * anyone's implementation choices) plus a TODO written in this project's own words. The body
- * throws rather than silently doing nothing, mirroring the mapping stub's precedent.
+ * anyone's implementation choices) plus a to-do note written in this project's own words. The
+ * body throws rather than silently doing nothing, mirroring the mapping stub's precedent.
+ *
+ * "to-do note", not the marker word itself: the marker belongs in the emitted template below,
+ * where it is a task for whoever generates a connector. Spelling it out here as well makes
+ * this file's own prose read to a linter as unfinished work in create-nimbus-connector, which
+ * it is not — nothing here is pending. Please keep the marker on the emitted side only.
  */
 function renderSync(spec: ConnectorSpec, listTool: ToolSpec): string {
   const id = titleIdentifier(spec);
   const svc = serviceId(spec);
   const mappingFn = `map${id}ItemToItem`;
   const defaultIntervalMs = spec.syncInterval * 1000;
-  // Final fix wave, IMPORTANT 1: LIST_TOOL_ID used to be referenced only from the TODO
-  // comment below. Nimbus's tsconfig.base.json sets `noUnusedLocals: true` and its
+  // Final fix wave, IMPORTANT 1: LIST_TOOL_ID used to be referenced only from the emitted
+  // to-do comment below. Nimbus's tsconfig.base.json sets `noUnusedLocals: true` and its
   // biome.json sets lint/correctness/noUnusedVariables to "error", so this file failed
   // `bun run typecheck` and `bun run lint` in packages/gateway the moment it landed there —
   // a comment is not a consumer. The thrown message now interpolates it, which is both a
