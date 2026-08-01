@@ -46,8 +46,11 @@ jobs:
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Tests
-        run: bun test
+      # --coverage is not decoration: bunfig.toml sets a per-file coverageThreshold, so this
+      # fails the build when any observed file drops below the floor. Without the flag the
+      # thresholds are never evaluated and the gate is silently absent.
+      - name: Tests and coverage
+        run: bun test --coverage
 
       - name: Typecheck
         run: bun run typecheck
