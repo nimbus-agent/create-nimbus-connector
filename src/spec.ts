@@ -186,6 +186,15 @@ export const FetchHelperSchema = z.strictObject({
   jsonFallbackRaw: z.boolean().default(false),
 });
 
+/**
+ * The two styles that emit their own fetch helper and env accessors. `read-only-kit`
+ * differs from `hand-rolled` only in the server file's prologue and epilogue (Stage D
+ * design §1.2), so every schema rule keyed to "hand-rolled" applies to it unchanged.
+ */
+function isHandStyle(style: string): boolean {
+  return style === "hand-rolled" || style === "read-only-kit";
+}
+
 export const ConnectorSpecSchema = z
   .strictObject({
     name: z.string().regex(/^[a-z0-9-]+$/, "name must be lower-kebab-case"),
@@ -194,7 +203,7 @@ export const ConnectorSpecSchema = z
     id: z.string().min(1).optional(),
     description: z.string().min(1),
     serviceLabel: z.string().min(1),
-    style: z.enum(["rest-kit", "hand-rolled"]).default("rest-kit"),
+    style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
     network: z.array(z.string()).default([]),
     syncInterval: z.number().int().positive().default(300),
     minNimbusVersion: z.string().default("0.2.0"),
@@ -204,7 +213,7 @@ export const ConnectorSpecSchema = z
   })
   .refine(
     (s) =>
-      s.style !== "hand-rolled" ||
+      !isHandStyle(s.style) ||
       (s.fetchHelper.headers === undefined) !== (s.fetchHelper.inlineHeaders === undefined),
     {
       message:

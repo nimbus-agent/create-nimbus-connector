@@ -915,3 +915,36 @@ describe("preflightOutOfScope", () => {
     expect(() => parseSpec({ ...stageCBase, tools: "nope" })).toThrow(/Invalid connector spec/);
   });
 });
+
+describe("style: read-only-kit", () => {
+  it("is accepted and inherits the hand-rolled fetchHelper rule", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [],
+    });
+    expect(spec.style).toBe("read-only-kit");
+  });
+
+  it("rejects a read-only-kit spec declaring neither headers nor inlineHeaders", () => {
+    expect(() =>
+      parseSpec({
+        name: "mercury",
+        displayName: "Mercury",
+        description: "d.",
+        serviceLabel: "Mercury",
+        style: "read-only-kit",
+        fetchHelper: { local: "mercuryGet", base: "https://api.mercury.com" },
+        tools: [],
+      }),
+    ).toThrow(/exactly one of fetchHelper.headers or fetchHelper.inlineHeaders/);
+  });
+});
