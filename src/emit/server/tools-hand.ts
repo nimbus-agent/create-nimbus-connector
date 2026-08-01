@@ -2,10 +2,12 @@ import type { ConnectorSpec } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
+  if (tool.impl === "search") return renderSearchTool(spec, tool);
   const schema = renderZodSchema(tool.args);
   const head = `${JSON.stringify(tool.name)}, ${JSON.stringify(tool.description)}, ${schema}`;
 
