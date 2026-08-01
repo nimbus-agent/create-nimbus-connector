@@ -1,4 +1,4 @@
-import type { ConnectorSpec } from "../../spec.ts";
+import type { ConnectorSpec, ToolSpec } from "../../spec.ts";
 import type { GeneratedFile } from "../../types.ts";
 import type { GenerateTarget } from "../index.ts";
 import { renderEnvAccessors } from "./env.ts";
@@ -8,6 +8,7 @@ import { renderRestKitTools } from "./tools-rest.ts";
 
 const KIT = "@nimbus-dev/sdk/connector-kit";
 const RUN_READ_ONLY = "../../shared/run-read-only-mcp-connector.ts";
+const SEARCH_TOOL = "../../shared/mcp-search-tool.ts";
 
 function isHandStyle(spec: ConnectorSpec): boolean {
   return spec.style === "hand-rolled" || spec.style === "read-only-kit";
@@ -66,6 +67,47 @@ function renderNamedImport(names: readonly string[], from: string): string[] {
   return ["import {", ...names.map((n) => `  ${n},`), `} from "${from}";`];
 }
 
+function searchTools(spec: ConnectorSpec): ToolSpec[] {
+  return spec.tools.filter((t) => t.impl === "search");
+}
+
+/**
+ * matchesResult is always needed by a search connector; searchToolInputSchema only by a
+ * search tool that declares no args of its own — bitrise inlines its schema and never
+ * calls the helper, so importing it unconditionally would be an unused import under the
+ * generated package's own noUnusedLocals.
+ */
+function searchKitNames(spec: ConnectorSpec): string[] {
+  const tools = searchTools(spec);
+  if (tools.length === 0) return [];
+  const names = ["matchesResult"];
+  if (tools.some((t) => Object.keys(t.args).length === 0)) names.push("searchToolInputSchema");
+  return names;
+}
+
+/** One import line naming every filter this server calls, in declaration order. */
+function filterImport(spec: ConnectorSpec): string | undefined {
+  const exports = searchTools(spec).map((t) => t.filter!.export);
+  if (exports.length === 0) return undefined;
+  return `import { ${exports.join(", ")} } from "./search-filter.ts";`;
+}
+
+/**
+ * A relative-specifier import (one or more rendered lines) keyed by its module specifier, so
+ * a set of them can be emitted in Biome's alphabetical order regardless of which order the
+ * caller happened to build them in. "../../shared/mcp-search-tool.ts" sorts before
+ * "../../shared/mcp-tool-kit.ts", which sorts before
+ * "../../shared/run-read-only-mcp-connector.ts" — and "./search-filter.ts" sorts after all
+ * three, since "." < "/" makes every "../…" specifier sort before a "./…" one.
+ */
+type RelativeImportBlock = { readonly from: string; readonly lines: readonly string[] };
+
+function sortedRelativeImportLines(blocks: readonly RelativeImportBlock[]): string[] {
+  return [...blocks]
+    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
+    .flatMap((b) => b.lines);
+}
+
 function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   // z.object(...) is only emitted per tool — a zero-tool spec never calls it.
   const usesZod = spec.tools.length > 0;
@@ -85,24 +127,55 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     // own group behind a blank line — the kit is a package specifier, and
     // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
     // BEFORE "zod". It therefore belongs inside the first group, in that position.
-    head.push(...renderNamedImport(kitImportNames(spec, true, target), KIT));
+    const kitNames = [...kitImportNames(spec, true, target), ...searchKitNames(spec)].sort();
+    head.push(...renderNamedImport(kitNames, KIT));
     if (usesZod) head.push(zodImport);
+    const filters = filterImport(spec);
+    if (filters !== undefined) head.push("", filters);
     return head.join("\n");
   }
 
   // monorepo — unchanged from Stage A
   if (usesZod) head.push(zodImport);
-  head.push("");
+
+  const search = searchKitNames(spec);
+  const filters = filterImport(spec);
+  const MCP_TOOL_KIT = "../../shared/mcp-tool-kit.ts";
+
   if (spec.style === "read-only-kit") {
+    // No blank line here: unlike hand-rolled/rest-kit (which precede the McpServer/
+    // StdioServerTransport package group), read-only-kit's package group is "zod" alone, and
+    // real connectors (mercury, bitrise, testflight, dbt, zoom, flagsmith, …) run it straight
+    // into the relative-import group with no separating blank line.
     const kit = kitImportNames(spec, false, target);
-    if (kit.length > 0) head.push(...renderNamedImport(kit, "../../shared/mcp-tool-kit.ts"));
-    head.push(`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`);
+    const blocks: RelativeImportBlock[] = [];
+    if (kit.length > 0)
+      blocks.push({ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) });
+    blocks.push({
+      from: RUN_READ_ONLY,
+      lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
+    });
+    if (search.length > 0) {
+      blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
+    }
+    if (filters !== undefined) blocks.push({ from: "./search-filter.ts", lines: [filters] });
+    head.push(...sortedRelativeImportLines(blocks));
     return head.join("\n");
   }
+
+  head.push("");
   if (spec.style === "hand-rolled") {
-    head.push(
-      ...renderNamedImport(kitImportNames(spec, false, target), "../../shared/mcp-tool-kit.ts"),
-    );
+    const blocks: RelativeImportBlock[] = [
+      {
+        from: MCP_TOOL_KIT,
+        lines: renderNamedImport(kitImportNames(spec, false, target), MCP_TOOL_KIT),
+      },
+    ];
+    if (search.length > 0) {
+      blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
+    }
+    if (filters !== undefined) blocks.push({ from: "./search-filter.ts", lines: [filters] });
+    head.push(...sortedRelativeImportLines(blocks));
   } else {
     head.push(
       'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',

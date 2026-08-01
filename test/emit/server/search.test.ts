@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emitServer } from "../../../src/emit/server/index.ts";
 import { renderSearchTool } from "../../../src/emit/server/search.ts";
 import { parseSpec } from "../../../src/spec.ts";
 
@@ -79,5 +80,67 @@ describe("renderSearchTool", () => {
     expect(out).toContain("appSlug: z.string().min(1)");
     expect(out).toContain("query: z.string().min(1)");
     expect(out).toContain("limit: z.number().int().min(1).max(100).optional()");
+  });
+});
+
+function specWith(tools: unknown[], style = "read-only-kit") {
+  return parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "d.",
+    serviceLabel: "Mercury",
+    style,
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools,
+  });
+}
+
+const SEARCH = {
+  name: "mercury_search",
+  description: "Search accounts.",
+  impl: "search",
+  path: "/api/v1/accounts",
+  rows: "accounts",
+  filter: { export: "filterMercuryAccounts", fields: ["id"] },
+};
+
+describe("emitServer search imports", () => {
+  it("imports both search helpers and the filter, monorepo", () => {
+    const out = emitServer(specWith([SEARCH]), "monorepo").content;
+    expect(out).toContain(
+      'import { matchesResult, searchToolInputSchema } from "../../shared/mcp-search-tool.ts";',
+    );
+    expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.ts";');
+  });
+
+  it("omits searchToolInputSchema when every search tool inlines its schema", () => {
+    const out = emitServer(
+      specWith([
+        { ...SEARCH, args: { appSlug: { type: "string", min: 1 } }, path: "/a/${arg.appSlug}/b" },
+      ]),
+      "monorepo",
+    ).content;
+    expect(out).toContain('import { matchesResult } from "../../shared/mcp-search-tool.ts";');
+    expect(out).not.toContain("searchToolInputSchema");
+  });
+
+  it("imports both from the SDK kit on standalone", () => {
+    const out = emitServer(specWith([SEARCH]), "standalone").content;
+    expect(out).not.toContain("../../shared/");
+    expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.ts";');
+    expect(out).toContain("matchesResult");
+  });
+
+  it("emits no search imports for a spec with no search tool", () => {
+    const out = emitServer(
+      specWith([{ name: "mercury_list", description: "List.", path: "/api/v1/accounts" }]),
+      "monorepo",
+    ).content;
+    expect(out).not.toContain("mcp-search-tool");
+    expect(out).not.toContain("search-filter");
   });
 });
