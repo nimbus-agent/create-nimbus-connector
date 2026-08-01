@@ -15,6 +15,21 @@ export type RenderContext = {
 const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
 const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
 
+/**
+ * The two placeholder conventions a user is most likely to reach for by habit — OpenAPI's
+ * `{id}` and Express's `/:id` — neither of which this generator interpolates.
+ *
+ * They are caught rather than passed through because passing them through is silent and
+ * wrong: `"/items/{id}"` emits `vcGet("/items/{id}")`, which compiles, typechecks, passes
+ * every gate, and requests a URL containing the literal characters `{id}`. Nothing fails
+ * until the connector is pointed at a real API.
+ *
+ * The Express arm requires the colon to follow a slash. A bare `:name` would false-positive
+ * on query values that legitimately contain one — sentry's fixture path carries
+ * `?query=is:unresolved`, and `is:unresolved` is not a placeholder.
+ */
+const FOREIGN_PLACEHOLDER = /\{([A-Za-z_]\w*)\}|\/:([A-Za-z_]\w*)/;
+
 export function parsePathTemplate(tpl: string): PathSegment[] {
   const out: PathSegment[] = [];
   let last = 0;
@@ -38,11 +53,21 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
 
   // Validate: no unrecognized placeholders in literal segments
   for (const seg of out) {
-    if (seg.kind === "literal" && seg.text.includes("${")) {
+    if (seg.kind !== "literal") continue;
+    if (seg.text.includes("${")) {
       throw new Error(
         `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
           "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
           "namespace and mode must be lowercase.",
+      );
+    }
+    const foreign = FOREIGN_PLACEHOLDER.exec(seg.text);
+    if (foreign !== null) {
+      throw new Error(
+        `Path template uses ${foreign[0]}, which this generator does not interpolate: ` +
+          `${JSON.stringify(seg.text)}. It would be emitted as a literal path segment, and ` +
+          `the connector would request the characters "${foreign[0]}" instead of a value. ` +
+          `Use \${arg.${foreign[1] ?? foreign[2]}|enc} instead.`,
       );
     }
   }

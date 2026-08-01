@@ -57,6 +57,39 @@ describe("parsePathTemplate", () => {
     );
   });
 
+  // These two are the only failure mode here that is SILENT. An unterminated or
+  // wrong-namespace placeholder already throws; `{id}` and `/:id` used to pass straight
+  // through as literal text, emitting a connector that compiles, typechecks, passes every
+  // gate in this repo, and then requests a URL containing the characters "{id}".
+  it("rejects OpenAPI-style {id}, naming the replacement", () => {
+    expect(() => parsePathTemplate("/items/{id}")).toThrow(
+      /uses \{id\}, which this generator does not interpolate/,
+    );
+    expect(() => parsePathTemplate("/items/{id}")).toThrow(/Use \$\{arg\.id\|enc\} instead/);
+  });
+
+  it("rejects Express-style /:id, naming the replacement", () => {
+    expect(() => parsePathTemplate("/items/:id")).toThrow(
+      /uses \/:id, which this generator does not interpolate/,
+    );
+    expect(() => parsePathTemplate("/items/:id")).toThrow(/Use \$\{arg\.id\|enc\} instead/);
+  });
+
+  // The Express arm matches "/:" and not a bare colon, because a colon inside a query value
+  // is ordinary. This exact path is sentry's, one of the four byte-locked golden fixtures:
+  // if this ever throws, `diff:golden` drops sentry from 6/6 and the corpus stops
+  // reproducing.
+  it("accepts a colon inside a query value — is:unresolved is not a placeholder", () => {
+    const tpl = "/projects/${env.org}/${arg.projectSlug}/issues/?query=is:unresolved";
+    expect(() => parsePathTemplate(tpl)).not.toThrow();
+    expect(parsePathTemplate(tpl).some((s) => s.kind === "arg")).toBe(true);
+  });
+
+  it("accepts a bracketed query key — page[size] is not a placeholder", () => {
+    // datadog's fixture path. Square brackets, not braces; the guard must not widen to them.
+    expect(() => parsePathTemplate("/api/v2/incidents?page[size]=${arg.limit|num}")).not.toThrow();
+  });
+
   it("returns empty array for empty template", () => {
     expect(parsePathTemplate("")).toEqual([]);
   });
