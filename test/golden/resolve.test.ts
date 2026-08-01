@@ -62,6 +62,27 @@ describe("resolveNimbusRoot", () => {
     expect(message).toContain(bogusFlag);
   });
 
+  it("reports a sibling directory that exists but lacks the checkout marker", () => {
+    const workspace = tmp.make("workspace-");
+    const sibling = join(workspace, "Nimbus");
+    mkdirSync(sibling, { recursive: true });
+
+    const scriptDir = join(workspace, "some-project", "scripts");
+    mkdirSync(scriptDir, { recursive: true });
+
+    let thrown: unknown;
+    try {
+      resolveNimbusRoot({ scriptDir });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain(sibling);
+    expect(message).toMatch(/marker file missing/);
+  });
+
   it("lists every attempted path when nothing resolves", () => {
     expect(() => resolveNimbusRoot({ scriptDir: "/nowhere" })).toThrow(/tried/i);
   });
