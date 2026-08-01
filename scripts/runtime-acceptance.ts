@@ -86,7 +86,14 @@ function startApi(recorded: Recorded[]): { server: ReturnType<typeof Bun.serve>;
         body,
       });
       if (url.pathname === "/oauth/token") {
-        return Response.json({ access_token: "exchanged-token-abc", expires_in: 3600 });
+        // `?short` mints a 2-second token, so the expiry path can be observed rather than
+        // reasoned about. The emitted code halves its 60s renewal skew for short-lived
+        // tokens, so expires_in: 2 is treated as valid for 1 second.
+        const short = url.search.includes("short");
+        return Response.json({
+          access_token: short ? `short-${recorded.length}` : "exchanged-token-abc",
+          expires_in: short ? 2 : 3600,
+        });
       }
       if (url.pathname === "/boom") {
         return new Response("upstream exploded", { status: 500 });
@@ -181,6 +188,25 @@ function ccSpec(base: string): unknown {
   };
 }
 
+/** Same as ccSpec, but its token endpoint mints a 2-second token. */
+function shortTokenSpec(base: string): unknown {
+  const spec = ccSpec(base) as {
+    name: string;
+    displayName: string;
+    serviceLabel: string;
+    env: Array<{ tokenUrl: string; local: string }>;
+    fetchHelper: { local: string; headers: string };
+  };
+  return {
+    ...spec,
+    name: "rtshort",
+    displayName: "RtShort",
+    serviceLabel: "RtShort",
+    env: [{ ...spec.env[0]!, tokenUrl: `${base}/oauth/token?short` }],
+    fetchHelper: { ...spec.fetchHelper, local: "shortGet" },
+  };
+}
+
 /** Generate a package into `dir`, point its SDK dependency at the right place, install. */
 async function materialize(spec: unknown, dir: string): Promise<void> {
   const parsed = parseSpec(spec);
@@ -206,6 +232,8 @@ async function callTools(
   dir: string,
   env: Record<string, string>,
   calls: ReadonlyArray<{ name: string; args: Record<string, unknown> }>,
+  /** Pause between calls. Only the expiry scenario needs it — it must outlive a token. */
+  gapMs = 0,
 ): Promise<Array<{ isError: boolean; text: string }>> {
   const proc = Bun.spawn(["bun", join(dir, "src", "server.ts")], {
     cwd: dir,
@@ -274,6 +302,7 @@ async function callTools(
           next += 1;
           const call = calls[next];
           if (call === undefined) return results;
+          if (gapMs > 0) await Bun.sleep(gapMs);
           send({
             jsonrpc: "2.0",
             id: 100 + next,
@@ -404,6 +433,38 @@ async function main(): Promise<void> {
       "the token is cached — two tool calls, one exchange",
       exchanges.length === 1,
       `${exchanges.length} exchange(s) for ${cc.filter((r) => r.path === "/items").length} API call(s)`,
+    );
+    // ---- token expiry ----------------------------------------------------------------
+    // The cache used to be unconditional: `if (cachedToken !== null) return cachedToken`,
+    // with expires_in never read. Correct only while connectors stayed short-lived, which
+    // is a property of the caller, not of this code. Observed here rather than argued.
+    const shortDir = join(root, "rtshort");
+    await materialize(shortTokenSpec(base), shortDir);
+    const beforeShort = recorded.length;
+    await callTools(
+      shortDir,
+      { RTCC_CLIENT_ID: "id-2", RTCC_CLIENT_SECRET: "secret-2" },
+      [
+        { name: "cc_list", args: {} },
+        { name: "cc_list", args: {} },
+        { name: "cc_list", args: {} },
+      ],
+      // Longer than the 1s the emitted code treats a 2s token as valid for, so at least one
+      // gap straddles an expiry. Short enough to keep the harness quick.
+      1400,
+    );
+    const short = recorded.slice(beforeShort);
+    const shortExchanges = short.filter((r) => r.path.startsWith("/oauth/token"));
+    const apiCalls = short.filter((r) => r.path === "/items");
+    check(
+      "an expired token is re-exchanged rather than reused",
+      shortExchanges.length > 1,
+      `${shortExchanges.length} exchange(s) for ${apiCalls.length} API call(s)`,
+    );
+    check(
+      "the API call after re-exchange carries the NEW token",
+      apiCalls.at(-1)?.auth !== apiCalls[0]?.auth,
+      `first: ${apiCalls[0]?.auth ?? "?"} / last: ${apiCalls.at(-1)?.auth ?? "?"}`,
     );
   } finally {
     server.stop(true);

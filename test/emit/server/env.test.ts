@@ -171,3 +171,37 @@ describe("client-credentials", () => {
     expect(out).not.toContain("scope");
   });
 });
+
+describe("client-credentials token expiry", () => {
+  const spec = (): Parameters<typeof renderEnvAccessor>[0] =>
+    ({
+      vars: ["X_ID", "X_SECRET"],
+      local: "authHeaders",
+      auth: "client-credentials",
+      tokenUrl: "https://api.x.test/oauth/token",
+      credentialsIn: "body",
+      required: true,
+    }) as Parameters<typeof renderEnvAccessor>[0];
+
+  it("gates the cache on an expiry, not merely on the token being present", () => {
+    // The cache used to be unconditional, with expires_in never read — correct only while
+    // connectors stayed short-lived, which is a property of the caller rather than of this
+    // code. Verified end to end by scripts/runtime-acceptance.ts, which observes a second
+    // exchange after a 2-second token lapses.
+    const out = renderEnvAccessor(spec(), "X");
+    expect(out).toContain("let tokenExpiresAt = 0;");
+    expect(out).toContain("if (cachedToken !== null && Date.now() < tokenExpiresAt)");
+  });
+
+  it("reads expires_in and renews early", () => {
+    const out = renderEnvAccessor(spec(), "X");
+    expect(out).toContain("expires_in?: unknown");
+    expect(out).toContain("Math.min(60, Math.floor(parsed.expires_in / 2))");
+  });
+
+  it("falls back to the process lifetime when expires_in is absent", () => {
+    // Not every token endpoint returns expires_in. Treating its absence as "expired" would
+    // re-exchange on every single call.
+    expect(renderEnvAccessor(spec(), "X")).toContain("Number.POSITIVE_INFINITY");
+  });
+});

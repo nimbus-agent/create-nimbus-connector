@@ -28,6 +28,7 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   // two declarations of that name in the same module.
   "token",
   "cachedToken",
+  "tokenExpiresAt",
   "encodeBasicAuthHeader",
   "URLSearchParams",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
