@@ -1,14 +1,24 @@
+/**
+ * Generates each standalone fixture into a temp tree, installs a real @nimbus-dev/sdk into
+ * it, builds it, and drives the result over stdio.
+ *
+ * What remains here is everything that needs those subprocesses. The pieces that decide
+ * something from their arguments alone live in scripts/_lib/ — sdk-pkg.ts (which SDK, and
+ * whether it is built), mcp-frames.ts (reading the tools/list reply), escaping-imports.ts,
+ * checks.ts — where they are unit-tested. See scripts/_lib/mcp-frames.ts's header for why
+ * the split has to fall exactly there.
+ */
+
 import {
   existsSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
@@ -21,8 +31,9 @@ import {
 import { run } from "../src/golden/run.ts";
 import { parseSpec } from "../src/spec.ts";
 import { type Check, formatCheckLines } from "./_lib/checks.ts";
-import { resolveSdkPkg } from "./_lib/sdk-pkg.ts";
-import { readJsonLines } from "./_lib/stdio-rpc.ts";
+import { findEscapingImports } from "./_lib/escaping-imports.ts";
+import { toolsListCheck } from "./_lib/mcp-driver.ts";
+import { assertLocalSdkBuilt, modeBanner, resolveSdkPkg } from "./_lib/sdk-pkg.ts";
 
 /**
  * Both emission styles, because they import the kit differently and only one of them was
@@ -48,53 +59,6 @@ const FIXTURES = [
   "zzwriterest",
 ] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-
-/**
- * Refuse to run against an unbuilt local SDK checkout.
- *
- * `bunx tsc --noEmit` below resolves the kit's types from dist/connector-kit/index.d.ts, and
- * the node_modules existence check below needs dist/connector-kit/index.js on disk. That is
- * genuine dist coverage for types and for install-time existence — but NOT for runtime JS
- * execution: the two tools/list checks spawn `bun`, and Bun applies the SDK's "bun" export
- * condition, which points every entry point (including ./connector-kit) at TypeScript source
- * (src/connector-kit/index.ts). So both `bun src/server.ts` and `bun dist/server.js` run the
- * kit from source, not from the built dist JS. The dist JS runtime path a Node consumer takes
- * is exercised by the SDK's own node-smoke CI job (sdks/typescript/scripts/smoke-esm.mjs, run
- * under Node via .github/workflows/ci.yml), not by this harness.
- *
- * In `--registry` mode (`sdkPkg === undefined`) there is nothing local to build: the
- * published tarball either carries dist or it does not, which the node_modules check decides.
- */
-export function assertLocalSdkBuilt(sdkPkg: string | undefined): void {
-  if (sdkPkg !== undefined && !existsSync(join(sdkPkg, "dist", "connector-kit", "index.js"))) {
-    throw new Error(
-      `${sdkPkg}/dist/connector-kit/index.js is missing — run \`bun run build\` in the SDK first. ` +
-        "`bunx tsc --noEmit` below resolves the kit's types from dist/connector-kit/index.d.ts, " +
-        "and the node_modules check asserts dist/connector-kit/index.js is on disk, so neither " +
-        "can be verified against an unbuilt SDK.",
-    );
-  }
-}
-
-/**
- * The banner naming which of the two modes this run is answering for.
- *
- *   local checkout (default) — the generated dependency is rewritten to
- *     file:<sdk-root>/sdks/typescript. Answers "does an unreleased SDK branch satisfy the
- *     contract?", which is the pre-release gate: it can be pointed at a branch that is not
- *     on npm and cannot be, so it stays useful after every future SDK change.
- *
- *   --registry (sdkPkg undefined) — the generated "^1.11.0" is left alone and bun resolves
- *     it from npm. Answers "does the artifact actually on the registry satisfy the
- *     contract?" — which the local mode cannot, because a local checkout has files the
- *     published tarball may not. A `dist` missing from the published `files` array surfaces
- *     here and nowhere else.
- */
-export function modeBanner(sdkPkg: string | undefined): string {
-  return sdkPkg === undefined
-    ? "Mode:        registry (@nimbus-dev/sdk resolved from npm, generated dependency unmodified)"
-    : `Mode:        local checkout (${sdkPkg})`;
-}
 
 /** Generate, install, build and drive one fixture. Its temp tree is removed either way. */
 async function runFixture(NAME: string, sdkPkg: string | undefined): Promise<Check[]> {
@@ -249,106 +213,4 @@ async function main(argv: readonly string[]): Promise<void> {
 // unchanged — import.meta.main is true for the entry point.
 if (import.meta.main) {
   await main(process.argv.slice(2));
-}
-
-/**
- * Pure-Bun replacement for `grep -rn "\.\./\.\." <dir>`: no external binary, so it works
- * identically under PowerShell and Git Bash. Recurses through dir and returns one
- * "path:line:content" entry per matching line (grep's -n format), or "" if none match.
- */
-export function findEscapingImports(dir: string): string {
-  const matches: string[] = [];
-
-  const walk = (current: string) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const full = join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile()) {
-        const lines = readFileSync(full, "utf8").split("\n");
-        for (const [i, line] of lines.entries()) {
-          if (line.includes("../..")) {
-            matches.push(`${relative(dir, full).replaceAll("\\", "/")}:${i + 1}:${line}`);
-          }
-        }
-      }
-    }
-  };
-
-  if (existsSync(dir)) walk(dir);
-  return matches.join("\n");
-}
-
-/** The `tools/list` reply reduced to the verdict, plus a line naming what it did return. */
-export function describeToolsList(
-  tools: ReadonlyArray<{ name?: string }> | undefined,
-  expected: readonly string[],
-): { ok: boolean; output: string } {
-  const names = (tools ?? []).map((t) => t.name);
-  const missing = expected.filter((n) => !names.includes(n));
-  return {
-    ok: missing.length === 0,
-    output:
-      missing.length === 0
-        ? `tools/list returned ${names.join(", ")}`
-        : `tools/list missing ${missing.join(", ")}; got ${names.join(", ") || "(none)"}`,
-  };
-}
-
-async function toolsListCheck(
-  cwd: string,
-  entryPath: string,
-  expected: readonly string[],
-): Promise<{ ok: boolean; output: string }> {
-  const proc = Bun.spawn(["bun", entryPath], {
-    cwd,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    // No credential env vars are set. Accessors are only called inside tool handlers,
-    // so a clean tools/list proves the server starts and describes itself without secrets.
-  });
-
-  const timer = setTimeout(() => proc.kill(), 10_000);
-  try {
-    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
-
-    send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "standalone-acceptance", version: "0.0.0" },
-      },
-    });
-
-    let sawInitialized = false;
-
-    // Read until the tools/list response (id 2) arrives, the process exits, or the timeout kills it.
-    for await (const raw of readJsonLines(proc.stdout)) {
-      const msg = raw as { id?: unknown; result?: { tools?: Array<{ name?: string }> } };
-
-      if (msg.id === 1 && !sawInitialized) {
-        sawInitialized = true;
-        send({ jsonrpc: "2.0", method: "notifications/initialized" });
-        send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-        continue;
-      }
-
-      if (msg.id === 2) return describeToolsList(msg.result?.tools, expected);
-    }
-
-    const stderr = await new Response(proc.stderr).text();
-    return { ok: false, output: `server exited before answering tools/list.\n${stderr.trim()}` };
-  } finally {
-    clearTimeout(timer);
-    proc.kill();
-    // kill() only signals. Without awaiting exit, this returns while the server is still
-    // running, and the caller's `rmSync(outDir)` races it — on Windows, removing a
-    // directory whose files a live process still holds open fails outright. Four servers
-    // are spawned per run now that both fixtures are exercised.
-    await proc.exited;
-  }
 }

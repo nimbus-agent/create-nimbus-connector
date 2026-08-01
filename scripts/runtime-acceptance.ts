@@ -32,65 +32,16 @@ import { generate } from "../src/emit/index.ts";
 import { formatAll, initFormatter } from "../src/format.ts";
 import { parseSpec } from "../src/spec.ts";
 import type { Check } from "./_lib/checks.ts";
+import { type Recorded, startApi } from "./_lib/fake-api.ts";
+import { callTools } from "./_lib/mcp-driver.ts";
+import { describeAuth, describeFormFields } from "./_lib/redact.ts";
 import { resolveSdkPkg } from "./_lib/sdk-pkg.ts";
-import { readJsonLines } from "./_lib/stdio-rpc.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-
-/** One recorded inbound request, kept in arrival order. */
-export type Recorded = {
-  method: string;
-  path: string;
-  auth: string | undefined;
-  apiKey: string | undefined;
-  contentType: string | undefined;
-  body: string;
-};
 
 const checks: Check[] = [];
 function check(name: string, ok: boolean, output: string): void {
   checks.push({ name, ok, output });
-}
-
-/**
- * The fake API. Records every request, and answers by path:
- *   /items            → 200, a list
- *   /items/<id>       → 200 for GET/PATCH/DELETE
- *   /oauth/token      → 200 with an access token
- *   /boom             → 500, to exercise the emitted error branch
- */
-function startApi(recorded: Recorded[]): { server: ReturnType<typeof Bun.serve>; base: string } {
-  const server = Bun.serve({
-    port: 0,
-    hostname: "127.0.0.1",
-    async fetch(req) {
-      const url = new URL(req.url);
-      const body = req.method === "GET" || req.method === "DELETE" ? "" : await req.text();
-      recorded.push({
-        method: req.method,
-        path: `${url.pathname}${url.search}`,
-        auth: req.headers.get("authorization") ?? undefined,
-        apiKey: req.headers.get("x-api-key") ?? undefined,
-        contentType: req.headers.get("content-type") ?? undefined,
-        body,
-      });
-      if (url.pathname === "/oauth/token") {
-        // `?short` mints a 2-second token, so the expiry path can be observed rather than
-        // reasoned about. The emitted code halves its 60s renewal skew for short-lived
-        // tokens, so expires_in: 2 is treated as valid for 1 second.
-        const short = url.search.includes("short");
-        return Response.json({
-          access_token: short ? `short-${recorded.length}` : "exchanged-token-abc",
-          expires_in: short ? 2 : 3600,
-        });
-      }
-      if (url.pathname === "/boom") {
-        return new Response("upstream exploded", { status: 500 });
-      }
-      return Response.json({ ok: true, path: url.pathname });
-    },
-  });
-  return { server, base: `http://127.0.0.1:${server.port}` };
 }
 
 /** A bearer-auth connector exercising path interpolation, bodies, booleans and errors. */
@@ -276,132 +227,6 @@ async function materialize(spec: unknown, dir: string, sdkPkg: string | undefine
   if (install.exitCode !== 0) {
     throw new Error(`bun install failed in ${dir}:\n${install.stderr.toString()}`);
   }
-}
-
-/** One decoded JSON-RPC frame, in the only two shapes these harnesses look at. */
-export type RpcMessage = {
-  id?: unknown;
-  result?: { isError?: boolean; content?: Array<{ text?: string }> };
-  error?: { message?: string };
-};
-
-export type ToolCall = { name: string; args: Record<string, unknown> };
-
-/** tools/call request ids start at 100, so `id >= 100` identifies a tool reply. */
-export const toolCallRequest = (id: number, call: ToolCall): unknown => ({
-  jsonrpc: "2.0",
-  id,
-  method: "tools/call",
-  params: { name: call.name, arguments: call.args },
-});
-
-/** A tools/call reply flattened to the pair the checks below assert on. */
-export function toResult(msg: RpcMessage): { isError: boolean; text: string } {
-  return {
-    isError: msg.result?.isError === true || msg.error !== undefined,
-    text: msg.result?.content?.map((c) => c.text ?? "").join("") ?? msg.error?.message ?? "",
-  };
-}
-
-/**
- * Drive a generated server over stdio: initialize, then one tools/call per request, in
- * order, returning each result. Sequential by design — the client-credentials cache check
- * depends on the two calls happening in a known order in one process.
- */
-async function callTools(
-  dir: string,
-  env: Record<string, string>,
-  calls: readonly ToolCall[],
-  /** Pause between calls. Only the expiry scenario needs it — it must outlive a token. */
-  gapMs = 0,
-): Promise<Array<{ isError: boolean; text: string }>> {
-  const proc = Bun.spawn(["bun", join(dir, "src", "server.ts")], {
-    cwd: dir,
-    env: { ...process.env, ...env },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const timer = setTimeout(() => proc.kill(), 30_000);
-  const results: Array<{ isError: boolean; text: string }> = [];
-  try {
-    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
-    send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "runtime-acceptance", version: "0.0.0" },
-      },
-    });
-
-    let next = 0;
-
-    for await (const raw of readJsonLines(proc.stdout)) {
-      const msg = raw as RpcMessage;
-
-      if (msg.id === 1) {
-        send({ jsonrpc: "2.0", method: "notifications/initialized" });
-        const first = calls[0];
-        if (first === undefined) return results;
-        send(toolCallRequest(100, first));
-        continue;
-      }
-
-      // Anything that is not a tools/call reply — a notification, a server log frame — is
-      // not a result and must not advance `next`.
-      if (typeof msg.id !== "number" || msg.id < 100) continue;
-
-      results.push(toResult(msg));
-      next += 1;
-      const call = calls[next];
-      if (call === undefined) return results;
-      if (gapMs > 0) await Bun.sleep(gapMs);
-      send(toolCallRequest(100 + next, call));
-    }
-    return results;
-  } finally {
-    clearTimeout(timer);
-    proc.kill();
-  }
-}
-
-/**
- * Describes a credential-bearing header WITHOUT reproducing it.
- *
- * CodeQL flagged the original of this file for clear-text logging of sensitive information,
- * and it was right about more than the line it pointed at: six checks echoed bearer tokens,
- * an API key, and a `client_secret=` form body straight to stdout. The values here are
- * synthetic, but a harness whose output is safe only because its inputs are fake is one
- * edit away from not being, and this output lands in CI logs.
- *
- * Every value returned here is a STRING LITERAL selected by a comparison. Nothing is
- * extracted from the credential — no prefix, no length, no regex capture, no parsed key
- * name — because anything derived from the value carries its taint into the log.
- *
- * A first attempt got this wrong in a way worth recording: it returned
- * `${scheme}, unexpected value`, pulling the auth scheme out of the header with a regex.
- * That reads as harmless — a scheme is not a secret — but it is still a value derived from
- * the credential flowing to stdout, and CodeQL re-flagged the file for it. Comparison
- * results are not tainted; substrings of the secret are. Keep the branches, drop the
- * extraction.
- */
-export function describeAuth(value: string | undefined, expected: string): string {
-  if (value === undefined) return "absent";
-  return value === expected ? "present, as expected" : "present, unexpected value";
-}
-
-/**
- * Whether a token-exchange body carries exactly the expected form fields — reported as a
- * literal, since even the field NAMES are parsed out of a string containing the secret.
- */
-export function describeFormFields(body: string | undefined, expected: readonly string[]): string {
-  if (body === undefined || body === "") return "(empty)";
-  const params = new URLSearchParams(body);
-  const missing = expected.filter((n) => !params.has(n));
-  return missing.length === 0 ? "carries the expected fields" : "missing expected field(s)";
 }
 
 const find = (rec: readonly Recorded[], pred: (r: Recorded) => boolean): Recorded | undefined =>
