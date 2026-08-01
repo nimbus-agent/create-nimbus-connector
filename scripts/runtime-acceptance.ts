@@ -53,6 +53,7 @@ type Recorded = {
   method: string;
   path: string;
   auth: string | undefined;
+  apiKey: string | undefined;
   contentType: string | undefined;
   body: string;
 };
@@ -82,6 +83,7 @@ function startApi(recorded: Recorded[]): { server: ReturnType<typeof Bun.serve>;
         method: req.method,
         path: `${url.pathname}${url.search}`,
         auth: req.headers.get("authorization") ?? undefined,
+        apiKey: req.headers.get("x-api-key") ?? undefined,
         contentType: req.headers.get("content-type") ?? undefined,
         body,
       });
@@ -188,6 +190,70 @@ function ccSpec(base: string): unknown {
   };
 }
 
+/**
+ * rest-kit, whose writes take a completely different route: makeRestToolRegistrar in the
+ * SDK builds the request from a `buildInit` callback, so none of the hand-rolled fetch
+ * helper's code runs. That path had never been executed either.
+ */
+function restKitSpec(base: string): unknown {
+  return {
+    name: "rtrest",
+    displayName: "RtRest",
+    description: "Runtime acceptance rest-kit connector.",
+    serviceLabel: "RtRest",
+    style: "rest-kit",
+    network: ["127.0.0.1"],
+    syncInterval: 300,
+    minNimbusVersion: "0.2.0",
+    env: [{ vars: ["RTREST_TOKEN"], local: "authHeaders", bindings: ["t"], auth: "bearer" }],
+    fetchHelper: { local: "rtRestFetch", base },
+    tools: [
+      { name: "rr_list", description: "List.", path: "/items" },
+      {
+        name: "rr_create",
+        description: "Create.",
+        path: "/items",
+        method: "POST",
+        effect: "write",
+        args: { title: { type: "string" }, draft: { type: "boolean", optional: true } },
+      },
+      {
+        name: "rr_patch",
+        description: "Patch.",
+        path: "/items/${arg.id|enc}",
+        method: "PATCH",
+        effect: "write",
+        args: { id: { type: "string" }, title: { type: "string" } },
+      },
+    ],
+  };
+}
+
+/** auth: "headers" — a named header rather than Authorization: Bearer. */
+function headersSpec(base: string): unknown {
+  return {
+    name: "rthdr",
+    displayName: "RtHdr",
+    description: "Runtime acceptance header-auth connector.",
+    serviceLabel: "RtHdr",
+    style: "hand-rolled",
+    network: ["127.0.0.1"],
+    syncInterval: 300,
+    minNimbusVersion: "0.2.0",
+    env: [
+      {
+        vars: ["RTHDR_KEY"],
+        local: "headers",
+        bindings: ["k"],
+        auth: "headers",
+        headerNames: ["X-Api-Key"],
+      },
+    ],
+    fetchHelper: { local: "hdrGet", base, headers: "headers" },
+    tools: [{ name: "hdr_list", description: "List.", path: "/items" }],
+  };
+}
+
 /** Same as ccSpec, but its token endpoint mints a 2-second token. */
 function shortTokenSpec(base: string): unknown {
   const spec = ccSpec(base) as {
@@ -202,7 +268,9 @@ function shortTokenSpec(base: string): unknown {
     name: "rtshort",
     displayName: "RtShort",
     serviceLabel: "RtShort",
-    env: [{ ...spec.env[0]!, tokenUrl: `${base}/oauth/token?short` }],
+    // credentialsIn: "basic" here and "body" in ccSpec, so both placements are executed
+    // without a fourth install.
+    env: [{ ...spec.env[0]!, tokenUrl: `${base}/oauth/token?short`, credentialsIn: "basic" }],
     fetchHelper: { ...spec.fetchHelper, local: "shortGet" },
   };
 }
@@ -319,6 +387,42 @@ async function callTools(
   }
 }
 
+/**
+ * Describes a credential-bearing header WITHOUT reproducing it.
+ *
+ * CodeQL flagged the original of this file for clear-text logging of sensitive information,
+ * and it was right about more than the line it pointed at: six checks echoed bearer tokens,
+ * an API key, and a `client_secret=` form body straight to stdout. The values here are
+ * synthetic, but a harness whose output is safe only because its inputs are fake is one
+ * edit away from not being, and this output lands in CI logs.
+ *
+ * Every value returned here is a STRING LITERAL selected by a comparison. Nothing is
+ * extracted from the credential — no prefix, no length, no regex capture, no parsed key
+ * name — because anything derived from the value carries its taint into the log.
+ *
+ * A first attempt got this wrong in a way worth recording: it returned
+ * `${scheme}, unexpected value`, pulling the auth scheme out of the header with a regex.
+ * That reads as harmless — a scheme is not a secret — but it is still a value derived from
+ * the credential flowing to stdout, and CodeQL re-flagged the file for it. Comparison
+ * results are not tainted; substrings of the secret are. Keep the branches, drop the
+ * extraction.
+ */
+function describeAuth(value: string | undefined, expected: string): string {
+  if (value === undefined) return "absent";
+  return value === expected ? "present, as expected" : "present, unexpected value";
+}
+
+/**
+ * Whether a token-exchange body carries exactly the expected form fields — reported as a
+ * literal, since even the field NAMES are parsed out of a string containing the secret.
+ */
+function describeFormFields(body: string | undefined, expected: readonly string[]): string {
+  if (body === undefined || body === "") return "(empty)";
+  const params = new URLSearchParams(body);
+  const missing = expected.filter((n) => !params.has(n));
+  return missing.length === 0 ? "carries the expected fields" : "missing expected field(s)";
+}
+
 const find = (rec: readonly Recorded[], pred: (r: Recorded) => boolean): Recorded | undefined =>
   rec.find(pred);
 
@@ -345,7 +449,7 @@ async function main(): Promise<void> {
     check(
       "bearer token reaches the wire as an Authorization header",
       list?.auth === "Bearer tok-123",
-      `Authorization: ${list?.auth ?? "(none)"}`,
+      `Authorization: ${describeAuth(list?.auth, "Bearer tok-123")}`,
     );
 
     // Spec §8's decision, finally observed rather than argued.
@@ -422,18 +526,63 @@ async function main(): Promise<void> {
       "credentialsIn: body puts the id and secret in the form body",
       exchanges[0]?.body.includes("client_id=id-1") === true &&
         exchanges[0].body.includes("client_secret=secret-1"),
-      `token body: ${exchanges[0]?.body ?? "(none)"}`,
+      `token body: ${describeFormFields(exchanges[0]?.body, ["grant_type", "client_id", "client_secret"])}`,
     );
     check(
       "the exchanged token is used for the API call",
       cc[1]?.auth === "Bearer exchanged-token-abc",
-      `Authorization: ${cc[1]?.auth ?? "(none)"}`,
+      `Authorization: ${describeAuth(cc[1]?.auth, "Bearer exchanged-token-abc")}`,
     );
     check(
       "the token is cached — two tool calls, one exchange",
       exchanges.length === 1,
       `${exchanges.length} exchange(s) for ${cc.filter((r) => r.path === "/items").length} API call(s)`,
     );
+    // ---- rest-kit -----------------------------------------------------------------
+    // A different code path end to end: makeRestToolRegistrar builds the request from the
+    // emitted `buildInit` callback, so none of the hand-rolled helper above runs.
+    const restDir = join(root, "rtrest");
+    await materialize(restKitSpec(base), restDir);
+    const beforeRest = recorded.length;
+    await callTools(restDir, { RTREST_TOKEN: "rest-tok" }, [
+      { name: "rr_list", args: {} },
+      { name: "rr_create", args: { title: "made", draft: true } },
+      { name: "rr_patch", args: { id: "p1", title: "renamed" } },
+    ]);
+    const rest = recorded.slice(beforeRest);
+    const restPost = find(rest, (r) => r.method === "POST");
+    const restPostBody = restPost === undefined ? undefined : JSON.parse(restPost.body);
+    const restPatch = find(rest, (r) => r.method === "PATCH");
+    const restPatchBody = restPatch === undefined ? undefined : JSON.parse(restPatch.body);
+
+    check(
+      "rest-kit sends the bearer token the registrar resolves itself",
+      find(rest, (r) => r.method === "GET")?.auth === "Bearer rest-tok",
+      `Authorization: ${describeAuth(find(rest, (r) => r.method === "GET")?.auth, "Bearer rest-tok")}`,
+    );
+    check(
+      "rest-kit buildInit produces the declared method and a JSON body",
+      restPost?.method === "POST" && restPostBody?.title === "made" && restPostBody.draft === true,
+      `POST ${restPost?.path ?? "?"} body: ${restPost?.body ?? "(none)"}`,
+    );
+    check(
+      "rest-kit applies the D5 path-arg exclusion too",
+      restPatchBody !== undefined && !("id" in restPatchBody) && restPatch?.path === "/items/p1",
+      `PATCH ${restPatch?.path ?? "?"} body: ${restPatch?.body ?? "(none)"}`,
+    );
+
+    // ---- header auth ----------------------------------------------------------------
+    const hdrDir = join(root, "rthdr");
+    await materialize(headersSpec(base), hdrDir);
+    const beforeHdr = recorded.length;
+    await callTools(hdrDir, { RTHDR_KEY: "key-9" }, [{ name: "hdr_list", args: {} }]);
+    const hdr = recorded.slice(beforeHdr)[0];
+    check(
+      'auth: "headers" sends the named header, not Authorization',
+      hdr?.apiKey === "key-9" && hdr.auth === undefined,
+      `X-Api-Key: ${describeAuth(hdr?.apiKey, "key-9")} / Authorization: ${describeAuth(hdr?.auth, "")}`,
+    );
+
     // ---- token expiry ----------------------------------------------------------------
     // The cache used to be unconditional: `if (cachedToken !== null) return cachedToken`,
     // with expires_in never read. Correct only while connectors stayed short-lived, which
@@ -457,6 +606,13 @@ async function main(): Promise<void> {
     const shortExchanges = short.filter((r) => r.path.startsWith("/oauth/token"));
     const apiCalls = short.filter((r) => r.path === "/items");
     check(
+      'credentialsIn: "basic" sends the credentials as an Authorization: Basic header',
+      shortExchanges[0]?.auth?.startsWith("Basic ") === true &&
+        !shortExchanges[0].body.includes("client_secret"),
+      `Basic scheme: ${shortExchanges[0]?.auth?.startsWith("Basic ") === true}; ` +
+        `secret kept out of the body: ${shortExchanges[0]?.body.includes("client_secret") === false}`,
+    );
+    check(
       "an expired token is re-exchanged rather than reused",
       shortExchanges.length > 1,
       `${shortExchanges.length} exchange(s) for ${apiCalls.length} API call(s)`,
@@ -464,7 +620,7 @@ async function main(): Promise<void> {
     check(
       "the API call after re-exchange carries the NEW token",
       apiCalls.at(-1)?.auth !== apiCalls[0]?.auth,
-      `first: ${apiCalls[0]?.auth ?? "?"} / last: ${apiCalls.at(-1)?.auth ?? "?"}`,
+      `first and last Authorization differ: ${apiCalls.at(-1)?.auth !== apiCalls[0]?.auth}`,
     );
   } finally {
     server.stop(true);

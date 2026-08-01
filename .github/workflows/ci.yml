@@ -58,18 +58,22 @@ jobs:
       - name: Lint and format
         run: bun run lint
 
-# Deliberately NOT run here: `bun run diff:golden` and `bun run acceptance`.
+# Deliberately NOT run here: `bun run diff:golden`, `bun run wiring:conformance`
+# and `bun run acceptance`.
 #
-# Both compare generated output against the real connectors in the Nimbus
-# monorepo, which is a separate AGPL-3.0-only repository that is not checked
-# out on this runner. Vendoring it into this MIT repo was rejected in decision
-# D4 of the design doc, so the byte-diff acceptance test remains a local
-# pre-merge gate rather than a CI check.
+# All three need a checkout of the Nimbus monorepo, a separate AGPL-3.0-only
+# repository that is not on this runner. Vendoring it into this MIT repo was
+# rejected in decision D4 of the design doc, so they remain local pre-merge
+# gates rather than CI checks.
 #
 # That is a real limitation, not an oversight: the project's most valuable
-# test does not run here. Run it before merging:
+# check does not run here. Run these before merging:
 #
 #   bun run diff:golden --nimbus-root /path/to/Nimbus
 #   bun run wiring:conformance --nimbus-root /path/to/Nimbus
-#   bun run runtime:acceptance --registry
 #   bun run acceptance  /path/to/Nimbus
+#
+# The two harnesses that need only the published SDK — standalone-acceptance and
+# runtime:acceptance — DO run automatically, in acceptance.yml. They live in
+# their own workflow because both reach the npm registry, and an outage there
+# should not red-X a pull request that changed nothing related.
