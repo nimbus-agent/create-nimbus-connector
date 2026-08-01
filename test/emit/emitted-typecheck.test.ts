@@ -94,8 +94,8 @@ const NIMBUS_COMPILER_OPTIONS = {
 const SYNC_TYPES_STANDIN = `export type SyncContext = { readonly serviceId: string };
 export type SyncResult = {
   readonly cursor: string | null;
-  readonly upserted: number;
-  readonly deleted: number;
+  readonly itemsUpserted: number;
+  readonly itemsDeleted: number;
   readonly hasMore: boolean;
   readonly durationMs: number;
 };

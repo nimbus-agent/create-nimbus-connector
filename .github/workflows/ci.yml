@@ -67,4 +67,5 @@ jobs:
 # test does not run here. Run it before merging:
 #
 #   bun run diff:golden --nimbus-root /path/to/Nimbus
+#   bun run wiring:conformance --nimbus-root /path/to/Nimbus
 #   bun run acceptance  /path/to/Nimbus
