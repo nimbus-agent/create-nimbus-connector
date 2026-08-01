@@ -25,7 +25,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(scriptDir, "..", "fixtures");
 const expectationsPath = join(fixturesDir, "expectations.json");
 
-function parseArgs(argv: string[]): { names: string[]; nimbusRoot?: string } {
+export function parseArgs(argv: readonly string[]): { names: string[]; nimbusRoot?: string } {
   const names: string[] = [];
   let nimbusRoot: string | undefined;
   for (let i = 0; i < argv.length; i++) {
@@ -40,7 +40,7 @@ function parseArgs(argv: string[]): { names: string[]; nimbusRoot?: string } {
   return { names, nimbusRoot };
 }
 
-function unifiedDiff(expected: string, actual: string): string {
+export function unifiedDiff(expected: string, actual: string): string {
   const e = expected.split("\n");
   const a = actual.split("\n");
   const out: string[] = [];
@@ -54,7 +54,7 @@ function unifiedDiff(expected: string, actual: string): string {
 }
 
 /** Parenthetical note appended after the identical-file count on a PASS line. */
-function passNote(expected: number, total: number, stubs: number): string {
+export function passNote(expected: number, total: number, stubs: number): string {
   const parts: string[] = [];
   if (expected < total) parts.push("expected partial");
   if (stubs > 0) parts.push(`${stubs} stub tool(s)`);
@@ -62,7 +62,7 @@ function passNote(expected: number, total: number, stubs: number): string {
 }
 
 /** Names the files that entered or left the identical set, so a FAIL is actionable. */
-function deltaNote(lost: readonly string[], gained: readonly string[]): string {
+export function deltaNote(lost: readonly string[], gained: readonly string[]): string {
   const parts: string[] = [];
   if (lost.length > 0) parts.push(`no longer matching ${lost.join(", ")}`);
   if (gained.length > 0) parts.push(`newly matching ${gained.join(", ")}`);
@@ -76,7 +76,7 @@ function deltaNote(lost: readonly string[], gained: readonly string[]): string {
  * mode this harness exists to prevent, just triggered by a hollow fixture list instead of a
  * missing monorepo.
  */
-function selectFixtures(names: readonly string[], all: readonly string[]): string[] {
+export function selectFixtures(names: readonly string[], all: readonly string[]): string[] {
   const selected = names.length > 0 ? names : all;
   if (selected.length > 0) return [...selected];
   if (names.length === 0) {
@@ -91,7 +91,7 @@ function selectFixtures(names: readonly string[], all: readonly string[]): strin
 }
 
 /** Read and parse one fixture's spec, naming the fixture when the file is not there. */
-function readFixtureSpec(name: string, specPath: string): ReturnType<typeof parseSpec> {
+export function readFixtureSpec(name: string, specPath: string): ReturnType<typeof parseSpec> {
   let specRaw: string;
   try {
     specRaw = readFileSync(specPath, "utf8");
@@ -102,7 +102,7 @@ function readFixtureSpec(name: string, specPath: string): ReturnType<typeof pars
 }
 
 /** Which generated files are byte-identical to the real connector, and what is wrong with the rest. */
-function diffAgainstReal(
+export function diffAgainstReal(
   files: readonly GeneratedFile[],
   realDir: string,
 ): { identicalPaths: string[]; problems: string[] } {
@@ -129,7 +129,7 @@ function diffAgainstReal(
 }
 
 /** The single console line for one fixture — PASS with its note, or FAIL with what moved. */
-function verdictLine(args: {
+export function verdictLine(args: {
   name: string;
   identical: number;
   total: number;
@@ -153,8 +153,15 @@ function verdictLine(args: {
   );
 }
 
-/** Generate one fixture, compare it to the real connector, and report the outcome. */
-function compareFixture(
+/**
+ * Generate one fixture, compare it to the real connector, and report the outcome.
+ *
+ * Exported despite doing I/O because it is the seam where the pure pieces above are
+ * composed, and it is deterministic given its three arguments: point `root` at a directory
+ * with no connector in it and every file comes back MISSING, which is a real, assertable
+ * outcome rather than a stand-in. Call `initFormatter()` first — `formatAll` needs it.
+ */
+export function compareFixture(
   name: string,
   root: string,
   expectations: Expectations,
@@ -192,7 +199,7 @@ function compareFixture(
   };
 }
 
-async function main(): Promise<void> {
+async function main(argv: readonly string[]): Promise<void> {
   await initFormatter();
   if (!formatterAvailable()) {
     throw new Error(
@@ -202,7 +209,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const { names, nimbusRoot } = parseArgs(process.argv.slice(2));
+  const { names, nimbusRoot } = parseArgs(argv);
   const root = resolveNimbusRoot({
     flag: nimbusRoot,
     env: process.env["NIMBUS_ROOT"],
@@ -238,4 +245,11 @@ async function main(): Promise<void> {
   console.log("\nAll fixtures match their declared expectations.");
 }
 
-await main();
+// Guarded exactly as src/cli.ts is, so the helpers above can be imported and tested without
+// running the harness. Before this guard, importing the module generated every fixture,
+// required a Nimbus checkout, and could call process.exit — which is why nothing in this
+// file had a test. Running it as a program (`bun scripts/diff-golden.ts`) is unchanged:
+// import.meta.main is true for the entry point.
+if (import.meta.main) {
+  await main(process.argv.slice(2));
+}

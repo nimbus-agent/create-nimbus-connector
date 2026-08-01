@@ -30,27 +30,15 @@ import { fileURLToPath } from "node:url";
 import { writeFiles } from "../src/cli.ts";
 import { generate } from "../src/emit/index.ts";
 import { formatAll, initFormatter } from "../src/format.ts";
-import { parseSdkArgs, resolveSdkRoot } from "../src/golden/sdk-root.ts";
 import { parseSpec } from "../src/spec.ts";
+import type { Check } from "./_lib/checks.ts";
+import { resolveSdkPkg } from "./_lib/sdk-pkg.ts";
 import { readJsonLines } from "./_lib/stdio-rpc.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const { registry, flag } = parseSdkArgs(process.argv.slice(2));
-
-const sdkPkg = registry
-  ? undefined
-  : join(
-      resolveSdkRoot({
-        ...(flag === undefined ? {} : { flag }),
-        env: process.env["NIMBUS_SDK_ROOT"],
-        scriptDir,
-      }),
-      "sdks",
-      "typescript",
-    );
 
 /** One recorded inbound request, kept in arrival order. */
-type Recorded = {
+export type Recorded = {
   method: string;
   path: string;
   auth: string | undefined;
@@ -58,8 +46,6 @@ type Recorded = {
   contentType: string | undefined;
   body: string;
 };
-
-type Check = { name: string; ok: boolean; output: string };
 
 const checks: Check[] = [];
 function check(name: string, ok: boolean, output: string): void {
@@ -108,7 +94,7 @@ function startApi(recorded: Recorded[]): { server: ReturnType<typeof Bun.serve>;
 }
 
 /** A bearer-auth connector exercising path interpolation, bodies, booleans and errors. */
-function bearerSpec(base: string): unknown {
+export function bearerSpec(base: string): unknown {
   return {
     name: "rtbearer",
     displayName: "RtBearer",
@@ -167,7 +153,7 @@ function bearerSpec(base: string): unknown {
 }
 
 /** A client-credentials connector, to observe the token exchange and its caching. */
-function ccSpec(base: string): unknown {
+export function ccSpec(base: string): unknown {
   return {
     name: "rtcc",
     displayName: "RtCc",
@@ -196,7 +182,7 @@ function ccSpec(base: string): unknown {
  * SDK builds the request from a `buildInit` callback, so none of the hand-rolled fetch
  * helper's code runs. That path had never been executed either.
  */
-function restKitSpec(base: string): unknown {
+export function restKitSpec(base: string): unknown {
   return {
     name: "rtrest",
     displayName: "RtRest",
@@ -231,7 +217,7 @@ function restKitSpec(base: string): unknown {
 }
 
 /** auth: "headers" — a named header rather than Authorization: Bearer. */
-function headersSpec(base: string): unknown {
+export function headersSpec(base: string): unknown {
   return {
     name: "rthdr",
     displayName: "RtHdr",
@@ -256,7 +242,7 @@ function headersSpec(base: string): unknown {
 }
 
 /** Same as ccSpec, but its token endpoint mints a 2-second token. */
-function shortTokenSpec(base: string): unknown {
+export function shortTokenSpec(base: string): unknown {
   const spec = ccSpec(base) as {
     name: string;
     displayName: string;
@@ -277,7 +263,7 @@ function shortTokenSpec(base: string): unknown {
 }
 
 /** Generate a package into `dir`, point its SDK dependency at the right place, install. */
-async function materialize(spec: unknown, dir: string): Promise<void> {
+async function materialize(spec: unknown, dir: string, sdkPkg: string | undefined): Promise<void> {
   const parsed = parseSpec(spec);
   await writeFiles(formatAll(generate(parsed, { target: "standalone" })), dir);
   if (sdkPkg !== undefined) {
@@ -293,16 +279,16 @@ async function materialize(spec: unknown, dir: string): Promise<void> {
 }
 
 /** One decoded JSON-RPC frame, in the only two shapes these harnesses look at. */
-type RpcMessage = {
+export type RpcMessage = {
   id?: unknown;
   result?: { isError?: boolean; content?: Array<{ text?: string }> };
   error?: { message?: string };
 };
 
-type ToolCall = { name: string; args: Record<string, unknown> };
+export type ToolCall = { name: string; args: Record<string, unknown> };
 
 /** tools/call request ids start at 100, so `id >= 100` identifies a tool reply. */
-const toolCallRequest = (id: number, call: ToolCall): unknown => ({
+export const toolCallRequest = (id: number, call: ToolCall): unknown => ({
   jsonrpc: "2.0",
   id,
   method: "tools/call",
@@ -310,7 +296,7 @@ const toolCallRequest = (id: number, call: ToolCall): unknown => ({
 });
 
 /** A tools/call reply flattened to the pair the checks below assert on. */
-function toResult(msg: RpcMessage): { isError: boolean; text: string } {
+export function toResult(msg: RpcMessage): { isError: boolean; text: string } {
   return {
     isError: msg.result?.isError === true || msg.error !== undefined,
     text: msg.result?.content?.map((c) => c.text ?? "").join("") ?? msg.error?.message ?? "",
@@ -402,7 +388,7 @@ async function callTools(
  * results are not tainted; substrings of the secret are. Keep the branches, drop the
  * extraction.
  */
-function describeAuth(value: string | undefined, expected: string): string {
+export function describeAuth(value: string | undefined, expected: string): string {
   if (value === undefined) return "absent";
   return value === expected ? "present, as expected" : "present, unexpected value";
 }
@@ -411,7 +397,7 @@ function describeAuth(value: string | undefined, expected: string): string {
  * Whether a token-exchange body carries exactly the expected form fields — reported as a
  * literal, since even the field NAMES are parsed out of a string containing the secret.
  */
-function describeFormFields(body: string | undefined, expected: readonly string[]): string {
+export function describeFormFields(body: string | undefined, expected: readonly string[]): string {
   if (body === undefined || body === "") return "(empty)";
   const params = new URLSearchParams(body);
   const missing = expected.filter((n) => !params.has(n));
@@ -433,10 +419,11 @@ async function checkBearerConnector(
   root: string,
   base: string,
   recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
 ): Promise<void> {
   // ---- bearer connector -------------------------------------------------------------
   const bearerDir = join(root, "rtbearer");
-  await materialize(bearerSpec(base), bearerDir);
+  await materialize(bearerSpec(base), bearerDir, sdkPkg);
   const results = await callTools(bearerDir, { RTBEARER_TOKEN: "tok-123" }, [
     { name: "rt_list", args: {} },
     { name: "rt_get", args: { id: "a b/c" } },
@@ -512,10 +499,11 @@ async function checkClientCredentials(
   root: string,
   base: string,
   recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
 ): Promise<void> {
   // ---- client-credentials connector -------------------------------------------------
   const ccDir = join(root, "rtcc");
-  await materialize(ccSpec(base), ccDir);
+  await materialize(ccSpec(base), ccDir, sdkPkg);
   const before = recorded.length;
   await callTools(ccDir, { RTCC_CLIENT_ID: "id-1", RTCC_CLIENT_SECRET: "secret-1" }, [
     { name: "cc_list", args: {} },
@@ -555,9 +543,10 @@ async function checkRestKit(
   root: string,
   base: string,
   recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
 ): Promise<void> {
   const restDir = join(root, "rtrest");
-  await materialize(restKitSpec(base), restDir);
+  await materialize(restKitSpec(base), restDir, sdkPkg);
   const beforeRest = recorded.length;
   await callTools(restDir, { RTREST_TOKEN: "rest-tok" }, [
     { name: "rr_list", args: {} },
@@ -591,10 +580,11 @@ async function checkHeaderAuth(
   root: string,
   base: string,
   recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
 ): Promise<void> {
   // ---- header auth ----------------------------------------------------------------
   const hdrDir = join(root, "rthdr");
-  await materialize(headersSpec(base), hdrDir);
+  await materialize(headersSpec(base), hdrDir, sdkPkg);
   const beforeHdr = recorded.length;
   await callTools(hdrDir, { RTHDR_KEY: "key-9" }, [{ name: "hdr_list", args: {} }]);
   const hdr = recorded.slice(beforeHdr)[0];
@@ -615,9 +605,10 @@ async function checkTokenExpiry(
   root: string,
   base: string,
   recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
 ): Promise<void> {
   const shortDir = join(root, "rtshort");
-  await materialize(shortTokenSpec(base), shortDir);
+  await materialize(shortTokenSpec(base), shortDir, sdkPkg);
   const beforeShort = recorded.length;
   await callTools(
     shortDir,
@@ -653,18 +644,20 @@ async function checkTokenExpiry(
   );
 }
 
-async function main(): Promise<void> {
+async function main(argv: readonly string[]): Promise<void> {
+  const sdkPkg = resolveSdkPkg(argv, process.env["NIMBUS_SDK_ROOT"], scriptDir);
+
   await initFormatter();
   const recorded: Recorded[] = [];
   const { server, base } = startApi(recorded);
   const root = mkdtempSync(join(tmpdir(), "cnc-runtime-"));
 
   try {
-    await checkBearerConnector(root, base, recorded);
-    await checkClientCredentials(root, base, recorded);
-    await checkRestKit(root, base, recorded);
-    await checkHeaderAuth(root, base, recorded);
-    await checkTokenExpiry(root, base, recorded);
+    await checkBearerConnector(root, base, recorded, sdkPkg);
+    await checkClientCredentials(root, base, recorded, sdkPkg);
+    await checkRestKit(root, base, recorded, sdkPkg);
+    await checkHeaderAuth(root, base, recorded, sdkPkg);
+    await checkTokenExpiry(root, base, recorded, sdkPkg);
   } finally {
     server.stop(true);
     rmSync(root, { recursive: true, force: true });
@@ -678,5 +671,11 @@ async function main(): Promise<void> {
   if (failed.length > 0) throw new Error(`${failed.length} runtime check(s) failed.`);
 }
 
-if (!existsSync(scriptDir)) throw new Error("unreachable");
-await main();
+// Guarded exactly as src/cli.ts is. argv used to be consumed at module scope, so importing
+// this file to reach a spec builder or one of the redaction helpers either resolved an SDK
+// checkout the importer did not have or threw on flags it never passed.
+// `bun scripts/runtime-acceptance.ts [--registry|--sdk-root <path>]` is unchanged.
+if (import.meta.main) {
+  if (!existsSync(scriptDir)) throw new Error("unreachable");
+  await main(process.argv.slice(2));
+}

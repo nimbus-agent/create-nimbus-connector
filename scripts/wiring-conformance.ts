@@ -36,7 +36,7 @@ import { parseSpec } from "../src/spec.ts";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
 
-function parseArgs(argv: string[]): { nimbusRoot?: string } {
+export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
   let nimbusRoot: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--nimbus-root") {
@@ -55,7 +55,7 @@ function parseArgs(argv: string[]): { nimbusRoot?: string } {
  * of scalar members, and the failure mode of getting it wrong is loud: an empty member set
  * fails the "found nothing" check below rather than passing vacuously.
  */
-function interfaceMembers(source: string, name: string): string[] {
+export function interfaceMembers(source: string, name: string): string[] {
   const start = source.indexOf(`interface ${name} {`);
   if (start === -1) throw new Error(`interface ${name} not found in the real sync/types.ts`);
   const open = source.indexOf("{", start);
@@ -84,8 +84,8 @@ function interfaceMembers(source: string, name: string): string[] {
   );
 }
 
-function main(): void {
-  const { nimbusRoot } = parseArgs(process.argv.slice(2));
+function main(argv: readonly string[]): void {
+  const { nimbusRoot } = parseArgs(argv);
   const root = resolveNimbusRoot({
     flag: nimbusRoot,
     env: process.env["NIMBUS_ROOT"],
@@ -153,4 +153,9 @@ function main(): void {
   console.log(`\nPASS  emitted wiring conforms to ${typesPath}`);
 }
 
-main();
+// Guarded exactly as src/cli.ts is: importing this module used to demand a Nimbus checkout
+// and throw without one, so neither helper above could be reached from a test.
+// `bun scripts/wiring-conformance.ts` is unchanged.
+if (import.meta.main) {
+  main(process.argv.slice(2));
+}
