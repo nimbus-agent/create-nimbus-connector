@@ -48,6 +48,17 @@ export const ArgSchema = z
       "argument's default can never be reached, since the schema demands a value",
   });
 
+/**
+ * The per-connector search filter. `fields` omitted means the emitter cannot express the
+ * extraction and emits a throwing stub instead (Stage D design D5) — 40 of the 49 corpus
+ * filter files hand-write an extractor this shape cannot reach.
+ */
+export const SearchFilterSchema = z.strictObject({
+  export: identifierField(),
+  fields: z.array(z.string().min(1)).min(1, "a filter must name at least one field").optional(),
+  tags: z.boolean().default(false),
+});
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -64,7 +75,7 @@ export const ToolSchema = z
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
-      .enum(["rest", "get", "stub"])
+      .enum(["rest", "get", "stub", "search"])
       .default("rest")
       .transform((v) => (v === "get" ? "rest" : v)),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
@@ -76,6 +87,11 @@ export const ToolSchema = z
     effect: z.enum(["read", "write", "delete"]).default("read"),
     /** arg name -> API field name. Omitted means "the args object is the body". */
     body: z.record(z.string().min(1), z.string().min(1)).optional(),
+    /** Property plucked from the response envelope. Omitted means the response IS the array. */
+    rows: z.string().min(1).optional(),
+    /** Per-connector result cap. Corpus: 100 ×24, 200 ×12, 2000 ×2, 50 ×1. */
+    maxLimit: z.number().int().positive().default(100),
+    filter: SearchFilterSchema.optional(),
   })
   .refine((t) => (t.impl === "stub") === (t.path === undefined), {
     message:
@@ -103,6 +119,21 @@ export const ToolSchema = z
         ctx.addIssue({ code: "custom", message: `"body" key "${k}" is not a declared arg` });
       }
     }
+  })
+  .refine((t) => (t.impl === "search") === (t.filter !== undefined), {
+    message:
+      '"filter" is required when "impl" is "search", and is not valid on any other tool kind',
+  })
+  .refine((t) => !(t.impl === "search" && (t.method !== "GET" || t.body !== undefined)), {
+    message: 'a "search" tool issues a GET, so "method" and "body" have nothing to describe',
+  })
+  .refine((t) => !(t.impl === "search" && t.effect !== "read"), {
+    message:
+      'a "search" tool cannot mutate — "effect" must be "read". Unlike a stub, it stands in ' +
+      "for nothing that will later write.",
+  })
+  .refine((t) => t.impl === "search" || (t.rows === undefined && t.maxLimit === 100), {
+    message: '"rows" and "maxLimit" are only valid on a tool with "impl": "search"',
   });
 
 export const EnvSchema = z

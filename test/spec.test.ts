@@ -948,3 +948,77 @@ describe("style: read-only-kit", () => {
     ).toThrow(/exactly one of fetchHelper.headers or fetchHelper.inlineHeaders/);
   });
 });
+
+describe("impl: search", () => {
+  function tool(extra: Record<string, unknown> = {}) {
+    return {
+      name: "mercury_search",
+      description: "Search accounts.",
+      impl: "search",
+      path: "/api/v1/accounts",
+      filter: { export: "filterMercuryAccounts", fields: ["id", "name"] },
+      ...extra,
+    };
+  }
+  function make(t: unknown, style = "read-only-kit") {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style,
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [t],
+    });
+  }
+
+  it("defaults maxLimit to 100 and tags to false", () => {
+    const t = make(tool()).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.filter?.tags).toBe(false);
+  });
+
+  it("accepts rows and a custom maxLimit", () => {
+    const t = make(tool({ rows: "accounts", maxLimit: 2000 })).tools[0]!;
+    expect(t.rows).toBe("accounts");
+    expect(t.maxLimit).toBe(2000);
+  });
+
+  it("requires a filter", () => {
+    expect(() => make({ ...tool(), filter: undefined })).toThrow(/"filter" is required/);
+  });
+
+  it("rejects an empty fields list", () => {
+    expect(() => make(tool({ filter: { export: "f", fields: [] } }))).toThrow(
+      /at least one field/,
+    );
+  });
+
+  it("rejects method and body", () => {
+    expect(() => make(tool({ method: "POST" }))).toThrow(/issues a GET/);
+    expect(() => make(tool({ body: { a: "b" } }))).toThrow(/issues a GET/);
+  });
+
+  it("rejects a non-read effect", () => {
+    expect(() => make(tool({ effect: "write" }))).toThrow(/cannot mutate/);
+  });
+
+  it("rejects a non-identifier filter.export", () => {
+    expect(() => make(tool({ filter: { export: "not a name", fields: ["id"] } }))).toThrow();
+  });
+
+  it("accepts an ordinary GET tool that never mentions maxLimit", () => {
+    const t = make({
+      name: "mercury_get_account",
+      description: "Get an account.",
+      impl: "rest",
+      path: "/api/v1/accounts/:id",
+    }).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.rows).toBeUndefined();
+  });
+});
