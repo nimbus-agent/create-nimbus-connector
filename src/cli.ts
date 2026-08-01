@@ -10,6 +10,7 @@ import {
   formatterUnavailableReason,
   initFormatter,
 } from "./format.ts";
+import { MARKER } from "./golden/resolve.ts";
 import { MONOREPO_LICENSE, validateLicense } from "./license.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
@@ -30,6 +31,47 @@ export type CliOptions = {
    */
   force: boolean;
 };
+
+/** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
+const KNOWN_FLAGS = [
+  "--dry-run",
+  "--force",
+  "--gateway-wiring",
+  "--help",
+  "--license",
+  "--out-dir",
+  "--spec",
+  "--standalone",
+  "--version",
+] as const;
+
+/** Levenshtein distance, for suggesting the flag a typo probably meant. */
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row.push(Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + cost));
+    }
+    prev = row;
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * `Unknown flag: --standlone` and nothing else leaves the user to spot a transposition by
+ * eye. The threshold is deliberately tight — a suggestion that is merely the closest of a
+ * short list, rather than actually close, sends people to the wrong flag with confidence.
+ */
+function unknownFlagMessage(flag: string): string {
+  const ranked = KNOWN_FLAGS.map((k) => ({ k, d: editDistance(flag, k) })).sort(
+    (x, y) => x.d - y.d,
+  );
+  const best = ranked[0]!;
+  const suffix = best.d <= 3 ? ` Did you mean ${best.k}?` : " Run with --help to see the flags.";
+  return `Unknown flag: ${flag}.${suffix}`;
+}
 
 /** Guards against a flag whose value was omitted, e.g. a trailing `--foo` with nothing after it. */
 export function takeValue(argv: readonly string[], i: number, flag: string): string {
@@ -53,7 +95,7 @@ function parseFlags(argv: readonly string[]): CliOptions {
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
     else if (a === "--gateway-wiring") {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
-    } else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
+    } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
     else opts.name = a;
   }
   return opts;
@@ -139,6 +181,27 @@ export function assertWiringTargetsAbsent(
   }
 }
 
+/**
+ * --gateway-wiring's argument is a path into someone else's repository, and nothing checked
+ * it was that repository. A typo, or the wrong checkout, silently scaffolded
+ * `packages/gateway/src/connectors/` inside whatever directory was named — creating a
+ * plausible-looking tree in the wrong place and reporting success.
+ *
+ * This is the same rule the feature already applies to individual files (it refuses to
+ * overwrite one it did not create), extended to the destination itself. MARKER is the same
+ * file `diff:golden` uses to decide what counts as a Nimbus checkout, so the two agree on
+ * the question by construction.
+ */
+export function assertNimbusRoot(root: string): string {
+  if (existsSync(join(root, MARKER))) return root;
+  throw new Error(
+    `--gateway-wiring: ${root} does not look like a Nimbus checkout (expected ${MARKER} ` +
+      `inside it). Wiring files are written into <root>/packages/gateway/src/connectors/, ` +
+      `so pointing this at the wrong directory would scaffold a Gateway tree where none ` +
+      `belongs. Pass the root of your Nimbus monorepo.`,
+  );
+}
+
 /** Exported for scripts/acceptance.ts (Task 18) — must stay side-effect-free besides disk I/O. */
 export async function writeFiles(files: readonly GeneratedFile[], outDir: string): Promise<void> {
   for (const f of files) {
@@ -168,23 +231,50 @@ Flags:
   --gateway-wiring <root>  also emit Nimbus Gateway sync/mapping skeletons (monorepo only)
   --force                  allow --gateway-wiring to overwrite existing target files
   --dry-run                print what would be written, write nothing
+  --version                print the version
   --help                   show this message
 
 Path templates interpolate \${arg.NAME} and \${env.NAME}, with an optional
 |raw, |enc, |num or |bool mode. OpenAPI's {id} and Express's /:id are rejected
 rather than emitted literally.`;
 
+/**
+ * Reads the spec file, turning the two failure modes a user actually hits into messages
+ * that name the flag and the file. Before this, a missing file surfaced Node's raw
+ * `ENOENT: no such file or directory, open 'nope.json'` and malformed JSON surfaced
+ * `JSON Parse error: Expected '}'` with no indication of WHICH file was being parsed.
+ */
+async function readSpecFile(specPath: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await Bun.file(specPath).text();
+  } catch {
+    throw new Error(`--spec: cannot read ${specPath}. Check the path exists and is readable.`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`--spec: ${specPath} is not valid JSON (${detail}).`);
+  }
+}
+
 export async function main(argv: readonly string[]): Promise<void> {
-  // Before parseCliArgs, deliberately: --help must work on its own, and must not be refused
-  // by a flag-combination rule it has nothing to do with.
+  // Before parseCliArgs, deliberately: both must work on their own, and must not be refused
+  // by a flag-combination rule they have nothing to do with.
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
+    return;
+  }
+  if (argv.includes("--version") || argv.includes("-v")) {
+    const pkg = await Bun.file(join(import.meta.dir, "..", "package.json")).json();
+    console.log(pkg.version);
     return;
   }
   const opts = parseCliArgs(argv);
   const spec =
     opts.specPath !== undefined
-      ? parseSpec(JSON.parse(await Bun.file(opts.specPath).text()))
+      ? parseSpec(await readSpecFile(opts.specPath))
       : promptForSpec(opts.name);
 
   const target = opts.standalone ? "standalone" : "monorepo";
@@ -195,7 +285,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   const gatewayWiringDir =
     opts.gatewayWiring === undefined
       ? undefined
-      : join(opts.gatewayWiring, "packages", "gateway", "src", "connectors");
+      : join(assertNimbusRoot(opts.gatewayWiring), "packages", "gateway", "src", "connectors");
 
   await initFormatter();
   if (!formatterAvailable()) {

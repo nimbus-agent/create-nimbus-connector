@@ -52,6 +52,20 @@ function withTempDir<T>(fn: (dir: string) => T): T {
   }
 }
 
+/**
+ * A directory that passes --gateway-wiring's checkout test. The CLI refuses to scaffold a
+ * Gateway tree into a directory that is not a Nimbus checkout, so a bare temp dir is no
+ * longer a valid target — which is the point: these tests now model the real destination
+ * rather than any writable path.
+ */
+function makeFakeNimbusRoot(dir: string): string {
+  const root = join(dir, "fake-nimbus-root");
+  const markerDir = join(root, "packages", "mcp-connectors", "shared");
+  mkdirSync(markerDir, { recursive: true });
+  writeFileSync(join(markerDir, "mcp-tool-kit.ts"), "// marker\n", "utf8");
+  return root;
+}
+
 describe("bun src/cli.ts (the real binary)", () => {
   it("--standalone writes a package that imports the published kit", () => {
     withTempDir((dir) => {
@@ -161,7 +175,7 @@ describe("bun src/cli.ts (the real binary)", () => {
 
   it("--gateway-wiring writes the two wiring files and prints the paste-able registration lines", () => {
     withTempDir((dir) => {
-      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const nimbusRoot = makeFakeNimbusRoot(dir);
       const { exitCode, output } = runCli(["--gateway-wiring", nimbusRoot], dir);
       expect(exitCode).toBe(0);
 
@@ -205,7 +219,7 @@ describe("bun src/cli.ts (the real binary)", () => {
 
   it("--gateway-wiring refuses to overwrite an existing target file, and writes nothing else", () => {
     withTempDir((dir) => {
-      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const nimbusRoot = makeFakeNimbusRoot(dir);
       const connectorsDir = join(nimbusRoot, "packages", "gateway", "src", "connectors");
       mkdirSync(connectorsDir, { recursive: true });
       // Stand in for a hand-authored real connector (or previously filled-in wiring) sitting
@@ -228,7 +242,7 @@ describe("bun src/cli.ts (the real binary)", () => {
 
   it("--gateway-wiring --force overwrites an existing target file", () => {
     withTempDir((dir) => {
-      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const nimbusRoot = makeFakeNimbusRoot(dir);
       const connectorsDir = join(nimbusRoot, "packages", "gateway", "src", "connectors");
       mkdirSync(connectorsDir, { recursive: true });
       const preexisting = join(connectorsDir, "zzstandalone-sync.ts");
@@ -244,12 +258,13 @@ describe("bun src/cli.ts (the real binary)", () => {
 
   it("rejects --standalone with --gateway-wiring, writing nothing anywhere", () => {
     withTempDir((dir) => {
-      const nimbusRoot = join(dir, "fake-nimbus-root");
+      const nimbusRoot = makeFakeNimbusRoot(dir);
       const { exitCode, output } = runCli(["--standalone", "--gateway-wiring", nimbusRoot], dir);
       expect(exitCode).toBe(1);
       expect(output).toContain("monorepo target only");
-      // Neither the connector package nor anything inside the Nimbus root.
-      expect(existsSync(nimbusRoot)).toBe(false);
+      // The root itself now pre-exists (it has to, to pass the checkout test), so the
+      // meaningful assertion is that no Gateway tree was scaffolded inside it.
+      expect(existsSync(join(nimbusRoot, "packages", "gateway"))).toBe(false);
       expect(existsSync(join(dir, CONNECTOR))).toBe(false);
     });
   });
@@ -271,6 +286,65 @@ describe("bun src/cli.ts (the real binary)", () => {
         "@nimbus-dev/sdk/connector-kit",
       );
       expect(existsSync(join(dir, CONNECTOR))).toBe(false);
+    });
+  });
+});
+
+describe("CLI surface", () => {
+  it("--version prints the package version", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--version"], dir);
+      expect(exitCode).toBe(0);
+      expect(output.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    });
+  });
+
+  it("suggests the intended flag on a near-miss typo", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--standlone"], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("Did you mean --standalone?");
+    });
+  });
+
+  it("points a wildly wrong flag at --help rather than guessing", () => {
+    // A suggestion that is merely the closest of a short list, rather than actually close,
+    // sends people to the wrong flag with confidence.
+    withTempDir((dir) => {
+      const { output } = runCli(["--xyzzy-nonsense"], dir);
+      expect(output).toContain("--help");
+      expect(output).not.toContain("Did you mean");
+    });
+  });
+
+  it("names the flag and the file when --spec cannot be read", () => {
+    withTempDir((dir) => {
+      const { exitCode, output } = runCli(["--spec", "no-such-file.json"], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("--spec: cannot read");
+      expect(output).not.toContain("ENOENT");
+    });
+  });
+
+  it("names the file when --spec is not valid JSON", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "bad.json"), "{ not json", "utf8");
+      const { exitCode, output } = runCli(["--spec", join(dir, "bad.json")], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("bad.json is not valid JSON");
+    });
+  });
+
+  it("refuses --gateway-wiring at a directory that is not a Nimbus checkout", () => {
+    // The whole point: a typo'd path used to silently scaffold packages/gateway/src/
+    // connectors/ inside whatever directory was named, and report success.
+    withTempDir((dir) => {
+      const notNimbus = join(dir, "not-nimbus");
+      mkdirSync(notNimbus, { recursive: true });
+      const { exitCode, output } = runCli(["--gateway-wiring", notNimbus], dir);
+      expect(exitCode).toBe(1);
+      expect(output).toContain("does not look like a Nimbus checkout");
+      expect(existsSync(join(notNimbus, "packages"))).toBe(false);
     });
   });
 });
