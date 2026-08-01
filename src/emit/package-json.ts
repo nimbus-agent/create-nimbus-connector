@@ -32,7 +32,14 @@ export function emitPackageJson(
     },
     dependencies: {
       "@modelcontextprotocol/sdk": "1.30.0",
-      "@nimbus-dev/sdk": standalone ? "^1.11.0" : "^1.8.1",
+      // search-filter and matchesResult land in connector-kit in SDK 1.12.0. Only a spec
+      // that names them needs that floor; raising it for everyone would strand users on a
+      // version they have no reason to need.
+      "@nimbus-dev/sdk": standalone
+        ? spec.tools.some((t) => t.impl === "search")
+          ? "^1.12.0"
+          : "^1.11.0"
+        : "^1.8.1",
       zod: "^4.4.2",
     },
     // A monorepo connector gets biome and tsc from the workspace root's node_modules/.bin.
