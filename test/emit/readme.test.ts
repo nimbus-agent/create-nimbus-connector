@@ -73,6 +73,12 @@ describe("read-only-kit caveat", () => {
     const withoutKit = emitReadme(handRolledSpec, "standalone", "MIT").content;
     expect(withoutKit).not.toContain("does not restrict");
   });
+
+  it("omits the caveat from the monorepo README even for read-only-kit — byte-locked against a corpus with no such text", () => {
+    const monorepoKit = emitReadme(readOnlyKitSpec, "monorepo").content;
+    expect(monorepoKit).not.toContain("does not restrict");
+    expect(monorepoKit).not.toContain("runReadOnlyMcpConnector");
+  });
 });
 
 describe("standalone README", () => {
