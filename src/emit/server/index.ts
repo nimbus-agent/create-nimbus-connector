@@ -38,12 +38,21 @@ function usesBasicClientCredentials(spec: ConnectorSpec): boolean {
  * "../../shared/mcp-tool-kit.ts" also exports encodeBasicAuthHeader — but it never asks for
  * makeRestToolRegistrar, which lives in a second, separate shared module there.
  */
-function kitImportNames(spec: ConnectorSpec, withRestRegistrar: boolean): string[] {
-  // read-only-kit delegates construction to the shared helper, so it never names the two
-  // registrar primitives. Emitting them would be an unused import under the generated
-  // package's own noUnusedLocals.
+function kitImportNames(
+  spec: ConnectorSpec,
+  withRestRegistrar: boolean,
+  target: GenerateTarget,
+): string[] {
+  // Monorepo read-only-kit delegates to the shared helper and names neither primitive;
+  // standalone emits the glue itself, so it needs both, plus the two types the glue's
+  // signature references.
   const names =
-    spec.style === "read-only-kit" ? [] : ["createRegisterSimpleTool", "createZodToolRegistrar"];
+    spec.style === "read-only-kit" && target === "monorepo"
+      ? []
+      : ["createRegisterSimpleTool", "createZodToolRegistrar"];
+  if (spec.style === "read-only-kit" && target === "standalone") {
+    names.push("type McpListResult", "type ZodObjectSchema");
+  }
   if (usesBasicClientCredentials(spec)) names.push("encodeBasicAuthHeader");
   if (usesJsonResult(spec)) names.push("mcpJsonResult as jsonResult");
   if (withRestRegistrar && spec.style === "rest-kit") names.push("makeRestToolRegistrar");
@@ -63,7 +72,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
 
   const zodImport = 'import { z } from "zod";';
   const head =
-    spec.style === "read-only-kit"
+    spec.style === "read-only-kit" && target === "monorepo"
       ? []
       : [
           'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
@@ -76,7 +85,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     // own group behind a blank line — the kit is a package specifier, and
     // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
     // BEFORE "zod". It therefore belongs inside the first group, in that position.
-    head.push(...renderNamedImport(kitImportNames(spec, true), KIT));
+    head.push(...renderNamedImport(kitImportNames(spec, true, target), KIT));
     if (usesZod) head.push(zodImport);
     return head.join("\n");
   }
@@ -85,13 +94,15 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   if (usesZod) head.push(zodImport);
   head.push("");
   if (spec.style === "read-only-kit") {
-    const kit = kitImportNames(spec, false);
+    const kit = kitImportNames(spec, false, target);
     if (kit.length > 0) head.push(...renderNamedImport(kit, "../../shared/mcp-tool-kit.ts"));
     head.push(`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`);
     return head.join("\n");
   }
   if (spec.style === "hand-rolled") {
-    head.push(...renderNamedImport(kitImportNames(spec, false), "../../shared/mcp-tool-kit.ts"));
+    head.push(
+      ...renderNamedImport(kitImportNames(spec, false, target), "../../shared/mcp-tool-kit.ts"),
+    );
   } else {
     head.push(
       'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
@@ -130,6 +141,33 @@ function renderTools(spec: ConnectorSpec): string {
   );
 }
 
+/**
+ * The standalone equivalent of shared/run-read-only-mcp-connector.ts, emitted into the
+ * package rather than added to the SDK: the SDK core must not depend on
+ * @modelcontextprotocol/sdk, and the generated package already does. The two registrar
+ * primitives it builds on ARE SDK exports, so only this glue is local.
+ */
+function renderRunReadOnlyGlue(): string {
+  return [
+    "type ZodToolRegistrar = <T>(",
+    "  name: string,",
+    "  description: string,",
+    "  schema: ZodObjectSchema<T>,",
+    "  handler: (args: T) => Promise<McpListResult>,",
+    ") => void;",
+    "",
+    "async function runReadOnlyMcpConnector(",
+    "  serverName: string,",
+    "  register: (reg: ZodToolRegistrar) => void,",
+    "): Promise<void> {",
+    '  const mcp = new McpServer({ name: serverName, version: "0.1.0" });',
+    "  register(createZodToolRegistrar(createRegisterSimpleTool(mcp)));",
+    "  const transport = new StdioServerTransport();",
+    "  await mcp.connect(transport);",
+    "}",
+  ].join("\n");
+}
+
 export function emitServer(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const isHand = isHandStyle(spec);
   const readHelper = renderReadHelper(spec);
@@ -149,6 +187,7 @@ export function emitServer(spec: ConnectorSpec, target: GenerateTarget): Generat
     ...(readHelper === undefined ? [] : [readHelper]),
     ...(writeHelper === undefined ? [] : [writeHelper]),
     ...(wiring(spec) === undefined ? [] : [wiring(spec)!]),
+    ...(spec.style === "read-only-kit" && target === "standalone" ? [renderRunReadOnlyGlue()] : []),
     renderTools(spec),
     ...(tail(spec) === undefined ? [] : [tail(spec)!]),
   ].filter((s) => s.trim() !== "");

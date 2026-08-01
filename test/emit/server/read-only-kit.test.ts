@@ -43,3 +43,21 @@ describe("emitServer, style read-only-kit", () => {
     expect(out).not.toContain("runReadOnlyMcpConnector");
   });
 });
+
+describe("emitServer, style read-only-kit, standalone target", () => {
+  it("defines the helper locally instead of importing it", () => {
+    const out = emitServer(make("read-only-kit", LIST), "standalone").content;
+    expect(out).not.toContain("../../shared/");
+    expect(out).toContain("async function runReadOnlyMcpConnector(");
+    expect(out).toContain('import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";');
+    expect(out).toContain(
+      'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
+    );
+  });
+
+  it("uses the identical call site on both targets", () => {
+    const call = 'await runReadOnlyMcpConnector("nimbus-mercury", (reg) => {';
+    expect(emitServer(make("read-only-kit", LIST), "monorepo").content).toContain(call);
+    expect(emitServer(make("read-only-kit", LIST), "standalone").content).toContain(call);
+  });
+});
