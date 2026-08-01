@@ -11,3 +11,36 @@
 # it isn't running, this is why.
 [test]
 pathIgnorePatterns = ["fixtures/**"]
+
+# Coverage counts the code under test, not the tests. Without this, every test file scores
+# ~100% (a test file is, by construction, fully executed by running it) and drags the
+# headline number up: the aggregate read 97.66% while src/cli.ts sat at 42.76%. A number
+# that cannot go down is not a gate.
+coverageSkipTestFiles = true
+
+# Bun enforces this PER FILE, not against the aggregate — verified: 0.40 passes, 0.95 fails,
+# and the file that fails is src/cli.ts. That is the stronger reading (an average lets one
+# well-covered file hide an uncovered one), so the floor is set by the weakest file rather
+# than by the mean, which is currently 95.97% lines / 96.72% functions.
+#
+# The floor is src/cli.ts at 42.76% lines and src/prompts.ts at 50% functions, and NEITHER
+# is a testing gap. test/cli-main.test.ts drives the CLI through Bun.spawnSync on the real
+# binary — 13 tests asserting the bytes it puts on disk — and Bun does not instrument child
+# processes, so every line main() executes reads as uncovered. Spawning the real binary is
+# the better test: it proves the shipped entry point works, which an in-process call does
+# not. src/prompts.ts is interactive readline code, exercised the same way.
+#
+# So do NOT "raise coverage" on those two by adding in-process tests that duplicate the
+# subprocess ones. That would move the number without adding assurance, which is the
+# false-green pattern this repo has spent several rounds removing. Raise the floor only when
+# a real gap closes.
+# Excluded from the coverage METRIC, not from testing — and this is the one exclusion in
+# this file, so it has to earn itself. Both are driven through Bun.spawnSync on the real
+# binary, which Bun cannot instrument, so leaving them in drags the per-file floor from 78%
+# down to 42.76% and makes the threshold vacuous for the other 25 files. If a future change
+# tests either of these in-process, delete its entry rather than raising the floor around it.
+coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
+
+# The measured floor with those two excluded: src/format.ts at 78.16% lines / 81.82%
+# functions (its Biome-unavailable fallback branches). Aggregate is 98.77% / 99.20%.
+coverageThreshold = { lines = 0.78, functions = 0.81 }
