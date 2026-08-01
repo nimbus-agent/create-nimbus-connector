@@ -21,6 +21,7 @@ import {
 import { run } from "../src/golden/run.ts";
 import { parseSdkArgs, resolveSdkRoot } from "../src/golden/sdk-root.ts";
 import { parseSpec } from "../src/spec.ts";
+import { readJsonLines } from "./_lib/stdio-rpc.ts";
 
 /**
  * Both emission styles, because they import the kit differently and only one of them was
@@ -149,22 +150,23 @@ async function runFixture(NAME: string): Promise<Check[]> {
       "connector-kit",
       "index.js",
     );
-    checks.push({
-      name: "connector-kit present in node_modules",
-      ok: existsSync(installedKit),
-      output: existsSync(installedKit)
-        ? installedKit
-        : `${installedKit} is missing — the SDK installed without the connector-kit build output`,
-    });
-
-    checks.push({ name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) });
-
-    // Run the generated package's OWN scripts, not equivalents. Both were unrunnable in a
-    // standalone package until the emitted devDependencies and biome.json landed, and this
-    // harness did not notice: it resolves them through node_modules, exactly as a consumer
-    // does. `bun run lint` additionally re-checks the emitted formatting and import order
-    // against the emitted biome.json, so a drift between the two fails here.
+    // One push, several checks: arguments evaluate left to right, so each `run(...)` still
+    // executes in exactly the order written — install-time existence, then tsc, then the
+    // package's own scripts.
     checks.push(
+      {
+        name: "connector-kit present in node_modules",
+        ok: existsSync(installedKit),
+        output: existsSync(installedKit)
+          ? installedKit
+          : `${installedKit} is missing — the SDK installed without the connector-kit build output`,
+      },
+      { name: "tsc --noEmit", ...run(["bunx", "tsc", "--noEmit"], outDir) },
+      // Run the generated package's OWN scripts, not equivalents. Both were unrunnable in a
+      // standalone package until the emitted devDependencies and biome.json landed, and this
+      // harness did not notice: it resolves them through node_modules, exactly as a consumer
+      // does. `bun run lint` additionally re-checks the emitted formatting and import order
+      // against the emitted biome.json, so a drift between the two fails here.
       { name: "bun run typecheck", ...run(["bun", "run", "typecheck"], outDir) },
       { name: "bun run lint", ...run(["bun", "run", "lint"], outDir) },
     );
@@ -182,34 +184,38 @@ async function runFixture(NAME: string): Promise<Check[]> {
 
     const expectedTools = spec.tools.map((t) => t.name);
 
-    // src/server.ts is what `bun run dev` runs — worth proving on its own, independent of
-    // the bundler.
-    checks.push({
-      name: "tools/list over stdio (src)",
-      ...(await toolsListCheck(outDir, "src/server.ts", expectedTools)),
-    });
+    checks.push(
+      // src/server.ts is what `bun run dev` runs — worth proving on its own, independent of
+      // the bundler.
+      {
+        name: "tools/list over stdio (src)",
+        ...(await toolsListCheck(outDir, "src/server.ts", expectedTools)),
+      },
+      // nimbus.extension.json declares entrypoint: "dist/server.js", which is what the Nimbus
+      // Gateway actually launches. Nothing else in this project builds or runs that artifact,
+      // so prove `bun run build` produces it before trusting the source-level checks above.
+      // Evaluated after the await above, since arguments evaluate left to right.
+      { name: "bun run build", ...run(["bun", "run", "build"], outDir) },
+    );
 
-    // nimbus.extension.json declares entrypoint: "dist/server.js", which is what the Nimbus
-    // Gateway actually launches. Nothing else in this project builds or runs that artifact,
-    // so prove `bun run build` produces it before trusting the source-level checks above.
-    checks.push({ name: "bun run build", ...run(["bun", "run", "build"], outDir) });
     const builtServer = join(outDir, "dist", "server.js");
-    checks.push({
-      name: "dist/server.js exists after build",
-      ok: existsSync(builtServer),
-      output: existsSync(builtServer)
-        ? builtServer
-        : `${builtServer} is missing — \`bun run build\` did not produce the entrypoint the Gateway launches`,
-    });
-
-    // The build check above only proves the artifact exists, not that it runs. A bundler
-    // can externalize or strip an import in a way that leaves every source-level check
-    // green while dist/server.js is broken — so drive the actual Gateway-launched file
-    // over stdio too, not just the unbundled source.
-    checks.push({
-      name: "tools/list over stdio (dist/server.js)",
-      ...(await toolsListCheck(outDir, "dist/server.js", expectedTools)),
-    });
+    checks.push(
+      {
+        name: "dist/server.js exists after build",
+        ok: existsSync(builtServer),
+        output: existsSync(builtServer)
+          ? builtServer
+          : `${builtServer} is missing — \`bun run build\` did not produce the entrypoint the Gateway launches`,
+      },
+      // The build check above only proves the artifact exists, not that it runs. A bundler
+      // can externalize or strip an import in a way that leaves every source-level check
+      // green while dist/server.js is broken — so drive the actual Gateway-launched file
+      // over stdio too, not just the unbundled source.
+      {
+        name: "tools/list over stdio (dist/server.js)",
+        ...(await toolsListCheck(outDir, "dist/server.js", expectedTools)),
+      },
+    );
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }
@@ -268,6 +274,22 @@ function findEscapingImports(dir: string): string {
   return matches.join("\n");
 }
 
+/** The `tools/list` reply reduced to the verdict, plus a line naming what it did return. */
+function describeToolsList(
+  tools: ReadonlyArray<{ name?: string }> | undefined,
+  expected: readonly string[],
+): { ok: boolean; output: string } {
+  const names = (tools ?? []).map((t) => t.name);
+  const missing = expected.filter((n) => !names.includes(n));
+  return {
+    ok: missing.length === 0,
+    output:
+      missing.length === 0
+        ? `tools/list returned ${names.join(", ")}`
+        : `tools/list missing ${missing.join(", ")}; got ${names.join(", ") || "(none)"}`,
+  };
+}
+
 async function toolsListCheck(
   cwd: string,
   entryPath: string,
@@ -297,48 +319,20 @@ async function toolsListCheck(
       },
     });
 
-    const reader = proc.stdout.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
     let sawInitialized = false;
 
     // Read until the tools/list response (id 2) arrives, the process exits, or the timeout kills it.
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
+    for await (const raw of readJsonLines(proc.stdout)) {
+      const msg = raw as { id?: unknown; result?: { tools?: Array<{ name?: string }> } };
 
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? ""; // keep the trailing partial fragment
-
-      for (const line of lines) {
-        if (line.trim() === "") continue;
-        let msg: { id?: unknown; result?: { tools?: Array<{ name?: string }> } };
-        try {
-          msg = JSON.parse(line);
-        } catch {
-          continue; // a warning or other non-JSON output — not a protocol error
-        }
-
-        if (msg.id === 1 && !sawInitialized) {
-          sawInitialized = true;
-          send({ jsonrpc: "2.0", method: "notifications/initialized" });
-          send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-          continue;
-        }
-
-        if (msg.id === 2) {
-          const names = (msg.result?.tools ?? []).map((t) => t.name);
-          const missing = expected.filter((n) => !names.includes(n));
-          return {
-            ok: missing.length === 0,
-            output:
-              missing.length === 0
-                ? `tools/list returned ${names.join(", ")}`
-                : `tools/list missing ${missing.join(", ")}; got ${names.join(", ") || "(none)"}`,
-          };
-        }
+      if (msg.id === 1 && !sawInitialized) {
+        sawInitialized = true;
+        send({ jsonrpc: "2.0", method: "notifications/initialized" });
+        send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+        continue;
       }
+
+      if (msg.id === 2) return describeToolsList(msg.result?.tools, expected);
     }
 
     const stderr = await new Response(proc.stderr).text();

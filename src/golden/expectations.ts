@@ -42,7 +42,10 @@ export type Comparison = {
  * property to avoid here — it can order the same two paths differently on two runners.
  * Only ordering is at stake either way: the verdict below is decided by `length`.
  */
-const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const byCodeUnit = (a: string, b: string): number => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
 
 export function classify(actual: readonly string[], expected: readonly string[]): Comparison {
   const actualSet = new Set(actual);

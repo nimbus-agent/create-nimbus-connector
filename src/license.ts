@@ -29,6 +29,70 @@ const SYNTAX_HINT =
   'Expected an SPDX identifier or expression, e.g. "MIT", "Apache-2.0", ' +
   '"AGPL-3.0-only", "MIT OR Apache-2.0", or "UNLICENSED".';
 
+/** The one rejection message shape, so every arm below reads identically to a user. */
+function bad(raw: string, why: string): never {
+  throw new Error(
+    `--license value ${JSON.stringify(raw)} is not a valid SPDX expression: ${why}. ${SYNTAX_HINT}`,
+  );
+}
+
+/**
+ * Two license identifiers in a row. Overwhelmingly this is a lowercase operator, since SPDX
+ * requires AND/OR/WITH uppercase — say so instead of just "unexpected token".
+ */
+function badOperandRun(raw: string, t: string): never {
+  if (OPERATORS.has(t.toUpperCase())) {
+    bad(raw, `operator "${t}" must be uppercase ("${t.toUpperCase()}")`);
+  }
+  bad(raw, `"${t}" where an operator (AND, OR, WITH) was expected`);
+}
+
+/**
+ * Where the scan stands between two tokens: how many parens are open, and whether the next
+ * token must be an operand (a license identifier or an opening paren) rather than an operator.
+ */
+type ScanState = { readonly depth: number; readonly expectOperand: boolean };
+
+/** Consume one token, returning the state the next token is read in. Throws on a bad token. */
+function stepToken(raw: string, t: string, state: ScanState): ScanState {
+  if (t === "(") {
+    if (!state.expectOperand) bad(raw, '"(" where an operator was expected');
+    return { depth: state.depth + 1, expectOperand: true };
+  }
+  if (t === ")") {
+    if (state.expectOperand) bad(raw, '")" where a license identifier was expected');
+    const depth = state.depth - 1;
+    if (depth < 0) bad(raw, 'unbalanced ")"');
+    return { depth, expectOperand: false };
+  }
+  if (OPERATORS.has(t)) {
+    if (state.expectOperand) bad(raw, `"${t}" where a license identifier was expected`);
+    return { depth: state.depth, expectOperand: true };
+  }
+  if (!state.expectOperand) badOperandRun(raw, t);
+  if (!SPDX_TOKEN.test(t)) bad(raw, `"${t}" is not a valid license identifier`);
+  return { depth: state.depth, expectOperand: false };
+}
+
+/** Split on whitespace, with parens as their own tokens wherever they are written. */
+function tokenizeExpression(value: string): string[] {
+  return value
+    .replaceAll("(", " ( ")
+    .replaceAll(")", " ) ")
+    .split(/\s+/)
+    .filter((t) => t !== "");
+}
+
+/** Walk the token stream, then check the two things only the end of it can reveal. */
+function assertSpdxExpression(raw: string, tokens: readonly string[]): void {
+  let state: ScanState = { depth: 0, expectOperand: true };
+  for (const t of tokens) {
+    state = stepToken(raw, t, state);
+  }
+  if (state.depth !== 0) bad(raw, 'unbalanced "("');
+  if (state.expectOperand) bad(raw, "it ends with an operator");
+}
+
 /**
  * Validate a `--license` value and return it trimmed.
  *
@@ -63,47 +127,7 @@ export function validateLicense(raw: string): string {
     );
   }
 
-  const tokens = value
-    .replaceAll("(", " ( ")
-    .replaceAll(")", " ) ")
-    .split(/\s+/)
-    .filter((t) => t !== "");
-
-  const bad = (why: string): never => {
-    throw new Error(
-      `--license value ${JSON.stringify(raw)} is not a valid SPDX expression: ${why}. ${SYNTAX_HINT}`,
-    );
-  };
-
-  let depth = 0;
-  let expectOperand = true;
-  for (const t of tokens) {
-    if (t === "(") {
-      if (!expectOperand) bad('"(" where an operator was expected');
-      depth++;
-    } else if (t === ")") {
-      if (expectOperand) bad('")" where a license identifier was expected');
-      depth--;
-      if (depth < 0) bad('unbalanced ")"');
-    } else if (OPERATORS.has(t)) {
-      if (expectOperand) bad(`"${t}" where a license identifier was expected`);
-      expectOperand = true;
-    } else if (!expectOperand) {
-      // Two identifiers in a row. Overwhelmingly this is a lowercase operator, since SPDX
-      // requires AND/OR/WITH uppercase — say so instead of just "unexpected token".
-      if (OPERATORS.has(t.toUpperCase())) {
-        bad(`operator "${t}" must be uppercase ("${t.toUpperCase()}")`);
-      }
-      bad(`"${t}" where an operator (AND, OR, WITH) was expected`);
-    } else if (!SPDX_TOKEN.test(t)) {
-      bad(`"${t}" is not a valid license identifier`);
-    } else {
-      expectOperand = false;
-    }
-  }
-
-  if (depth !== 0) bad('unbalanced "("');
-  if (expectOperand) bad("it ends with an operator");
+  assertSpdxExpression(raw, tokenizeExpression(value));
 
   return value;
 }

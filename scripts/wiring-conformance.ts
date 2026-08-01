@@ -73,7 +73,15 @@ function interfaceMembers(source: string, name: string): string[] {
   }
   const body = source.slice(open + 1, end);
   // `name:` / `name?:` / `name(` at the start of a line, ignoring comments and nesting.
-  return [...body.matchAll(/^\s*(?:readonly\s+)?([A-Za-z_]\w*)\s*\??\s*[:(]/gm)].map((m) => m[1]!);
+  //
+  // The tail is spelled `\s*(?:\?\s*)?` and not `\s*\??\s*`. The two describe the same
+  // language — optional whitespace, an optional `?`, optional whitespace — but the second
+  // is ambiguous: a run of n spaces before a non-`?` can be split between the two `\s*`
+  // in n+1 ways, which is polynomial backtracking on a failing line. Separating the two
+  // quantifiers with the mandatory `\?` leaves exactly one parse for any input.
+  return [...body.matchAll(/^\s*(?:readonly\s+)?([A-Za-z_]\w*)\s*(?:\?\s*)?[:(]/gm)].map(
+    (m) => m[1]!,
+  );
 }
 
 function main(): void {
@@ -103,7 +111,7 @@ function main(): void {
 
   // 1. Every required Syncable member must be supplied by the emitted object literal.
   for (const member of required) {
-    const supplies = new RegExp(`\\b${member}\\s*[:(]`).test(syncFile.content);
+    const supplies = new RegExp(String.raw`\b${member}\s*[:(]`).test(syncFile.content);
     if (!supplies) failures.push(`emitted skeleton does not supply Syncable.${member}`);
   }
 

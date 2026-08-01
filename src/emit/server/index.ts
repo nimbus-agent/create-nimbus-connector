@@ -8,18 +8,48 @@ import { renderRestKitTools } from "./tools-rest.ts";
 
 const KIT = "@nimbus-dev/sdk/connector-kit";
 
+/** Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool. */
+function usesJsonResult(spec: ConnectorSpec): boolean {
+  return spec.style === "hand-rolled" && spec.tools.some((t) => t.impl !== "stub");
+}
+
+/**
+ * Only the "basic" branch of the client-credentials token exchange calls
+ * encodeBasicAuthHeader — a "body" entry never references it, so gating on credentialsIn
+ * (rather than merely "a client-credentials entry exists") is what keeps the import used,
+ * satisfying noUnusedLocals.
+ */
+function usesBasicClientCredentials(spec: ConnectorSpec): boolean {
+  return spec.env.some((e) => e.auth === "client-credentials" && e.credentialsIn === "basic");
+}
+
+/**
+ * The tool-kit names the emitted server references, in the order Biome's organizeImports
+ * demands of the generated package's own `bun run lint`.
+ *
+ * Alphabetical insertion point: "encodeBasicAuthHeader" sorts after "createZodToolRegistrar"
+ * and before "makeRestToolRegistrar" / "mcpJsonResult as jsonResult". The monorepo
+ * hand-rolled branch shares the constraint against the same export set, since
+ * "../../shared/mcp-tool-kit.ts" also exports encodeBasicAuthHeader — but it never asks for
+ * makeRestToolRegistrar, which lives in a second, separate shared module there.
+ */
+function kitImportNames(spec: ConnectorSpec, withRestRegistrar: boolean): string[] {
+  const names = ["createRegisterSimpleTool", "createZodToolRegistrar"];
+  if (usesBasicClientCredentials(spec)) names.push("encodeBasicAuthHeader");
+  if (usesJsonResult(spec)) names.push("mcpJsonResult as jsonResult");
+  if (withRestRegistrar && spec.style === "rest-kit") names.push("makeRestToolRegistrar");
+  return names;
+}
+
+/** One line when the import is the bare two-name default, a wrapped block otherwise. */
+function renderNamedImport(names: readonly string[], from: string): string[] {
+  if (names.length === 2) return [`import { ${names.join(", ")} } from "${from}";`];
+  return ["import {", ...names.map((n) => `  ${n},`), `} from "${from}";`];
+}
+
 function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   // z.object(...) is only emitted per tool — a zero-tool spec never calls it.
   const usesZod = spec.tools.length > 0;
-  // Stub handlers only throw; jsonResult(...) is only emitted by a non-stub hand-rolled tool.
-  const usesJsonResult = spec.style === "hand-rolled" && spec.tools.some((t) => t.impl !== "stub");
-  // Only the "basic" branch of the client-credentials token exchange calls
-  // encodeBasicAuthHeader — a "body" entry never references it, so gating on credentialsIn
-  // (rather than merely "a client-credentials entry exists") is what keeps the import used,
-  // satisfying noUnusedLocals.
-  const usesBasicClientCredentials = spec.env.some(
-    (e) => e.auth === "client-credentials" && e.credentialsIn === "basic",
-  );
 
   const zodImport = 'import { z } from "zod";';
   const head = [
@@ -33,19 +63,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     // own group behind a blank line — the kit is a package specifier, and
     // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
     // BEFORE "zod". It therefore belongs inside the first group, in that position.
-    const names = ["createRegisterSimpleTool", "createZodToolRegistrar"];
-    // Alphabetical insertion point: "encodeBasicAuthHeader" sorts after
-    // "createZodToolRegistrar" and before "makeRestToolRegistrar" / "mcpJsonResult as
-    // jsonResult", and Biome's organizeImports enforces that order in the generated
-    // package's own `bun run lint`.
-    if (usesBasicClientCredentials) names.push("encodeBasicAuthHeader");
-    if (usesJsonResult) names.push("mcpJsonResult as jsonResult");
-    if (spec.style === "rest-kit") names.push("makeRestToolRegistrar");
-    if (names.length === 2) {
-      head.push(`import { ${names.join(", ")} } from "${KIT}";`);
-    } else {
-      head.push("import {", ...names.map((n) => `  ${n},`), `} from "${KIT}";`);
-    }
+    head.push(...renderNamedImport(kitImportNames(spec, true), KIT));
     if (usesZod) head.push(zodImport);
     return head.join("\n");
   }
@@ -54,20 +72,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   if (usesZod) head.push(zodImport);
   head.push("");
   if (spec.style === "hand-rolled") {
-    // Same alphabetical constraint as the standalone branch above, against the same
-    // export set — "../../shared/mcp-tool-kit.ts" also exports encodeBasicAuthHeader.
-    const names = ["createRegisterSimpleTool", "createZodToolRegistrar"];
-    if (usesBasicClientCredentials) names.push("encodeBasicAuthHeader");
-    if (usesJsonResult) names.push("mcpJsonResult as jsonResult");
-    if (names.length === 2) {
-      head.push(`import { ${names.join(", ")} } from "../../shared/mcp-tool-kit.ts";`);
-    } else {
-      head.push(
-        "import {",
-        ...names.map((n) => `  ${n},`),
-        '} from "../../shared/mcp-tool-kit.ts";',
-      );
-    }
+    head.push(...renderNamedImport(kitImportNames(spec, false), "../../shared/mcp-tool-kit.ts"));
   } else {
     head.push(
       'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',

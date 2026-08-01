@@ -1,4 +1,4 @@
-import { parsePathTemplate } from "./emit/server/path-template.ts";
+import { type PathSegment, parsePathTemplate } from "./emit/server/path-template.ts";
 import type { ConnectorSpec } from "./spec.ts";
 import { registrarName } from "./spec.ts";
 
@@ -98,6 +98,48 @@ export function validateSpec(spec: ConnectorSpec): void {
   }
 }
 
+type ToolLike = ConnectorSpec["tools"][number];
+type ArgSegment = Extract<PathSegment, { kind: "arg" }>;
+type EnvSegment = Extract<PathSegment, { kind: "env" }>;
+
+/** A `${arg.X}` reference must name an arg the tool declares, with a mode that fits its type. */
+function validateArgSegment(t: ToolLike, seg: ArgSegment): void {
+  const arg = t.args[seg.name];
+  if (arg === undefined) {
+    throw new Error(
+      `Tool "${t.name}" path references "\${arg.${seg.name}}", but declares no arg named ` +
+        `"${seg.name}".`,
+    );
+  }
+  // |bool renders the hoisted boolean local (the "true"/"false" conversion comes from
+  // the hoist itself, keyed on type === "boolean" — see renderHoists). Applied to any
+  // other type it would silently fall back to a raw, non-hoisted reference.
+  if (seg.mode === "bool" && arg.type !== "boolean") {
+    throw new Error(
+      `Tool "${t.name}" path references "\${arg.${seg.name}|bool}", but "${seg.name}" is ` +
+        `declared as type "${arg.type}", not "boolean" — |bool only makes sense on a ` +
+        "boolean argument.",
+    );
+  }
+}
+
+/** A `${env.X}` reference must name a declared env accessor, and rest-kit emits none. */
+function validateEnvSegment(spec: ConnectorSpec, t: ToolLike, seg: EnvSegment): void {
+  if (spec.style === "rest-kit") {
+    throw new Error(
+      `Tool "${t.name}" path references "\${env.${seg.name}}", but a rest-kit connector ` +
+        "cannot reference ${env.X} in a tool path — rest-kit emits no env accessors, so " +
+        "the call would be undefined.",
+    );
+  }
+  if (!spec.env.some((e) => e.local === seg.name)) {
+    throw new Error(
+      `Tool "${t.name}" path references "\${env.${seg.name}}", but no env entry has ` +
+        `local "${seg.name}".`,
+    );
+  }
+}
+
 /**
  * Resolve every `${arg.X}` / `${env.X}` placeholder in a tool's path against the spec
  * that declared it. `parsePathTemplate` only knows placeholder syntax; it has no notion
@@ -105,46 +147,9 @@ export function validateSpec(spec: ConnectorSpec): void {
  * reference parses cleanly and fails only later, at `tsc`, with no clue which spec field
  * was responsible.
  */
-function validateToolPath(
-  spec: ConnectorSpec,
-  t: ConnectorSpec["tools"][number],
-  path: string,
-): void {
-  const segments = parsePathTemplate(path);
-  for (const seg of segments) {
-    if (seg.kind === "arg") {
-      const arg = t.args[seg.name];
-      if (arg === undefined) {
-        throw new Error(
-          `Tool "${t.name}" path references "\${arg.${seg.name}}", but declares no arg named ` +
-            `"${seg.name}".`,
-        );
-      }
-      // |bool renders the hoisted boolean local (the "true"/"false" conversion comes from
-      // the hoist itself, keyed on type === "boolean" — see renderHoists). Applied to any
-      // other type it would silently fall back to a raw, non-hoisted reference.
-      if (seg.mode === "bool" && arg.type !== "boolean") {
-        throw new Error(
-          `Tool "${t.name}" path references "\${arg.${seg.name}|bool}", but "${seg.name}" is ` +
-            `declared as type "${arg.type}", not "boolean" — |bool only makes sense on a ` +
-            "boolean argument.",
-        );
-      }
-    }
-    if (seg.kind === "env") {
-      if (spec.style === "rest-kit") {
-        throw new Error(
-          `Tool "${t.name}" path references "\${env.${seg.name}}", but a rest-kit connector ` +
-            "cannot reference ${env.X} in a tool path — rest-kit emits no env accessors, so " +
-            "the call would be undefined.",
-        );
-      }
-      if (!spec.env.some((e) => e.local === seg.name)) {
-        throw new Error(
-          `Tool "${t.name}" path references "\${env.${seg.name}}", but no env entry has ` +
-            `local "${seg.name}".`,
-        );
-      }
-    }
+function validateToolPath(spec: ConnectorSpec, t: ToolLike, path: string): void {
+  for (const seg of parsePathTemplate(path)) {
+    if (seg.kind === "arg") validateArgSegment(t, seg);
+    if (seg.kind === "env") validateEnvSegment(spec, t, seg);
   }
 }
