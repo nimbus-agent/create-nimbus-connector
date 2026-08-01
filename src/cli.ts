@@ -96,7 +96,15 @@ function parseFlags(argv: readonly string[]): CliOptions {
     else if (a === "--gateway-wiring") {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
     } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
-    else opts.name = a;
+    else {
+      if (opts.name !== undefined) {
+        throw new Error(
+          `The connector name was given twice: "${opts.name}" and "${a}" — pass one ` +
+            `(for example, "${opts.name}-${a}").`,
+        );
+      }
+      opts.name = a;
+    }
   }
   return opts;
 }

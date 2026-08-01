@@ -51,6 +51,12 @@ describe("parseCliArgs", () => {
     expect(() => parseCliArgs(["slack", "--spec", "x.json"])).toThrow(/--spec/);
   });
 
+  it("rejects two positional names instead of silently keeping the last one", () => {
+    expect(() => parseCliArgs(["acme", "crm"])).toThrow(
+      'The connector name was given twice: "acme" and "crm" — pass one',
+    );
+  });
+
   it("still accepts a bare positional name", () => {
     expect(() => parseCliArgs(["slack"])).not.toThrow();
   });
