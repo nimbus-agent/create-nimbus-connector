@@ -34,12 +34,17 @@ export function interfaceMembers(source: string, name: string): string[] {
   const body = source.slice(open + 1, end);
   // `name:` / `name?:` / `name(` at the start of a line, ignoring comments and nesting.
   //
-  // The tail is spelled `\s*(?:\?\s*)?` and not `\s*\??\s*`. The two describe the same
-  // language — optional whitespace, an optional `?`, optional whitespace — but the second
-  // is ambiguous: a run of n spaces before a non-`?` can be split between the two `\s*`
-  // in n+1 ways, which is polynomial backtracking on a failing line. Separating the two
-  // quantifiers with the mandatory `\?` leaves exactly one parse for any input.
-  return [...body.matchAll(/^\s*(?:readonly\s+)?([A-Za-z_]\w*)\s*(?:\?\s*)?[:(]/gm)].map(
+  // Every quantifier here is over a DISJOINT character class, so any input has exactly one
+  // parse and the match is linear. The earlier spellings — `\s*\??\s*`, and then
+  // `\s*(?:\?\s*)?` — both placed two whitespace quantifiers either side of an optional `?`,
+  // so on a line that fails to match (an identifier followed by spaces and no `:`), the
+  // leading run backtracks position by position; with the `g` flag over n start positions
+  // that is quadratic. Collapsing the tail to the single class `[ \t?]*` removes the
+  // ambiguity outright rather than relocating it.
+  //
+  // `[ \t]` rather than `\s`: `\s` matches `\n`, which under `^…/gm` would let a match run
+  // past the end of its own line.
+  return [...body.matchAll(/^[ \t]*(?:readonly[ \t]+)?([A-Za-z_]\w*)[ \t?]*[:(]/gm)].map(
     (m) => m[1]!,
   );
 }
