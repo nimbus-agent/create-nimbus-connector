@@ -25,10 +25,15 @@ package byte-identical to a hand-written one.
 
 ## Where the reasoning lives
 
-This project was built in four stages, each with a long design document and implementation plan
-recording what was measured in the Nimbus corpus and what was decided. Those documents have been
-retired — their durable conclusions are folded into the pages above, and git history has the
-originals:
+This project was built in stages, each with a long design document and implementation plan
+recording what was measured in the Nimbus corpus and what was decided. Stages A-D's four
+documents have been retired — their durable conclusions are folded into the pages above, and
+git history has the originals. Stage E's are kept, under `docs/superpowers/`, because they still
+hold things the pages above do not:
+[the design doc](./superpowers/specs/2026-08-02-search-filter-extractors-design.md) records the
+entry-kind options measured and declined and the corrected 12 → 7 → 9 corpus split;
+[the plan](./superpowers/plans/2026-08-02-search-filter-extractors.md) records the task
+breakdown.
 
 - **What the generator cannot do, and why** → [ROADMAP.md § Known limitations](./ROADMAP.md#known-limitations)
 - **Proposals measured and rejected** → [ROADMAP.md § Considered and declined](./ROADMAP.md#considered-and-declined)

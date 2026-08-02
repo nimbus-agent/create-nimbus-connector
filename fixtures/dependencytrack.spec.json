@@ -1,0 +1,62 @@
+{
+  "name": "dependencytrack",
+  "title": "DependencyTrack",
+  "displayName": "Dependency-Track",
+  "description": "OWASP Dependency-Track connector (read-only). Surfaces the user's software-supply-chain projects from a self-hosted Dependency-Track instance as `dependencytrack:project` items in the local index — the project name, version, classifier (APPLICATION / LIBRARY / CONTAINER / …), active flag, last BOM-import timestamp, tags, and the embedded vulnerability metrics (critical / high / medium / low counts, total vulnerabilities, and component count). Useful for answering supply-chain questions (\"which projects have critical vulnerabilities?\", \"what's the SBOM coverage for the payment service?\") without leaving Nimbus. Dependency-Track API-key auth (sent as the X-Api-Key request header). Dependency-Track has no universal SaaS host: the server host is supplied via the dependencytrack base-url vault key and added to the sandbox network list at spawn time by phase3AddDependencytrackMcp, so the static manifest network list is intentionally empty. The /api/v1/project endpoint paginates by pageNumber / pageSize (pageSize max 100); the connector walks a single forward page-number pass per cycle, capped. v1 indexes projects only — individual findings and components are a deferred follow-up. No write tools.",
+  "serviceLabel": "Dependency-Track",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": [],
+  "filesystem": { "read": [], "write": [] },
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["DEPENDENCYTRACK_URL"],
+      "local": "apiBase",
+      "bindings": ["v"],
+      "required": true,
+      "transform": "trimTrailingSlashFn"
+    },
+    {
+      "vars": ["DEPENDENCYTRACK_API_KEY"],
+      "local": "authHeader",
+      "bindings": ["k"],
+      "auth": "headers",
+      "headerNames": ["X-Api-Key"]
+    }
+  ],
+  "fetchHelper": {
+    "local": "dtGet",
+    "base": "${env.apiBase}",
+    "headers": "authHeader"
+  },
+  "tools": [
+    {
+      "name": "dependencytrack_list",
+      "description": "List Dependency-Track projects (GET /api/v1/project?pageSize=100&pageNumber=1&excludeInactive=false). Dependency-Track returns a JSON array of project objects, each embedding its current vulnerability metrics. The optional pageNumber arg (default 1) selects the page; pageSize is fixed at 100.",
+      "args": {
+        "pageNumber": { "type": "number", "int": true, "min": 1, "optional": true, "default": 1, "local": "page" }
+      },
+      "path": "/api/v1/project?pageSize=100&pageNumber=${arg.pageNumber|num}&excludeInactive=false"
+    },
+    {
+      "name": "dependencytrack_get",
+      "description": "Fetch one Dependency-Track project by its UUID (GET /api/v1/project/{uuid}). Returns the project object directly (NOT wrapped in an array). Throws when no project with that UUID exists.",
+      "args": { "uuid": { "type": "string", "min": 1 } },
+      "path": "/api/v1/project/${arg.uuid|enc}"
+    },
+    {
+      "name": "dependencytrack_search",
+      "description": "Substring search across the first page of Dependency-Track projects. Matches the query (case-insensitive) against the project name, version, classifier, and tag names. Returns a matches envelope.",
+      "impl": "search",
+      "path": "/api/v1/project?pageSize=100&pageNumber=1&excludeInactive=false",
+      "maxLimit": 100,
+      "filter": {
+        "export": "filterDependencyTrackProjects",
+        "fields": ["name", "version", "classifier", { "tags": "objects" }]
+      }
+    }
+  ]
+}

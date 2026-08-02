@@ -339,4 +339,145 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
       ),
     ).not.toThrow();
   });
+
+  // The brief's spec for this pair used a bare `parseSpec(...)` and omitted
+  // fetchHelper.headers/.inlineHeaders. Neither works as written: parseSpec() alone never
+  // calls validateSpec — only generate() does (src/emit/index.ts:37) — so the collision this
+  // test exists to catch would never surface; and style "read-only-kit" is a hand-style per
+  // isHandStyle(), which requires exactly one of fetchHelper.headers/.inlineHeaders at the
+  // schema level, so the spec would fail to parse for an unrelated reason first. Fixed by
+  // wrapping in validateSpec(parseSpec(...)) — the pattern every other test in this file
+  // uses via specWith() — and adding inlineHeaders so the spec parses.
+  it("rejects a filter export that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: "mercuryGet", fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/mercuryGet/);
+  });
+
+  it.each([
+    "fieldsOf",
+    "stringField",
+    "nestedString",
+    "tagText",
+    "tagNamesFromObjects",
+    "asObjectish",
+    "makeQueryFilter",
+    "fieldsFromKeys",
+  ])("reserves %s against a filter export", (name) => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: name, fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+});
+
+/**
+ * Fix round 1, CRITICAL 1: extractorFilter hardcodes "function fieldsOf", and
+ * emitSearchFilter maps it over every tool taking the extractor branch — a connector with two
+ * such tools emits two `function fieldsOf(...)` declarations in one module (TS2393, and the
+ * second silently wins for both makeQueryFilter calls, since both hoist). Rejected at
+ * validateSpec rather than resolved with a spec field to name the extractor or an
+ * auto-suffix — see the ruling in src/validate.ts.
+ */
+describe("at most one extractor-branch search filter per connector", () => {
+  function specWithFilters(filters: Record<string, unknown>[]) {
+    return parseSpec({
+      name: "mercury",
+      title: "Mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+      },
+      tools: filters.map((filter, i) => ({
+        name: `s_${i}`,
+        description: "S.",
+        impl: "search",
+        path: `/v1/x${i}`,
+        filter,
+      })),
+    });
+  }
+
+  it("rejects two tools that both need the fieldsOf extractor, naming both", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["name", { tags: "objects" }] },
+    ]);
+    expect(() => validateSpec(spec)).toThrow(/"s_0"/);
+    expect(() => validateSpec(spec)).toThrow(/"s_1"/);
+    expect(() => validateSpec(spec)).toThrow(/at most one/);
+  });
+
+  it("accepts one extractor-branch tool alongside a keyed tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["id", "name"] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts two keyed tools — neither takes the extractor branch", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id"] },
+      { export: "filterB", fields: ["name"], tags: true },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts a single extractor-branch tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
 });

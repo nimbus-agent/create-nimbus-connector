@@ -49,15 +49,141 @@ export const ArgSchema = z
   });
 
 /**
- * The per-connector search filter. `fields` omitted means the emitter cannot express the
- * extraction and emits a throwing stub instead (Stage D design D5) — 40 of the 49 corpus
- * filter files hand-write an extractor this shape cannot reach.
+ * One searchable field. A plain string is a top-level key; `path` reads a nested one via the
+ * shared `nestedString`; `tags` selects one of the two shared tag helpers.
+ *
+ * The union is untagged because the required-key sets are disjoint — an entry is a string, or
+ * has `path`, or has `tags`. A `"type"` discriminator was declined in review: it is paid on
+ * every entry an author writes, and a future kind is either a new disjoint shape or an optional
+ * key on an existing one.
  */
-export const SearchFilterSchema = z.strictObject({
-  export: identifierField(),
-  fields: z.array(z.string().min(1)).min(1, "a filter must name at least one field").optional(),
-  tags: z.boolean().default(false),
+const PathEntrySchema = z.strictObject({
+  path: z.array(z.string().min(1, "a path segment cannot be empty")),
 });
+
+const TagsEntrySchema = z.strictObject({
+  /** "text" -> tagText (a string[] under `tags`); "objects" -> tagNamesFromObjects ({name}[]). */
+  tags: z.enum(["text", "objects"]),
+});
+
+/**
+ * The custom error is not decoration. Verified against zod 4.4.2: a failing untagged union
+ * reports a single issue whose default message is "Invalid input" — it names neither what was
+ * given nor what was expected. (It does *not* dump one failure per branch; that is zod 3
+ * behaviour.) This message is the only thing that makes a malformed entry actionable.
+ */
+const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema], {
+  error:
+    'a field entry must be a key string, { "path": [...] } with two or more segments, or ' +
+    '{ "tags": "text" | "objects" }',
+});
+
+export type FieldEntry = z.infer<typeof FieldEntrySchema>;
+
+export function isPathEntry(e: FieldEntry): e is z.infer<typeof PathEntrySchema> {
+  return typeof e === "object" && "path" in e;
+}
+
+function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema> {
+  return typeof e === "object" && "tags" in e;
+}
+
+/**
+ * The fieldsFromKeys-compatible shape for a filter's entries, or undefined when at least one
+ * entry needs the bespoke `fieldsOf` extractor instead — a `path` entry, a `{"tags":"objects"}`
+ * entry, or a `{"tags":...}` entry anywhere but last.
+ *
+ * `fieldsFromKeys` appends `tagText(row)` *after* the keyed fields when `opts.tags` is set, so
+ * a trailing `{ tags: "text" }` is byte-identical to legacy `tags: true` and converges onto
+ * this shape — an author who prefers the newer spelling does not silently lose a byte-match.
+ * Trailing is load-bearing: that helper can only append, so a tag entry in any other position
+ * changes field order and cannot converge. `{ tags: "objects" }` has no equivalent —
+ * fieldsFromKeys hardcodes tagText.
+ *
+ * This is the single source of truth for "does this filter take the extractor branch": the
+ * schema's own superRefine (below), `validateSpec`'s at-most-one-extractor rule, and the
+ * emitter's `keyedShape` all derive from it rather than restating the rule.
+ */
+export function resolveKeyedShape(
+  fields: readonly FieldEntry[],
+): { keys: readonly string[]; trailingTagText: boolean } | undefined {
+  const last = fields.at(-1);
+  const trailingTagText = last !== undefined && isTagsEntry(last) && last.tags === "text";
+  const body = trailingTagText ? fields.slice(0, -1) : fields;
+  if (!body.every((e): e is string => typeof e === "string")) return undefined;
+  return { keys: body, trailingTagText };
+}
+
+/**
+ * Whether a filter's fields require the bespoke `fieldsOf` extractor rather than
+ * `fieldsFromKeys`. `fields` omitted is the throwing-stub branch, not the extractor — this is
+ * `false` for it.
+ */
+export function needsExtractor(filter: { fields?: readonly FieldEntry[] }): boolean {
+  return filter.fields !== undefined && resolveKeyedShape(filter.fields) === undefined;
+}
+
+/**
+ * The per-connector search filter. `fields` omitted means the emitter cannot express the
+ * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
+ * an extractor, 9 are reachable with these entry kinds, 30 define a local helper function or
+ * need logic no path/tag entry can express (a join, an array flatten, a coercion), and one is
+ * hand-rolled. See the Stage E extractor design.
+ */
+export const SearchFilterSchema = z
+  .strictObject({
+    export: identifierField(),
+    fields: z.array(FieldEntrySchema).min(1, "a filter must name at least one field").optional(),
+    tags: z.boolean().default(false),
+  })
+  .superRefine((f, ctx) => {
+    if (f.fields === undefined) return;
+
+    for (const [i, e] of f.fields.entries()) {
+      // A one-segment path and a plain key emit identical output. Accepting both spellings for
+      // one emission is an ambiguity, and normalising it silently would hide a likely typo.
+      if (isPathEntry(e) && e.path.length < 2) {
+        const only = e.path[0];
+        ctx.addIssue({
+          code: "custom",
+          path: ["fields", i, "path"],
+          message:
+            `"path": ${JSON.stringify(e.path)} has fewer than two segments. A single-segment ` +
+            `path emits the same call as the plain key ${JSON.stringify(only ?? "")} — write ` +
+            "the plain string form instead.",
+        });
+      }
+    }
+
+    // A precedence rule here would be invisible in the emitted file, so both spellings at once
+    // is an error rather than one winning.
+    if (f.tags && f.fields.some(isTagsEntry)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tags"],
+        message:
+          'a filter sets legacy "tags": true and also lists a { "tags": ... } entry in ' +
+          '"fields". Use one: the entry form if you need "objects", otherwise "tags": true.',
+      });
+    }
+
+    // extractorFilter (src/emit/search-filter.ts) reads only "fields" — it never consults
+    // "tags" — so a legacy "tags": true on a filter that takes the extractor branch is
+    // silently dropped: the connector compiles and passes every gate while failing to match
+    // on tags. The .some(isTagsEntry) case above already rejects the overlapping case (a tags
+    // entry anywhere alongside "tags": true), so this only needs to catch the entry-free
+    // cause — a "path" entry forcing the extractor branch with no { "tags": ... } in sight.
+    if (f.tags && !f.fields.some(isTagsEntry) && needsExtractor(f)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tags"],
+        message:
+          'a filter sets legacy "tags": true, but its "fields" need a bespoke extractor (a ' +
+          '"path" entry forces this) — the extractor never reads "tags", so it would be ' +
+          'silently dropped. Add { "tags": "text" } as the last entry in "fields" instead.',
+      });
+    }
+  });
 
 export const ToolSchema = z
   .strictObject({

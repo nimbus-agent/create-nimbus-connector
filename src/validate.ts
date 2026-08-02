@@ -1,6 +1,6 @@
 import { type PathSegment, parsePathTemplate } from "./emit/server/path-template.ts";
 import type { ConnectorSpec } from "./spec.ts";
-import { registrarName } from "./spec.ts";
+import { needsExtractor, registrarName } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -73,6 +73,29 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "Promise",
   "console",
   "RequestInit",
+  // Stage E's extractor branch. src/server.ts imports the filter export from
+  // ./search-filter.ts, so that name lands in server.ts's module scope beside the fetch
+  // helper; the rest are declared or imported by src/search-filter.ts itself.
+  //
+  //   fieldsOf                 the extractor the fieldsOf branch declares
+  //   asObjectish              its guard
+  //   stringField              plain-key entries
+  //   nestedString              path entries
+  //   tagText/tagNamesFromObjects   tag entries
+  //   makeQueryFilter/fieldsFromKeys  emitted since Stage D, never reserved until now
+  //
+  // Reserved flat and unconditionally, matching the rule the list already states: making an
+  // entry conditional would mean a spec validating or failing depending on a field elsewhere
+  // in the file. This slightly over-rejects — an env accessor named "stringField" collides
+  // with nothing real — and that cost is accepted for one rule instead of two.
+  "fieldsOf",
+  "asObjectish",
+  "stringField",
+  "nestedString",
+  "tagText",
+  "tagNamesFromObjects",
+  "makeQueryFilter",
+  "fieldsFromKeys",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {
@@ -123,6 +146,12 @@ export function validateSpec(spec: ConnectorSpec): void {
     }
     toolNames.add(t.name);
 
+    // server.ts does `import { <export> } from "./search-filter.ts"`, so the filter export
+    // occupies server.ts's module scope too — not only search-filter.ts's.
+    if (t.filter !== undefined) {
+      claim(seen, t.filter.export, `the search filter for tool ${t.name}`);
+    }
+
     for (const [argName, arg] of Object.entries(t.args)) {
       const local = arg.local ?? argName;
       const hoisted = arg.default !== undefined || arg.type === "boolean";
@@ -134,6 +163,30 @@ export function validateSpec(spec: ConnectorSpec): void {
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);
     }
+  }
+
+  // A connector may declare at most one search filter that takes the extractor branch:
+  // extractorFilter (src/emit/search-filter.ts) hardcodes the name "fieldsOf", and
+  // emitSearchFilter maps it over every tool taking that branch, so a second one emits a
+  // second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
+  // implementation, and because both hoist, the second silently wins for both makeQueryFilter
+  // calls. Corpus measurement: the only corpus connector with two extractors in one file is
+  // readwise (`fieldsOf` and `bookFieldsOf`), and readwise defines a local `tagNames` helper,
+  // which puts it in the group this design cannot reach regardless — no connector reachable by
+  // this design needs two. Rejected rather than adding a spec field to name the extractor or
+  // auto-suffixing it, per the Stage E design's declined-options list.
+  const extractorTools = spec.tools.filter(
+    (t) => t.filter !== undefined && needsExtractor(t.filter),
+  );
+  if (extractorTools.length > 1) {
+    const names = extractorTools.map((t) => `"${t.name}"`).join(", ");
+    throw new Error(
+      `A connector may declare at most one search filter that needs a bespoke fieldsOf ` +
+        `extractor, but ${names} all do — src/search-filter.ts would declare ` +
+        '"function fieldsOf" more than once, and the second declaration silently wins for ' +
+        "every makeQueryFilter call in the file. Reduce one tool's filter to plain string " +
+        "fields (the fieldsFromKeys branch), or split it into its own connector.",
+    );
   }
 }
 
