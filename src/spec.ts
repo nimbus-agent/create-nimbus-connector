@@ -187,6 +187,22 @@ export const SearchFilterSchema = z
     }
   });
 
+/**
+ * One query-string parameter. `name` is the key as the API spells it and is deliberately not
+ * an identifier check — `page[size]` is a real corpus key.
+ *
+ * `omitWhen` is a single-valued enum rather than a boolean because the guard it selects is a
+ * specific predicate (`!== undefined && !== ""`), not a yes/no. A second predicate, if the
+ * corpus ever shows one, becomes another value here rather than a second boolean field.
+ */
+export const QueryParamSchema = z.strictObject({
+  name: z.string().min(1),
+  arg: z.string().min(1),
+  omitWhen: z.literal("empty").optional(),
+});
+
+export type QueryParam = z.infer<typeof QueryParamSchema>;
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -200,6 +216,10 @@ export const ToolSchema = z
       )
       .default({}),
     path: z.string().optional(),
+    query: z
+      .array(QueryParamSchema)
+      .min(1, "a query must declare at least one parameter")
+      .optional(),
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
@@ -262,6 +282,35 @@ export const ToolSchema = z
   })
   .refine((t) => t.impl === "search" || (t.rows === undefined && t.maxLimit === 100), {
     message: '"rows" and "maxLimit" are only valid on a tool with "impl": "search"',
+  })
+  .refine((t) => !(t.impl === "stub" && t.query !== undefined), {
+    message: 'a "stub" tool issues no request, so "query" has nothing to describe',
+  })
+  .refine((t) => !(t.query !== undefined && (t.path ?? "").includes("?")), {
+    message:
+      '"query" and a "?" inside "path" both write the query string — use one. A tool that ' +
+      'needs "query" moves its whole query string there.',
+  })
+  .superRefine((t, ctx) => {
+    if (t.query === undefined) return;
+    const seen = new Set<string>();
+    for (const [i, q] of t.query.entries()) {
+      if (!(q.arg in t.args)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "arg"],
+          message: `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, which the tool does not declare`,
+        });
+      }
+      if (seen.has(q.name)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "name"],
+          message: `"query" declares ${JSON.stringify(q.name)} twice — the second would silently win`,
+        });
+      }
+      seen.add(q.name);
+    }
   });
 
 export const EnvSchema = z

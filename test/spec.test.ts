@@ -1193,3 +1193,116 @@ describe("SearchFilterSchema field entries", () => {
     ).not.toThrow();
   });
 });
+
+describe("ToolSchema query parameters", () => {
+  const withQuery = (tool: Record<string, unknown>) =>
+    parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "discordGet",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "t", description: "T.", path: "/messages", ...tool }],
+    });
+
+  it("accepts an unconditional and a conditional parameter", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" }, after: { type: "string", optional: true } },
+      query: [
+        { name: "limit", arg: "limit" },
+        { name: "after", arg: "after", omitWhen: "empty" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "limit", arg: "limit" },
+      { name: "after", arg: "after", omitWhen: "empty" },
+    ]);
+  });
+
+  it("accepts a query key that is not a JS identifier", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" } },
+      query: [{ name: "page[size]", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query![0]!.name).toBe("page[size]");
+  });
+
+  it("rejects an omitWhen value other than empty", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a query arg that is not declared", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "after", arg: "after" }] })).toThrow(
+      /"after"/,
+    );
+  });
+
+  it("rejects two entries writing the same query key", () => {
+    expect(() =>
+      withQuery({
+        args: { a: { type: "string" }, b: { type: "string" } },
+        query: [
+          { name: "limit", arg: "a" },
+          { name: "limit", arg: "b" },
+        ],
+      }),
+    ).toThrow(/"limit"/);
+  });
+
+  it("rejects query on a stub tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
+  it("rejects query when the path already carries a query string", () => {
+    expect(() =>
+      withQuery({
+        path: "/messages?limit=50",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/\?/);
+  });
+
+  it("rejects an empty query array", () => {
+    expect(() => withQuery({ args: {}, query: [] })).toThrow();
+  });
+
+  it("leaves a tool with no query untouched", () => {
+    const spec = withQuery({ args: {} });
+    expect(spec.tools[0]!.query).toBeUndefined();
+  });
+});
