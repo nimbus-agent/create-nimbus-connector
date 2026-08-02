@@ -79,10 +79,12 @@ Three fields:
 - **`name`** — the query key as the API spells it. Not required to be a JS identifier;
   `page[size]` is a real corpus key.
 - **`arg`** — the declared argument supplying the value.
-- **`omitWhen`** — optional, and `"empty"` is the only accepted value. It renders the guard
-  `!== undefined && !== ""`. A single-valued enum rather than a boolean because the guard is a
-  specific predicate, not a yes/no: if a second predicate ever appears in the corpus it becomes
-  another value here rather than a second boolean field.
+- **`omitWhen`** — optional, and takes one of two values: `"absent"` renders the guard
+  `!== undefined`, `"empty"` renders `!== undefined && !== ""`. Both are genuine author
+  variance in the six-connector corpus, not one canonical form with an optional second
+  clause — circleci and github-actions guard string args with `"absent"` alone, discord,
+  google-meet and google-photos add the empty check. An enum rather than a boolean because
+  the guard is a specific predicate, not a yes/no.
 
 ### Defaults are deliberately absent
 
@@ -141,19 +143,30 @@ double-encode. Path segments keep their modes, unchanged.
 
 Per entry:
 
-- no `omitWhen` → `u.searchParams.set("<name>", String(<value>));`
-- `omitWhen: "empty"` → the three-line `if` guard around the same `set`
+- no `omitWhen` → `u.searchParams.set("<name>", <rendered value>);`
+- `omitWhen: "absent"` → `if (<value> !== undefined) { … }` around the same `set`
+- `omitWhen: "empty"` → `if (<value> !== undefined && <value> !== "") { … }` around the same `set`
 
 `<value>` is the hoisted local when the argument declares a default, otherwise the parameter
 reference (`p.after`). That choice is not new — it is what `renderPath` already does for path
 segments, and reusing it keeps one rule for how an argument becomes an expression.
 
-`String(...)` wraps the unconditional form only; the guarded form does not. That asymmetry is
-the corpus's, not a choice — verified directly against `discord/src/server.ts`, whose guarded
-`after` is written bare (`u.searchParams.set("after", parsed.after)`). An unconditional entry
-may carry a number (`limit`), so it needs the wrap; every guarded entry in the six in-scope
-connectors is already a string, so wrapping it would emit `String(parsed.after)` where the real
-file writes `parsed.after`.
+**The `String()` wrap is driven by the argument's declared type, not by whether the entry is
+guarded.** A first pass at this design claimed the wrap tracked guardedness (unconditional
+wraps, guarded doesn't); that was checked against too small a sample. Tabulated across every
+guarded `searchParams.set` in the six in-scope connectors, the type is what actually decides
+it: `github` and `github-actions` wrap their numeric, guarded `page`
+(`u.searchParams.set("page", String(parsed.page))`, `github/src/server.ts:66-68`), while every
+guarded *string* arg — circleci's `pageToken`, github-actions's `branch`/`event`/`status`,
+discord/google-meet/google-photos's `after`/`pageToken`/`filter` — is written bare. The rule is
+simply: a `number` or `boolean` arg wraps in `String(...)`, a `string` arg does not, whether or
+not the entry is guarded.
+
+**`omitWhen` cannot combine with an argument declaring a `default`.** The hoist emits
+`const x = p.x ?? <default>;`, so `x` is never `undefined` and the guard around it is dead
+code — `x !== undefined` is always true. No corpus connector combines them: `github` writes
+`String(parsed.perPage ?? 30)` unconditionally and guards `page` instead, which declares no
+default. Rejected at parse time, naming the argument.
 
 ### The byte-safety invariant
 
@@ -199,6 +212,13 @@ Each is a parse-time error naming the offending field:
   whole query string moves there.
 - **An empty `query` array.** Consistent with `fields`: an empty list expresses nothing and is
   more likely a mistake than an intent.
+- **`omitWhen: "empty"` on an arg not declaring `type: "string"`.** Comparing a number or
+  boolean to `""` is `TS2367` in the generated package, and the `set` call it guards is
+  `TS2345` — compiled to confirm, not assumed. The message names the argument and its
+  declared type.
+- **`omitWhen` combined with an argument declaring a `default`.** The hoist emits
+  `const x = p.x ?? <default>;`, so `x` is never `undefined` and the guard can never omit the
+  parameter — dead code that would also mislead a reader into thinking omission is possible.
 
 ## What this closes
 
@@ -250,10 +270,14 @@ its current `3/6`.
   reproduction knob, consistent with the extractor guard/form/name decisions.
 - **Adding `!== null` to the `omitWhen: "empty"` guard.** Declined: `null` is unreachable.
   `ArgSchema` types an argument `string`, `number` or `boolean`, and zod's `.optional()` widens
-  to `| undefined`, never `| null` — a JSON `null` fails the schema before a handler runs. All
-  six in-scope connectors guard on `!== undefined && !== ""` and nothing else, so adding a
-  third clause would emit a check that can never fire *and* forfeit every byte match it was
-  added to protect.
+  to `| undefined`, never `| null` — a JSON `null` fails the schema before a handler runs. Every
+  entry in the corpus that uses the `"empty"` predicate (discord/google-meet/google-photos's
+  `after`/`pageToken`/`filter`) guards on exactly `!== undefined && !== ""` and nothing else —
+  note this is a claim about the `"empty"` entries specifically, not about all guarded entries;
+  circleci and github-actions guard other args on `!== undefined` alone (`"absent"`, in "Spec
+  language" above), and that is a different predicate, not this one plus a missing clause.
+  Adding a third clause to `"empty"` would emit a check that can never fire *and* forfeit every
+  byte match it was added to protect.
 - **Renaming the emitted URL local from `u`** to something less collision-prone
   (`urlObj`, `__url`). Declined, though the concern behind it is fair. The corpus is genuinely
   split — across all connectors the name is `search` ×23, `u` ×20, `params` ×15, `qs` ×10,
