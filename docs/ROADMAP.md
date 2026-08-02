@@ -132,15 +132,21 @@ discovered later:
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
       of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
       40 corpus filter files that hand-write an extractor, **26 can be expressed** and **14
-      cannot**. The method, and why an earlier count said 9, are in
-      [Measuring reach](#measuring-reach).
+      cannot** — "expressed" means the entry kinds can state the field list, not that the
+      generator can actually emit the file. `readwise` is one of the 26 by that measure, but
+      `src/validate.ts` separately rejects it because it declares two extractor-taking filters
+      (`fieldsOf` and `bookFieldsOf`), and this generator allows at most one per connector (see
+      [Known limitations](#known-limitations)). So **25** of the 26 are generatable today. The
+      method, and why an earlier count said 9, are in [Measuring reach](#measuring-reach).
 
       Of the 26: **22** produce an identical haystack; **3** (`prefect`, `readwise`, `ramp`)
-      differ only in whitespace, because a local helper filters empty parts before joining
-      where independent entries do not — `ramp` is the one where that is observable, since a
-      query spanning an absent middle field would match the hand-written filter and not the
-      generated one; **1** (`stackoverflow`) rests on an API assumption this repository cannot
-      verify, and drops out if it is wrong.
+      differ only in whitespace. For `prefect` and `ramp`, a local helper filters empty parts
+      before joining where the shared entry does not — `ramp` is the one where that is
+      observable, since a query spanning an absent middle field would match the hand-written
+      filter and not the generated one. `readwise` runs the opposite direction: its local
+      `tagNames` does *not* filter empty parts, while the shared `tagNamesFromObjects` filters
+      `name !== ""`, so there the generated haystack is the narrower one. **1** (`stackoverflow`)
+      rests on an API assumption this repository cannot verify, and drops out if it is wrong.
 
       The 14 that cannot each have a named cause: a join over a non-`tags` array (`snyk`,
       `airflow`, `greenhouse`, `mendeley`, `wiz`), a numeric coercion (`databricks`, `dbt`),
@@ -245,7 +251,10 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   `pageSize`/`searchPageSize` differ from the real file on that one line even though the
   request they build is identical. **Repeating, multi-value parameters** — `gmail` sends the
   same key more than once via `searchParams.append`, not `.set` — are out of scope; `query`
-  models one value per name.
+  models one value per name. **A slashless path**: the query branch threads the fetch helper's
+  base straight into `renderPath`'s `prefix` with no separator and none of the leading-slash
+  normalization the non-query path gets, so `query` is rejected at parse time on any tool whose
+  `path` does not begin with `/`.
 - **An upstream defect this generator deliberately does not reproduce.** `discord`, `circleci`,
   `google-meet` and `google-photos`'s hand-written path builders return
   `` `${u.pathname}${u.search}` ``. `u.pathname` already carries the base's own path component
@@ -281,9 +290,10 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   is always that name, so a second search tool taking the extractor branch in the same
   `src/search-filter.ts` would redeclare it — `validateSpec` rejects this at parse time rather
   than auto-suffixing or adding a spec field to name the extractor. Measured: the only corpus
-  connector with two extractors in one file is `readwise` (`fieldsOf` and `bookFieldsOf`), and
-  it is already unreachable for an unrelated reason — it defines a local `tagNames` helper,
-  putting it in the 30-file group no entry kind reaches regardless.
+  connector with two extractors in one file is `readwise` (`fieldsOf` and `bookFieldsOf`). Its
+  field lists are otherwise expressible — it is one of the 26 counted under
+  [Measuring reach](#measuring-reach) — so this rule is the sole reason it is not generatable
+  today, not a second, independent gap stacked on top of one.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
   still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
   define a local helper function or need logic no declarative field list expresses — a join, an

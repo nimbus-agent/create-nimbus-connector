@@ -4,7 +4,7 @@
 
 **Goal:** Let a tool declare query parameters that are omitted when their argument is absent, so the six corpus connectors writing the `URL` + `searchParams` shape stop being stubbed.
 
-**Architecture:** A new optional `query` array on `ToolSchema`. Rendering is *derived*: a tool without `query` emits today's path expression byte-for-byte; a tool with `query` emits a block that builds an absolute `URL`, sets each parameter, and returns `` `${u.pathname}${u.search}` ``. The rendering lives in one new module both the rest-kit and hand-rolled tool renderers call, so the two cannot disagree.
+**Architecture:** A new optional `query` array on `ToolSchema`. Rendering is *derived*: a tool without `query` emits today's path expression byte-for-byte; a tool with `query` emits a block that builds an absolute `URL`, sets each parameter, and returns `` `${u}` ``. The rendering lives in one new module both the rest-kit and hand-rolled tool renderers call, so the two cannot disagree.
 
 **Tech Stack:** Bun, TypeScript, zod 4 (`^4.4.2`), Biome 2.5.6, `bun:test`.
 

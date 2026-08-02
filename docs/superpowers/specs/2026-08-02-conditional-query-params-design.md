@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 **Stage:** E — the corpus tail, the "conditional paths" bullet (query parameters only)
-**Status:** approved, not yet implemented
+**Status:** implemented on branch `worktree-stage-e-reach`
 
 ## Problem
 
@@ -23,6 +23,10 @@ corpus writes that with a `URL` and `searchParams`:
   return `${u.pathname}${u.search}`;
 }
 ```
+
+(This is the corpus's actual code, bug included — see "An upstream defect this generator
+deliberately does not reproduce" under Rendering, below. The emitter does not reproduce this
+final `return` line.)
 
 A path template renders one fixed string, so a tool needing this shape must be stubbed. It is
 why `discord` and `google-meet` do not reach zero diff, and the ROADMAP already records
@@ -101,7 +105,7 @@ This is also what makes `discord` byte-reachable with no new machinery: its `lim
 | Spec shape | Emission |
 | --- | --- |
 | `query` absent | today's path expression, unchanged |
-| `query` present | `new URL(<base><path>)`, one `searchParams` statement per entry, `` return `${u.pathname}${u.search}` `` |
+| `query` present | `new URL(<base><path>)`, one `searchParams` statement per entry, `` return `${u}` `` |
 
 ### The URL is absolute, and the base comes from `baseExpr`
 
@@ -114,6 +118,9 @@ const u = new URL(`${DISCORD_API}/channels/${encodeURIComponent(parsed.channelId
 …
 return `${u.pathname}${u.search}`;
 ```
+
+(Again the corpus's actual, buggy return — the emitter's own return differs; see "An upstream
+defect this generator deliberately does not reproduce" below.)
 
 The emitter must therefore prefix the path with the base, and it must do so through the
 existing `baseExpr(spec)` in `src/emit/server/fetch-helper.ts` — which already yields `${BASE}`
@@ -177,6 +184,28 @@ protected them through the extractor work.
 `datadog` and `grafana` do carry `?` inside `path`, and that path stays on the unchanged
 branch. Nothing about this design touches it.
 
+### An upstream defect this generator deliberately does not reproduce
+
+The corpus's `` return `${u.pathname}${u.search}`; `` — quoted twice above as "the" shape this
+design targets — is not merely a formatting choice to reproduce. It is itself buggy.
+`u.pathname` already carries the base's own path component, because the base was spliced into
+`new URL(...)` as a literal string prefix rather than passed as the URL's origin, and the
+connector's fetch helper prepends that same base a second time. The real `discord` connector
+therefore requests `https://discord.com/api/v10/api/v10/channels/123/messages` — a doubled
+`/api/v10` — verified by running the connector's own code. `circleci`, `google-meet` and
+`google-photos` write the identical pattern; `github` and `github-actions` write it too and
+escape only because `api.github.com` has no path component to double.
+
+The maintainer decided this generator must not reproduce that defect. The emitter therefore
+returns `` `${u}` `` — the absolute URL — rather than `` `${u.pathname}${u.search}` ``; the
+fetch helper's own `startsWith("http")` short-circuit passes an absolute URL through
+untouched, so the request it makes is correct rather than doubled. This is a deliberate
+divergence, decided mid-implementation, not an oversight this document failed to catch — and
+it is why `discord` and `google-meet` do not byte-match `src/server.ts`, even though both now
+use `query` for real, non-stub tools. See "What this closes" below, and
+[`docs/ROADMAP.md`](../../ROADMAP.md)'s *Known limitations*, which records the same defect for
+a reader who starts there instead.
+
 ## Identifier safety
 
 `u` and `URL` join `RESERVED_IDENTIFIERS` in the same change.
@@ -225,13 +254,17 @@ Each is a parse-time error naming the offending field:
 Three of the five tools our fixtures currently stub: `discord_channel_messages`,
 `google_meet_list`, `google_meet_search`.
 
-`discord` is expected to byte-match. **`google-meet` is expected not to**, and that is
-accepted rather than fixed: it inlines its default —
-`u.searchParams.set("pageSize", String(parsed.pageSize ?? 50))` — where the emitter hoists,
-because the existing rule hoists any argument declaring a default. Reaching it would need a
-per-argument "inline this default" knob whose only purpose is reproducing a formatting choice,
-which is the same trade this project declined for the extractor guard, form and name. It is
-documented as shape variance instead.
+**Neither `discord` nor `google-meet` is expected to byte-match `src/server.ts`**, and both
+gaps are accepted rather than fixed. `discord`'s is the deliberate divergence described above
+under "An upstream defect this generator deliberately does not reproduce" — the emitter
+returns `` `${u}` `` where the real file returns `` `${u.pathname}${u.search}` ``, one correct
+request against one doubled one. `google-meet`'s is unrelated and pre-dates that decision: it
+inlines its default — `u.searchParams.set("pageSize", String(parsed.pageSize ?? 50))` — where
+the emitter hoists, because the existing rule hoists any argument declaring a default. Reaching
+it would need a per-argument "inline this default" knob whose only purpose is reproducing a
+formatting choice, which is the same trade this project declined for the extractor guard, form
+and name. Both are documented as shape variance / a deliberate divergence, not as `src/server.ts`
+byte matches this work obtains.
 
 `bitrise`'s two stubs are untouched.
 
@@ -282,7 +315,10 @@ its current `3/6`.
   (`urlObj`, `__url`). Declined, though the concern behind it is fair. The corpus is genuinely
   split — across all connectors the name is `search` ×23, `u` ×20, `params` ×15, `qs` ×10,
   `body` ×2, `q` ×1 — so any choice matches some files and not others, exactly like the
-  registrar naming and the transport tail. `u` is what `discord` and `google-meet` write, which
-  is the only reason it wins: it is the one that byte-matches the fixtures this work targets.
-  A hygienic name would match nothing. Reserving `u` costs a spec author one rename of their
-  own identifier; not emitting `u` costs every byte match this design exists to obtain.
+  registrar naming and the transport tail. `u` is what `discord` and `google-meet` write, and
+  they are the two connectors this branch targets, so `u` is the dominant local name in the
+  corpus this design actually has to read against — not a claim that either file byte-matches
+  `src/server.ts`, which neither does (see "An upstream defect this generator deliberately does
+  not reproduce", above). A hygienic name would match neither connector's convention. Reserving
+  `u` costs a spec author one rename of their own identifier; the corpus split means no name
+  choice here was ever going to satisfy every file.
