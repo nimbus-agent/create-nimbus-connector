@@ -96,6 +96,14 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "tagNamesFromObjects",
   "makeQueryFilter",
   "fieldsFromKeys",
+  // The conditional-query branch emits `const u = new URL(...)` inside the path callback and
+  // calls the URL global directly. `u` is function-scope rather than module-scope, which is
+  // exactly the case "root" above is reserved for: a fetch helper named `u` would produce a
+  // use-before-declaration, not a shadow. Corpus note: the URL local's name is genuinely split
+  // (search x23, u x20, params x15, qs x10), and `u` is chosen because it is what discord and
+  // google-meet write — the two connectors this branch exists to reproduce.
+  "u",
+  "URL",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {

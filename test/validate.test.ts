@@ -414,6 +414,27 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
       ),
     ).toThrow(/reserved/);
   });
+
+  it.each(["u", "URL"])("reserves %s against a fetch helper local", (name) => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: name,
+            base: "https://discord.com/api/v10",
+            inlineHeaders: {},
+          },
+          tools: [{ name: "t", description: "T.", path: "/x" }],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
 });
 
 /**
