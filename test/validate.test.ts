@@ -339,4 +339,79 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
       ),
     ).not.toThrow();
   });
+
+  // The brief's spec for this pair used a bare `parseSpec(...)` and omitted
+  // fetchHelper.headers/.inlineHeaders. Neither works as written: parseSpec() alone never
+  // calls validateSpec — only generate() does (src/emit/index.ts:37) — so the collision this
+  // test exists to catch would never surface; and style "read-only-kit" is a hand-style per
+  // isHandStyle(), which requires exactly one of fetchHelper.headers/.inlineHeaders at the
+  // schema level, so the spec would fail to parse for an unrelated reason first. Fixed by
+  // wrapping in validateSpec(parseSpec(...)) — the pattern every other test in this file
+  // uses via specWith() — and adding inlineHeaders so the spec parses.
+  it("rejects a filter export that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: "mercuryGet", fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/mercuryGet/);
+  });
+
+  it.each([
+    "fieldsOf",
+    "stringField",
+    "nestedString",
+    "tagText",
+    "tagNamesFromObjects",
+    "asObjectish",
+    "makeQueryFilter",
+    "fieldsFromKeys",
+  ])("reserves %s against a filter export", (name) => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: name, fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
 });

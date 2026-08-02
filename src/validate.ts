@@ -73,6 +73,29 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "Promise",
   "console",
   "RequestInit",
+  // Stage E's extractor branch. src/server.ts imports the filter export from
+  // ./search-filter.ts, so that name lands in server.ts's module scope beside the fetch
+  // helper; the rest are declared or imported by src/search-filter.ts itself.
+  //
+  //   fieldsOf                 the extractor the fieldsOf branch declares
+  //   asObjectish              its guard
+  //   stringField              plain-key entries
+  //   nestedString              path entries
+  //   tagText/tagNamesFromObjects   tag entries
+  //   makeQueryFilter/fieldsFromKeys  emitted since Stage D, never reserved until now
+  //
+  // Reserved flat and unconditionally, matching the rule the list already states: making an
+  // entry conditional would mean a spec validating or failing depending on a field elsewhere
+  // in the file. This slightly over-rejects — an env accessor named "stringField" collides
+  // with nothing real — and that cost is accepted for one rule instead of two.
+  "fieldsOf",
+  "asObjectish",
+  "stringField",
+  "nestedString",
+  "tagText",
+  "tagNamesFromObjects",
+  "makeQueryFilter",
+  "fieldsFromKeys",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {
@@ -122,6 +145,12 @@ export function validateSpec(spec: ConnectorSpec): void {
       throw new Error(`Duplicate tool name: "${t.name}".`);
     }
     toolNames.add(t.name);
+
+    // server.ts does `import { <export> } from "./search-filter.ts"`, so the filter export
+    // occupies server.ts's module scope too — not only search-filter.ts's.
+    if (t.filter !== undefined) {
+      claim(seen, t.filter.export, `the search filter for tool ${t.name}`);
+    }
 
     for (const [argName, arg] of Object.entries(t.args)) {
       const local = arg.local ?? argName;
