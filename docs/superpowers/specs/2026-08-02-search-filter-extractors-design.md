@@ -72,6 +72,14 @@ naming and tail idiom this repo has already declined to add knobs for.
 
 `{ "tags": "text" }` renders `tagText(row)`.
 
+Entry objects are `z.strictObject`s, matching every other schema in `spec.ts`, so a misspelled
+or mixed-shape entry — `{ "path": ["spec"], "tag": "objects" }` — is rejected rather than
+silently reinterpreted.
+
+The union is untagged (no `"type"` discriminator) because the required-key sets are disjoint:
+an entry is a string, or has `path`, or has `tags`. A tagged form was considered and declined —
+see [Considered and declined](#considered-and-declined).
+
 There is no fourth kind. `firebase` and `testflight` project a sub-object and then read flat
 keys off it — `const attributes = asObjectish(row["attributes"]) ?? {}` followed by
 `stringField(attributes, "version")`. That is semantically identical to
@@ -84,10 +92,17 @@ Each is a parse-time error, not a normalisation:
 
 - **A `path` with fewer than two segments.** A one-segment path and a plain string key produce
   identical output. Accepting both spellings for one emission is an ambiguity, and silently
-  normalising it hides a probable authoring mistake.
+  normalising it hides a probable authoring mistake. The message quotes the offending path and
+  names the plain-string spelling to use instead.
+- **An empty path segment.** `z.string().min(1)` per segment, matching the rule `fields`
+  already applies to plain keys. Whitespace-only segments are *not* rejected: `{" ": …}` is a
+  legal JSON key, and trimming would reject a spec that is merely unusual.
 - **Both legacy `tags: true` and a `{ "tags": … }` entry.** The message names both, because a
   precedence rule here would be invisible in the emitted file.
 - **An empty `fields` array**, unchanged from today.
+
+Every message names the offending key or value, matching the convention `validate.ts` already
+holds itself to.
 
 ### Backward compatibility
 
@@ -103,10 +118,21 @@ Derived from the entry kinds present. No selector field.
 | --- | --- |
 | all entries plain strings, `tags` absent or false | `makeQueryFilter(fieldsFromKeys([...]))` |
 | all entries plain strings, `tags: true` | `makeQueryFilter(fieldsFromKeys([...], { tags: true }))` |
-| any `path` or `{tags:…}` entry | `function fieldsOf(…)` + `makeQueryFilter(fieldsOf)` |
+| all entries plain strings **plus a trailing `{"tags":"text"}`** | `makeQueryFilter(fieldsFromKeys([...], { tags: true }))` |
+| any `path` entry, a non-trailing `{"tags":…}`, or `{"tags":"objects"}` | `function fieldsOf(…)` + `makeQueryFilter(fieldsOf)` |
 | `fields` omitted | throwing stub |
 
-The first, second and fourth rows are today's behaviour, unchanged. Only the third is new.
+The first, second and fifth rows are today's behaviour, unchanged.
+
+The third row makes the two tag spellings **converge** rather than diverge. `fieldsFromKeys`
+appends `tagText(row)` after the keyed fields when `opts.tags` is set, so a trailing
+`{"tags":"text"}` is byte-identical to `tags: true` — and emitting it as such means an author
+who prefers the newer spelling does not silently lose a byte-match. The trailing requirement is
+load-bearing: `fieldsFromKeys` can only append, so a `{"tags":"text"}` in any other position
+changes field order and must use `fieldsOf`.
+
+`{"tags":"objects"}` has no `fieldsFromKeys` equivalent — that helper hardcodes `tagText` — so
+it always takes the `fieldsOf` branch.
 
 A `form` override was considered and dropped. It was proposed to byte-match the seven Group A
 files that write a flat list in `fieldsOf` form, and it lost its justification when the goal
@@ -158,6 +184,21 @@ flat set checked before any style or tool kind is considered.
   existing code already computes this precisely for `SearchFilter`.
 - Emitters return unformatted source; line breaks are hand-managed, indentation is not.
 
+**Which primitives each branch imports.** The `fieldsOf` branch always imports `asObjectish`,
+for the guard; `stringField`, `nestedString`, `tagText` and `tagNamesFromObjects` only when an
+entry of that kind is present. `FieldExtractor` is **never** imported: the emitted form is a
+function declaration —
+
+```ts
+function fieldsOf(item: unknown): readonly string[] | null
+```
+
+— which annotates its own signature. `FieldExtractor` is needed only by the
+`const buildFields: FieldExtractor = (item) => …` form that `firebase` and `testflight` use,
+and this design does not emit that form.
+
+`asRecord` is never imported either, since the guard is always `asObjectish`.
+
 **Targets.** Monorepo imports from `../../shared/search-filter.ts`. Standalone imports from the
 single `@nimbus-dev/sdk/connector-kit` barrel. All six primitives are exported from
 `connector-kit/index.ts` as of the 1.15.0 release commit (`f2932d4`), and npm is at 1.16.0, so
@@ -179,9 +220,13 @@ into this repository.
 
 - Unit tests per entry kind and per rendering-table row, including that a plain-string-only
   spec still emits `fieldsFromKeys` unchanged.
+- A convergence test: a spec with a trailing `{"tags":"text"}` and the equivalent spec with
+  `tags: true` emit **identical bytes**.
 - A rejection test per new validator error, each asserting the offending key appears in the
   message.
-- Import-set tests for both targets, asserting absent primitives are *not* imported.
+- Import-set tests for both targets, asserting absent primitives are *not* imported — including
+  that a paths-only spec imports `nestedString` but neither `tagText` nor `tagNamesFromObjects`,
+  and that no branch ever imports `FieldExtractor` or `asRecord`.
 - `test/emit/emitted-typecheck.test.ts` covers the emitted source compiling.
 
 Generated `test/sandbox.test.ts` is not evidence — it is wrapped in
@@ -209,6 +254,35 @@ Generated `test/sandbox.test.ts` is not evidence — it is wrapped in
 - ROADMAP: correct the multi-file bullet. It names `elasticsearch` and `storybook`; 16
   connectors carry `src/tools.ts` and `server.ts` imports it in 15 of them.
 - Live numbers stay out of the docs. `diff:golden` is the answer.
+
+## Considered and declined
+
+Recorded so they are not re-proposed. Each came out of review on 2026-08-02.
+
+**A tagged discriminated union for field entries** — `{ "type": "nested", "path": [...] }`
+rather than `{ "path": [...] }`. Declined. The required-key sets are already disjoint under
+`strictObject`, so the untagged form is unambiguous today, and it stays extensible: a future
+coercion kind is either a new disjoint shape or an optional key on an existing one. The cost is
+paid on every entry an author writes, for extensibility this design explicitly defers to a
+later one. `spec.ts` also has no `discriminatedUnion` precedent to follow. If union error
+messages prove poor in practice, the fix is a `superRefine` naming the unrecognised entry
+shape — not a keyword on every entry.
+
+**A deprecation warning on legacy `tags: true`.** Declined, and it would have been actively
+harmful. `tags: true` is not superseded — it is the *only* spelling that reaches the
+`fieldsFromKeys` form, which is what `zendesk` and `raindrop` are written in and what `zendesk`
+byte-matches on today. Steering authors off it would push them to the `fieldsOf` form and break
+byte-matches. The trailing-`{"tags":"text"}` convergence rule above addresses the underlying
+concern — two spellings, one emission — without deprecating anything.
+
+**Numeric or boolean extraction primitives** (`nestedNumber`, `booleanField`). Declined here,
+on two grounds. `stringField` and `nestedString` do not coerce — both are
+`typeof v === "string" ? v : ""`, so a non-string field contributes `""` to the haystack. No
+Group A connector needs coercion; the connectors that do (`databricks`, `dbt`, `flagsmith` and
+others wrapping values in `String()`) are all Group B, already out of scope. More decisively,
+`shared/search-filter.ts` exports no such primitive, and the emitter may only compose helpers
+that already ship: adding one means a change to the AGPL Nimbus repo *and* a release of the MIT
+SDK, neither of which this repository can make unilaterally.
 
 ## Out of scope
 
