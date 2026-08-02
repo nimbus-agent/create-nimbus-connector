@@ -1,0 +1,66 @@
+{
+  "name": "netlify",
+  "title": "Netlify",
+  "displayName": "Netlify",
+  "description": "Netlify site connector (read-only). Surfaces site id, name, the production URL + SSL URL, the admin dashboard URL, the linked git repo + branch, and the embedded published-deploy status (state / branch / commit ref / commit URL / deploy preview URL) into the local index as `netlify:site` items — useful for answering \"is the latest deploy live?\" and \"which site shipped this commit?\". Bearer-token (PAT) auth. The SaaS host (api.netlify.com) is fixed. Per-deploy history, forms, functions, env vars, and DNS are deferred follow-ups.",
+  "serviceLabel": "Netlify",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.netlify.com"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["NETLIFY_TOKEN"],
+      "local": "authHeader",
+      "tokenLocal": "apiToken",
+      "bindings": ["t"],
+      "auth": "bearer"
+    }
+  ],
+  "fetchHelper": {
+    "local": "netlifyGet",
+    "base": "https://api.netlify.com",
+    "baseConst": "BASE",
+    "headers": "authHeader",
+    "staticPathStyle": "template"
+  },
+  "tools": [
+    {
+      "name": "netlify_list",
+      "description": "List Netlify sites (`GET /api/v1/sites`), capped at `per_page` (default 100). Returns a bare JSON array of site objects, each carrying the embedded `published_deploy` status and `build_settings`.",
+      "args": {
+        "per_page": { "type": "number", "int": true, "min": 1, "max": 100, "optional": true, "default": 100, "local": "perPage" }
+      },
+      "path": "/api/v1/sites?per_page=${arg.per_page|num}&page=1"
+    },
+    {
+      "name": "netlify_get",
+      "description": "Fetch one Netlify site by its id (`GET /api/v1/sites/{siteId}`). Returns the site object directly. Throws when no match is found.",
+      "args": { "siteId": { "type": "string", "min": 1 } },
+      "path": "/api/v1/sites/${arg.siteId|enc}"
+    },
+    {
+      "name": "netlify_search",
+      "description": "Substring search across Netlify sites. Matches the query against id, name, url, ssl_url, the linked git repo + branch, and the published-deploy state / branch / commit ref (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "path": "/api/v1/sites?per_page=100&page=1",
+      "maxLimit": 100,
+      "filter": {
+        "export": "filterNetlifySites",
+        "fields": [
+          "id",
+          "name",
+          "url",
+          "ssl_url",
+          { "path": ["build_settings", "repo_url"] },
+          { "path": ["build_settings", "repo_branch"] },
+          { "path": ["published_deploy", "state"] },
+          { "path": ["published_deploy", "branch"] },
+          { "path": ["published_deploy", "commit_ref"] }
+        ]
+      }
+    }
+  ]
+}
