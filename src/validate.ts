@@ -206,10 +206,9 @@ export function validateSpec(spec: ConnectorSpec): void {
   // second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
   // implementation, and because both hoist, the second silently wins for both makeQueryFilter
   // calls. Corpus measurement: the only corpus connector with two extractors in one file is
-  // readwise (`fieldsOf` and `bookFieldsOf`), and readwise defines a local `tagNames` helper,
-  // which puts it in the group this design cannot reach regardless — no connector reachable by
-  // this design needs two. Rejected rather than adding a spec field to name the extractor or
-  // auto-suffixing it, per the Stage E design's declined-options list.
+  // readwise (`fieldsOf` and `bookFieldsOf`) — its field lists are otherwise expressible, so
+  // this rule alone is what keeps it unreachable. Rejected rather than adding a spec field to
+  // name the extractor or auto-suffixing it, per the Stage E design's declined-options list.
   const extractorTools = spec.tools.filter(
     (t) => t.filter !== undefined && needsExtractor(t.filter),
   );
