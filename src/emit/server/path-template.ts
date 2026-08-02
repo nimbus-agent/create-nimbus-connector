@@ -17,6 +17,13 @@ export type RenderContext = {
    * which always renders as a template literal regardless of this setting.
    */
   readonly staticStyle?: "quoted" | "template";
+  /**
+   * Emitted at the start of the template, before the first segment. The conditional-query
+   * branch passes the fetch helper's base here so `new URL(...)` receives an absolute URL —
+   * `new URL("/relative")` throws. Threading it through the one path renderer keeps the
+   * template-vs-JSON-string distinction in a single place.
+   */
+  readonly prefix?: string;
 };
 
 const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
@@ -114,8 +121,9 @@ function argExpression(seg: { name: string; mode: ArgMode }, ctx: RenderContext)
 
 /** Returns a TS expression: a double-quoted string, or a backticked template literal. */
 export function renderPath(segments: readonly PathSegment[], ctx: RenderContext): string {
+  const prefix = ctx.prefix ?? "";
   const dynamic = segments.some((s) => s.kind !== "literal");
-  if (!dynamic) {
+  if (!dynamic && prefix === "") {
     const text = segments.map((s) => (s.kind === "literal" ? s.text : "")).join("");
     if (ctx.staticStyle === "template") {
       return `\`${text.replaceAll("\\", "\\\\").replaceAll("`", "\\`")}\``;
@@ -129,5 +137,5 @@ export function renderPath(segments: readonly PathSegment[], ctx: RenderContext)
       return `\${${argExpression(s, ctx)}}`;
     })
     .join("");
-  return `\`${body}\``;
+  return `\`${prefix}${body}\``;
 }
