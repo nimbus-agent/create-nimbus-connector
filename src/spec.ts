@@ -291,6 +291,16 @@ export const ToolSchema = z
   .refine((t) => !(t.impl === "stub" && t.query !== undefined), {
     message: 'a "stub" tool issues no request, so "query" has nothing to describe',
   })
+  // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
+  // never reads t.query — accepted at parse time and then silently discarded at emit time,
+  // the exact "accepted then discarded" failure this project has already fixed once (see
+  // the omitWhen/needsExtractor checks above). rest-kit tools cannot be impl: "search" at
+  // all (the schema's own rest-kit refine above rejects it), so this only ever fires for
+  // hand-rolled or read-only-kit.
+  .refine((t) => !(t.impl === "search" && t.query !== undefined), {
+    message:
+      'a "search" tool builds its query string from "filter", so "query" has nothing to describe',
+  })
   .refine((t) => !(t.query !== undefined && (t.path ?? "").includes("?")), {
     message:
       '"query" and a "?" inside "path" both write the query string — use one. A tool that ' +

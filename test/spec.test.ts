@@ -1354,6 +1354,38 @@ describe("ToolSchema query parameters", () => {
     ).toThrow(/query/);
   });
 
+  // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
+  // never reads t.query — accepted at parse time, silently discarded at emit time. The stub
+  // rejection above closes the same hole for stubs; this closes it for search tools.
+  it("rejects query on a search tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "search",
+            path: "/messages",
+            filter: { export: "filterDiscordMessages", fields: ["id"] },
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
   it("rejects query when the path already carries a query string", () => {
     expect(() =>
       withQuery({
