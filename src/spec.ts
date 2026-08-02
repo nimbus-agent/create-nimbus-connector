@@ -188,19 +188,6 @@ export const SearchFilterSchema = z
   });
 
 /**
- * One query-string parameter. `name` is the key as the API spells it and is deliberately not
- * an identifier check — `page[size]` is a real corpus key.
- *
- * `omitWhen` is an enum rather than a boolean because the guard it selects is one of two
- * specific predicates, not a yes/no: `"absent"` tests only `!== undefined` (circleci's
- * `pageToken`, github-actions's `branch`/`event`/`status`, github's `page`), `"empty"` adds
- * `&& !== ""` (discord/google-meet/google-photos's `after`/`pageToken`/`filter`). Both are
- * genuine author variance in the corpus — three connectors each way — not one canonical form
- * with an optional second clause, so a guarded entry must say which predicate it means; there
- * is no default between them. `omitWhen` itself stays optional — undefined means the entry is
- * set unconditionally, which is the third real shape (`limit`).
- */
-/**
  * Whether a query entry's value can genuinely be `undefined` at the point
  * `renderQueryLines` (src/emit/server/query.ts) reads it — i.e. whether `omitWhen`'s guard
  * has anything to omit. Requires all three: `"optional": true` (a required arg's value
@@ -220,6 +207,19 @@ function canOmitQueryValue(arg: z.infer<typeof ArgSchema>): boolean {
   return arg.optional && arg.default === undefined && arg.type !== "boolean";
 }
 
+/**
+ * One query-string parameter. `name` is the key as the API spells it and is deliberately not
+ * an identifier check — `page[size]` is a real corpus key.
+ *
+ * `omitWhen` is an enum rather than a boolean because the guard it selects is one of two
+ * specific predicates, not a yes/no: `"absent"` tests only `!== undefined` (circleci's
+ * `pageToken`, github-actions's `branch`/`event`/`status`, github's `page`), `"empty"` adds
+ * `&& !== ""` (discord/google-meet/google-photos's `after`/`pageToken`/`filter`). Both are
+ * genuine author variance in the corpus — three connectors each way — not one canonical form
+ * with an optional second clause, so a guarded entry must say which predicate it means; there
+ * is no default between them. `omitWhen` itself stays optional — undefined means the entry is
+ * set unconditionally, which is the third real shape (`limit`).
+ */
 export const QueryParamSchema = z.strictObject({
   name: z.string().min(1),
   arg: z.string().min(1),
@@ -328,6 +328,26 @@ export const ToolSchema = z
   })
   .superRefine((t, ctx) => {
     if (t.query === undefined) return;
+
+    // renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
+    // (the fetch helper's base) straight into the template with no separator — it never
+    // applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
+    // applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
+    // cleanly; a path that does not silently fuses onto the base with nothing between them
+    // (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
+    // only visible once the connector makes a request. Rejecting here, rather than teaching
+    // renderPath the same normalization, keeps that guard in the one place
+    // (fetch-helper.ts) that owns it.
+    if (!(t.path ?? "").startsWith("/")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["path"],
+        message:
+          `tool ${JSON.stringify(t.name)} declares "query", so "path" must begin with "/" ` +
+          `— got ${JSON.stringify(t.path ?? "")}`,
+      });
+    }
+
     const seen = new Set<string>();
     for (const [i, q] of t.query.entries()) {
       // `q.arg in t.args` reaches inherited properties (`"toString"` would pass with an empty

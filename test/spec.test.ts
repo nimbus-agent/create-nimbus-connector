@@ -1440,6 +1440,29 @@ describe("ToolSchema query parameters", () => {
     expect(() => withQuery({ args: {}, query: [] })).toThrow();
   });
 
+  // renderPath's query-branch prefix (the fetch helper's base) joins directly onto the path
+  // template with no separator and none of renderFetchHelper's leading-slash normalization —
+  // a slashless path fuses onto the base ("https://x.testitems" instead of
+  // "https://x.test/items"). Rejected here rather than left to be discovered in a request.
+  it('rejects query on a tool whose path does not begin with "/"', () => {
+    expect(() =>
+      withQuery({
+        path: "messages",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"t".*"\/"/);
+  });
+
+  it('accepts query on a tool whose path begins with "/"', () => {
+    const spec = withQuery({
+      path: "/messages",
+      args: { after: { type: "string" } },
+      query: [{ name: "after", arg: "after" }],
+    });
+    expect(spec.tools[0]!.path).toBe("/messages");
+  });
+
   it("leaves a tool with no query untouched", () => {
     const spec = withQuery({ args: {} });
     expect(spec.tools[0]!.query).toBeUndefined();
