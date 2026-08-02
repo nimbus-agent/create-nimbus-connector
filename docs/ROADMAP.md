@@ -154,8 +154,14 @@ discovered later:
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file.
-- [ ] **Conditional paths and enum arguments.** `bitrise`'s two non-search tools select an
-      endpoint from whether an optional arg is present and map a `z.enum` through a lookup.
+- [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
+      guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
+      sent only when an optional argument is present or non-empty. See the README for the
+      field and its rejections, and [Known limitations](#known-limitations) for what it still
+      doesn't reach.
+- [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
+      still select an endpoint from whether an optional arg is present and map a `z.enum`
+      through a lookup table. Neither construct exists in the spec language.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
       than `fetch`.
 - [ ] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
@@ -232,10 +238,40 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 
 **Constructs outside the spec language.**
 
-- **Conditional query parameters.** `new URL(...)` plus conditional `searchParams.set(...)` —
-  a parameter added only when an optional arg is present. The path DSL renders one fixed
-  template per tool. This is the single most common reason a fixture stubs a tool, and it is
-  why `discord` and `google-meet` do not reach zero diff.
+- **Conditional query parameters, the remaining gaps.** The construct itself — `query` plus
+  `omitWhen` — now exists; the gaps are narrower now. An **inlined default**: real connectors
+  write `p.pageSize ?? 50` at the call site, but a `default`-bearing arg is always hoisted to a
+  named const above the handler (`isHoisted` in `src/emit/server/args.ts`), so `google-meet`'s
+  `pageSize`/`searchPageSize` differ from the real file on that one line even though the
+  request they build is identical. **Repeating, multi-value parameters** — `gmail` sends the
+  same key more than once via `searchParams.append`, not `.set` — are out of scope; `query`
+  models one value per name.
+- **An upstream defect this generator deliberately does not reproduce.** `discord`, `circleci`,
+  `google-meet` and `google-photos`'s hand-written path builders return
+  `` `${u.pathname}${u.search}` ``. `u.pathname` already carries the base's own path component
+  — the base is spliced into `new URL(...)` as a literal string prefix, not passed as the
+  URL's origin — and the connector's fetch helper prepends that same base a second time. The
+  real `discord` connector therefore requests
+  `https://discord.com/api/v10/api/v10/channels/123/messages`, a doubled `/api/v10`; verified
+  by running the connector's own code. `github` and `github-actions` write the identical
+  `u.pathname`/`u.search` pattern and escape only because `api.github.com` has no path
+  component to double. This generator emits `` `${u}` `` — the absolute URL — instead, which
+  the fetch helper's own `startsWith("http")` short-circuit passes through untouched,
+  producing one correct request. That is a deliberate divergence from a defect, not a
+  generator shortcoming, and it is why `discord` and `google-meet` do not byte-match
+  `src/server.ts` even though both now use `query` for real, non-stub tools.
+- **`auth: "bearer"` cannot express two real shapes**, surfaced by the `discord` fixture.
+  Discord's own scheme is a literal `Bot ${token}`, not `Bearer ${token}`, and it sends a
+  static `User-Agent` header alongside the `Authorization` one. No env field today carries an
+  alternate scheme string or a static extra header, so this connector's auth shape is not
+  reachable regardless of what `query` can express.
+- **A validator over-rejection in hoisted-argument-local uniqueness.** `src/validate.ts`
+  claims every tool's hoisted argument locals into one map shared across the whole connector,
+  but each is emitted inside its own tool's arrow function (`renderHoists`), so two tools
+  declaring the same defaulted arg name can never actually collide in the generated file — the
+  spec is rejected anyway. `fixtures/google-meet.spec.json` carries `"local":
+  "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
+  and not fixed here.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
   optional arg is present, or mapping a `z.enum` through a lookup table.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one

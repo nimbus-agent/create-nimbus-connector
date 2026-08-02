@@ -62,6 +62,81 @@ A tool that can't be expressed under that constraint sets `"impl": "stub"` and g
 
 **Spec surface is a cost, and it is deliberately controlled.** Byte-exactness pushes some purely cosmetic choices into the spec — real connectors hoist defaulted args to hand-picked short names (`const lim = p.limit ?? 10`, `const q = p.query ?? ""`), and there is no derivable rule for that. So `local` and `bindings` are permitted everywhere as optional strings with sensible defaults. Beyond those, a new field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff instead. A generator whose input is harder to write than its output is a failed generator.
 
+### Conditional query parameters: `query`
+
+`path`'s template DSL renders one fixed string per tool, so it cannot express a parameter that
+is only sent when an optional argument is present. A tool that needs that adds a `query` array
+alongside `path` instead:
+
+```jsonc
+{
+  "name": "acme_channel_messages",
+  "description": "List messages in a channel.",
+  "impl": "rest",
+  "path": "/channels/${arg.channelId|enc}/messages",
+  "args": {
+    "channelId": { "type": "string", "min": 1 },
+    "limit": {
+      "type": "number", "int": true, "min": 1, "max": 100,
+      "optional": true, "default": 50
+    },
+    "after": { "type": "string", "optional": true }
+  },
+  "query": [
+    { "name": "limit", "arg": "limit" },
+    { "name": "after", "arg": "after", "omitWhen": "empty" }
+  ]
+}
+```
+
+This emits `const u = new URL(...)`, a `u.searchParams.set(...)` line per entry — guarded where
+`omitWhen` says to guard — and returns the absolute URL. `discord` and `google-meet` are the two
+fixtures that exercise it.
+
+Each entry has three fields:
+
+- **`name`** — the query key as the API spells it. Deliberately not an identifier check —
+  `page[size]` is a real corpus key.
+- **`arg`** — the tool's declared argument supplying the value. Must name a key in that tool's
+  `args`.
+- **`omitWhen`** (optional) — guards the `set` call with one of two predicates: `"absent"`
+  tests `!== undefined`; `"empty"` adds `&& !== ""` and is valid only on a `string` arg.
+  Omitted means the parameter is always sent, unconditionally.
+
+**The value's wrap is type-driven, not guard-driven.** A `number` or `boolean` arg is wrapped
+in `String(...)` before it reaches `searchParams.set`; a `string` arg is passed bare. This holds
+whether or not the entry is guarded — it mirrors the corpus, where `github` and `github-actions`
+wrap their numeric `page` even though it's guarded, and every guarded *string* arg is written
+bare. It is not a style choice with an exception; the type decides it every time.
+
+**`searchParams` percent-encodes on its own, so a `query` entry takes no encoding mode.**
+There is no `|enc` (or any other) option here — applying one would double-encode the value.
+(`path`'s own `${arg.X|enc}` is unrelated and still applies inside `path`.)
+
+**Defaults live on the argument, not the query entry.** `{ "type": "number", "optional": true,
+"default": 50 }` is what makes an unconditional `limit` entry safe to emit with no guard at
+all — the hoist resolves it to a concrete value before the query line ever runs.
+
+**Rejected at parse time:**
+
+- `query` on a `"stub"` tool — it issues no request, so there is nothing to attach it to.
+- `query` on a `"search"` tool — it builds its query string from `filter`, not `query`.
+- `query` together with a `path` that already contains `"?"` — both write the query string;
+  a tool that needs `query` moves its whole query string there instead.
+- an entry whose `arg` does not name a key the tool's `args` declares.
+- two entries sharing the same `name` — the second would silently win at runtime.
+- `omitWhen: "empty"` on a non-`string` arg — comparing a `number` or `boolean` to `""` does
+  not typecheck in the generated package.
+- `omitWhen` on an argument whose value can never be `undefined` at the point the guard would
+  read it: not declared `"optional": true`, or declaring a `"default"`, or type `"boolean"`
+  (every boolean argument is hoisted to a `"true"`/`"false"` const, never `undefined`). The
+  guard would be dead code — it could never omit the parameter.
+- **the mirror of that last rule:** an argument that genuinely *can* be `undefined`
+  (`"optional": true`, no `"default"`, not `"boolean"`) but whose entry declares no
+  `omitWhen`. Without a guard, `searchParams.set` receives a value that can be `undefined` —
+  a compile error for a `string` arg, or a literal `"?name=undefined"` sent on the wire for a
+  wrapped one, since `String(undefined) === "undefined"`.
+
 ### Writes: `method`, `effect` and `body`
 
 ```jsonc

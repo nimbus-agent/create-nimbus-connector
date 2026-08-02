@@ -20,6 +20,19 @@ is something an existing user needs told even when no subject line would say so.
   boolean` keep their exact current meaning and byte output; see **Breaking** below for the
   identifiers now reserved.
 
+* **spec:** a tool may declare a `query` array — `{ "name", "arg", "omitWhen"? }` — for a
+  parameter the fixed `path` template DSL cannot express: one sent only when an optional
+  argument is present (`omitWhen: "absent"`) or non-empty (`omitWhen: "empty"`, string args
+  only), or unconditionally when `omitWhen` is omitted. Composes `new URL(...)` and guarded
+  `searchParams.set(...)` calls; the value is wrapped in `String(...)` for a `number` or
+  `boolean` arg and passed bare for a `string`, by type, not by whether the entry is guarded.
+  Rejected on a `"stub"` or `"search"` tool, alongside a `path` containing `"?"`, an undeclared
+  `arg`, a duplicate `name`, and either half of an `omitWhen`/undefinedness mismatch — see the
+  README for the full list. `discord` and `google-meet` are the two fixtures exercising it;
+  neither reaches a byte-exact `src/server.ts`, for reasons unrelated to `query` itself — see
+  `docs/ROADMAP.md`'s *Known limitations*. See **Breaking** below for the identifiers now
+  reserved.
+
 ### Output changes (user-visible)
 
 * **emit(server):** an `auth: "headers"` env entry that declares a **single** variable now
@@ -78,6 +91,22 @@ is something an existing user needs told even when no subject line would say so.
   passed every gate, and simply never matched on tags. And more than one search filter per
   connector taking the extractor branch — the emitted extractor is always named `fieldsOf`, so a
   second one is a duplicate declaration.
+
+* **validate:** three more identifiers are reserved: `u`, `URL` and `url`. All three are names
+  the new `query` feature's emitted handler binds itself: a tool declaring `query` emits
+  `const u = new URL(<path>)` and calls the global `URL` directly, and every fetch helper — not
+  only rest-kit's, which already declared it unconditionally before this change — now emits
+  `const url = path.startsWith("http") ? path : ...` whenever the spec declares any query tool
+  at all. Each is reserved unconditionally, matching how `token` and `root` were handled
+  earlier: the list is checked before any style or tool kind is considered, so a conditional
+  entry would mean a spec validating or failing depending on a field elsewhere in the file.
+
+  **`u` and `url` are ordinary words, more so than `root` was.** A spec published against
+  0.5.0 or earlier may already spell a `fetchHelper.local` `"u"`, an env `local` `"url"`, or a
+  `fetchHelper.baseConst` `"url"` — none of those collided with anything before this release.
+  Rename the field; nothing else changes. (`URL`, being a global identifier already reserved
+  everywhere in this list's neighboring entries such as `fetch` and `JSON`, is the less likely
+  of the three to be in use, but is reserved for the same reason.)
 
 ### Bug Fixes
 
