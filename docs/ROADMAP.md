@@ -131,11 +131,26 @@ discovered later:
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
       of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
-      40 corpus filter files that hand-write an extractor: **9** are reachable this way, **30**
-      define a local helper function or need logic no path can express — a join, an array
-      flatten, a coercion — and stay unreachable, and **1** (`zoom`) is hand-rolled and does not
-      use `makeQueryFilter` at all. See [Known limitations](#known-limitations) for the byte gap
-      that keeps 8 of the 9 from matching — the ninth, `dependencytrack`, already does.
+      40 corpus filter files that hand-write an extractor, **26 can be expressed** and **14
+      cannot**. The method, and why an earlier count said 9, are in
+      [Measuring reach](#measuring-reach).
+
+      Of the 26: **22** produce an identical haystack; **3** (`prefect`, `readwise`, `ramp`)
+      differ only in whitespace, because a local helper filters empty parts before joining
+      where independent entries do not — `ramp` is the one where that is observable, since a
+      query spanning an absent middle field would match the hand-written filter and not the
+      generated one; **1** (`stackoverflow`) rests on an API assumption this repository cannot
+      verify, and drops out if it is wrong.
+
+      The 14 that cannot each have a named cause: a join over a non-`tags` array (`snyk`,
+      `airflow`, `greenhouse`, `mendeley`, `wiz`), a numeric coercion (`databricks`, `dbt`),
+      an alternate tag shape (`dagster` reads key *and* value, `zotero` reads `tag["tag"]`,
+      `intercom` nests at `row.tags.tags[]`, `flagsmith` maps numbers through `String`),
+      a conditional array search (`flux`), a per-item concatenation (`mlflow`), and `zoom`,
+      which is hand-rolled and does not use `makeQueryFilter` at all.
+
+      See [Known limitations](#known-limitations) for the separate question of byte-matching,
+      which only `dependencytrack` currently achieves.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file.
@@ -161,6 +176,45 @@ discovered later:
 
 The three items under [Consolidation](#consolidation), then retiring
 `@nimbus-dev/create-connector` with a migration path.
+
+---
+
+## Measuring reach
+
+Stage E asks for the corpus reach to be published **with its method**, because the number is
+easy to get wrong and was — three times, each wrong in a way the next pass exposed.
+
+**The question.** For how many of the 40 hand-written extractor files could the generator emit
+a filter that behaves the same? Two extractors behave the same when, for any row that
+connector's API actually returns, the haystack `filterByQuery` builds contains the same
+substrings in the same order — so `.includes(needle)` answers identically for every query.
+
+**The method.** Read every file. For each element of the returned array, classify it as a plain
+key, a nested-path read of any depth, or a tag helper — and for every *local* helper, diff its
+guard and body against the shared primitive rather than matching on its name. A file is
+expressible only if every element maps to one of the three entry kinds; one unexpressible
+element disqualifies the file, since the emitter writes one extractor, not a partial one.
+
+**Why the earlier numbers were wrong**, recorded because each error was a method error:
+
+- **12** came from pattern-matching helper names instead of reading bodies.
+- **7** came from a script whose range was `/^function fieldsOf/,/^}/`, which cannot see
+  `firebase` and `testflight` — they write `const releaseFields: FieldExtractor = (item) => …`,
+  an arrow. Structurally identical files landed on opposite sides of the split.
+- **9** came from asking a *structural* question — "does this file define a local function?" —
+  when the goal is a *semantic* one. A helper that walks a path is expressible; a helper that
+  joins an array is not. Defining a helper says nothing on its own. This is the error that
+  understated reach by more than half, and `netlify` is the fixture that demonstrates it:
+  its `subStringField(row, "build_settings", "repo_url")` is exactly
+  `nestedString(row, ["build_settings", "repo_url"])`.
+
+**A pattern worth naming**, since it caused two of the three: a check for `String(` also matches
+inside `nestedString(`, and a check for `.join(` fires on helpers that are exact
+re-implementations of `tagText`. Both silently move files to the wrong side.
+
+The counts this method produces are in [Stage E](#stage-e--the-corpus-tail-). They describe
+*behaviour*, not bytes — byte-matching is a stricter question, answered in
+[Known limitations](#known-limitations) and, live, by `diff:golden`.
 
 ---
 
@@ -216,8 +270,12 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
   other two cannot byte-match.
-- **8 of the 9 reachable extractor files still do not byte-match**, even though `filter.fields`
-  now expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter
+- **Expressible is not the same as byte-identical, and almost none of the 26 byte-match.**
+  Expressing a field list correctly says nothing about reproducing the file that carries it —
+  `netlify` is the clearest case, generated correctly and textually different on every line of
+  its extractor, because the real file declares a local `subStringField` where the emitter
+  calls the shared `nestedString`. Four gaps account for the rest. The guard: `argocd` writes
+  `asRecord(item)`, the emitter
   always writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits
   arrays, `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
   `const buildFields: FieldExtractor = (item) => …`, an arrow expression with an explicit type
@@ -226,10 +284,10 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   `buildFields`; the emitter's is always `fieldsOf`. And a hand-written 4–5 line doc comment
   explaining the service's response shape, present in `canva`, `figma`, `firebase`, `hubspot`,
   `miro`, `salesforce` and `testflight` — the same content gap already recorded above for
-  hand-authored READMEs, not a formatting one. The ninth, `dependencytrack`, **does** byte-match:
-  it guards with `asObjectish`, names its extractor `fieldsOf`, and carries no hand-written doc
-  comment, so none of the four gaps above applies to it — the exception shows these are gaps in
-  what a spec can carry, not a ceiling the emitter itself imposes.
+  hand-authored READMEs, not a formatting one. `dependencytrack` **does** byte-match: it guards
+  with `asObjectish`, names its extractor `fieldsOf`, and carries no hand-written doc comment,
+  so none of the four gaps applies to it — the exception shows these are gaps in what a spec
+  can carry, not a ceiling the emitter itself imposes.
 
 **Absences.**
 

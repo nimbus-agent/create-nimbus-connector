@@ -126,9 +126,11 @@ export function needsExtractor(filter: { fields?: readonly FieldEntry[] }): bool
 /**
  * The per-connector search filter. `fields` omitted means the emitter cannot express the
  * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
- * an extractor, 9 are reachable with these entry kinds, 30 define a local helper function or
- * need logic no path/tag entry can express (a join, an array flatten, a coercion), and one is
- * hand-rolled. See the Stage E extractor design.
+ * an extractor, 26 can be expressed with these entry kinds and 14 cannot, the latter needing a
+ * join over a non-`tags` array, a numeric coercion, an alternate tag shape, or a conditional
+ * search. Defining a local helper does NOT by itself put a file out of reach: a helper that
+ * walks a nested path is exactly a `path` entry, which is why an earlier count said 9. See
+ * ROADMAP's "Measuring reach" for the method.
  */
 export const SearchFilterSchema = z
   .strictObject({
