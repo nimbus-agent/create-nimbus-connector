@@ -129,5 +129,13 @@ src/golden/        fixture resolution, expectations, snapshots
 src/cli.ts         arg parsing, prompts, writeFiles
 scripts/           the harnesses (each documented in its own header)
 fixtures/          hand-written specs + expectations.json + snapshots/
-docs/superpowers/  per-stage design docs and implementation plans
+docs/              ARCHITECTURE, ROADMAP, USAGE, and the project docs
 ```
+
+**Where the reasoning lives.** Four long per-stage design documents were retired once their
+durable conclusions were folded into the docs above; git history has them. What the generator
+cannot do and why is [`docs/ROADMAP.md`](./docs/ROADMAP.md)'s *Known limitations*; proposals
+measured and rejected are its *Considered and declined*; harness behaviour is
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). Corpus measurements sit in the README next to
+the field they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a
+document repeating it goes stale silently.

@@ -18,9 +18,9 @@ document owns everything generator-shaped.
 > *what* and *why*. The **[stages](#stages)** are the execution plan, in order. Stages are
 > ordering, not dates. Tasks are `[ ]` not started, `[~]` in progress, `[x]` done.
 >
-> **Measured results are not repeated here.** Fixture counts and pass rates move every stage
-> and a roadmap that restates them goes stale silently. Each stage links its design doc, which
-> records what was actually observed.
+> **Measured results are deliberately not repeated here.** Fixture counts and pass rates move
+> with the corpus, and a roadmap that restates them goes stale silently. `bun run diff:golden`
+> is the live answer; [known limitations](#known-limitations) records the durable gaps.
 
 ---
 
@@ -105,32 +105,23 @@ its conditions attached.
 ### Stage A — monorepo-internal generation `[x]`
 
 The generator, the six-file tree, `--dry-run`, and the golden-fixture diff harness.
-[Design](./superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md)
 
 ### Stage B — standalone generation `[x]`
 
 Connectors that run outside the monorepo, resolving helpers from
 `@nimbus-dev/sdk/connector-kit`; the standalone acceptance harness; published to npm.
-[Design](./superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md)
 
 ### Stage C — writes, HITL and OAuth `[x]`
 
 `method`, `effect` and `body`; `hitlRequired` in the manifest; `client-credentials`; the
-Gateway wiring checklist and its conformance script.
-[Design](./superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md)
+Gateway wiring skeleton and its conformance script.
 
-### Stage D — the `read-only-kit` style and search tools `[~]`
+### Stage D — the `read-only-kit` style and search tools `[x]`
 
-The registration style 60 of the 94 connectors use, and search tools with their seventh
-emitted file. Implemented; the registry acceptance gate stays skipped until
-[nimbus-sdk#111](https://github.com/nimbus-agent/nimbus-sdk/pull/111) merges and releases the
-search kit.
-[Design](./superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md)
-
-- [x] `style: "read-only-kit"`
-- [x] `impl: "search"`, `rows`, `maxLimit`, `filter`
-- [x] `mercury`, `zendesk`, `bitrise` fixtures
-- [ ] SDK 1.15.0 released; `standalone-acceptance --registry` runs the search fixtures for real
+The registration style 60 of the 94 connectors use, and search tools with their seventh emitted
+file, `src/search-filter.ts`. The search kit shipped in `@nimbus-dev/sdk` 1.15.0, so
+`standalone-acceptance --registry` verifies the search fixtures against the published artifact
+rather than skipping them.
 
 ### Stage E — the corpus tail `[ ]`
 
@@ -165,6 +156,76 @@ The three items under [Consolidation](#consolidation), then retiring
 `@nimbus-dev/create-connector` with a migration path.
 
 ---
+
+## Known limitations
+
+Measured, not guessed, and each one visible on every harness run rather than hidden in an
+expectation file. They are listed here so nobody rediscovers them the hard way.
+
+**Content no spec field can derive.**
+
+- **Hand-authored READMEs.** Several real connectors carry prose naming their specific item
+  types, their tool names and their deferred follow-ups. The generator emits boilerplate. This
+  is a content gap, not a formatting one, and no rewording closes it.
+- **`*-mapping.ts` bodies.** No spec field describes a service's API response shape.
+
+**Constructs outside the spec language.**
+
+- **Conditional query parameters.** `new URL(...)` plus conditional `searchParams.set(...)` —
+  a parameter added only when an optional arg is present. The path DSL renders one fixed
+  template per tool. This is the single most common reason a fixture stubs a tool, and it is
+  why `discord` and `google-meet` do not reach zero diff.
+- **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
+  optional arg is present, or mapping a `z.enum` through a lookup table.
+- **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
+  source file.
+- **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+- **Bespoke search extractors.** Most corpus filter files hand-write an extractor reaching
+  nested or computed fields. `filter.fields` omitted emits a throwing stub for these.
+
+**Shape variance the emitter models one way.**
+
+- **Alternate fetch-helper shapes.** A rest-kit connector using a different shared fetch
+  primitive, a non-bearer auth scheme, or an extra static header cannot be expressed — the
+  rest-kit `fetchHelper` has no `authScheme` field and forbids `${env.*}` references, since the
+  credential is resolved by the registrar rather than an env accessor.
+- **Registrar and helper naming.** Derived by formula. A connector whose author picked a
+  shorter name by hand will differ on that line.
+- **Wiring and tail idiom.** Roughly half the rest-kit corpus writes the one-line registrar
+  form and half the two-line one; likewise the transport tail. There is no majority to converge
+  on, so the emitter picks one and the other half differs.
+- **`permissions.filesystem` is always collapsed to one line**, which is what 27 of the 29
+  manifests declaring it do.
+- **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
+  other two cannot byte-match.
+
+**Absences.**
+
+- **A connector with no `test/sandbox.test.ts`.** 15 of the 94 lack one; the generator always
+  emits it, so the harness reports `MISSING` rather than `DIFF`.
+
+## Considered and declined
+
+Recorded so they are not re-proposed. Each was measured before being rejected.
+
+- **Coercing the row set before `matchesResult`** (`accounts ?? []`). The guard already exists
+  one level down — `matchesResult` does `Array.isArray(rows) ? … : []`, so `undefined`, `null`
+  and any non-array already yield an empty match set. The coercion would be dead code that
+  changes a byte-exact fixture's bytes.
+- **A validation warning on a large `maxLimit`.** It measures the wrong quantity. `maxLimit`
+  caps how many matches are *returned*, not how many rows are *fetched* — the connector has
+  already awaited the full response. A connector with `maxLimit: 50` against an endpoint
+  returning 100,000 rows carries the whole memory cost and would draw no warning, while a
+  legitimate 2000 would. Warning on response size would be defensible; warning on `maxLimit`
+  would train authors to lower a number that is not the problem.
+- **Making the URL/body treatment of an unset optional boolean consistent.** Both halves are
+  right for their medium and one is byte-locked by the corpus. See the README.
+- **Generating a working Gateway `sync()`.** The shape it would assume fits 2 of ~98 real sync
+  files, and producing it would mean reproducing AGPL source nearly verbatim in an MIT repo.
+- **Growing the spec with purely cosmetic fields.** `local` and `bindings` are permitted
+  everywhere; beyond those, a field that changes only appearance is refused and the difference
+  is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a
+  generator whose input is harder to write than its output is a failed generator.
 
 ## Non-goals
 
