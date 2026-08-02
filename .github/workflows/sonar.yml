@@ -14,6 +14,20 @@ name: sonar
 # the workflow green while analysing nothing, which is the precise failure this repo keeps
 # removing elsewhere — and it would stay green forever if the secret were never added. A
 # loud failure is the correct behaviour for a workflow whose prerequisites are unmet.
+#
+# The job-level `if` below is NOT that guard, and the difference is the whole point. GitHub
+# withholds secrets from a pull request opened from a fork, so SONAR_TOKEN is empty there no
+# matter how correctly the repository is configured — the scan failed on every external
+# contribution for a reason the contributor could not fix or act on, which trains everyone to
+# read a red check as noise. Skipping on that one condition cannot hide a missing secret,
+# because pushes to main and same-repo pull requests still run unguarded: forget to add
+# SONAR_TOKEN and main goes red on the very next merge. `env.SONAR_TOKEN != ''` would have
+# suppressed that too, and that is why it stays rejected.
+#
+# Nothing is lost by skipping the whole job rather than only the upload: ci.yml already runs
+# `bun test --coverage`, so bunfig.toml's per-file coverageThreshold is enforced on a fork's
+# pull request there. This job's unique contribution is the LCOV upload, and that is exactly
+# the part a fork cannot do.
 
 on:
   push:
@@ -30,6 +44,12 @@ concurrency:
 
 jobs:
   sonar:
+    # Compares head repo to this one rather than reading `head.repo.fork`: the condition that
+    # actually governs secret availability is "the head branch does not live in this
+    # repository", and saying that directly survives the fork-of-a-fork case.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
