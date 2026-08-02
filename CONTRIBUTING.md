@@ -83,6 +83,14 @@ Both switches precede the merge deliberately. The alternative — merge first, t
 
 `bunfig.toml`'s per-file `coverageThreshold` still applies during that run, so the gate does not become advisory just because a reporter was added.
 
+### If you are contributing from a fork
+
+**The `sonar` check will show as skipped on your pull request, and that is expected — it is not something you did.** GitHub withholds repository secrets from pull requests opened from a fork, so `SONAR_TOKEN` is unavailable and the scanner cannot authenticate. Until this was handled the check failed outright on every external contribution, which meant a red mark nobody could act on.
+
+**Your coverage is still enforced.** `ci.yml` runs `bun test --coverage` on your pull request, and `bunfig.toml`'s per-file floors apply there. What you lose is the SonarCloud *report*, not the gate — a maintainer sees the analysis once the change is on `main`.
+
+Nothing about this makes the scan optional for the repository itself: pushes to `main` and pull requests from branches in this repository run it unguarded, so a missing or expired `SONAR_TOKEN` still turns `main` red on the next merge.
+
 ## Coverage floors
 
 Coverage is enforced **per file, not in aggregate** — an average lets one well-covered file hide an uncovered one. `src/cli.ts` and `src/prompts.ts` are excluded from the metric because both are driven through `Bun.spawnSync` on the real binary, which Bun cannot instrument; spawning the real binary is the better test, since it proves the shipped entry point works.
