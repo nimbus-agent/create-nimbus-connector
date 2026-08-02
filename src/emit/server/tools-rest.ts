@@ -93,7 +93,15 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       ...hoists,
       `    const u = new URL(${pathExpr});`,
       ...queryLines,
-      "    return `${u.pathname}${u.search}`;",
+      // The absolute URL, NOT `${u.pathname}${u.search}` — that drops only the origin and
+      // keeps `u.pathname`, which still carries the base's OWN path component (e.g.
+      // "/api/v10"), because `pathExpr` was built with the base spliced in as a `new URL(...)`
+      // prefix, not as the URL's origin alone. Returning the pathname+search reintroduces that
+      // component as a plain string, and the fetch helper then prepends the base a second time
+      // — "/api/v10/api/v10/...". `makeRestToolRegistrar`'s buildPath return type is exactly
+      // "a path OR a full URL", and every fetch helper short-circuits on `path.startsWith
+      // ("http")`, so the absolute form is the intended use of that contract, not a workaround.
+      "    return `${u}`;",
       "  },",
     ];
     if (initArg !== undefined) lines.push(initArg);

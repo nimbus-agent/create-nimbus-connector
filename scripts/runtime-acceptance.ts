@@ -167,6 +167,48 @@ export function restKitSpec(base: string): unknown {
   };
 }
 
+/**
+ * A hand-rolled connector with one query-declaring GET tool, whose base has a path
+ * component (`/v2`) — the shape every source-level check (compile, string assertion,
+ * byte-diff) could pass while the actual request still doubled that path component onto
+ * itself. Only a request actually made can prove it does not: buildPath/the handler return
+ * an ABSOLUTE URL (`` `${u}` ``, tools-hand.ts/tools-rest.ts) to avoid the base being
+ * prepended twice, and the fetch helper has to recognise and pass that absolute form
+ * through untouched (fetch-helper.ts's `hasQueryTool` gate) rather than treating it as a
+ * bare path and prepending the base again.
+ */
+export function querySpec(base: string): unknown {
+  return {
+    name: "rtquery",
+    displayName: "RtQuery",
+    description: "Runtime acceptance query-parameter connector.",
+    serviceLabel: "RtQuery",
+    style: "hand-rolled",
+    network: ["127.0.0.1"],
+    syncInterval: 300,
+    minNimbusVersion: "0.2.0",
+    env: [{ vars: ["RTQUERY_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
+    // The path component ("/v2") is the whole point: a base with no path (api.github.com)
+    // cannot distinguish "doubled" from "correct" — the doubling has nothing to duplicate.
+    fetchHelper: { local: "rtqGet", base: `${base}/v2`, headers: "headers" },
+    tools: [
+      {
+        name: "rtq_list",
+        description: "List items, filtered.",
+        path: "/items",
+        args: {
+          limit: { type: "number", optional: true, default: 10 },
+          after: { type: "string", optional: true },
+        },
+        query: [
+          { name: "limit", arg: "limit" },
+          { name: "after", arg: "after", omitWhen: "empty" },
+        ],
+      },
+    ],
+  };
+}
+
 /** auth: "headers" — a named header rather than Authorization: Bearer. */
 export function headersSpec(base: string): unknown {
   return {
@@ -401,6 +443,40 @@ async function checkRestKit(
   );
 }
 
+/**
+ * The check Critical 1 of Task 4's round-1 review asked for: every other gate in this repo
+ * looks at emitted SOURCE (a shape check, a string assertion, a byte-diff), and none of them
+ * observed the actual REQUEST — which is exactly how a doubled base URL survived a green
+ * board. `querySpec`'s base carries a path component precisely so this can fail: if the
+ * request lands at "/v2/v2/items" the assertion below catches it directly, rather than
+ * inferring correctness from the emitted text.
+ */
+async function checkQueryConnector(
+  root: string,
+  base: string,
+  recorded: readonly Recorded[],
+  sdkPkg: string | undefined,
+): Promise<void> {
+  const queryDir = join(root, "rtquery");
+  await materialize(querySpec(base), queryDir, sdkPkg);
+  const before = recorded.length;
+  await callTools(queryDir, { RTQUERY_TOKEN: "tok-q" }, [
+    { name: "rtq_list", args: { after: "abc" } },
+  ]);
+  const list = recorded.slice(before)[0];
+
+  check(
+    "a query tool's request path carries the base's path component exactly once",
+    list?.path === "/v2/items?limit=10&after=abc",
+    `GET ${list?.path ?? "(no request)"}`,
+  );
+  check(
+    "the base's own path segment is not duplicated in the request",
+    (list?.path.match(/\/v2/g) ?? []).length === 1,
+    `GET ${list?.path ?? "(no request)"}`,
+  );
+}
+
 async function checkHeaderAuth(
   root: string,
   base: string,
@@ -481,6 +557,7 @@ async function main(argv: readonly string[]): Promise<void> {
     await checkBearerConnector(root, base, recorded, sdkPkg);
     await checkClientCredentials(root, base, recorded, sdkPkg);
     await checkRestKit(root, base, recorded, sdkPkg);
+    await checkQueryConnector(root, base, recorded, sdkPkg);
     await checkHeaderAuth(root, base, recorded, sdkPkg);
     await checkTokenExpiry(root, base, recorded, sdkPkg);
   } finally {

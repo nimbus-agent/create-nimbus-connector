@@ -200,6 +200,26 @@ export const SearchFilterSchema = z
  * is no default between them. `omitWhen` itself stays optional — undefined means the entry is
  * set unconditionally, which is the third real shape (`limit`).
  */
+/**
+ * Whether a query entry's value can genuinely be `undefined` at the point
+ * `renderQueryLines` (src/emit/server/query.ts) reads it — i.e. whether `omitWhen`'s guard
+ * has anything to omit. Requires all three: `"optional": true` (a required arg's value
+ * always exists by the time the handler runs), no `"default"` (the hoist emits
+ * `p.x ?? <default>`, never `undefined`), and not type `"boolean"` (`isHoisted` in
+ * `src/emit/server/args.ts` hoists every boolean regardless of `default`, and
+ * `renderHoists` emits `p.x === true ? "true" : "false"`, also never `undefined`).
+ *
+ * One predicate governs both directions of "does `omitWhen` make sense on this entry", so
+ * they cannot independently drift: `omitWhen` SET on an arg this returns `false` for is a
+ * dead guard (can never omit); `omitWhen` ABSENT on an arg this returns `true` for is a
+ * missing guard — `searchParams.set` receives a value that can be `undefined`, which is
+ * `TS2345` for a string arg (the wrapped-in-`String()` cases compile, but send the literal
+ * query value `"undefined"` on the wire, since `String(undefined) === "undefined"`).
+ */
+function canOmitQueryValue(arg: z.infer<typeof ArgSchema>): boolean {
+  return arg.optional && arg.default === undefined && arg.type !== "boolean";
+}
+
 export const QueryParamSchema = z.strictObject({
   name: z.string().min(1),
   arg: z.string().min(1),
@@ -350,29 +370,42 @@ export const ToolSchema = z
       }
 
       // omitWhen's guard only omits anything if the value it tests can genuinely be
-      // undefined. That requires all three: "optional": true (otherwise the schema demands a
-      // value), no "default" (the hoist emits `p.x ?? <default>`, never undefined), and not
-      // type "boolean" (isHoisted in args.ts hoists every boolean regardless of default, and
-      // renderHoists emits `p.x === true ? "true" : "false"`, also never undefined). `default`
-      // alone is not the governing condition — a required or boolean arg is just as dead a
-      // guard, and neither can reach this check by way of `default`. No corpus connector
-      // combines omitWhen with any of the three: github writes `String(parsed.perPage ?? 30)`
-      // unconditionally and guards `page`, which is optional with no default and type number.
-      if (q.omitWhen !== undefined) {
-        const violations: string[] = [];
-        if (!arg.optional) violations.push('is not declared "optional": true');
-        if (arg.default !== undefined) violations.push('declares a "default"');
-        if (arg.type === "boolean") violations.push('is type "boolean"');
-        if (violations.length > 0) {
+      // undefined — canOmitQueryValue's exact predicate. Both directions of that question
+      // are checked here, off the one predicate, so they cannot drift apart: no corpus
+      // connector combines omitWhen with a dead guard (github writes
+      // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
+      // with no default and type number).
+      if (q.omitWhen === undefined) {
+        // A value that CAN be undefined and has no guard reaches searchParams.set
+        // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
+        // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
+        // since the non-string branch wraps in String(...) and String(undefined) ===
+        // "undefined". Neither is visible to a spec author until the generated package is
+        // built or the request is inspected — this rejection is what makes it visible here.
+        if (canOmitQueryValue(arg)) {
           ctx.addIssue({
             code: "custom",
             path: ["query", i, "omitWhen"],
             message:
-              `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
-              `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
-              "undefined, so the guard can never omit the parameter",
+              `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
+              'which can be undefined ("optional": true, no "default", not type "boolean") ' +
+              'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
+              'parameter is sent as an unconditional (and possibly literal-"undefined") value',
           });
         }
+      } else if (!canOmitQueryValue(arg)) {
+        const violations: string[] = [];
+        if (!arg.optional) violations.push('is not declared "optional": true');
+        if (arg.default !== undefined) violations.push('declares a "default"');
+        if (arg.type === "boolean") violations.push('is type "boolean"');
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "omitWhen"],
+          message:
+            `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
+            `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
+            "undefined, so the guard can never omit the parameter",
+        });
       }
     }
   });

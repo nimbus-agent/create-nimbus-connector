@@ -102,7 +102,15 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       ...hoists,
       `    const u = new URL(${pathExpr});`,
       ...queryLines,
-      "    const path = `${u.pathname}${u.search}`;",
+      // The absolute URL, NOT `${u.pathname}${u.search}` — that drops only the origin and
+      // keeps `u.pathname`, which still carries the base's OWN path component (e.g.
+      // "/api/v10"), because `pathExpr` was built with the base spliced in as a `new URL(...)`
+      // prefix. Returning the pathname+search reintroduces that component as a plain string,
+      // and `call`'s fetch helper (`<local>` / `<local>Send`) then prepends the base a second
+      // time — "/api/v10/api/v10/...". Both fetch helpers short-circuit on
+      // `path.startsWith("http")` and pass an absolute URL through untouched, so this is the
+      // intended use of that contract, not a workaround.
+      "    const path = `${u}`;",
       `    return ${call};`,
       "  },",
       ");",

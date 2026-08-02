@@ -37,6 +37,20 @@ export function baseExpr(spec: ConnectorSpec): string {
   return baseConst === undefined ? resolveEnvRefs(base) : `\${${baseConst}}`;
 }
 
+/**
+ * Whether any tool in this spec declares "query" — the only shape whose handler/buildPath
+ * callback (tools-hand.ts / tools-rest.ts) returns an ABSOLUTE URL rather than a bare path,
+ * to avoid double-prefixing the base (see those files' own comments at the `` `${u}` ``
+ * return). `renderFetchHelper` and `renderWriteHelper` below gate their own
+ * `path.startsWith("http")` passthrough on this: it is new code neither function needs for a
+ * spec with no query tool, and gating on it is what keeps every existing fixture's read/write
+ * helper byte-identical. `renderRestKitFetchHelper` needs no such gate — its passthrough
+ * predates this feature and was already unconditional.
+ */
+function hasQueryTool(spec: ConnectorSpec): boolean {
+  return spec.tools.some((t) => t.query !== undefined);
+}
+
 function headerOption(spec: ConnectorSpec): string {
   const fh = spec.fetchHelper;
   if (fh.inlineHeaders !== undefined) {
@@ -121,7 +135,9 @@ export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
   if (spec.style === "rest-kit") return undefined; // the registrar's buildInit carries it
 
   const fh = spec.fetchHelper;
-  const url = `\`${baseExpr(spec)}\${path}\``;
+  const base = baseExpr(spec);
+  const passthrough = hasQueryTool(spec);
+  const url = passthrough ? "url" : `\`${base}\${path}\``;
   // headerOption(spec) returns "headers: <expr>" where <expr> is either an inline object
   // literal or an accessor call (see FetchHelperSchema — headers and inlineHeaders are
   // mutually exclusive). Strip the "headers: " prefix and spread the expression so the
@@ -133,6 +149,9 @@ export function renderWriteHelper(spec: ConnectorSpec): string | undefined {
     "  method: string,",
     "  body: string | undefined,",
     "): Promise<unknown> {",
+    // See hasQueryTool's comment: only reached when a query tool exists, so this is never
+    // an extra line in a spec that has none.
+    ...(passthrough ? [`  const url = path.startsWith("http") ? path : \`${base}\${path}\`;`] : []),
     `  const res = await fetch(${url}, {`,
     "    method,",
     `    headers: { ...${headerExpr}, "Content-Type": "application/json" },`,
@@ -180,7 +199,9 @@ export function renderFetchHelper(spec: ConnectorSpec): string {
 
   const fh = spec.fetchHelper;
   const pathVar = fh.normalizeLeadingSlash ? "pathPart" : "path";
-  const url = `\`${baseExpr(spec)}\${${pathVar}}\``;
+  const base = baseExpr(spec);
+  const passthrough = hasQueryTool(spec);
+  const url = passthrough ? "url" : `\`${base}\${${pathVar}}\``;
   const opts = headerOption(spec);
   // Expanded form (matching grafana/newrelic) iff normalizeLeadingSlash asks for it or the
   // headers are an inline object literal; a bare `headers: headers()` accessor call (datadog,
@@ -190,7 +211,23 @@ export function renderFetchHelper(spec: ConnectorSpec): string {
   const lines: string[] = [`async function ${fh.local}(path: string): Promise<unknown> {`];
 
   if (fh.normalizeLeadingSlash) {
-    lines.push('  const pathPart = path.startsWith("/") ? path : `/${path}`;');
+    // The `startsWith("http")` arm only matters when a query tool exists (passthrough) —
+    // without one `path` is never an absolute URL, so this stays byte-identical to before for
+    // every existing fixture. With one, this guard has to run BEFORE the leading-slash rule
+    // below: an absolute URL forced through `` `/${path}` `` would emit "/https://...".
+    const guard = passthrough
+      ? 'path.startsWith("http") || path.startsWith("/")'
+      : 'path.startsWith("/")';
+    lines.push(`  const pathPart = ${guard} ? path : \`/\${path}\`;`);
+  }
+
+  if (passthrough) {
+    // See hasQueryTool's comment: mirrors makeRestToolRegistrar's own passthrough so a query
+    // tool's absolute-URL return (tools-hand.ts) is used as-is instead of having the base
+    // prepended a second time.
+    lines.push(
+      `  const url = ${pathVar}.startsWith("http") ? ${pathVar} : \`${base}\${${pathVar}}\`;`,
+    );
   }
 
   if (expand) {

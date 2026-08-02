@@ -73,6 +73,55 @@ describe("renderBodyExpr", () => {
     expect(renderBodyExpr(t, noScope("p"))).toBeUndefined();
   });
 
+  // Important 3 (Task 4, round 1 review): pathArgs used to be the complete model of "what
+  // the URL carries" — true only while the URL was exactly the path. "query" makes the URL
+  // carry more, and the exclusion has to grow with it, or a non-GET query tool sends the
+  // same arg twice (once in the query string, once in the JSON body).
+  it("excludes an arg referenced in query from the default body — a write must not send it twice", () => {
+    const t = toolOf({
+      path: "/items",
+      method: "POST",
+      effect: "write",
+      args: { filter: { type: "string" }, title: { type: "string" } },
+      query: [{ name: "filter", arg: "filter" }],
+    });
+    expect(expr(t, "p")).toBe("JSON.stringify({ title: p.title })");
+  });
+
+  it("returns undefined when every default-body arg is a query arg — mirrors the path-only case", () => {
+    const t = toolOf({
+      path: "/items",
+      method: "POST",
+      effect: "write",
+      args: { filter: { type: "string" } },
+      query: [{ name: "filter", arg: "filter" }],
+    });
+    expect(renderBodyExpr(t, noScope("p"))).toBeUndefined();
+  });
+
+  it("excludes both a path arg and a query arg from the default body together", () => {
+    const t = toolOf({
+      path: "/items/${arg.id}",
+      method: "PATCH",
+      effect: "write",
+      args: { id: { type: "string" }, filter: { type: "string" }, title: { type: "string" } },
+      query: [{ name: "filter", arg: "filter" }],
+    });
+    expect(expr(t, "p")).toBe("JSON.stringify({ title: p.title })");
+  });
+
+  it("keeps a query arg when the mapping names it explicitly — the default excludes it, an explicit request does not", () => {
+    const t = toolOf({
+      path: "/items",
+      method: "POST",
+      effect: "write",
+      args: { filter: { type: "string" } },
+      query: [{ name: "filter", arg: "filter" }],
+      body: { filter: "q" },
+    });
+    expect(expr(t, "p")).toBe("JSON.stringify({ q: p.filter })");
+  });
+
   it("renames keys under an explicit mapping", () => {
     const t = toolOf({
       path: "/a",

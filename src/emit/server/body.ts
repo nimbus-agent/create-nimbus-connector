@@ -72,11 +72,16 @@ function fieldValue(
  * (`JSON.stringify({ issueId, status })`). Arg values are referenced directly rather
  * than interpolated into a string, so a number arg stays a number in the JSON.
  *
- * The default excludes any arg already referenced in the path: that value is carried by
- * the URL, so mirroring it into the body would send it twice on a PATCH, or manufacture a
- * body where none belongs on a DELETE whose only arg is its path id. An explicit `body`
- * mapping is unaffected by this — naming a path arg there is a deliberate author choice
- * and is always respected verbatim.
+ * The default excludes any arg already referenced in the path OR in "query": both values
+ * are carried by the URL, so mirroring either into the body would send it twice on a PATCH,
+ * or manufacture a body where none belongs on a DELETE whose only arg is its path id or its
+ * one query parameter. `pathArgs` used to be the complete model of "what the URL carries" —
+ * true only while the URL was exactly the path. `query` makes the URL carry more, and this
+ * function's own exclusion set has to grow with it or the two defects the path exclusion
+ * exists to prevent both reopen for a query arg specifically: a non-GET query tool sends the
+ * arg twice, and a DELETE whose only non-path arg is a query parameter manufactures a body
+ * where none belongs. An explicit `body` mapping is unaffected by either exclusion — naming
+ * a path or query arg there is a deliberate author choice and is always respected verbatim.
  */
 export function renderBodyExpr(tool: ToolSpec, ctx: RenderContext): BodyExpr | undefined {
   if (tool.method === "GET") return undefined;
@@ -86,13 +91,14 @@ export function renderBodyExpr(tool: ToolSpec, ctx: RenderContext): BodyExpr | u
     // Schema guarantees tool.path is present here: a non-GET tool is never a "stub" (stubs
     // are pinned to method "GET" by ToolSchema's refine), and any non-stub tool must have a
     // path.
-    const pathArgs = new Set(
+    const urlArgs = new Set(
       parsePathTemplate(tool.path!)
         .filter((s) => s.kind === "arg")
         .map((s) => s.name),
     );
+    for (const q of tool.query ?? []) urlArgs.add(q.arg);
     pairs = Object.keys(tool.args)
-      .filter((a) => !pathArgs.has(a))
+      .filter((a) => !urlArgs.has(a))
       .map((a) => [a, a] as const);
   } else {
     pairs = Object.entries(tool.body).map(([arg, field]) => [field, arg] as const);

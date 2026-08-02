@@ -237,7 +237,10 @@ describe("hand-rolled query parameters", () => {
     );
     expect(out).toContain('u.searchParams.set("limit", String(lim));');
     expect(out).toContain('if (p.after !== undefined && p.after !== "") {');
-    expect(out).toContain("const path = `${u.pathname}${u.search}`;");
+    // The absolute URL — NOT `${u.pathname}${u.search}` — or the fetch helper prepends the
+    // base a second time, since `pathExpr` already had it spliced in for `new URL(...)`. See
+    // this shape's emission site (tools-hand.ts) for the doubling this avoids.
+    expect(out).toContain("const path = `${u}`;");
     expect(out).toContain("return jsonResult(await discordGet(path));");
   });
 
@@ -253,8 +256,38 @@ describe("hand-rolled query parameters", () => {
   // on a stub — see spec.ts), and this file builds its call with a GET/non-GET split. A
   // second, hand-duplicated call expression for the query branch would be free to disagree
   // with that split — exactly the kind of silent divergence a substring test on the GET case
-  // alone would never catch.
-  it("routes a non-GET query tool through discordSend with its method, not the read helper", () => {
+  // alone would never catch. `title` is a genuine body field, alongside the `query` arg that
+  // is consumed only by the query string — proving both that the write helper is used AND
+  // that the query arg is excluded from the default body (see body.ts's urlArgs exclusion).
+  it("routes a non-GET query tool through discordSend with its method, excluding the query arg from the body", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+            title: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ]),
+    );
+    expect(out).toContain(
+      'return jsonResult(await discordGetSend(path, "POST", JSON.stringify({ title: p.title })));',
+    );
+    expect(out).not.toContain("discordGet(path)");
+    expect(out).not.toContain("query: p.query");
+  });
+
+  // Important 3's "pairs.length === 0" case: a non-GET tool whose only non-path arg is a
+  // query parameter must fall through to the existing no-body path, exactly like a DELETE
+  // whose only arg is its path id — not manufacture an empty-but-present body.
+  it("a non-GET query tool with no other args sends no body at all", () => {
     const out = renderHandRolledTools(
       spec([
         {
@@ -271,10 +304,7 @@ describe("hand-rolled query parameters", () => {
         },
       ]),
     );
-    expect(out).toContain(
-      'return jsonResult(await discordGetSend(path, "POST", JSON.stringify({ query: p.query })));',
-    );
-    expect(out).not.toContain("discordGet(path)");
+    expect(out).toContain('return jsonResult(await discordGetSend(path, "POST", undefined));');
   });
 });
 

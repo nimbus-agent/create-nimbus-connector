@@ -1303,6 +1303,46 @@ describe("ToolSchema query parameters", () => {
     ).toThrow(/"flag"/);
   });
 
+  // The mirror of the omitWhen-forbidden checks above: an arg whose value CAN be undefined
+  // (optional, no default, not boolean) and declares no omitWhen reaches searchParams.set
+  // unconditionally — TS2345 in the generated package for a string arg (set(key, value)
+  // rejects `string | undefined`), and a literal "?<name>=undefined" on the wire for a
+  // numeric one (the non-string branch wraps in String(...), and String(undefined) ===
+  // "undefined"). Both parsed clean before canOmitQueryValue's bidirectional check.
+  it("rejects an optional string query arg with no omitWhen — would fail set()'s own typecheck", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it('rejects an optional numeric query arg with no omitWhen — would send a literal "undefined"', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("still accepts a defaulted optional arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number", optional: true, default: 50 } },
+      query: [{ name: "limit", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "limit", arg: "limit" }]);
+  });
+
+  it("still accepts a required arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { id: { type: "string" } },
+      query: [{ name: "id", arg: "id" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "id", arg: "id" }]);
+  });
+
   it("rejects a query arg that is not declared", () => {
     expect(() => withQuery({ args: {}, query: [{ name: "after", arg: "after" }] })).toThrow(
       /"after"/,
