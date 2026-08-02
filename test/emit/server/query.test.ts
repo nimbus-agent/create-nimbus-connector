@@ -1,21 +1,40 @@
 import { describe, expect, it } from "bun:test";
 import { parsePathTemplate, renderPath } from "../../../src/emit/server/path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "../../../src/emit/server/query.ts";
+import type { ArgSpec } from "../../../src/spec.ts";
 
 const NO_HOISTS = new Map<string, string>();
 
+const STRING_ARG: ArgSpec = { type: "string", optional: false, int: false };
+const NUMBER_ARG: ArgSpec = { type: "number", optional: false, int: false };
+
 describe("renderQueryLines", () => {
-  it("sets an unconditional parameter through String()", () => {
+  it("sets an unconditional numeric parameter through String()", () => {
     expect(
-      renderQueryLines([{ name: "limit", arg: "limit" }], { param: "parsed", hoisted: NO_HOISTS }),
+      renderQueryLines([{ name: "limit", arg: "limit" }], {
+        param: "parsed",
+        hoisted: NO_HOISTS,
+        args: { limit: NUMBER_ARG },
+      }),
     ).toEqual(['u.searchParams.set("limit", String(parsed.limit));']);
   });
 
-  it("guards a conditional parameter on undefined and empty", () => {
+  it("sets an unconditional string parameter bare", () => {
+    expect(
+      renderQueryLines([{ name: "filter", arg: "filter" }], {
+        param: "parsed",
+        hoisted: NO_HOISTS,
+        args: { filter: STRING_ARG },
+      }),
+    ).toEqual(['u.searchParams.set("filter", parsed.filter);']);
+  });
+
+  it("guards a string parameter on undefined and empty, bare — omitWhen: empty", () => {
     expect(
       renderQueryLines([{ name: "after", arg: "after", omitWhen: "empty" }], {
         param: "parsed",
         hoisted: NO_HOISTS,
+        args: { after: STRING_ARG },
       }),
     ).toEqual([
       'if (parsed.after !== undefined && parsed.after !== "") {',
@@ -24,10 +43,42 @@ describe("renderQueryLines", () => {
     ]);
   });
 
+  it("guards a string parameter on undefined only, bare — omitWhen: absent", () => {
+    expect(
+      renderQueryLines([{ name: "pageToken", arg: "pageToken", omitWhen: "absent" }], {
+        param: "parsed",
+        hoisted: NO_HOISTS,
+        args: { pageToken: STRING_ARG },
+      }),
+    ).toEqual([
+      "if (parsed.pageToken !== undefined) {",
+      '  u.searchParams.set("pageToken", parsed.pageToken);',
+      "}",
+    ]);
+  });
+
+  it("wraps a guarded numeric parameter in String() with no empty check — github's page", () => {
+    const lines = renderQueryLines([{ name: "page", arg: "page", omitWhen: "absent" }], {
+      param: "parsed",
+      hoisted: NO_HOISTS,
+      args: { page: NUMBER_ARG },
+    });
+    expect(lines).toEqual([
+      "if (parsed.page !== undefined) {",
+      '  u.searchParams.set("page", String(parsed.page));',
+      "}",
+    ]);
+    expect(lines.join("\n")).not.toContain('!== ""');
+  });
+
   it("references the hoisted const when the arg declares a default", () => {
     const hoisted = new Map([["limit", "lim"]]);
     expect(
-      renderQueryLines([{ name: "limit", arg: "limit" }], { param: "parsed", hoisted }),
+      renderQueryLines([{ name: "limit", arg: "limit" }], {
+        param: "parsed",
+        hoisted,
+        args: { limit: NUMBER_ARG },
+      }),
     ).toEqual(['u.searchParams.set("limit", String(lim));']);
   });
 
@@ -36,16 +87,9 @@ describe("renderQueryLines", () => {
       renderQueryLines([{ name: "page[size]", arg: "limit" }], {
         param: "parsed",
         hoisted: NO_HOISTS,
+        args: { limit: NUMBER_ARG },
       }),
     ).toEqual(['u.searchParams.set("page[size]", String(parsed.limit));']);
-  });
-
-  it("does not wrap a guarded value in String(), matching the corpus", () => {
-    const lines = renderQueryLines([{ name: "after", arg: "after", omitWhen: "empty" }], {
-      param: "parsed",
-      hoisted: NO_HOISTS,
-    });
-    expect(lines.join("\n")).not.toContain("String(");
   });
 });
 

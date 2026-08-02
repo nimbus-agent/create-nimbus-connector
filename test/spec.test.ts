@@ -1233,13 +1233,39 @@ describe("ToolSchema query parameters", () => {
     expect(spec.tools[0]!.query![0]!.name).toBe("page[size]");
   });
 
-  it("rejects an omitWhen value other than empty", () => {
+  it("accepts omitWhen: absent on a string arg with no default", () => {
+    const spec = withQuery({
+      args: { after: { type: "string", optional: true } },
+      query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "after", arg: "after", omitWhen: "absent" }]);
+  });
+
+  it("rejects an omitWhen value that is neither absent nor empty", () => {
     expect(() =>
       withQuery({
         args: { after: { type: "string", optional: true } },
-        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+        query: [{ name: "after", arg: "after", omitWhen: "bogus" }],
       }),
     ).toThrow();
+  });
+
+  it('rejects omitWhen: "empty" on a non-string arg', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page", omitWhen: "empty" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("rejects omitWhen combined with an arg declaring a default", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true, default: "x" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
   });
 
   it("rejects a query arg that is not declared", () => {
