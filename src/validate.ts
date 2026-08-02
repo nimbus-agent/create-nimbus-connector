@@ -116,6 +116,21 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   // because it is what discord and google-meet write — the two connectors this branch exists
   // to reproduce.
   "u",
+  // Task 4 fix round 2: the query branch's absolute-URL passthrough (fetch-helper.ts's
+  // hasQueryTool gate) declares `const url = path.startsWith("http") ? path : ...` at
+  // function scope, inside `renderFetchHelper` (the read helper) and `renderWriteHelper` —
+  // and it was already there, unconditionally, in `renderRestKitFetchHelper` before this
+  // feature existed. Two collisions, same shape as "u"'s reservation above: a fetch helper
+  // named "url" shadows the passthrough const, so the emitted `fetch(url, ...)` calls a
+  // string with .startsWith() semantics gone (a compile error only if url() is then called
+  // as a function, e.g. via `headers: url()`); a `baseConst: "url"` shadows it the other way
+  // — the passthrough's own initializer references `${base}` where `base` resolves to
+  // `${url}`, so `const url = ... : \`${url}${path}\`` reads `url` before its own
+  // declaration finishes (TS2448). Reserved unconditionally, not only when a query tool
+  // exists: RESERVED_IDENTIFIERS is checked before any tool kind is considered, and rest-kit
+  // has emitted this same `const url` unconditionally since before "u"/"URL" were reserved —
+  // this entry was simply missed then.
+  "url",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {

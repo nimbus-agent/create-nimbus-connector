@@ -415,7 +415,7 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
     ).toThrow(/reserved/);
   });
 
-  it.each(["u", "URL"])("reserves %s against a fetch helper local", (name) => {
+  it.each(["u", "URL", "url"])("reserves %s against a fetch helper local", (name) => {
     expect(() =>
       validateSpec(
         parseSpec({
@@ -431,6 +431,73 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
             inlineHeaders: {},
           },
           tools: [{ name: "t", description: "T.", path: "/x" }],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+
+  /**
+   * Task 4 fix round 2: "url" is emitted at function scope by the query branch's absolute-URL
+   * passthrough in ALL THREE fetch-helper shapes (rest-kit unconditionally, hand-rolled/
+   * read-only-kit's read and write helpers whenever a query tool exists), not only as a
+   * fetch helper's own `local`. Pins the two exact collision shapes the reviewer reproduced
+   * by hand — an env accessor and a baseConst, not the fetch helper's own name.
+   */
+  it("rejects an env accessor local named url — the same shape as fetchHelper.local, a different field", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          env: [{ vars: ["D_TOKEN"], local: "url", auth: "bearer" }],
+          fetchHelper: {
+            local: "discordGet",
+            base: "https://discord.com/api/v10",
+            headers: "url",
+          },
+          tools: [
+            {
+              name: "t",
+              description: "T.",
+              path: "/x",
+              args: { q: { type: "string" } },
+              query: [{ name: "q", arg: "q" }],
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+
+  it("rejects a baseConst named url", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "discordGet",
+            base: "https://discord.com/api/v10",
+            baseConst: "url",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "t",
+              description: "T.",
+              path: "/x",
+              args: { q: { type: "string" } },
+              query: [{ name: "q", arg: "q" }],
+            },
+          ],
         }),
       ),
     ).toThrow(/reserved/);
