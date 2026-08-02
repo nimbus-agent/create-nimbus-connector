@@ -55,6 +55,13 @@ arguments mapped through a lookup table into a numeric parameter. Those are a di
 problem — control flow over the path itself rather than over one parameter — and the ROADMAP
 bullet covering them stays open.
 
+**Also out: repeating (multi-value) parameters.** `?labelIds=a&labelIds=b` needs
+`searchParams.append` inside a loop rather than `set`. This is a real corpus shape — `gmail`
+writes it, at `gmail/src/server.ts:77` and again at `:101-104` — but none of the six connectors
+in scope uses it, and it needs an argument typed as an array, which `ArgSchema` has no form
+for. Adding `set`-only now does not foreclose it: `append` would be a further `omitWhen`-style
+field on the same entry, not a redesign.
+
 ## Spec language
 
 `ToolSchema` gains an optional `query`:
@@ -92,7 +99,45 @@ This is also what makes `discord` byte-reachable with no new machinery: its `lim
 | Spec shape | Emission |
 | --- | --- |
 | `query` absent | today's path expression, unchanged |
-| `query` present | `new URL(...)`, one `searchParams` statement per entry, `` return `${u.pathname}${u.search}` `` |
+| `query` present | `new URL(<base><path>)`, one `searchParams` statement per entry, `` return `${u.pathname}${u.search}` `` |
+
+### The URL is absolute, and the base comes from `baseExpr`
+
+`new URL("/channels/123")` throws `TypeError: Invalid URL` — a relative reference needs a base.
+The corpus never hits this because it always builds an **absolute** URL and strips it back
+afterwards. All six connectors do it the same way:
+
+```ts
+const u = new URL(`${DISCORD_API}/channels/${encodeURIComponent(parsed.channelId)}/messages`);
+…
+return `${u.pathname}${u.search}`;
+```
+
+The emitter must therefore prefix the path with the base, and it must do so through the
+existing `baseExpr(spec)` in `src/emit/server/fetch-helper.ts` — which already yields `${BASE}`
+when `fetchHelper.baseConst` is declared and the resolved literal otherwise. That helper exists
+precisely so the read helper, the write helper and the rest-kit helper cannot disagree about
+which form the base takes; a fourth call site must not reintroduce the disagreement.
+
+**One gate to re-examine while implementing.** `renderBaseConst` emits the module-scope const
+only when a fetch helper is emitted, because a spec whose tools are all stubs would otherwise
+declare a const nothing reads — a `noUnusedLocals` error in the generated package. A `query`
+tool is a third reader of that const. The combination looks unreachable (a `query` tool is not
+a stub, and a non-stub tool emits a helper), but the gate's own comment insists the question be
+asked of what is actually emitted rather than restated, so the implementation must confirm it
+rather than assume it.
+
+**Consequence for the `discord` fixture:** it currently declares no `baseConst`, so `baseExpr`
+would inline the literal where the real connector writes `${DISCORD_API}`. Byte-matching
+`discord` requires adding `"baseConst": "DISCORD_API"` to its fixture spec. That is a fixture
+change, not a design constraint.
+
+### Encoding
+
+`URLSearchParams.set` percent-encodes both key and value. Query values therefore take **no**
+encoding mode — there is no `|enc` to apply, because a query entry names an argument rather
+than embedding a path-template placeholder. Applying `encodeURIComponent` as well would
+double-encode. Path segments keep their modes, unchanged.
 
 Per entry:
 
@@ -191,3 +236,17 @@ its current `3/6`.
   the argument already carries.
 - **An "inline this default" knob** to reach `google-meet`'s form. Declined as a formatting
   reproduction knob, consistent with the extractor guard/form/name decisions.
+- **Adding `!== null` to the `omitWhen: "empty"` guard.** Declined: `null` is unreachable.
+  `ArgSchema` types an argument `string`, `number` or `boolean`, and zod's `.optional()` widens
+  to `| undefined`, never `| null` — a JSON `null` fails the schema before a handler runs. All
+  six in-scope connectors guard on `!== undefined && !== ""` and nothing else, so adding a
+  third clause would emit a check that can never fire *and* forfeit every byte match it was
+  added to protect.
+- **Renaming the emitted URL local from `u`** to something less collision-prone
+  (`urlObj`, `__url`). Declined, though the concern behind it is fair. The corpus is genuinely
+  split — across all connectors the name is `search` ×23, `u` ×20, `params` ×15, `qs` ×10,
+  `body` ×2, `q` ×1 — so any choice matches some files and not others, exactly like the
+  registrar naming and the transport tail. `u` is what `discord` and `google-meet` write, which
+  is the only reason it wins: it is the one that byte-matches the fixtures this work targets.
+  A hygienic name would match nothing. Reserving `u` costs a spec author one rename of their
+  own identifier; not emitting `u` costs every byte match this design exists to obtain.
