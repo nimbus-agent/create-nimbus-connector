@@ -193,12 +193,12 @@ export const SearchFilterSchema = z
  *
  * `omitWhen` is an enum rather than a boolean because the guard it selects is one of two
  * specific predicates, not a yes/no: `"absent"` tests only `!== undefined` (circleci's
- * `pageToken`, github-actions's `branch`/`event`/`status`), `"empty"` adds `&& !== ""`
- * (discord/google-meet/google-photos's `after`/`pageToken`/`filter`). Both are genuine author
- * variance in the corpus — three connectors each way — not one canonical form with an
- * optional second clause, so a guarded entry must say which predicate it means; there is no
- * default between them. `omitWhen` itself stays optional — undefined means the entry is set
- * unconditionally, which is the third real shape (`limit`).
+ * `pageToken`, github-actions's `branch`/`event`/`status`, github's `page`), `"empty"` adds
+ * `&& !== ""` (discord/google-meet/google-photos's `after`/`pageToken`/`filter`). Both are
+ * genuine author variance in the corpus — three connectors each way — not one canonical form
+ * with an optional second clause, so a guarded entry must say which predicate it means; there
+ * is no default between them. `omitWhen` itself stays optional — undefined means the entry is
+ * set unconditionally, which is the third real shape (`limit`).
  */
 export const QueryParamSchema = z.strictObject({
   name: z.string().min(1),
@@ -300,8 +300,11 @@ export const ToolSchema = z
     if (t.query === undefined) return;
     const seen = new Set<string>();
     for (const [i, q] of t.query.entries()) {
-      const arg = t.args[q.arg];
-      if (arg === undefined) {
+      // `q.arg in t.args` reaches inherited properties (`"toString"` would pass with an empty
+      // `args: {}`), and the renderer would then emit a reference to `Object.prototype`'s
+      // method instead of failing loudly. `Object.hasOwn` checks only t.args's own keys.
+      const declared = Object.hasOwn(t.args, q.arg);
+      if (!declared) {
         ctx.addIssue({
           code: "custom",
           path: ["query", i, "arg"],
@@ -320,7 +323,8 @@ export const ToolSchema = z
       // Both checks below are skipped when the arg itself is undeclared — the "does not
       // declare" issue above already covers that case, and `arg.type`/`arg.default` would
       // have nothing real to report on.
-      if (arg === undefined) continue;
+      if (!declared) continue;
+      const arg = t.args[q.arg]!;
 
       // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
       // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
@@ -335,19 +339,30 @@ export const ToolSchema = z
         });
       }
 
-      // The hoist emits `const x = p.x ?? <default>;`, so a defaulted arg's local is never
-      // undefined and an omitWhen guard around it is dead code. No corpus connector combines
-      // them: github writes `String(parsed.perPage ?? 30)` unconditionally and guards `page`,
-      // which declares no default.
-      if (q.omitWhen !== undefined && arg.default !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["query", i, "omitWhen"],
-          message:
-            `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
-            `${JSON.stringify(q.arg)} declares a default — the hoisted const is never ` +
-            "undefined, so the guard can never omit the parameter",
-        });
+      // omitWhen's guard only omits anything if the value it tests can genuinely be
+      // undefined. That requires all three: "optional": true (otherwise the schema demands a
+      // value), no "default" (the hoist emits `p.x ?? <default>`, never undefined), and not
+      // type "boolean" (isHoisted in args.ts hoists every boolean regardless of default, and
+      // renderHoists emits `p.x === true ? "true" : "false"`, also never undefined). `default`
+      // alone is not the governing condition — a required or boolean arg is just as dead a
+      // guard, and neither can reach this check by way of `default`. No corpus connector
+      // combines omitWhen with any of the three: github writes `String(parsed.perPage ?? 30)`
+      // unconditionally and guards `page`, which is optional with no default and type number.
+      if (q.omitWhen !== undefined) {
+        const violations: string[] = [];
+        if (!arg.optional) violations.push('is not declared "optional": true');
+        if (arg.default !== undefined) violations.push('declares a "default"');
+        if (arg.type === "boolean") violations.push('is type "boolean"');
+        if (violations.length > 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["query", i, "omitWhen"],
+            message:
+              `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
+              `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
+              "undefined, so the guard can never omit the parameter",
+          });
+        }
       }
     }
   });

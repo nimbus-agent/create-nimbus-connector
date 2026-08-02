@@ -1241,13 +1241,30 @@ describe("ToolSchema query parameters", () => {
     expect(spec.tools[0]!.query).toEqual([{ name: "after", arg: "after", omitWhen: "absent" }]);
   });
 
+  it("accepts omitWhen: absent on a numeric arg with no default — github's page", () => {
+    const spec = withQuery({
+      args: {
+        perPage: { type: "number", optional: true, default: 30 },
+        page: { type: "number", optional: true },
+      },
+      query: [
+        { name: "per_page", arg: "perPage" },
+        { name: "page", arg: "page", omitWhen: "absent" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "per_page", arg: "perPage" },
+      { name: "page", arg: "page", omitWhen: "absent" },
+    ]);
+  });
+
   it("rejects an omitWhen value that is neither absent nor empty", () => {
     expect(() =>
       withQuery({
         args: { after: { type: "string", optional: true } },
         query: [{ name: "after", arg: "after", omitWhen: "bogus" }],
       }),
-    ).toThrow();
+    ).toThrow(/omitWhen/);
   });
 
   it('rejects omitWhen: "empty" on a non-string arg', () => {
@@ -1268,9 +1285,33 @@ describe("ToolSchema query parameters", () => {
     ).toThrow(/"after"/);
   });
 
+  it("rejects omitWhen on an arg that is not optional", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it("rejects omitWhen on a boolean arg — isHoisted hoists every boolean regardless of default", () => {
+    expect(() =>
+      withQuery({
+        args: { flag: { type: "boolean", optional: true } },
+        query: [{ name: "flag", arg: "flag", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"flag"/);
+  });
+
   it("rejects a query arg that is not declared", () => {
     expect(() => withQuery({ args: {}, query: [{ name: "after", arg: "after" }] })).toThrow(
       /"after"/,
+    );
+  });
+
+  it("rejects a query arg named after an inherited Object property", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "k", arg: "toString" }] })).toThrow(
+      /"toString"/,
     );
   });
 

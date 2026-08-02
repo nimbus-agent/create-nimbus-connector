@@ -44,8 +44,9 @@ export function renderQueryLines(query: readonly QueryParam[], ctx: QueryContext
   for (const q of query) {
     const key = JSON.stringify(q.name);
     const value = valueExpr(q, ctx);
-    // Schema guarantees the arg is declared here — ToolSchema's superRefine rejects any
-    // "query" entry naming an undeclared arg.
+    // Present for every arg reachable here: ToolSchema's superRefine rejects any "query"
+    // entry naming an arg t.args does not declare as its own key (see the Object.hasOwn
+    // check there), before this ever runs.
     const type = ctx.args[q.arg]!.type;
     const rendered = wrapsInString(type) ? `String(${value})` : value;
     if (q.omitWhen === undefined) {
