@@ -425,9 +425,20 @@ async (p) => {
 
 ### 4.5 The SDK floor
 
-A standalone spec using search emits `@nimbus-dev/sdk` `^1.12.0` — the release carrying
+A standalone spec using search emits `@nimbus-dev/sdk` `^1.15.0` — the release carrying
 `search-filter` and `matchesResult`. Specs without search keep `^1.11.0`. Raising the floor for
 everyone would strand users on a version they have no reason to need.
+
+**This number was 1.12.0 in the design and in the plan, and both were overtaken by the SDK's own
+release train.** `nimbus-sdk` shipped typescript 1.12.0, 1.13.0 and 1.14.0 while Stage D was
+being built, none of them carrying the search kit — verified with
+`git ls-tree typescript-v1.14.0 sdks/typescript/src/connector-kit/`, which lists
+`fetch-bearer-json`, `mcp-tool-kit` and `rest-tool-kit` only. Emitting `^1.12.0` would therefore
+have resolved 1.14.x and left every emitted
+`import { matchesResult } from "@nimbus-dev/sdk/connector-kit"` unresolvable — a floor that
+reads as satisfied and is not. The kit lands in the next minor after main's 1.14.0, so the
+floor is `^1.15.0`. The lesson generalises: a floor naming an unreleased version has to be
+re-derived at the moment it is emitted, not carried forward from a design written weeks earlier.
 
 ---
 
@@ -522,13 +533,13 @@ list what genuinely matches, so every gap below is on screen on every run.
 1. `style: "read-only-kit"` — schema, emitter
 2. `impl: "search"` — schema, validation, `src/search-filter.ts` emission, tool body
 3. Throwing-stub extractor and `zzsearchstub`
-4. **Nimbus SDK: add `search-filter` and `matchesResult` to `connector-kit`, release 1.12.0** —
+4. **Nimbus SDK: add `search-filter` and `matchesResult` to `connector-kit`, release 1.15.0** —
    a separate PR in `nimbus-sdk`, runnable in parallel with 1–3
-5. Standalone target — SDK import path, inlined glue, floor bump to `^1.12.0`
+5. Standalone target — SDK import path, inlined glue, floor bump to `^1.15.0`
 6. Golden fixtures `mercury` / `zendesk` / `bitrise`, snapshots, standalone acceptance
 
 **Step 4 is the critical path for step 5**, exactly as Stage C §7 step 6 was for installability.
-Until 1.12.0 is on the registry, standalone acceptance for search fixtures runs only in
+Until 1.15.0 is on the registry, standalone acceptance for search fixtures runs only in
 local-checkout mode — which is what that mode is for, and it is the pre-release gate. Steps 1–3
 and the three real fixtures in step 6 have no cross-repo dependency at all: the monorepo target
 imports `../../shared/*` and needs no SDK release.

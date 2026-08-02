@@ -213,9 +213,13 @@ describe("SDK floor", () => {
     ],
   });
 
-  it("raises the floor to ^1.12.0 for a standalone search spec", () => {
+  // ^1.15.0, not the ^1.12.0 the Stage D plan predicted: the SDK released 1.12.0, 1.13.0 and
+  // 1.14.0 while this stage was being built, and `git ls-tree typescript-v1.14.0
+  // sdks/typescript/src/connector-kit/` shows no search-filter.ts in any of them. A package
+  // pinning ^1.12.0 would resolve 1.14.x and fail to import matchesResult at all.
+  it("raises the floor to ^1.15.0 for a standalone search spec", () => {
     const pkg = JSON.parse(emitPackageJson(searchSpec, "standalone", "MIT").content);
-    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^1.12.0");
+    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^1.15.0");
   });
 
   it("leaves the floor at ^1.11.0 for a standalone spec with no search tool", () => {
