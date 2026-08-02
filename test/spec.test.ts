@@ -1077,3 +1077,77 @@ describe("search and style interaction", () => {
     ).toThrow(/filterItems/);
   });
 });
+
+describe("SearchFilterSchema field entries", () => {
+  const withFilter = (filter: unknown) =>
+    parseSpec({
+      name: "mercury",
+      title: "Mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "s", description: "S.", impl: "search", path: "/v1/x", filter }],
+    });
+
+  it("accepts a plain key, a path entry and a tag entry together", () => {
+    const spec = withFilter({
+      export: "filterX",
+      fields: ["name", { path: ["spec", "source", "repoURL"] }, { tags: "objects" }],
+    });
+    expect(spec.tools[0]!.filter!.fields).toEqual([
+      "name",
+      { path: ["spec", "source", "repoURL"] },
+      { tags: "objects" },
+    ]);
+  });
+
+  it("rejects a single-segment path and names the plain-string spelling", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ path: ["name"] }] })).toThrow(/"name"/);
+  });
+
+  it("rejects an empty path segment", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ path: ["spec", ""] }] })).toThrow();
+  });
+
+  it("accepts a whitespace-only path segment, which is a legal JSON key", () => {
+    const spec = withFilter({ export: "filterX", fields: [{ path: ["spec", " "] }] });
+    expect(spec.tools[0]!.filter!.fields).toEqual([{ path: ["spec", " "] }]);
+  });
+
+  it("rejects an unknown key inside an entry object", () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: [{ path: ["a", "b"], tag: "objects" }] }),
+    ).toThrow();
+  });
+
+  it("rejects an unknown tag format", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ tags: "nope" }] })).toThrow();
+  });
+
+  it("rejects legacy tags:true alongside a tag entry, naming both", () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: ["name", { tags: "text" }], tags: true }),
+    ).toThrow(/tags/);
+  });
+
+  it('reports a malformed entry with the three legal shapes, not "Invalid input"', () => {
+    // Verified against zod 4.4.2: an untagged union reports ONE issue, not one per branch,
+    // and its default message is the useless "Invalid input". The custom error is what makes
+    // the failure actionable.
+    expect(() => withFilter({ export: "filterX", fields: [{ pat: ["a", "b"] }] })).toThrow(
+      /a field entry must be a key string/,
+    );
+  });
+
+  it("still accepts the flat 0.4.0 shape unchanged", () => {
+    const spec = withFilter({ export: "filterX", fields: ["id", "name"], tags: true });
+    expect(spec.tools[0]!.filter!.fields).toEqual(["id", "name"]);
+    expect(spec.tools[0]!.filter!.tags).toBe(true);
+  });
+});

@@ -49,15 +49,88 @@ export const ArgSchema = z
   });
 
 /**
- * The per-connector search filter. `fields` omitted means the emitter cannot express the
- * extraction and emits a throwing stub instead (Stage D design D5) — 40 of the 49 corpus
- * filter files hand-write an extractor this shape cannot reach.
+ * One searchable field. A plain string is a top-level key; `path` reads a nested one via the
+ * shared `nestedString`; `tags` selects one of the two shared tag helpers.
+ *
+ * The union is untagged because the required-key sets are disjoint — an entry is a string, or
+ * has `path`, or has `tags`. A `"type"` discriminator was declined in review: it is paid on
+ * every entry an author writes, and a future kind is either a new disjoint shape or an optional
+ * key on an existing one.
  */
-export const SearchFilterSchema = z.strictObject({
-  export: identifierField(),
-  fields: z.array(z.string().min(1)).min(1, "a filter must name at least one field").optional(),
-  tags: z.boolean().default(false),
+const PathEntrySchema = z.strictObject({
+  path: z.array(z.string().min(1, "a path segment cannot be empty")),
 });
+
+const TagsEntrySchema = z.strictObject({
+  /** "text" -> tagText (a string[] under `tags`); "objects" -> tagNamesFromObjects ({name}[]). */
+  tags: z.enum(["text", "objects"]),
+});
+
+/**
+ * The custom error is not decoration. Verified against zod 4.4.2: a failing untagged union
+ * reports a single issue whose default message is "Invalid input" — it names neither what was
+ * given nor what was expected. (It does *not* dump one failure per branch; that is zod 3
+ * behaviour.) This message is the only thing that makes a malformed entry actionable.
+ */
+export const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema], {
+  error:
+    'a field entry must be a key string, { "path": [...] } with two or more segments, or ' +
+    '{ "tags": "text" | "objects" }',
+});
+
+export type FieldEntry = z.infer<typeof FieldEntrySchema>;
+
+export function isPathEntry(e: FieldEntry): e is z.infer<typeof PathEntrySchema> {
+  return typeof e === "object" && "path" in e;
+}
+
+export function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema> {
+  return typeof e === "object" && "tags" in e;
+}
+
+/**
+ * The per-connector search filter. `fields` omitted means the emitter cannot express the
+ * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
+ * an extractor, 7 are reachable with these entry kinds, 32 call a locally-defined helper and
+ * one is hand-rolled. See the Stage E extractor design.
+ */
+export const SearchFilterSchema = z
+  .strictObject({
+    export: identifierField(),
+    fields: z.array(FieldEntrySchema).min(1, "a filter must name at least one field").optional(),
+    tags: z.boolean().default(false),
+  })
+  .superRefine((f, ctx) => {
+    if (f.fields === undefined) return;
+
+    for (const [i, e] of f.fields.entries()) {
+      // A one-segment path and a plain key emit identical output. Accepting both spellings for
+      // one emission is an ambiguity, and normalising it silently would hide a likely typo.
+      if (isPathEntry(e) && e.path.length < 2) {
+        const only = e.path[0];
+        ctx.addIssue({
+          code: "custom",
+          path: ["fields", i, "path"],
+          message:
+            `"path": ${JSON.stringify(e.path)} has fewer than two segments. A single-segment ` +
+            `path emits the same call as the plain key ${JSON.stringify(only ?? "")} — write ` +
+            "the plain string form instead.",
+        });
+      }
+    }
+
+    // A precedence rule here would be invisible in the emitted file, so both spellings at once
+    // is an error rather than one winning.
+    if (f.tags && f.fields.some(isTagsEntry)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tags"],
+        message:
+          'a filter sets legacy "tags": true and also lists a { "tags": ... } entry in ' +
+          '"fields". Use one: the entry form if you need "objects", otherwise "tags": true.',
+      });
+    }
+  });
 
 export const ToolSchema = z
   .strictObject({
