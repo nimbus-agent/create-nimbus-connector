@@ -89,6 +89,41 @@ export function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema>
 }
 
 /**
+ * The fieldsFromKeys-compatible shape for a filter's entries, or undefined when at least one
+ * entry needs the bespoke `fieldsOf` extractor instead — a `path` entry, a `{"tags":"objects"}`
+ * entry, or a `{"tags":...}` entry anywhere but last.
+ *
+ * `fieldsFromKeys` appends `tagText(row)` *after* the keyed fields when `opts.tags` is set, so
+ * a trailing `{ tags: "text" }` is byte-identical to legacy `tags: true` and converges onto
+ * this shape — an author who prefers the newer spelling does not silently lose a byte-match.
+ * Trailing is load-bearing: that helper can only append, so a tag entry in any other position
+ * changes field order and cannot converge. `{ tags: "objects" }` has no equivalent —
+ * fieldsFromKeys hardcodes tagText.
+ *
+ * This is the single source of truth for "does this filter take the extractor branch": the
+ * schema's own superRefine (below), `validateSpec`'s at-most-one-extractor rule, and the
+ * emitter's `keyedShape` all derive from it rather than restating the rule.
+ */
+export function resolveKeyedShape(
+  fields: readonly FieldEntry[],
+): { keys: readonly string[]; trailingTagText: boolean } | undefined {
+  const last = fields.at(-1);
+  const trailingTagText = last !== undefined && isTagsEntry(last) && last.tags === "text";
+  const body = trailingTagText ? fields.slice(0, -1) : fields;
+  if (!body.every((e): e is string => typeof e === "string")) return undefined;
+  return { keys: body, trailingTagText };
+}
+
+/**
+ * Whether a filter's fields require the bespoke `fieldsOf` extractor rather than
+ * `fieldsFromKeys`. `fields` omitted is the throwing-stub branch, not the extractor — this is
+ * `false` for it.
+ */
+export function needsExtractor(filter: { fields?: readonly FieldEntry[] }): boolean {
+  return filter.fields !== undefined && resolveKeyedShape(filter.fields) === undefined;
+}
+
+/**
  * The per-connector search filter. `fields` omitted means the emitter cannot express the
  * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
  * an extractor, 7 are reachable with these entry kinds, 32 call a locally-defined helper and
@@ -128,6 +163,23 @@ export const SearchFilterSchema = z
         message:
           'a filter sets legacy "tags": true and also lists a { "tags": ... } entry in ' +
           '"fields". Use one: the entry form if you need "objects", otherwise "tags": true.',
+      });
+    }
+
+    // extractorFilter (src/emit/search-filter.ts) reads only "fields" — it never consults
+    // "tags" — so a legacy "tags": true on a filter that takes the extractor branch is
+    // silently dropped: the connector compiles and passes every gate while failing to match
+    // on tags. The .some(isTagsEntry) case above already rejects the overlapping case (a tags
+    // entry anywhere alongside "tags": true), so this only needs to catch the entry-free
+    // cause — a "path" entry forcing the extractor branch with no { "tags": ... } in sight.
+    if (f.tags && !f.fields.some(isTagsEntry) && needsExtractor(f)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tags"],
+        message:
+          'a filter sets legacy "tags": true, but its "fields" need a bespoke extractor (a ' +
+          '"path" entry forces this) — the extractor never reads "tags", so it would be ' +
+          'silently dropped. Add { "tags": "text" } as the last entry in "fields" instead.',
       });
     }
   });

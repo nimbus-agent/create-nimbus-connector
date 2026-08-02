@@ -2,7 +2,7 @@ import {
   type ConnectorSpec,
   type FieldEntry,
   isPathEntry,
-  isTagsEntry,
+  resolveKeyedShape,
   type ToolSpec,
 } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
@@ -30,21 +30,15 @@ function renderStringArray(values: readonly string[]): string {
 }
 
 /**
- * The keyed shape, or undefined when the entries need a bespoke extractor.
- *
- * `fieldsFromKeys` appends `tagText(row)` *after* the keyed fields when `opts.tags` is set, so
- * a trailing `{ tags: "text" }` is byte-identical to legacy `tags: true` and is emitted as
- * such — an author who prefers the newer spelling does not silently lose a byte-match. Trailing
- * is load-bearing: that helper can only append, so a tag entry in any other position changes
- * field order. `{ tags: "objects" }` has no equivalent — fieldsFromKeys hardcodes tagText.
+ * The keyed shape, or undefined when the entries need a bespoke extractor. Thin wrapper over
+ * `resolveKeyedShape` (src/spec.ts) — the single source of truth for the trailing-tags
+ * convergence rule, shared with the schema's own superRefine and validateSpec's at-most-one-
+ * extractor rule, so the three call sites cannot drift apart.
  */
-function keyedShape(tool: ToolSpec): { keys: string[]; tags: boolean } | undefined {
-  const entries = tool.filter!.fields!;
-  const last = entries.at(-1);
-  const trailingTagText = last !== undefined && isTagsEntry(last) && last.tags === "text";
-  const body = trailingTagText ? entries.slice(0, -1) : entries;
-  if (!body.every((e): e is string => typeof e === "string")) return undefined;
-  return { keys: body, tags: tool.filter!.tags || trailingTagText };
+function keyedShape(tool: ToolSpec): { keys: readonly string[]; tags: boolean } | undefined {
+  const resolved = resolveKeyedShape(tool.filter!.fields!);
+  if (resolved === undefined) return undefined;
+  return { keys: resolved.keys, tags: tool.filter!.tags || resolved.trailingTagText };
 }
 
 /** One element of the extractor's returned array. */
@@ -86,7 +80,7 @@ function primitivesFor(entries: readonly FieldEntry[]): string[] {
   return [...names];
 }
 
-function keyedFilter(tool: ToolSpec, shape: { keys: string[]; tags: boolean }): string {
+function keyedFilter(tool: ToolSpec, shape: { keys: readonly string[]; tags: boolean }): string {
   const keys = renderStringArray(shape.keys);
   const opts = shape.tags ? ", { tags: true }" : "";
   return [
@@ -126,7 +120,7 @@ export function emitSearchFilter(
   const tools = spec.tools.filter((t) => t.impl === "search");
   if (tools.length === 0) return undefined;
 
-  const shapes = new Map<ToolSpec, { keys: string[]; tags: boolean } | undefined>();
+  const shapes = new Map<ToolSpec, { keys: readonly string[]; tags: boolean } | undefined>();
   for (const t of tools) {
     shapes.set(t, t.filter!.fields === undefined ? undefined : keyedShape(t));
   }

@@ -415,3 +415,69 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
     ).toThrow(/reserved/);
   });
 });
+
+/**
+ * Fix round 1, CRITICAL 1: extractorFilter hardcodes "function fieldsOf", and
+ * emitSearchFilter maps it over every tool taking the extractor branch — a connector with two
+ * such tools emits two `function fieldsOf(...)` declarations in one module (TS2393, and the
+ * second silently wins for both makeQueryFilter calls, since both hoist). Rejected at
+ * validateSpec rather than resolved with a spec field to name the extractor or an
+ * auto-suffix — see the ruling in src/validate.ts.
+ */
+describe("at most one extractor-branch search filter per connector", () => {
+  function specWithFilters(filters: Record<string, unknown>[]) {
+    return parseSpec({
+      name: "mercury",
+      title: "Mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+      },
+      tools: filters.map((filter, i) => ({
+        name: `s_${i}`,
+        description: "S.",
+        impl: "search",
+        path: `/v1/x${i}`,
+        filter,
+      })),
+    });
+  }
+
+  it("rejects two tools that both need the fieldsOf extractor, naming both", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["name", { tags: "objects" }] },
+    ]);
+    expect(() => validateSpec(spec)).toThrow(/"s_0"/);
+    expect(() => validateSpec(spec)).toThrow(/"s_1"/);
+    expect(() => validateSpec(spec)).toThrow(/at most one/);
+  });
+
+  it("accepts one extractor-branch tool alongside a keyed tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["id", "name"] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts two keyed tools — neither takes the extractor branch", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id"] },
+      { export: "filterB", fields: ["name"], tags: true },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts a single extractor-branch tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+});

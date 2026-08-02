@@ -1,6 +1,6 @@
 import { type PathSegment, parsePathTemplate } from "./emit/server/path-template.ts";
 import type { ConnectorSpec } from "./spec.ts";
-import { registrarName } from "./spec.ts";
+import { needsExtractor, registrarName } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -163,6 +163,30 @@ export function validateSpec(spec: ConnectorSpec): void {
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);
     }
+  }
+
+  // A connector may declare at most one search filter that takes the extractor branch:
+  // extractorFilter (src/emit/search-filter.ts) hardcodes the name "fieldsOf", and
+  // emitSearchFilter maps it over every tool taking that branch, so a second one emits a
+  // second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
+  // implementation, and because both hoist, the second silently wins for both makeQueryFilter
+  // calls. Corpus measurement: the only corpus connector with two extractors in one file is
+  // readwise (`fieldsOf` and `bookFieldsOf`), and readwise defines a local `tagNames` helper,
+  // which puts it in the group this design cannot reach regardless — no connector reachable by
+  // this design needs two. Rejected rather than adding a spec field to name the extractor or
+  // auto-suffixing it, per the Stage E design's declined-options list.
+  const extractorTools = spec.tools.filter(
+    (t) => t.filter !== undefined && needsExtractor(t.filter),
+  );
+  if (extractorTools.length > 1) {
+    const names = extractorTools.map((t) => `"${t.name}"`).join(", ");
+    throw new Error(
+      `A connector may declare at most one search filter that needs a bespoke fieldsOf ` +
+        `extractor, but ${names} all do — src/search-filter.ts would declare ` +
+        '"function fieldsOf" more than once, and the second declaration silently wins for ' +
+        "every makeQueryFilter call in the file. Reduce one tool's filter to plain string " +
+        "fields (the fieldsFromKeys branch), or split it into its own connector.",
+    );
   }
 }
 

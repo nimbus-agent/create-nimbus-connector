@@ -1150,4 +1150,46 @@ describe("SearchFilterSchema field entries", () => {
     expect(spec.tools[0]!.filter!.fields).toEqual(["id", "name"]);
     expect(spec.tools[0]!.filter!.tags).toBe(true);
   });
+
+  /**
+   * Fix round 1, CRITICAL 2: extractorFilter reads only "fields" and never consults "tags", so
+   * legacy "tags": true silently vanishes when a filter's entries force the extractor branch —
+   * the connector compiles and passes every gate while silently failing to match on tags.
+   * Rejected here rather than appended silently, symmetric with the existing
+   * tags-alongside-a-tags-entry rejection above.
+   */
+  it('rejects legacy "tags": true on a filter forced onto the extractor branch by a path entry', () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }],
+        tags: true,
+      }),
+    ).toThrow(/"tags": true.*extractor|extractor.*"tags"/s);
+  });
+
+  it("names the replacement spelling in the rejection message", () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }],
+        tags: true,
+      }),
+    ).toThrow(/\{ "tags": "text" \}/);
+  });
+
+  it('accepts a trailing { "tags": "text" } entry with no legacy "tags": true — the converging form', () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }, { tags: "text" }],
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts legacy "tags": true on a filter that stays on the keyed branch', () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: ["id", "name"], tags: true }),
+    ).not.toThrow();
+  });
 });

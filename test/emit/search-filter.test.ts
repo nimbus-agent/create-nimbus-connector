@@ -207,4 +207,84 @@ describe("emitSearchFilter", () => {
     expect(file.content).not.toContain("fieldsOf");
     expect(file.content).toContain('fieldsFromKeys(["id", "name"])');
   });
+
+  /**
+   * Fix round 1, IMPORTANT 3: the restructured filterNames block is the most-branched new
+   * code in the diff, and until now the only test touching it used a single-tool spec. This
+   * spec has one keyed tool, one extractor tool (with a string, a path and a tags:"objects"
+   * entry, to exercise stringField/nestedString/tagNamesFromObjects together), and one stub
+   * tool — every import-list branch at once.
+   *
+   * Note: emitSearchFilter is a pure emitter and does not call validateSpec, so this spec is
+   * legal to build with `make()` (parseSpec only) even though it has one extractor-branch
+   * tool — the at-most-one-extractor rule lives in validateSpec (src/validate.ts) and is
+   * covered separately in test/validate.test.ts.
+   */
+  const MIXED = [
+    {
+      ...KEYED,
+      name: "mercury_search_keyed",
+      path: "/api/v1/a",
+      filter: { export: "filterKeyed", fields: ["id"] },
+    },
+    {
+      ...KEYED,
+      name: "mercury_search_extractor",
+      path: "/api/v1/b",
+      filter: {
+        export: "filterExtractor",
+        fields: ["name", { path: ["spec", "source"] }, { tags: "objects" }],
+      },
+    },
+    {
+      ...KEYED,
+      name: "mercury_search_stub",
+      path: "/api/v1/c",
+      filter: { export: "filterStub" },
+    },
+  ];
+
+  it("imports every symbol a keyed + extractor + stub mix actually names, correctly sorted", () => {
+    const file = emitSearchFilter(make(MIXED), "monorepo")!;
+    expect(file.content).toContain(
+      'import { type SearchFilter } from "../../shared/mcp-search-tool.ts";',
+    );
+    expect(file.content).toContain(
+      [
+        "import {",
+        "  asObjectish,",
+        "  fieldsFromKeys,",
+        "  makeQueryFilter,",
+        "  nestedString,",
+        "  type SearchMatchOptions,",
+        "  stringField,",
+        "  tagNamesFromObjects,",
+        '} from "../../shared/search-filter.ts";',
+      ].join("\n"),
+    );
+    // Nothing unused: no primitive this spec doesn't name.
+    expect(file.content).not.toContain("tagText");
+    expect(file.content).toContain("export const filterKeyed = makeQueryFilter(");
+    expect(file.content).toContain("export const filterExtractor = makeQueryFilter(fieldsOf);");
+    expect(file.content).toContain("export const filterStub: SearchFilter = () => {");
+  });
+
+  it("resolves the same mixed set from the kit on standalone, SearchFilter included", () => {
+    const file = emitSearchFilter(make(MIXED), "standalone")!;
+    expect(file.content).toContain(
+      [
+        "import {",
+        "  asObjectish,",
+        "  fieldsFromKeys,",
+        "  makeQueryFilter,",
+        "  nestedString,",
+        "  type SearchFilter,",
+        "  type SearchMatchOptions,",
+        "  stringField,",
+        "  tagNamesFromObjects,",
+        '} from "@nimbus-dev/sdk/connector-kit";',
+      ].join("\n"),
+    );
+    expect(file.content).not.toContain("../../shared/");
+  });
 });
