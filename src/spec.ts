@@ -72,7 +72,7 @@ const TagsEntrySchema = z.strictObject({
  * given nor what was expected. (It does *not* dump one failure per branch; that is zod 3
  * behaviour.) This message is the only thing that makes a malformed entry actionable.
  */
-export const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema], {
+const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema], {
   error:
     'a field entry must be a key string, { "path": [...] } with two or more segments, or ' +
     '{ "tags": "text" | "objects" }',
@@ -84,7 +84,7 @@ export function isPathEntry(e: FieldEntry): e is z.infer<typeof PathEntrySchema>
   return typeof e === "object" && "path" in e;
 }
 
-export function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema> {
+function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema> {
   return typeof e === "object" && "tags" in e;
 }
 

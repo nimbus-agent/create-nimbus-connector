@@ -67,7 +67,7 @@ const FIXTURES = [
   "zzsearch",
   "zzsearchstub",
   // Stage E's extractor branch, proven against a real SDK for the same reason as the two
-  // above: no in-process test can see whether the six primitives it emits
+  // above: no in-process test can see whether the seven primitives it emits
   // (asObjectish/stringField/nestedString/tagText/tagNamesFromObjects/fieldsFromKeys/
   // makeQueryFilter) actually exist in the published @nimbus-dev/sdk. Two search tools, one
   // taking the fieldsOf extractor branch and one converging onto fieldsFromKeys, so a single
