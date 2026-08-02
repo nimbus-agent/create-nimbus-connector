@@ -88,6 +88,13 @@ is something an existing user needs told even when no subject line would say so.
   written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
   which is new in this same unreleased range.
 
+## [0.5.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.4.0...create-nimbus-connector-v0.5.0) (2026-08-02)
+
+
+### Features
+
+* Stage E — path and tag entries in filter.fields ([#51](https://github.com/nimbus-agent/create-nimbus-connector/issues/51)) ([6864a4b](https://github.com/nimbus-agent/create-nimbus-connector/commit/6864a4b9c4a72eed14814ce021502fb9bf96664f))
+
 ## [0.4.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.3...create-nimbus-connector-v0.4.0) (2026-08-02)
 
 
