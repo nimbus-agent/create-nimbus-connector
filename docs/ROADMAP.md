@@ -135,7 +135,7 @@ discovered later:
       define a local helper function or need logic no path can express — a join, an array
       flatten, a coercion — and stay unreachable, and **1** (`zoom`) is hand-rolled and does not
       use `makeQueryFilter` at all. See [Known limitations](#known-limitations) for the byte gap
-      that keeps even the 9 from matching.
+      that keeps 8 of the 9 from matching — the ninth, `dependencytrack`, already does.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file.
@@ -209,17 +209,20 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
   other two cannot byte-match.
-- **The 9 reachable extractor files never byte-match**, even though `filter.fields` now
-  expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter always
-  writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits arrays,
-  `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
+- **8 of the 9 reachable extractor files still do not byte-match**, even though `filter.fields`
+  now expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter
+  always writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits
+  arrays, `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
   `const buildFields: FieldExtractor = (item) => …`, an arrow expression with an explicit type
   annotation, where the emitter always writes a `function fieldsOf(item: unknown)` declaration.
   The extractor's name: `firebase` calls it `releaseFields` and `testflight` calls it
   `buildFields`; the emitter's is always `fieldsOf`. And a hand-written 4–5 line doc comment
   explaining the service's response shape, present in `canva`, `figma`, `firebase`, `hubspot`,
   `miro`, `salesforce` and `testflight` — the same content gap already recorded above for
-  hand-authored READMEs, not a formatting one.
+  hand-authored READMEs, not a formatting one. The ninth, `dependencytrack`, **does** byte-match:
+  it guards with `asObjectish`, names its extractor `fieldsOf`, and carries no hand-written doc
+  comment, so none of the four gaps above applies to it — the exception shows these are gaps in
+  what a spec can carry, not a ceiling the emitter itself imposes.
 
 **Absences.**
 
