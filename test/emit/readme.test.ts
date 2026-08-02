@@ -38,6 +38,49 @@ describe("emitReadme", () => {
   });
 });
 
+describe("read-only-kit caveat", () => {
+  const readOnlyKitSpec = parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "d.",
+    serviceLabel: "Mercury",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [{ name: "mercury_list", description: "List.", path: "/api/v1/accounts" }],
+  });
+
+  const handRolledSpec = parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "d.",
+    serviceLabel: "Mercury",
+    style: "hand-rolled",
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [{ name: "mercury_list", description: "List.", path: "/api/v1/accounts" }],
+  });
+
+  it("explains that runReadOnly does not restrict writes, for read-only-kit only", () => {
+    const withKit = emitReadme(readOnlyKitSpec, "standalone", "MIT").content;
+    expect(withKit).toContain("does not restrict");
+    const withoutKit = emitReadme(handRolledSpec, "standalone", "MIT").content;
+    expect(withoutKit).not.toContain("does not restrict");
+  });
+
+  it("omits the caveat from the monorepo README even for read-only-kit — byte-locked against a corpus with no such text", () => {
+    const monorepoKit = emitReadme(readOnlyKitSpec, "monorepo").content;
+    expect(monorepoKit).not.toContain("does not restrict");
+    expect(monorepoKit).not.toContain("runReadOnlyMcpConnector");
+  });
+});
+
 describe("standalone README", () => {
   const md = () => emitReadme(spec, "standalone").content;
 

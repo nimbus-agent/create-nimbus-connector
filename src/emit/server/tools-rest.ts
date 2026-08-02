@@ -15,7 +15,7 @@ function tokenEnvVar(spec: ConnectorSpec): string {
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   const name = registrarName(spec);
-  const schema = renderZodSchema(tool.args);
+  const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
   const head = [
     `${name}(`,
     `  ${JSON.stringify(tool.name)},`,
@@ -36,7 +36,11 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
 
   const hoisted = hoistedLocals(tool.args);
   const segments = parsePathTemplate(path);
-  const pathExpr = renderPath(segments, { param: PARAM, hoisted });
+  const pathExpr = renderPath(segments, {
+    param: PARAM,
+    hoisted,
+    staticStyle: spec.fetchHelper.staticPathStyle,
+  });
 
   // Only the path can consume a hoist here: the hoists are emitted inside the path callback,
   // and the init callback below is a separate arrow with its own scope. A hoisted const no

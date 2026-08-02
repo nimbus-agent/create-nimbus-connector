@@ -156,6 +156,43 @@ describe("renderHandRolledTools", () => {
     expect(out).toContain("async () =>");
     expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
   });
+
+  it("renders a static path as a template literal end-to-end when fetchHelper.staticPathStyle is 'template'", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "hand-rolled",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools: [
+        {
+          name: "mercury_list",
+          description: "List accounts.",
+          path: "/api/v1/accounts",
+        },
+        {
+          name: "mercury_get",
+          description: "Get one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ],
+    });
+    const out = renderHandRolledTools(spec);
+    // Static path: template style overrides renderPath's quoted default.
+    expect(out).toContain("jsonResult(await mercuryGet(`/api/v1/accounts`))");
+    expect(out).not.toContain('mercuryGet("/api/v1/accounts")');
+    // Dynamic path: already a template literal under the default, unaffected either way.
+    expect(out).toContain(
+      "jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`))",
+    );
+  });
 });
 
 describe("hand-rolled write support", () => {
@@ -351,5 +388,57 @@ describe("hand-rolled write support", () => {
       expect(out).not.toContain("const lim =");
       expect(out).toContain('jsonResult(await zzGet("/i"))');
     });
+  });
+});
+
+describe('renderHandRolledTools, handlerStyle "block"', () => {
+  function blockSpec(tools: unknown[]) {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      handlerStyle: "block",
+      argsSchemaStyle: "expanded",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools,
+    });
+  }
+
+  it("gives a no-arg tool a statement body and no parameter", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        { name: "mercury_list", description: "List accounts.", path: "/api/v1/accounts" },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_list",\n  "List accounts.",\n  z.object({}),\n  async () => {\n' +
+        "    return jsonResult(await mercuryGet(`/api/v1/accounts`));\n  },\n);",
+    );
+  });
+
+  it("gives an arg tool a statement body taking p, with the schema expanded", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        {
+          name: "mercury_get",
+          description: "Fetch one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_get",\n  "Fetch one account.",\n  z.object({\n  id: z.string().min(1),\n}),\n' +
+        "  async (p) => {\n" +
+        "    return jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`));\n" +
+        "  },\n);",
+    );
   });
 });

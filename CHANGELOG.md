@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+Hand-written; release-please prepends its own generated section above this one at release
+time, and these notes then move down with it. Recorded here because release-please derives
+its entries from commit subjects, and a change to the BYTES a generated connector contains
+is something an existing user needs told even when no subject line would say so.
+
+### Output changes (user-visible)
+
+* **emit(server):** an `auth: "headers"` env entry that declares a **single** variable now
+  returns its header object on one line. Regenerating an existing connector built with
+  0.3.3 or earlier will therefore show a diff in `src/server.ts`:
+
+  ```diff
+  -  return {
+  -    "X-Api-Key": k,
+  -    Accept: "application/json",
+  -  };
+  +  return { "X-Api-Key": k, Accept: "application/json" };
+  ```
+
+  Semantically neutral — same object, same keys, same values — and it matches what every
+  corpus connector with one custom header writes. An entry declaring two or more variables
+  is unchanged and still expands. There is no spec field to opt out: the two forms are a
+  formatting convention, not a behaviour, and carrying a switch for it would outlive its
+  usefulness. A connector using `auth: "bearer"`, `auth: "basic"`, or `inlineHeaders` is
+  unaffected.
+
+### Breaking (spec validation)
+
+* **validate:** eight identifiers are now reserved and a spec reusing one is rejected at parse
+  time: `runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`,
+  `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions` and `root`. Each is a name the
+  emitted `src/server.ts` declares or imports for the new `read-only-kit` style or a search
+  tool, so reusing one previously emitted two declarations of it and failed the generated
+  package's own `typecheck` — this moves that failure to parse time, where the error names the
+  field. Reserved unconditionally, matching how `token` and `cachedToken` were handled in 0.3.0.
+
+  **`root` is the one likely to affect an existing spec**, being an ordinary word: a search tool
+  with `rows` emits `const root = await <fetchHelper.local>(…)`. Rename the `local`; nothing
+  else changes.
+
+### Bug Fixes
+
+* **emit(manifest):** a `filesystem` path containing `$&`, `` $` ``, `$'` or `$$` no longer
+  corrupts `nimbus.extension.json`. The one-line collapse of `permissions.filesystem` passed
+  its replacement to `String.prototype.replace` as a string, which expands those tokens; a
+  path of `"$&BAD"` produced a manifest `JSON.parse` rejects, and `"A$$B"` was silently
+  written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
+  which is new in this same unreleased range.
+
 ## [0.3.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.2...create-nimbus-connector-v0.3.3) (2026-08-01)
 
 

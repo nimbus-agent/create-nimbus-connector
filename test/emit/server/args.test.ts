@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { hoistedLocals, renderHoists, renderZodSchema } from "../../../src/emit/server/args.ts";
+import {
+  hoistedLocals,
+  renderHoists,
+  renderZodFieldList,
+  renderZodSchema,
+} from "../../../src/emit/server/args.ts";
 import { ToolSchema } from "../../../src/spec.ts";
 
 function args(raw: unknown) {
@@ -28,6 +33,45 @@ describe("renderZodSchema", () => {
     expect(renderZodSchema(args({ only_open: { type: "boolean", optional: true } }))).toBe(
       "z.object({ only_open: z.boolean().optional() })",
     );
+  });
+
+  it('breaks one field per line under argsSchemaStyle "expanded"', () => {
+    const a = args({ id: { type: "string", min: 1 } });
+    expect(renderZodSchema(a, "expanded")).toBe(`z.object({
+  id: z.string().min(1),
+})`);
+  });
+
+  it("keeps an empty object on one line whatever the style — there is nothing to break", () => {
+    expect(renderZodSchema(args({}), "expanded")).toBe("z.object({})");
+  });
+
+  it("expands every field, in declaration order, with a trailing comma on each", () => {
+    const a = args({
+      appSlug: { type: "string", min: 1 },
+      limit: { type: "number", int: true, min: 1, max: 50, optional: true },
+    });
+    expect(renderZodSchema(a, "expanded")).toBe(`z.object({
+  appSlug: z.string().min(1),
+  limit: z.number().int().min(1).max(50).optional(),
+})`);
+  });
+});
+
+describe("renderZodFieldList", () => {
+  it("returns one unwrapped entry per arg, in declaration order", () => {
+    const a = args({
+      appSlug: { type: "string", min: 1 },
+      limit: { type: "number", optional: true },
+    });
+    expect(renderZodFieldList(a)).toEqual([
+      "appSlug: z.string().min(1)",
+      "limit: z.number().optional()",
+    ]);
+  });
+
+  it("is empty for a tool with no args", () => {
+    expect(renderZodFieldList(args({}))).toEqual([]);
   });
 });
 

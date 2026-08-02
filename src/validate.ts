@@ -30,7 +30,37 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "cachedToken",
   "tokenExpiresAt",
   "encodeBasicAuthHeader",
+  // Stage D's transform: "trimTrailingSlashFn" emits `function trimTrailingSlash` at module
+  // scope (see env.ts), so a `local` of that name would be declared twice.
+  "trimTrailingSlash",
   "URLSearchParams",
+  // The read-only-kit style and search tools, all of them names the emitted src/server.ts
+  // declares or binds at module scope. Reserved unconditionally, matching how "token" and
+  // "cachedToken" are treated: the list is a flat set checked before any style or tool kind is
+  // considered, and making entries conditional would mean a spec validating or failing
+  // depending on a field elsewhere in the file.
+  //
+  //   runReadOnlyMcpConnector  imported (monorepo) or declared by the emitted glue (standalone)
+  //   ZodToolRegistrar         the glue's registrar type alias, standalone only
+  //   searchToolInputSchema    imported (monorepo) or declared by the emitted glue (standalone)
+  //   matchesResult            imported by every search connector
+  //   McpListResult
+  //   ZodObjectSchema          type imports the two standalone glues' signatures name
+  //   SearchMatchOptions
+  //
+  // "root" is the one that is not an import: renderSearchTool emits `const root = await
+  // <fetchHelper.local>(...)` for a search tool with `rows`. A fetch helper named "root" emits
+  // `const root = await root(...)`, which is a use-before-declaration error rather than a
+  // shadow. Function-scope rather than module-scope, but the failure mode and the fix are the
+  // same, and reserving it keeps the rule one rule.
+  "runReadOnlyMcpConnector",
+  "ZodToolRegistrar",
+  "searchToolInputSchema",
+  "matchesResult",
+  "McpListResult",
+  "ZodObjectSchema",
+  "SearchMatchOptions",
+  "root",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits
   // `function fetch()` shadowing the global, then calls it with two arguments.
@@ -69,8 +99,17 @@ export function validateSpec(spec: ConnectorSpec): void {
 
   for (const e of spec.env) {
     claim(seen, e.local, `env accessor for ${e.vars.join(", ")}`);
+    // The split-bearer form declares a second function beside `local`; both are module
+    // scope, so both have to be claimed or the collision surfaces only at tsc.
+    if (e.tokenLocal !== undefined) {
+      claim(seen, e.tokenLocal, `the raw-token accessor for ${e.vars.join(", ")}`);
+    }
   }
 
+  // Module-scope `const <baseConst> = "<base>";`, claimed for the same reason.
+  if (spec.fetchHelper.baseConst !== undefined) {
+    claim(seen, spec.fetchHelper.baseConst, "the fetch helper's base const");
+  }
   claim(seen, spec.fetchHelper.local, "the fetch helper");
   // Claimed unconditionally, not only when a non-GET tool exists: the name is derived from
   // fetchHelper.local, so whether it collides is a property of the spec's identifiers, and a

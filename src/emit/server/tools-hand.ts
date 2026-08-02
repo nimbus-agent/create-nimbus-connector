@@ -2,11 +2,13 @@ import type { ConnectorSpec } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
-  const schema = renderZodSchema(tool.args);
+  if (tool.impl === "search") return renderSearchTool(spec, tool);
+  const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
   const head = `${JSON.stringify(tool.name)}, ${JSON.stringify(tool.description)}, ${schema}`;
 
   if (tool.impl === "stub") {
@@ -29,7 +31,11 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
 
   const hoisted = hoistedLocals(tool.args);
   const segments = parsePathTemplate(path);
-  const pathExpr = renderPath(segments, { param: PARAM, hoisted });
+  const pathExpr = renderPath(segments, {
+    param: PARAM,
+    hoisted,
+    staticStyle: spec.fetchHelper.staticPathStyle,
+  });
 
   // A non-GET tool routes through the write helper (`${local}Send`) with its method and
   // JSON body; renderBodyExpr returns undefined for a tool that sends no body (e.g. a
@@ -64,8 +70,12 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     segments.some((s) => s.kind === "arg" && !hoisted.has(s.name)) ||
     bodyExpr !== undefined;
 
-  if (used.size === 0) {
-    const param = needsParam ? `(${PARAM})` : "()";
+  const param = needsParam ? `(${PARAM})` : "()";
+
+  // The one-line `reg(name, description, schema, async … => call,\n);` form, which only the
+  // "concise" convention uses. A hoist has nowhere to live in an expression body, so a tool
+  // that needs one takes the block form regardless of the connector's declared style.
+  if (used.size === 0 && spec.handlerStyle === "concise") {
     if (needsParam) {
       return `reg(${head}, async ${param} => ${call},\n);`;
     }
@@ -78,7 +88,7 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     `  ${JSON.stringify(tool.name)},`,
     `  ${JSON.stringify(tool.description)},`,
     `  ${schema},`,
-    `  async (${PARAM}) => {`,
+    `  async ${param} => {`,
     ...hoists,
     `    return ${call};`,
     "  },",

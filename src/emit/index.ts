@@ -7,6 +7,7 @@ import { emitManifest } from "./manifest.ts";
 import { emitPackageJson } from "./package-json.ts";
 import { emitReadme } from "./readme.ts";
 import { emitSandboxTest } from "./sandbox-test.ts";
+import { emitSearchFilter } from "./search-filter.ts";
 import { emitServer } from "./server/index.ts";
 import { emitTsconfig } from "./tsconfig.ts";
 
@@ -36,6 +37,12 @@ export function generate(spec: ConnectorSpec, options: GenerateOptions = {}): Ge
   validateSpec(spec);
   return [
     emitServer(spec, target),
+    // Seventh file, emitted only for a spec with a search tool — a read-only spec never
+    // reaches this branch, which is what keeps the six-file fixtures byte-safe.
+    ...((): GeneratedFile[] => {
+      const f = emitSearchFilter(spec, target);
+      return f === undefined ? [] : [f];
+    })(),
     emitSandboxTest(),
     emitPackageJson(spec, target, license),
     emitManifest(spec),

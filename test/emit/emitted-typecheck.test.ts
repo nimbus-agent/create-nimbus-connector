@@ -1,12 +1,30 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generate } from "../../src/emit/index.ts";
+import { emitServer } from "../../src/emit/server/index.ts";
 import { emitWiring } from "../../src/emit/wiring.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { run } from "../../src/golden/run.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { tempDirs } from "../support/tmp.ts";
+
+/**
+ * This project's OWN pinned `@biomejs/biome` binary — the same version
+ * src/emit/biome-json.ts's BIOME_VERSION bakes into every emitted standalone package's
+ * biome.json. Used to lint an emitted package's `src/` under its OWN emitted biome.json (via
+ * cwd, which Biome walks up from to find config) without a real `bun install` in a throwaway
+ * dir: Biome's checks are syntactic (import order, unused bindings), not type-driven, so they
+ * do not need the package's real dependencies actually installed to be meaningful.
+ */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const BIOME_BIN = join(
+  REPO_ROOT,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "biome.exe" : "biome",
+);
 
 /**
  * Typechecks EMITTED output, not the emitter.
@@ -105,6 +123,74 @@ export type Syncable = {
   readonly initialSyncDepthDays: number;
   sync(ctx: SyncContext, cursor: string | null): Promise<SyncResult>;
 };
+`;
+
+/**
+ * Stand-ins for `packages/mcp-connectors/shared/*.ts`, written from the shapes
+ * src/emit/server/index.ts and src/emit/server/search.ts assume — NOT copies of the real
+ * (AGPL-3.0-only) files. Loosely typed on purpose: their only job is to let a monorepo-target
+ * server.ts resolve its imports so `tsc --noEmit` reaches the check that matters here —
+ * `noUnusedLocals` on the import list itself — not to reproduce every real overload.
+ */
+const MCP_TOOL_KIT_STANDIN = `export type ZodToolRegistrar = (
+  name: string,
+  description: string,
+  schema: unknown,
+  handler: (args: never) => Promise<unknown>,
+) => void;
+export function createRegisterSimpleTool(_server: unknown): unknown {
+  throw new Error("stub");
+}
+export function createZodToolRegistrar(_register: unknown): ZodToolRegistrar {
+  throw new Error("stub");
+}
+export function encodeBasicAuthHeader(_id: string, _secret: string): string {
+  throw new Error("stub");
+}
+export function mcpJsonResult(_data: unknown): unknown {
+  throw new Error("stub");
+}
+`;
+
+const MCP_SEARCH_TOOL_STANDIN = `export type SearchFilter = (item: unknown, query: string) => boolean;
+export function searchToolInputSchema(_maxLimit: number): unknown {
+  throw new Error("stub");
+}
+export function matchesResult(
+  _rows: unknown,
+  _filter: (item: unknown, query: string) => boolean,
+  _params: unknown,
+): unknown {
+  throw new Error("stub");
+}
+`;
+
+/**
+ * Stand-in for `packages/mcp-connectors/shared/search-filter.ts`, written from the shapes
+ * src/emit/search-filter.ts assumes — NOT a copy of the real (AGPL-3.0-only) file. Deliberately
+ * does NOT export `SearchFilter` (that lives in mcp-search-tool.ts, per MCP_SEARCH_TOOL_STANDIN
+ * above): the split is the exact thing under test for the stub-filter path.
+ */
+const SEARCH_FILTER_SHARED_STANDIN = `export type SearchMatchOptions = { readonly query: string };
+export type FieldExtractor = (item: unknown) => readonly string[];
+export function fieldsFromKeys(
+  _keys: readonly string[],
+  _opts?: { tags?: boolean },
+): FieldExtractor {
+  throw new Error("stub");
+}
+export function makeQueryFilter(
+  _fields: FieldExtractor,
+): (item: unknown, query: string) => boolean {
+  throw new Error("stub");
+}
+`;
+
+const RUN_READ_ONLY_STANDIN = `import type { ZodToolRegistrar } from "./mcp-tool-kit.ts";
+export async function runReadOnlyMcpConnector(
+  _serverName: string,
+  _register: (reg: ZodToolRegistrar) => void,
+): Promise<void> {}
 `;
 
 describe("emitted --gateway-wiring output typechecks", () => {
@@ -237,5 +323,272 @@ describe("read helper emission is conditional on a call site", () => {
     });
     expect(out).toContain("async function zzFetch(");
     expect(out).toContain("  fetch: zzFetch,");
+  });
+});
+
+describe("a search-only connector imports only what it calls", () => {
+  /**
+   * A read-only-kit spec whose ONLY tool is impl: "search". renderSearchTool emits
+   * matchesResult(...) and never jsonResult(...) — usesJsonResult used to gate on
+   * `impl !== "stub"`, which a search tool also satisfies, so this shape used to import
+   * `mcpJsonResult as jsonResult` into a file that never calls it: TS6133 under the generated
+   * package's own tsconfig (noUnusedLocals), and a biome noUnusedVariables error under its own
+   * biome.json. Neither is visible to a substring assertion that only checks for the presence
+   * of the *correct* imports — this compiles the emitted monorepo server.ts for real, against
+   * local stand-ins for the shared modules, to catch the declared-but-unread case too.
+   */
+  const spec = parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "Mercury connector.",
+    serviceLabel: "Mercury",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "mercury_search",
+        description: "Search accounts.",
+        impl: "search",
+        path: "/api/v1/accounts",
+        filter: { export: "filterMercuryAccounts", fields: ["id"] },
+      },
+    ],
+  });
+
+  it("emits no jsonResult import — the cheap, direct statement of the rule", () => {
+    const out = emitServer(spec, "monorepo").content;
+    expect(out).not.toContain("jsonResult");
+    expect(out).toContain("matchesResult");
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions — the check a substring assertion cannot make", async () => {
+    const dir = tmp.make("cnc-search-only-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "mercury", "src"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), MCP_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "mcp-search-tool.ts"), MCP_SEARCH_TOOL_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+    writeFileSync(
+      join(dir, "mercury", "src", "search-filter.ts"),
+      "export function filterMercuryAccounts(_item: unknown, _query: string): boolean {\n" +
+        "  return true;\n}\n",
+      "utf8",
+    );
+
+    await initFormatter();
+    for (const f of formatAll([emitServer(spec, "monorepo")])) {
+      writeFileSync(join(dir, "mercury", "src", ...f.path.slice(1)), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "mercury", "tsconfig.json");
+    // Real emitTsconfig() sets `types: ["bun"]` for the monorepo target, so `fetch` resolves
+    // from @types/bun — but `types` resolves via typeRoots, which walks UP from the tsconfig's
+    // own directory through node_modules/@types, and this tsconfig lives in a throwaway OS
+    // temp directory with no node_modules to find. Substituting the "DOM" lib for the same
+    // global-fetch guarantee is a deliberate, local-only deviation from NIMBUS_COMPILER_OPTIONS
+    // — not a claim that Nimbus's real tsconfig uses it — and does not affect the check that
+    // matters here, which is `noUnusedLocals` on the import list.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: {
+            ...NIMBUS_COMPILER_OPTIONS,
+            types: [],
+            lib: ["ESNext", "DOM"],
+          },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    // Named explicitly: before the fix this was
+    // `src/server.ts(3,25): error TS6133: 'jsonResult' is declared but its value is never
+    // read.`
+    expect(output).not.toContain("TS6133");
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a generated package containing a stub filter typechecks", () => {
+  /**
+   * The stub path is the likeliest place for an unused or unresolved import: it is the ONLY
+   * shape that adds a second relative-import line (SearchFilter from mcp-search-tool.ts,
+   * split from SearchMatchOptions in search-filter.ts — see src/emit/search-filter.ts's
+   * top-of-file comment), and it is the only shape that must NOT import fieldsFromKeys /
+   * makeQueryFilter at all. Neither defect is visible to a substring assertion that only
+   * checks for the presence of the correct imports; this compiles the real emitted
+   * src/server.ts + src/search-filter.ts pair, via generate(), against local stand-ins for
+   * every shared module the pair can reach.
+   */
+  const stubSpec = parseSpec({
+    name: "mercury",
+    displayName: "Mercury",
+    description: "Mercury connector.",
+    serviceLabel: "Mercury",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "mercuryGet",
+      base: "https://api.mercury.com",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "mercury_search",
+        description: "Search accounts.",
+        impl: "search",
+        path: "/api/v1/accounts",
+        // fields deliberately omitted — this is the stub-filter shape.
+        filter: { export: "filterMercuryAccounts" },
+      },
+    ],
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions", async () => {
+    const dir = tmp.make("cnc-search-stub-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "mercury", "src"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), MCP_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "mcp-search-tool.ts"), MCP_SEARCH_TOOL_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "search-filter.ts"), SEARCH_FILTER_SHARED_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+
+    await initFormatter();
+    // Only the src/ files generate() returns — package.json, nimbus.extension.json,
+    // tsconfig.json, README.md and test/sandbox.test.ts play no part in this compile.
+    const srcFiles = generate(stubSpec, { target: "monorepo" }).filter((f) => f.path[0] === "src");
+    expect(srcFiles.map((f) => f.path.join("/")).sort()).toEqual([
+      "src/search-filter.ts",
+      "src/server.ts",
+    ]);
+    for (const f of formatAll(srcFiles)) {
+      writeFileSync(join(dir, "mercury", ...f.path), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "mercury", "tsconfig.json");
+    // Same DOM-lib substitution as the search-only compile test above, and for the same
+    // reason: this tsconfig lives in a throwaway temp dir with no node_modules/@types/bun to
+    // resolve `types: ["bun"]` against.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: {
+            ...NIMBUS_COMPILER_OPTIONS,
+            types: [],
+            lib: ["ESNext", "DOM"],
+          },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    expect(output).not.toContain("TS6133"); // declared but never read (unused import)
+    expect(output).not.toContain("TS2307"); // cannot find module (unresolved import)
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a standalone package's merged KIT import lints clean under its own biome.json", () => {
+  /**
+   * Combines every optional branch of the standalone-target KIT import at once: the two base
+   * names, the two `type` names (read-only-kit + standalone), `encodeBasicAuthHeader`
+   * (client-credentials with credentialsIn: "basic"), and both search names (matchesResult +
+   * searchToolInputSchema, since the one tool has zero args of its own). This is the exact
+   * combination a plain `.sort()` got wrong: Biome 2.5.6's `assist/source/organizeImports`
+   * — enabled by `linter.rules.recommended: true` even with no explicit `assist` block, which
+   * is what src/emit/biome-json.ts emits — reported `Found 1 error` on the `.sort()`-ordered
+   * output ("type McpListResult" needs to sort before "matchesResult", despite 'a' < 'c' at
+   * the second character). See task-7-report.md, "Finding A", for the full derivation.
+   *
+   * This asserts against a real `biome check` run under the package's own emitted biome.json,
+   * not a substring — the whole point being that a hand-picked example string can happen to
+   * come out sorted correctly while the general rule is still wrong.
+   */
+  const spec = parseSpec({
+    name: "zzfindinga",
+    displayName: "ZZ Finding A",
+    description: "Finding A repro.",
+    serviceLabel: "ZZ Finding A",
+    style: "read-only-kit",
+    env: [
+      {
+        vars: ["ZZFA_CLIENT_ID", "ZZFA_CLIENT_SECRET"],
+        local: "authHeaders",
+        bindings: ["id", "secret"],
+        auth: "client-credentials",
+        tokenUrl: "https://api.zzfindinga.test/token",
+        credentialsIn: "basic",
+      },
+    ],
+    fetchHelper: { local: "zzfaGet", base: "https://api.zzfindinga.test", headers: "authHeaders" },
+    tools: [
+      {
+        name: "zzfindinga_search",
+        description: "Search things.",
+        impl: "search",
+        path: "/v1/things",
+        filter: { export: "filterZzfindingaThings", fields: ["id"] },
+      },
+    ],
+  });
+
+  it("emits the KIT import in Biome's real order", () => {
+    const out = emitServer(spec, "standalone").content;
+    expect(out).toContain(
+      [
+        "import {",
+        "  createRegisterSimpleTool,",
+        "  createZodToolRegistrar,",
+        "  encodeBasicAuthHeader,",
+        "  type McpListResult,",
+        "  matchesResult,",
+        // Not searchToolInputSchema: the SDK does not export it (it builds a zod schema, and
+        // the SDK carries no runtime dependencies), so the standalone target defines it
+        // locally and imports the type its signature returns instead.
+        "  type SearchMatchOptions,",
+        "  type ZodObjectSchema,",
+        '} from "@nimbus-dev/sdk/connector-kit";',
+      ].join("\n"),
+    );
+  });
+
+  it("passes a real `biome check src/` under the emitted biome.json", async () => {
+    if (!existsSync(BIOME_BIN)) {
+      throw new Error(
+        `${BIOME_BIN} is missing — this project's own @biomejs/biome devDependency should provide it`,
+      );
+    }
+    const dir = tmp.make("cnc-organize-imports-tc-");
+    await initFormatter();
+    for (const f of formatAll(generate(spec, { target: "standalone" }))) {
+      const p = join(dir, ...f.path);
+      mkdirSync(join(p, ".."), { recursive: true });
+      writeFileSync(p, f.content, "utf8");
+    }
+
+    const { ok, output } = run([BIOME_BIN, "check", "src/"], dir);
+    expect(output).not.toContain("organizeImports");
+    expect(ok).toBe(true);
   });
 });

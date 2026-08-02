@@ -1,0 +1,54 @@
+{
+  "name": "mercury",
+  "title": "Mercury",
+  "displayName": "Mercury",
+  "description": "Mercury business-banking connector (read-only). Surfaces the user's bank accounts as `mercury:account` items in the local index — account name, status (active/archived), type/kind (checking/savings), the last 4 digits of the account number (the full number is never stored), routing number, available + current USD balances, the legal business name, and the open date. Useful for answering banking questions (\"what's my checking balance?\", \"which accounts are archived?\") without leaving Nimbus. Bearer API-token auth. The SaaS host (api.mercury.com) is fixed. Mercury balances are USD major units (dollars, not cents) and `createdAt` is ISO-8601 (converted to epoch-ms on index). Transactions / bills / statements and the wire / ACH (HITL) writes are deferred follow-ups.",
+  "serviceLabel": "Mercury",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.mercury.com"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["MERCURY_TOKEN"],
+      "local": "authHeader",
+      "tokenLocal": "apiToken",
+      "bindings": ["t"],
+      "auth": "bearer"
+    }
+  ],
+  "fetchHelper": {
+    "local": "mercuryGet",
+    "base": "https://api.mercury.com",
+    "baseConst": "BASE",
+    "headers": "authHeader",
+    "staticPathStyle": "template"
+  },
+  "tools": [
+    {
+      "name": "mercury_list",
+      "description": "List the user's Mercury bank accounts (`GET /api/v1/accounts`). Returns the `{ accounts: [...] }` envelope. There is no pagination — Mercury returns the full account list in one call.",
+      "path": "/api/v1/accounts"
+    },
+    {
+      "name": "mercury_get",
+      "description": "Fetch one Mercury account by its id (`GET /api/v1/account/{id}`, note the singular `account` in the path). Returns the account object directly. Throws when no match is found.",
+      "args": { "id": { "type": "string", "min": 1 } },
+      "path": "/api/v1/account/${arg.id|enc}"
+    },
+    {
+      "name": "mercury_search",
+      "description": "Substring search across the user's Mercury accounts. Matches the query against id, name, status, type, kind, and the legal business name (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "path": "/api/v1/accounts",
+      "rows": "accounts",
+      "maxLimit": 100,
+      "filter": {
+        "export": "filterMercuryAccounts",
+        "fields": ["id", "name", "status", "type", "kind", "legalBusinessName"]
+      }
+    }
+  ]
+}

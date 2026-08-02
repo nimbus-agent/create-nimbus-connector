@@ -48,6 +48,17 @@ export const ArgSchema = z
       "argument's default can never be reached, since the schema demands a value",
   });
 
+/**
+ * The per-connector search filter. `fields` omitted means the emitter cannot express the
+ * extraction and emits a throwing stub instead (Stage D design D5) — 40 of the 49 corpus
+ * filter files hand-write an extractor this shape cannot reach.
+ */
+export const SearchFilterSchema = z.strictObject({
+  export: identifierField(),
+  fields: z.array(z.string().min(1)).min(1, "a filter must name at least one field").optional(),
+  tags: z.boolean().default(false),
+});
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -64,7 +75,7 @@ export const ToolSchema = z
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
-      .enum(["rest", "get", "stub"])
+      .enum(["rest", "get", "stub", "search"])
       .default("rest")
       .transform((v) => (v === "get" ? "rest" : v)),
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
@@ -76,6 +87,11 @@ export const ToolSchema = z
     effect: z.enum(["read", "write", "delete"]).default("read"),
     /** arg name -> API field name. Omitted means "the args object is the body". */
     body: z.record(z.string().min(1), z.string().min(1)).optional(),
+    /** Property plucked from the response envelope. Omitted means the response IS the array. */
+    rows: z.string().min(1).optional(),
+    /** Per-connector result cap. Corpus: 100 ×24, 200 ×12, 2000 ×2, 50 ×1. */
+    maxLimit: z.number().int().positive().default(100),
+    filter: SearchFilterSchema.optional(),
   })
   .refine((t) => (t.impl === "stub") === (t.path === undefined), {
     message:
@@ -103,6 +119,21 @@ export const ToolSchema = z
         ctx.addIssue({ code: "custom", message: `"body" key "${k}" is not a declared arg` });
       }
     }
+  })
+  .refine((t) => (t.impl === "search") === (t.filter !== undefined), {
+    message:
+      '"filter" is required when "impl" is "search", and is not valid on any other tool kind',
+  })
+  .refine((t) => !(t.impl === "search" && (t.method !== "GET" || t.body !== undefined)), {
+    message: 'a "search" tool issues a GET, so "method" and "body" have nothing to describe',
+  })
+  .refine((t) => !(t.impl === "search" && t.effect !== "read"), {
+    message:
+      'a "search" tool cannot mutate — "effect" must be "read". Unlike a stub, it stands in ' +
+      "for nothing that will later write.",
+  })
+  .refine((t) => t.impl === "search" || (t.rows === undefined && t.maxLimit === 100), {
+    message: '"rows" and "maxLimit" are only valid on a tool with "impl": "search"',
   });
 
 export const EnvSchema = z
@@ -114,12 +145,36 @@ export const EnvSchema = z
     bindings: z.array(z.string().min(1)).optional(),
     required: z.boolean().default(false),
     default: z.string().optional(),
-    transform: z.enum(["stripTrailingSlash"]).optional(),
+    /**
+     * How a trailing slash is stripped from a user-supplied base URL. The corpus splits 13
+     * to 3 in favour of the helper — `"trimTrailingSlashFn"` emits the shared
+     * `function trimTrailingSlash(s: string): string` once and calls it (airflow, argocd,
+     * databricks, dbt, zendesk and 8 more), `"stripTrailingSlash"` inlines
+     * `.replace(/\/$/, "")` (fastmail, grafana, sentry). Both are kept because the minority
+     * form is byte-locked by the grafana and sentry fixtures, not because the split is
+     * close. Byte-identical helper text in all 13, so it is a constant here rather than a
+     * template.
+     */
+    transform: z.enum(["stripTrailingSlash", "trimTrailingSlashFn"]).optional(),
     prefix: z.string().optional(),
     suffix: z.string().optional(),
-    auth: z.enum(["bearer", "headers", "client-credentials"]).optional(),
+    auth: z.enum(["bearer", "basic", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
+    /**
+     * Split a bearer accessor in two: a `(): string` accessor named by this field, which
+     * reads and guards the variable, and `local`, reduced to a wrapper that builds the
+     * header from a call to it — `function apiToken(): string` plus
+     * `function authHeader(): Record<string, string>` returning `` `Bearer ${apiToken()}` ``.
+     * Omitted keeps the single fused accessor, which is what newrelic/datadog/grafana/sentry
+     * emit.
+     *
+     * **12** corpus connectors are byte-reproducible by this field. The membership rule is
+     * narrower than "splits the accessor in two", and the difference matters — see
+     * renderSplitBearer in src/emit/server/env.ts, which states the criterion and lists
+     * them.
+     */
+    tokenLocal: identifierField().optional(),
     /**
      * Token endpoint, required when auth === "client-credentials".
      *
@@ -142,18 +197,32 @@ export const EnvSchema = z
   .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
     message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
   })
+  // "basic" is the exception, and only for prefix/suffix: those decorate the USERNAME
+  // passed to encodeBasicAuthHeader (zendesk's `${email}/token`), a position the wrapper
+  // does not replace. `transform` has no such position and stays rejected for every mode.
   .refine(
     (e) =>
       e.auth === undefined ||
-      (e.transform === undefined && e.prefix === undefined && e.suffix === undefined),
+      (e.transform === undefined &&
+        (e.auth === "basic" || (e.prefix === undefined && e.suffix === undefined))),
     {
       message:
-        'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value',
+        'an entry with "auth" cannot also declare "transform", "prefix" or "suffix" — the auth wrapper replaces the returned value (auth: "basic" may declare "prefix"/"suffix", which decorate the username)',
     },
   )
-  .refine((e) => e.vars.length === 1 || e.auth === "headers" || e.auth === "client-credentials", {
-    message:
-      'only an entry with auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+  .refine(
+    (e) =>
+      e.vars.length === 1 ||
+      e.auth === "basic" ||
+      e.auth === "headers" ||
+      e.auth === "client-credentials",
+    {
+      message:
+        'only an entry with auth: "basic", auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
+    },
+  )
+  .refine((e) => e.auth !== "basic" || e.vars.length === 2, {
+    message: 'auth: "basic" requires exactly two "vars" — a username and a password',
   })
   .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
     message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
@@ -172,19 +241,60 @@ export const EnvSchema = z
   })
   .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
     message: '"credentialsIn" is only valid when auth is "client-credentials"',
+  })
+  .refine((e) => e.tokenLocal === undefined || e.auth === "bearer", {
+    message:
+      '"tokenLocal" is only valid when auth is "bearer" — it names the raw-token accessor the ' +
+      "bearer header wrapper calls, and no other auth mode emits one",
+  })
+  .refine((e) => e.tokenLocal === undefined || e.tokenLocal !== e.local, {
+    message:
+      '"tokenLocal" must differ from "local" — the two name two functions declared in the ' +
+      "same module",
   });
 
-export const FetchHelperSchema = z.strictObject({
-  local: identifierField(),
-  /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
-  base: z.string().min(1),
-  /** Name of an env accessor returning the header record. */
-  headers: z.string().min(1).optional(),
-  /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
-  inlineHeaders: z.record(z.string(), z.string()).optional(),
-  normalizeLeadingSlash: z.boolean().default(false),
-  jsonFallbackRaw: z.boolean().default(false),
-});
+export const FetchHelperSchema = z
+  .strictObject({
+    local: identifierField(),
+    /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
+    base: z.string().min(1),
+    /**
+     * Hoist `base` to a module-scope `const <name> = "<base>";` and reference that const
+     * from the emitted helper(s) instead of inlining the literal. mercury spells it `BASE`,
+     * bitrise `BITRISE_API`. Omitted inlines the literal, which is what
+     * newrelic/datadog/grafana/sentry do.
+     */
+    baseConst: identifierField().optional(),
+    /** Name of an env accessor returning the header record. */
+    headers: z.string().min(1).optional(),
+    /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
+    inlineHeaders: z.record(z.string(), z.string()).optional(),
+    normalizeLeadingSlash: z.boolean().default(false),
+    jsonFallbackRaw: z.boolean().default(false),
+    /**
+     * How a fully-static path renders in a fetch-helper call. A per-connector convention:
+     * 17 corpus connectors quote it, 8 use a backtick template literal, none mix.
+     */
+    staticPathStyle: z.enum(["quoted", "template"]).default("quoted"),
+  })
+  // A `${env.X}` reference resolves to an accessor CALL, and the const is initialised at
+  // module scope, before the process env has been guarded — hoisting it would move the
+  // accessor's throw from the first request to import time, and freeze a value the
+  // accessor is written to recompute. Only a fully static base may be hoisted.
+  .refine((f) => f.baseConst === undefined || !/\$\{env\./.test(f.base), {
+    message:
+      '"baseConst" requires a fully static "base" — a base naming ${env.X} resolves to an ' +
+      "accessor call, which must not run at module-initialisation time",
+  });
+
+/**
+ * The two styles that emit their own fetch helper and env accessors. `read-only-kit`
+ * differs from `hand-rolled` only in the server file's prologue and epilogue (Stage D
+ * design §1.2), so every schema rule keyed to "hand-rolled" applies to it unchanged.
+ */
+function isHandStyle(style: string): boolean {
+  return style === "hand-rolled" || style === "read-only-kit";
+}
 
 export const ConnectorSpecSchema = z
   .strictObject({
@@ -194,8 +304,36 @@ export const ConnectorSpecSchema = z
     id: z.string().min(1).optional(),
     description: z.string().min(1),
     serviceLabel: z.string().min(1),
-    style: z.enum(["rest-kit", "hand-rolled"]).default("rest-kit"),
+    style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
+    /**
+     * How a REST tool's handler is written. `"concise"` is an expression-bodied arrow
+     * (`async () => jsonResult(await nrGet(...))`), the form newrelic/datadog/grafana/
+     * sentry use; `"block"` is a statement body with an explicit `return`, which 57 of the
+     * 60 corpus connectors built on `runReadOnlyMcpConnector` use. A per-connector
+     * convention like `fetchHelper.staticPathStyle`, and it never mixes within a connector.
+     * A stub or search handler always has a block body and is unaffected.
+     */
+    handlerStyle: z.enum(["concise", "block"]).default("concise"),
+    /**
+     * How a tool's `z.object({...})` argument schema is printed: on one line, or one field
+     * per line. Biome preserves whichever the emitter produces, so it is the emitter's
+     * choice rather than the formatter's. `z.object({})` is always one line — an empty
+     * object has nothing to break onto.
+     */
+    argsSchemaStyle: z.enum(["inline", "expanded"]).default("inline"),
     network: z.array(z.string()).default([]),
+    /**
+     * The manifest's `permissions.filesystem`, emitted after `network` when declared. 29 of
+     * the 94 corpus manifests carry it — most, like zendesk, as a pair of empty arrays
+     * stating explicitly that the connector touches no files. Omitted leaves the key out
+     * entirely, which is what the other 65 do, so the existing fixtures cannot move.
+     */
+    filesystem: z
+      .strictObject({
+        read: z.array(z.string()).default([]),
+        write: z.array(z.string()).default([]),
+      })
+      .optional(),
     syncInterval: z.number().int().positive().default(300),
     minNimbusVersion: z.string().default("0.2.0"),
     env: z.array(EnvSchema).default([]),
@@ -204,7 +342,7 @@ export const ConnectorSpecSchema = z
   })
   .refine(
     (s) =>
-      s.style !== "hand-rolled" ||
+      !isHandStyle(s.style) ||
       (s.fetchHelper.headers === undefined) !== (s.fetchHelper.inlineHeaders === undefined),
     {
       message:
@@ -256,7 +394,37 @@ export const ConnectorSpecSchema = z
       message:
         "a rest-kit connector cannot reference ${env.X} in fetchHelper.base or fetchHelper.inlineHeaders — rest-kit emits no env accessors, so the call would be undefined",
     },
-  );
+  )
+  // Measured: the intersection of the 10 rest-tool-kit users and the 45 mcp-search-tool
+  // users in the corpus is empty, and the code explains why — makeRestToolRegistrar
+  // performs the fetch AND wraps the result, so there is no callback between the response
+  // and the MCP result for the filter to run in. Same shape as the client-credentials
+  // exclusion above.
+  .refine((s) => s.style !== "rest-kit" || !s.tools.some((t) => t.impl === "search"), {
+    message:
+      'style "rest-kit" cannot declare an "impl": "search" tool: makeRestToolRegistrar ' +
+      "performs the request and wraps the result itself, so it has no seam for the filter. " +
+      'Use style "read-only-kit" or "hand-rolled".',
+  })
+  // One emitted `export const` per filter, all in one src/search-filter.ts. Two tools
+  // naming the same export would emit a duplicate declaration. No corpus connector reuses
+  // one filter across two search tools (raindrop's two are distinct exports).
+  .superRefine((s, ctx) => {
+    const seen = new Set<string>();
+    for (const t of s.tools) {
+      const name = t.filter?.export;
+      if (name === undefined) continue;
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `two tools declare "filter.export": "${name}" — each search tool emits its own ` +
+            "export into src/search-filter.ts, so the names must differ",
+        });
+      }
+      seen.add(name);
+    }
+  });
 
 export type EnvSpec = z.infer<typeof EnvSchema>;
 export type ToolSpec = z.infer<typeof ToolSchema>;

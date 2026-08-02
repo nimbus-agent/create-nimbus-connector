@@ -30,7 +30,7 @@ import {
 } from "../src/format.ts";
 import { run } from "../src/golden/run.ts";
 import { parseSpec } from "../src/spec.ts";
-import { type Check, formatCheckLines } from "./_lib/checks.ts";
+import { type Check, formatCheckLines, isUnpublishedFloorFailure } from "./_lib/checks.ts";
 import { findEscapingImports } from "./_lib/escaping-imports.ts";
 import { toolsListCheck } from "./_lib/mcp-driver.ts";
 import { assertLocalSdkBuilt, modeBanner, resolveSdkPkg } from "./_lib/sdk-pkg.ts";
@@ -57,6 +57,15 @@ const FIXTURES = [
   // shipped. Its boolean arg covers the paired hoist defect from the same fix wave.
   "zzwriteonly",
   "zzwriterest",
+  // The read-only-kit style and the search path, which nothing else here compiles. Three
+  // things only a real tsc can decide meet in these two: the inlined runReadOnlyMcpConnector
+  // glue (standalone emits it rather than importing it, and it names two SDK types in its
+  // signature), the kit import list, and — in zzsearchstub — whether src/search-filter.ts
+  // names fieldsFromKeys, makeQueryFilter and SearchFilter and neither more nor less. An
+  // over- or under-named import there is a noUnusedLocals error or an unresolved one, and no
+  // substring assertion in test/ can see either.
+  "zzsearch",
+  "zzsearchstub",
 ] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
@@ -89,7 +98,29 @@ async function runFixture(NAME: string, sdkPkg: string | undefined): Promise<Che
       // --registry: install exactly what the generator emitted. No rewrite, so a failure
       // here is a real consumer's failure.
       console.log(`  ${NAME}: installing @nimbus-dev/sdk ${declaredSdkDep} as emitted`);
-      checks.push({ name: "bun install", ...run(["bun", "install"], outDir) });
+      const install = run(["bun", "install"], outDir);
+
+      // ...with one exception, and only one: the fixture declares a floor that is not
+      // published yet. Every later check in this function needs node_modules, so without
+      // this a single unresolvable dependency reports as nine further failures that say
+      // nothing — which is exactly what Stage D's two search fixtures did while
+      // @nimbus-dev/sdk ^1.15.0 sat on an unmerged branch. One SKIP naming the version is
+      // the honest report, and main() below refuses to call the run green when it happens.
+      if (!install.ok && isUnpublishedFloorFailure(install.output, declaredSdkDep)) {
+        return [
+          {
+            name: `bun install (@nimbus-dev/sdk ${declaredSdkDep})`,
+            ok: true,
+            skipped: true,
+            output:
+              `@nimbus-dev/sdk ${declaredSdkDep} is not on the registry yet, so this fixture's ` +
+              "10 checks cannot run in --registry mode. Nothing is verified about it here. " +
+              "Run the harness against a local SDK checkout to cover it before the release, " +
+              "and re-run this mode after the release lands — it needs no edit to re-enable.",
+          },
+        ];
+      }
+      checks.push({ name: "bun install", ...install });
     } else {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
       pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
@@ -203,6 +234,20 @@ async function main(argv: readonly string[]): Promise<void> {
   for (const line of formatCheckLines(checks)) console.log(line);
 
   if (checks.some((c) => !c.ok)) process.exit(1);
+
+  // A run with skips exits 0 — the skipped question is unanswerable, not failed — but it must
+  // never print the same sentence a fully-verified run prints. Naming the fixtures is the
+  // point: "all checks passed" over a silently reduced fixture set is precisely how a gate
+  // stops gating without anyone noticing.
+  const skipped = checks.filter((c) => c.skipped === true);
+  if (skipped.length > 0) {
+    const names = skipped.map((c) => c.name.replace(/^\[([^\]]+)\].*$/, "$1")).join(", ");
+    console.log(
+      `\nStandalone acceptance passed for every fixture it could run, and SKIPPED ${skipped.length}: ${names}.` +
+        "\nThose fixtures are NOT verified against the registry by this run.",
+    );
+    return;
+  }
   console.log("\nAll standalone acceptance checks passed.");
 }
 

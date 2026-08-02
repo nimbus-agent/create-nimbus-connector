@@ -915,3 +915,165 @@ describe("preflightOutOfScope", () => {
     expect(() => parseSpec({ ...stageCBase, tools: "nope" })).toThrow(/Invalid connector spec/);
   });
 });
+
+describe("style: read-only-kit", () => {
+  it("is accepted and inherits the hand-rolled fetchHelper rule", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [],
+    });
+    expect(spec.style).toBe("read-only-kit");
+  });
+
+  it("rejects a read-only-kit spec declaring neither headers nor inlineHeaders", () => {
+    expect(() =>
+      parseSpec({
+        name: "mercury",
+        displayName: "Mercury",
+        description: "d.",
+        serviceLabel: "Mercury",
+        style: "read-only-kit",
+        fetchHelper: { local: "mercuryGet", base: "https://api.mercury.com" },
+        tools: [],
+      }),
+    ).toThrow(/exactly one of fetchHelper.headers or fetchHelper.inlineHeaders/);
+  });
+});
+
+describe("impl: search", () => {
+  function tool(extra: Record<string, unknown> = {}) {
+    return {
+      name: "mercury_search",
+      description: "Search accounts.",
+      impl: "search",
+      path: "/api/v1/accounts",
+      filter: { export: "filterMercuryAccounts", fields: ["id", "name"] },
+      ...extra,
+    };
+  }
+  function make(t: unknown, style = "read-only-kit") {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style,
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [t],
+    });
+  }
+
+  it("defaults maxLimit to 100 and tags to false", () => {
+    const t = make(tool()).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.filter?.tags).toBe(false);
+  });
+
+  it("accepts rows and a custom maxLimit", () => {
+    const t = make(tool({ rows: "accounts", maxLimit: 2000 })).tools[0]!;
+    expect(t.rows).toBe("accounts");
+    expect(t.maxLimit).toBe(2000);
+  });
+
+  it("requires a filter", () => {
+    expect(() => make({ ...tool(), filter: undefined })).toThrow(/"filter" is required/);
+  });
+
+  it("rejects an empty fields list", () => {
+    expect(() => make(tool({ filter: { export: "f", fields: [] } }))).toThrow(/at least one field/);
+  });
+
+  it("rejects method and body", () => {
+    expect(() => make(tool({ method: "POST" }))).toThrow(/issues a GET/);
+    expect(() => make(tool({ body: { a: "b" } }))).toThrow(/issues a GET/);
+  });
+
+  it("rejects a non-read effect", () => {
+    expect(() => make(tool({ effect: "write" }))).toThrow(/cannot mutate/);
+  });
+
+  it("rejects a non-identifier filter.export", () => {
+    expect(() => make(tool({ filter: { export: "not a name", fields: ["id"] } }))).toThrow(
+      /must be a valid JS identifier/,
+    );
+  });
+
+  it("accepts an ordinary GET tool that never mentions maxLimit", () => {
+    const t = make({
+      name: "mercury_get_account",
+      description: "Get an account.",
+      impl: "rest",
+      path: "/api/v1/accounts/:id",
+    }).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.rows).toBeUndefined();
+  });
+
+  it("rejects rows/maxLimit on a non-search tool", () => {
+    expect(() =>
+      make({
+        name: "mercury_get_account",
+        description: "Get an account.",
+        impl: "rest",
+        path: "/api/v1/accounts/:id",
+        maxLimit: 50,
+      }),
+    ).toThrow(/"rows" and "maxLimit" are only valid on a tool with "impl": "search"/);
+  });
+});
+
+describe("search and style interaction", () => {
+  const searchTool = {
+    name: "s_search",
+    description: "Search.",
+    impl: "search",
+    path: "/items",
+    filter: { export: "filterItems", fields: ["id"] },
+  };
+
+  it("rejects a search tool on style rest-kit", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "rest-kit",
+        env: [{ vars: ["S_TOKEN"], local: "token", auth: "bearer" }],
+        fetchHelper: { local: "sGet", base: "https://api.s.com" },
+        tools: [searchTool],
+      }),
+    ).toThrow(/no seam/);
+  });
+
+  it("rejects two tools sharing one filter.export", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "sGet",
+          base: "https://api.s.com",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [searchTool, { ...searchTool, name: "s_search_two", path: "/others" }],
+      }),
+    ).toThrow(/filterItems/);
+  });
+});

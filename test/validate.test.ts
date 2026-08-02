@@ -253,3 +253,90 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).toThrow(/registerGoogleMeetTool/);
   });
 });
+
+describe("validateSpec, identifiers the new Stage D conventions introduce", () => {
+  it("rejects a base const that collides with an env accessor", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          fetchHelper: {
+            local: "sentryGet",
+            base: "https://sentry.io",
+            baseConst: "org",
+            headers: "org",
+          },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "org"/);
+  });
+
+  it("rejects a raw-token accessor that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["SENTRY_AUTH_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "sentryGet",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: { local: "sentryGet", base: "https://sentry.io", headers: "authHeader" },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "sentryGet"/);
+  });
+
+  // Stage D added module-scope declarations that nothing claimed. Each of these is a name the
+  // emitter itself declares or binds in src/server.ts, so a spec reusing one emits two
+  // declarations of it and the collision surfaces only at the generated package's own tsc —
+  // which is precisely what this list exists to pull forward to parse time.
+  describe("Stage D reserved identifiers", () => {
+    for (const name of [
+      "runReadOnlyMcpConnector",
+      "ZodToolRegistrar",
+      "searchToolInputSchema",
+      "matchesResult",
+      "McpListResult",
+      "ZodObjectSchema",
+      "SearchMatchOptions",
+      "root",
+    ]) {
+      it(`rejects an env local named ${name}`, () => {
+        expect(() =>
+          validateSpec(
+            specWith({
+              env: [{ vars: ["SENTRY_TOKEN"], local: name, bindings: ["t"], auth: "bearer" }],
+            }),
+          ),
+        ).toThrow(new RegExp(`Identifier collision: "${name}"`));
+      });
+    }
+  });
+
+  it("accepts the mercury shape, where the two names differ", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["MERCURY_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "apiToken",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            baseConst: "BASE",
+            headers: "authHeader",
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { renderFetchHelper } from "../../../src/emit/server/fetch-helper.ts";
+import { renderBaseConst, renderFetchHelper } from "../../../src/emit/server/fetch-helper.ts";
 import { parseSpec } from "../../../src/spec.ts";
 
 function make(over: Record<string, unknown>) {
@@ -100,5 +100,79 @@ describe("renderFetchHelper", () => {
     );
     expect(out).not.toContain("throw new Error");
     expect(out).not.toContain("if (!res.ok)");
+  });
+});
+
+describe("renderBaseConst", () => {
+  it("returns undefined when the spec does not ask for a hoisted base", () => {
+    expect(
+      renderBaseConst(
+        make({ fetchHelper: { local: "xGet", base: "https://x.test", inlineHeaders: {} } }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("hoists the base to a module-scope const under the declared name", () => {
+    const spec = make({
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        baseConst: "BASE",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "m_list", description: "List accounts.", path: "/api/v1/accounts" }],
+    });
+    expect(renderBaseConst(spec)).toBe('const BASE = "https://api.mercury.com";');
+  });
+
+  it("omits the const when no helper is emitted to read it — an unread const fails tsc there", () => {
+    const spec = make({
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        baseConst: "BASE",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "m_todo", description: "Not implemented yet.", impl: "stub" }],
+    });
+    expect(renderBaseConst(spec)).toBeUndefined();
+  });
+
+  it("makes the helper reference the const instead of inlining the literal", () => {
+    const spec = make({
+      fetchHelper: {
+        local: "bitriseGet",
+        base: "https://api.bitrise.io",
+        baseConst: "BITRISE_API",
+        headers: "authHeader",
+      },
+      env: [
+        {
+          vars: ["BITRISE_TOKEN"],
+          local: "authHeader",
+          bindings: ["t"],
+          auth: "headers",
+          headerNames: ["Authorization"],
+        },
+      ],
+    });
+    expect(renderFetchHelper(spec)).toContain(
+      "const res = await fetch(`${BITRISE_API}${path}`, { headers: authHeader() });",
+    );
+    expect(renderFetchHelper(spec)).not.toContain("https://api.bitrise.io");
+  });
+
+  it('rejects "baseConst" on a base that names ${env.X}, which resolves to an accessor call', () => {
+    expect(() =>
+      make({
+        env: [{ vars: ["X_URL"], local: "baseUrl", bindings: ["u"], required: true }],
+        fetchHelper: {
+          local: "xGet",
+          base: "${env.baseUrl}",
+          baseConst: "BASE",
+          headers: "baseUrl",
+        },
+      }),
+    ).toThrow(/baseConst/);
   });
 });

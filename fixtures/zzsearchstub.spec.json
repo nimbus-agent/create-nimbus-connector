@@ -1,0 +1,37 @@
+{
+  "name": "zzsearchstub",
+  "title": "Zzsearchstub",
+  "displayName": "ZZ Search Stub",
+  "description": "Throwaway standalone acceptance connector covering the mixed filter shape: one search tool whose filter declares its fields and one that omits them and therefore emits a throwing stub. The mix is the point — src/search-filter.ts must then name fieldsFromKeys, makeQueryFilter and SearchFilter, and neither more nor less, which is what the generated package's own typecheck and lint decide.",
+  "serviceLabel": "ZZ Search Stub",
+  "style": "read-only-kit",
+  "network": ["api.zzsearchstub.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZSEARCHSTUB_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": {
+    "local": "zzGet",
+    "base": "https://api.zzsearchstub.test",
+    "headers": "headers"
+  },
+  "tools": [
+    {
+      "name": "zzsearchstub_item_search",
+      "description": "Substring search across items. Matches id and name.",
+      "impl": "search",
+      "path": "/v1/items",
+      "rows": "items",
+      "filter": { "export": "filterZzsearchstubItems", "fields": ["id", "name"] }
+    },
+    {
+      "name": "zzsearchstub_event_search",
+      "description": "Substring search across events. The searchable fields are not expressible as top-level keys, so the emitted filter is a stub to be replaced by hand.",
+      "impl": "search",
+      "path": "/v1/events",
+      "rows": "events",
+      "filter": { "export": "filterZzsearchstubEvents" }
+    }
+  ]
+}
