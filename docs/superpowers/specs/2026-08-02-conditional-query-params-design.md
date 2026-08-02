@@ -148,8 +148,12 @@ Per entry:
 reference (`p.after`). That choice is not new — it is what `renderPath` already does for path
 segments, and reusing it keeps one rule for how an argument becomes an expression.
 
-`String(...)` wraps every value, matching the corpus. It is a no-op for strings and required
-for numbers.
+`String(...)` wraps the unconditional form only; the guarded form does not. That asymmetry is
+the corpus's, not a choice — verified directly against `discord/src/server.ts`, whose guarded
+`after` is written bare (`u.searchParams.set("after", parsed.after)`). An unconditional entry
+may carry a number (`limit`), so it needs the wrap; every guarded entry in the six in-scope
+connectors is already a string, so wrapping it would emit `String(parsed.after)` where the real
+file writes `parsed.after`.
 
 ### The byte-safety invariant
 
