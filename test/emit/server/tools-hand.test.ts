@@ -195,6 +195,89 @@ describe("renderHandRolledTools", () => {
   });
 });
 
+describe("hand-rolled query parameters", () => {
+  const spec = (tools: unknown[]) =>
+    parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "discordGet",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools,
+    });
+
+  it("emits the URL block for a tool declaring query parameters", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages",
+          description: "List recent messages.",
+          path: "/channels/${arg.channelId|enc}/messages",
+          args: {
+            channelId: { type: "string", min: 1 },
+            limit: { type: "number", optional: true, default: 50, local: "lim" },
+            after: { type: "string", optional: true },
+          },
+          query: [
+            { name: "limit", arg: "limit" },
+            { name: "after", arg: "after", omitWhen: "empty" },
+          ],
+        },
+      ]),
+    );
+    expect(out).toContain("const lim = p.limit ?? 50;");
+    expect(out).toContain(
+      "const u = new URL(`https://discord.com/api/v10/channels/${encodeURIComponent(p.channelId)}/messages`);",
+    );
+    expect(out).toContain('u.searchParams.set("limit", String(lim));');
+    expect(out).toContain('if (p.after !== undefined && p.after !== "") {');
+    expect(out).toContain("const path = `${u.pathname}${u.search}`;");
+    expect(out).toContain("return jsonResult(await discordGet(path));");
+  });
+
+  it("leaves a tool with no query on the unchanged path branch", () => {
+    const out = renderHandRolledTools(
+      spec([{ name: "discord_guilds", description: "List guilds.", path: "/users/@me/guilds" }]),
+    );
+    expect(out).not.toContain("new URL(");
+    expect(out).toContain('jsonResult(await discordGet("/users/@me/guilds")),');
+  });
+
+  // The bug this brief exists to prevent: "query" is legal on a non-GET tool (rejected only
+  // on a stub — see spec.ts), and this file builds its call with a GET/non-GET split. A
+  // second, hand-duplicated call expression for the query branch would be free to disagree
+  // with that split — exactly the kind of silent divergence a substring test on the GET case
+  // alone would never catch.
+  it("routes a non-GET query tool through discordSend with its method, not the read helper", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ]),
+    );
+    expect(out).toContain(
+      'return jsonResult(await discordGetSend(path, "POST", JSON.stringify({ query: p.query })));',
+    );
+    expect(out).not.toContain("discordGet(path)");
+  });
+});
+
 describe("hand-rolled write support", () => {
   const spec = (tools: unknown[]) =>
     parseSpec({

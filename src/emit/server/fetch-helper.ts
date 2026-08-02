@@ -32,7 +32,7 @@ export function renderBaseConst(spec: ConnectorSpec): string | undefined {
  * literal otherwise. One helper so the read helper, the write helper and the rest-kit
  * helper cannot disagree about which form they use.
  */
-function baseExpr(spec: ConnectorSpec): string {
+export function baseExpr(spec: ConnectorSpec): string {
   const { baseConst, base } = spec.fetchHelper;
   return baseConst === undefined ? resolveEnvRefs(base) : `\${${baseConst}}`;
 }

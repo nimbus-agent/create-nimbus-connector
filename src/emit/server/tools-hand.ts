@@ -1,7 +1,9 @@
 import type { ConnectorSpec } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
+import { baseExpr } from "./fetch-helper.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { queryArgsUsed, renderQueryLines } from "./query.ts";
 import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
@@ -30,11 +32,13 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const path = tool.path!;
 
   const hoisted = hoistedLocals(tool.args);
+  const query = tool.query;
   const segments = parsePathTemplate(path);
   const pathExpr = renderPath(segments, {
     param: PARAM,
     hoisted,
     staticStyle: spec.fetchHelper.staticPathStyle,
+    ...(query === undefined ? {} : { prefix: baseExpr(spec) }),
   });
 
   // A non-GET tool routes through the write helper (`${local}Send`) with its method and
@@ -48,10 +52,15 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   // in the URL and the raw `undefined` arg in the body.
   const body = tool.method === "GET" ? undefined : renderBodyExpr(tool, { param: PARAM, hoisted });
   const bodyExpr = body?.expr;
+  // With a query the path is the `path` const the block below declares, not the inline
+  // expression — but WHICH helper receives it is still the method's decision. Substituting
+  // the path rather than duplicating the ternary is what keeps a non-GET query tool from
+  // silently routing through the read helper.
+  const callPath = query === undefined ? pathExpr : "path";
   const call =
     tool.method === "GET"
-      ? `jsonResult(await ${spec.fetchHelper.local}(${pathExpr}))`
-      : `jsonResult(await ${spec.fetchHelper.local}Send(${pathExpr}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+      ? `jsonResult(await ${spec.fetchHelper.local}(${callPath}))`
+      : `jsonResult(await ${spec.fetchHelper.local}Send(${callPath}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
 
   // Only hoists something actually reads are emitted — see renderHoists. The path consumes
   // every hoisted arg it names; the body reports its own usage, which excludes booleans.
@@ -59,18 +68,46 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   for (const s of segments) {
     if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
   }
+  // A query entry reads the same hoisted const the path would, so its args join `used` or the
+  // hoist is never emitted and the reference dangles.
+  if (query !== undefined) {
+    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
+  }
 
   // The body only ever references PARAM through renderBodyExpr's own param.field
   // expressions, so a defined bodyExpr always needs the parameter — even when the path
   // itself does not. Without this, a write tool whose path is fully static (e.g. a
   // POST to a fixed collection endpoint) would emit an unused `p`, which the generated
-  // package's own noUnusedParameters tsconfig setting rejects.
+  // package's own noUnusedParameters tsconfig setting rejects. A query entry naming an
+  // unhoisted arg needs the same thing, for the same reason — it reads `p.<arg>` directly.
   const needsParam =
     used.size > 0 ||
     segments.some((s) => s.kind === "arg" && !hoisted.has(s.name)) ||
-    bodyExpr !== undefined;
+    bodyExpr !== undefined ||
+    (query ?? []).some((q) => !hoisted.has(q.arg));
 
   const param = needsParam ? `(${PARAM})` : "()";
+
+  if (query !== undefined) {
+    const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
+    const queryLines = renderQueryLines(query, { param: PARAM, hoisted, args: tool.args }).map(
+      (l) => `    ${l}`,
+    );
+    return [
+      "reg(",
+      `  ${JSON.stringify(tool.name)},`,
+      `  ${JSON.stringify(tool.description)},`,
+      `  ${schema},`,
+      `  async ${param} => {`,
+      ...hoists,
+      `    const u = new URL(${pathExpr});`,
+      ...queryLines,
+      "    const path = `${u.pathname}${u.search}`;",
+      `    return ${call};`,
+      "  },",
+      ");",
+    ].join("\n");
+  }
 
   // The one-line `reg(name, description, schema, async … => call,\n);` form, which only the
   // "concise" convention uses. A hoist has nowhere to live in an expression body, so a tool
