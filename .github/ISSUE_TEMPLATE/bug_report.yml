@@ -1,0 +1,78 @@
+name: Bug report
+description: The generator emitted something wrong, refused something valid, or crashed
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The single most useful thing you can include is **the spec that
+        reproduces it** — this generator is a pure function of its input, so a spec plus the
+        command line is usually enough to reproduce exactly.
+
+        If the issue is in the gateway, a hand-written connector, or the `@nimbus-dev/sdk`
+        helpers, please use the links on the previous page instead.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did the generator do, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: The spec that reproduces it
+      description: >
+        Paste the smallest spec that still shows the problem. Redact URLs and env var names if
+        they are sensitive — but note that env var *names* are not secrets, and keeping them
+        makes the report reproducible.
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: bunx create-nimbus-connector --spec ./acme.spec.json --standalone
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The error, or the emitted source that is wrong. For a wrong-output bug, showing the emitted lines next to what you expected is ideal.
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      options:
+        - standalone
+        - monorepo
+        - both
+        - not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: create-nimbus-connector version
+      description: "`bunx create-nimbus-connector --version`, or the commit if running from a checkout"
+    validations:
+      required: true
+
+  - type: input
+    id: bun
+    attributes:
+      label: Bun version and OS
+      placeholder: "bun 1.3.14, Windows 11"
+    validations:
+      required: true

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions about writing a spec
+    url: https://github.com/nimbus-agent/Nimbus/discussions
+    about: How to express a service as a connector spec, or whether a change would be welcome — the one board for the whole organisation.
+  - name: Nimbus gateway / connectors
+    url: https://github.com/nimbus-agent/Nimbus/issues
+    about: For issues in the gateway, the Vault, the HITL machinery, or a hand-written connector — not this generator.
+  - name: "@nimbus-dev/sdk"
+    url: https://github.com/nimbus-agent/nimbus-sdk/issues
+    about: For issues in the connector-kit helpers a generated standalone connector imports.
