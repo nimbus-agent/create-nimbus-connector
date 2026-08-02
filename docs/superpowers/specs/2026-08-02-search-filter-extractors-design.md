@@ -16,12 +16,23 @@ The roadmap treats those 40 as one gap. They are not. Measured against the check
 
 | Group | Count | Shape |
 | --- | --- | --- |
-| A | 7 | `fieldsOf` built only from primitives `shared/search-filter.ts` already exports |
-| B | 32 | `fieldsOf` calling a locally-defined helper, or binding locals before its return |
+| A | 9 | `fieldsOf` built only from primitives `shared/search-filter.ts` already exports, plus local *variable* bindings that project a sub-object before reading flat keys off it — that shape is what a `path` entry expresses |
+| B | 30 | `fieldsOf` defining a local helper *function*, or needing logic no `path`/tag entry can express — a join, an array flatten, a coercion |
 | C | 1 | `zoom` — hand-rolled, does not use `makeQueryFilter` at all |
 
-A pattern-matched first pass put 12 files in Group A; reading each one moved five of them into
-Group B (see [Reach](#reach)).
+Measuring this by hand is easy to get wrong, and it was: a first pass with a script matching the
+range `/^function fieldsOf/,/^}/` reported 7/32/1. That pattern never matches `firebase` and
+`testflight`, which write their extractor as `const releaseFields: FieldExtractor = (item) =>
+{…}` — an arrow, not a `function` declaration — so those two spuriously reported zero local
+bindings while structurally identical files (`hubspot`, `miro`) reported non-zero and were
+excluded. The criterion the first pass used — "binds locals before its return array" — was also
+wrong, not just its application: a local binding that projects a sub-object and then reads flat
+keys off it (`const props = asObjectish(row["properties"]) ?? {}` in `hubspot`, `owner` in
+`miro`, `releaseNotes` in `firebase`, `attributes` in `testflight`) is exactly what a `path`
+entry expresses. What actually disqualifies a file is a local *function* declaration, or inline
+logic — a loop, an array filter, a `String()` coercion — that no entry kind reaches. Reading
+every one of the 40 files against that corrected criterion gives 9/30/1 (see
+[Reach](#reach)).
 
 Group A is reachable by composing existing primitives. Group B is not: byte-matching it means
 emitting *that connector's* bespoke helper under *that author's* chosen name, which no
@@ -49,7 +60,7 @@ derivable from the field list:
 - the extractor form — `function fieldsOf(…)` vs `const buildFields: FieldExtractor = (…) =>`
 - the extractor's name — `releaseFields`, `buildFields`, `fieldsOf`
 - a hand-written 4–5 line doc comment explaining the service's response shape, present in
-  `canva`, `figma`, `firebase`, `salesforce` and `testflight`
+  `canva`, `figma`, `firebase`, `hubspot`, `miro`, `salesforce` and `testflight`
 
 The doc comments are the same class of gap the ROADMAP already records for hand-authored
 READMEs: content no spec field can derive. The other three are the same class as the registrar
@@ -134,7 +145,7 @@ changes field order and must use `fieldsOf`.
 `{"tags":"objects"}` has no `fieldsFromKeys` equivalent — that helper hardcodes `tagText` — so
 it always takes the `fieldsOf` branch.
 
-A `form` override was considered and dropped. It was proposed to byte-match the seven Group A
+A `form` override was considered and dropped. It was proposed to byte-match the nine Group A
 files that write a flat list in `fieldsOf` form, and it lost its justification when the goal
 became correctness reach rather than byte-exactness.
 
@@ -286,7 +297,7 @@ SDK, neither of which this repository can make unilaterally.
 
 ## Out of scope
 
-- Group B's 32 local-helper extractors. Reaching them means modelling joins, array flattening
+- Group B's 30 local-helper extractors. Reaching them means modelling joins, array flattening
   and coercion — a mini-AST in the spec language, deserving its own design once the entry-union
   shape has proven itself.
 - `zoom`'s hand-rolled filter.
@@ -294,14 +305,47 @@ SDK, neither of which this repository can make unilaterally.
 
 ## Reach
 
-Group A was 12 on a first pass and 7 after reading every file. Five were reclassified out:
+Group A went through three passes, and the history is recorded here rather than smoothed over,
+because the second pass was also wrong and shipped into this document and the ROADMAP before
+being caught.
 
-| Connector | Why it is not reachable |
+**Pass 1**, pattern-matched: 12 files. Too loose — it did not distinguish a local *function*
+declaration from a local *variable* binding, so it counted several files (`dagster`, `semgrep`,
+`intercom`, and others) that define genuine local helper logic.
+
+**Pass 2**, reading every file by hand, but scripted with the range `/^function fieldsOf/,/^}/`
+to check for local bindings: 7 files. This under-counted. The pattern never matches `firebase`
+and `testflight`, which write their extractor as `const releaseFields: FieldExtractor = (item)
+=> {…}` — an arrow, not a `function` declaration — so the script reported those two as having
+*zero* local bindings and, by the (also wrong) criterion "bind locals before the return array",
+excluded `hubspot` and `miro` for a shape that `firebase` and `testflight` share:
+
+```ts
+// hubspot — excluded by pass 2
+const props = asObjectish(row["properties"]) ?? {};
+return [stringField(props, "dealname"), stringField(props, "dealstage"), ...];
+
+// firebase — kept by pass 2, because the range pattern never matched its arrow form
+const releaseNotes = asObjectish(row["releaseNotes"]) ?? {};
+return [..., stringField(releaseNotes, "text"), ...];
+```
+
+These are the same pattern: project a sub-object, then read flat keys off it. Both are exactly
+what a `path` entry expresses — `{ "path": ["properties", "dealname"] }`,
+`{ "path": ["releaseNotes", "text"] }`. A local *variable* binding is not disqualifying; only a
+local *function* declaration or logic no entry kind reaches (a join, an array flatten, a
+coercion) is.
+
+**Pass 3**, every file read against the corrected criterion: **9**. `hubspot` and `miro` move
+back in; nothing else changes.
+
+| Connector | Why it is not reachable (pass 3, corrected criterion) |
 | --- | --- |
-| `dagster`, `semgrep` | define a local helper function |
-| `hubspot`, `miro` | bind locals before the return array |
+| `dagster`, `semgrep`, `bigeye`, `databricks`, `dbt`, `flagsmith`, `flux`, `greenhouse`, `launchdarkly`, `lever`, `looker`, `mendeley`, `metabase`, `mlflow`, `netlify`, `powerbi`, `prefect`, `ramp`, `readwise`, `snowflake`, `sonarqube`, `stackoverflow`, `superset`, `tableau`, `vercel`, `wiz`, `zotero`, `airflow` | define a local helper function |
 | `intercom` | defines a local `tagText` that shadows the shared export |
+| `snyk` | inline coercion logic (array filter over `cve`), no local function needed to disqualify it |
 
-The remaining seven — `argocd`, `canva`, `dependencytrack`, `figma`, `firebase`, `salesforce`,
-`testflight` — all generate a correct filter under this design. One (`dependencytrack`)
-byte-matches.
+That is 30 (some rows above collapse several connectors sharing the same reason). The remaining
+nine — `argocd`, `canva`, `dependencytrack`, `figma`, `firebase`, `hubspot`, `miro`,
+`salesforce`, `testflight` — all generate a correct filter under this design. One
+(`dependencytrack`) byte-matches.

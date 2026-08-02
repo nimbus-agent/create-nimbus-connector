@@ -131,11 +131,11 @@ discovered later:
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
       of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
-      40 corpus filter files that hand-write an extractor: **7** are reachable this way, **32**
-      call a locally-defined helper or bind locals before their return array and stay
-      unreachable, and **1** (`zoom`) is hand-rolled and does not use `makeQueryFilter` at all.
-      See [Known limitations](#known-limitations) for the byte gap that keeps even the 7 from
-      matching.
+      40 corpus filter files that hand-write an extractor: **9** are reachable this way, **30**
+      define a local helper function or need logic no path can express — a join, an array
+      flatten, a coercion — and stay unreachable, and **1** (`zoom`) is hand-rolled and does not
+      use `makeQueryFilter` at all. See [Known limitations](#known-limitations) for the byte gap
+      that keeps even the 9 from matching.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file.
@@ -188,10 +188,11 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
-  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 32
-  call a locally-defined helper or bind locals before their return array — joins, array
-  flattening and coercion that no declarative field list expresses — and one (`zoom`) does not
-  use `makeQueryFilter` at all.
+  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
+  define a local helper function or need logic no declarative field list expresses — a join, an
+  array flatten, a coercion — and one (`zoom`) does not use `makeQueryFilter` at all. A local
+  *variable* binding that just projects a sub-object before reading flat keys off it is not in
+  this group — that shape is exactly what a `path` entry expresses.
 
 **Shape variance the emitter models one way.**
 
@@ -208,7 +209,7 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
   other two cannot byte-match.
-- **The 7 reachable extractor files never byte-match**, even though `filter.fields` now
+- **The 9 reachable extractor files never byte-match**, even though `filter.fields` now
   expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter always
   writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits arrays,
   `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
@@ -216,8 +217,8 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   annotation, where the emitter always writes a `function fieldsOf(item: unknown)` declaration.
   The extractor's name: `firebase` calls it `releaseFields` and `testflight` calls it
   `buildFields`; the emitter's is always `fieldsOf`. And a hand-written 4–5 line doc comment
-  explaining the service's response shape, present in `canva`, `figma`, `firebase`,
-  `salesforce` and `testflight` — the same content gap already recorded above for
+  explaining the service's response shape, present in `canva`, `figma`, `firebase`, `hubspot`,
+  `miro`, `salesforce` and `testflight` — the same content gap already recorded above for
   hand-authored READMEs, not a formatting one.
 
 **Absences.**
