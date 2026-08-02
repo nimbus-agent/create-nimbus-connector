@@ -172,7 +172,11 @@ export function matchesResult(
  * above): the split is the exact thing under test for the stub-filter path.
  */
 const SEARCH_FILTER_SHARED_STANDIN = `export type SearchMatchOptions = { readonly query: string };
-export type FieldExtractor = (item: unknown) => readonly string[];
+// Widened to allow null: the emitted Stage E extractor is
+// \`function fieldsOf(item: unknown): readonly string[] | null\`, returning null when
+// asObjectish's guard fails — that shape must be assignable to this type, or every extractor
+// branch fails makeQueryFilter's own call with a TS2345 no test here would otherwise catch.
+export type FieldExtractor = (item: unknown) => readonly string[] | null;
 export function fieldsFromKeys(
   _keys: readonly string[],
   _opts?: { tags?: boolean },
@@ -182,6 +186,24 @@ export function fieldsFromKeys(
 export function makeQueryFilter(
   _fields: FieldExtractor,
 ): (item: unknown, query: string) => boolean {
+  throw new Error("stub");
+}
+// Stage E's extractor branch. Signatures match the real shared/search-filter.ts primitives —
+// written from src/emit/search-filter.ts's assumptions, NOT copied from the AGPL-3.0-only
+// Nimbus checkout.
+export function asObjectish(_value: unknown): Record<string, unknown> | undefined {
+  throw new Error("stub");
+}
+export function stringField(_row: Record<string, unknown>, _key: string): string {
+  throw new Error("stub");
+}
+export function nestedString(_root: Record<string, unknown>, _path: readonly string[]): string {
+  throw new Error("stub");
+}
+export function tagText(_row: Record<string, unknown>): string {
+  throw new Error("stub");
+}
+export function tagNamesFromObjects(_row: Record<string, unknown>): string {
   throw new Error("stub");
 }
 `;
@@ -504,6 +526,99 @@ describe("a generated package containing a stub filter typechecks", () => {
     const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
     expect(output).not.toContain("TS6133"); // declared but never read (unused import)
     expect(output).not.toContain("TS2307"); // cannot find module (unresolved import)
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a generated package containing a bespoke fieldsOf extractor typechecks", () => {
+  /**
+   * Today the extractor branch's emitted source is proven only by diff:golden's byte-match and
+   * by standalone-acceptance --registry — one needs an AGPL Nimbus checkout, the other the
+   * network. Neither runs in a bare `bun test`. This spec forces every one of the branch's five
+   * new primitives into both the import list and the emitted body: a plain key (stringField), a
+   * two-segment path (nestedString), a non-trailing `{"tags":"objects"}` (tagNamesFromObjects)
+   * and a trailing `{"tags":"text"}` (tagText) — the guard (asObjectish) is unconditional. A
+   * wrong import name or a signature mismatch between the emitted `fieldsOf` and the shared
+   * primitives (e.g. the null return asObjectish's guard produces) now fails here instead of
+   * only in a gate CI cannot run.
+   */
+  const extractorSpec = parseSpec({
+    name: "zzextract",
+    displayName: "ZZ Extract",
+    description: "Extractor connector.",
+    serviceLabel: "ZZ Extract",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "zzGet",
+      base: "https://api.zzextract.test",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "zzextract_app_search",
+        description: "Search apps.",
+        impl: "search",
+        path: "/v1/apps",
+        filter: {
+          export: "filterZzextractApps",
+          fields: ["name", { path: ["profile", "email"] }, { tags: "objects" }, { tags: "text" }],
+        },
+      },
+    ],
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions", async () => {
+    const dir = tmp.make("cnc-search-extract-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "zzextract", "src"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), MCP_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "mcp-search-tool.ts"), MCP_SEARCH_TOOL_STANDIN, "utf8");
+    writeFileSync(join(dir, "shared", "search-filter.ts"), SEARCH_FILTER_SHARED_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+
+    await initFormatter();
+    // Only the src/ files generate() returns — package.json, nimbus.extension.json,
+    // tsconfig.json, README.md and test/sandbox.test.ts play no part in this compile.
+    const srcFiles = generate(extractorSpec, { target: "monorepo" }).filter(
+      (f) => f.path[0] === "src",
+    );
+    expect(srcFiles.map((f) => f.path.join("/")).sort()).toEqual([
+      "src/search-filter.ts",
+      "src/server.ts",
+    ]);
+    for (const f of formatAll(srcFiles)) {
+      writeFileSync(join(dir, "zzextract", ...f.path), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "zzextract", "tsconfig.json");
+    // Same DOM-lib substitution as the search-only and stub-filter compiles above, and for the
+    // same reason: this tsconfig lives in a throwaway temp dir with no node_modules/@types/bun
+    // to resolve `types: ["bun"]` against.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: {
+            ...NIMBUS_COMPILER_OPTIONS,
+            types: [],
+            lib: ["ESNext", "DOM"],
+          },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    expect(output).not.toContain("TS6133"); // declared but never read (unused import)
+    expect(output).not.toContain("TS2307"); // cannot find module (unresolved import)
+    expect(output).not.toContain("TS2345"); // argument not assignable (fieldsOf vs FieldExtractor)
     expect(output).toBe("");
     expect(ok).toBe(true);
   }, 120_000);
