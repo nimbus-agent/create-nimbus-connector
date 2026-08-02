@@ -687,7 +687,32 @@ Replace the block from `const pathExpr = renderPath(...)` through the final `ret
 
 - [ ] **Step 5: Implement the hand-rolled branch**
 
-In `src/emit/server/tools-hand.ts`, add the same two imports, pass the same conditional `prefix` into its `renderPath` call, add the same `queryArgsUsed` contribution to its `used` set, and — when `tool.query !== undefined` — build the handler body as:
+In `src/emit/server/tools-hand.ts`, add the same two imports, pass the same conditional `prefix` into its `renderPath` call, and add the same `queryArgsUsed` contribution to its `used` set.
+
+**The method matters here, and getting it wrong is silent.** That file already builds its call with a GET/non-GET split:
+
+```ts
+  const call =
+    tool.method === "GET"
+      ? `jsonResult(await ${spec.fetchHelper.local}(${pathExpr}))`
+      : `jsonResult(await ${spec.fetchHelper.local}Send(${pathExpr}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+```
+
+A `query` tool is not necessarily a GET — the schema rejects `query` only on a stub, and a POST carrying query parameters is an ordinary API shape. **Do not write a second call expression for the query branch.** Change only what the path is, leaving the existing split to decide the helper:
+
+```ts
+  // With a query the path is the `path` const the block below declares, not the inline
+  // expression — but WHICH helper receives it is still the method's decision. Substituting
+  // the path rather than duplicating the ternary is what keeps a non-GET query tool from
+  // silently routing through the read helper.
+  const callPath = tool.query === undefined ? pathExpr : "path";
+  const call =
+    tool.method === "GET"
+      ? `jsonResult(await ${spec.fetchHelper.local}(${callPath}))`
+      : `jsonResult(await ${spec.fetchHelper.local}Send(${callPath}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+```
+
+Then, when `tool.query !== undefined`, the handler body gains these statements before the call, alongside the hoists and indented the way that file already indents handler statements:
 
 ```ts
     const queryLines = renderQueryLines(query, { param: PARAM, hoisted });
@@ -695,11 +720,13 @@ In `src/emit/server/tools-hand.ts`, add the same two imports, pass the same cond
       `const u = new URL(${pathExpr});`,
       ...queryLines,
       "const path = `${u.pathname}${u.search}`;",
-      `return jsonResult(await ${spec.fetchHelper.local}(path));`,
+      `return ${call};`,
     ];
 ```
 
-placed inside the existing async handler block alongside the hoists, indented the way that file already indents handler statements. `path` is a local here rather than an inline template because the hand-rolled call site passes the path as an argument, and a nested template inside a call argument is harder to read than a named const — the corpus does the same in every hand-rolled connector that builds a URL.
+`path` is a named local rather than an inline template because the hand-rolled call site passes the path as a call argument, and a nested template literal inside an argument list reads poorly.
+
+**Add a test for the non-GET case** in `test/emit/server/tools-hand.test.ts`, asserting that a `POST` tool declaring `query` emits `<local>Send(path, "POST", …)` and not `<local>(path)`. Without it nothing pins the distinction, and the failure mode is a wrong HTTP method rather than a compile error.
 
 **`path` is already reserved** — `src/validate.ts:15`, verified while writing this plan — so declaring `const path` here needs no new entry. Do not remove or re-add it.
 
@@ -870,6 +897,12 @@ bun run runtime:acceptance --registry
 
 Report each gate's real output. A gate that could not run is reported as not run, never as passed. `--registry` and local-checkout mode answer different questions — say which was run.
 
+**The skip policy, stated so it is not improvised.** `diff:golden`, `acceptance` and `wiring:conformance` need the AGPL monorepo and therefore **cannot run in CI at all** — they are local pre-merge gates by design. If `C:/gitrep/Nimbus` is missing or unreadable, this task is **BLOCKED**, not complete: stop and report, because the byte-safety invariant is unverifiable without them and this change touches the emitter.
+
+Do **not** resolve a missing checkout by adding a CI job that skips when the root is absent. `CLAUDE.md` records that a silently-skipping gate is the exact failure mode this repository keeps removing.
+
+For `standalone-acceptance --registry` and `runtime:acceptance --registry`, a network failure is likewise reported as not run. A fixture whose declared SDK floor is unpublished reports `SKIP`, and a skipped run deliberately omits the sentence a fully-verified run prints — quote the final line rather than characterising it.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -884,6 +917,12 @@ git commit -m "docs: record conditional query parameters and the gaps that remai
 **Spec coverage.** Every design section maps to a task: the `query` spec language and all four rejections → Task 1; `u`/`URL` reservation → Task 2; the absolute-URL requirement, `baseExpr` reuse and the encoding note → Tasks 3 and 4; the rendering table → Task 4; `discord` → Task 5; `google-meet` and the inline-default gap → Task 6; the ROADMAP/README/CHANGELOG updates and the gate table → Task 7. The design's *Considered and declined* section needs no task. The multi-value out-of-scope statement is carried into Task 7's limitations update.
 
 **Type consistency.** `QueryParam = { name; arg; omitWhen? }` is defined in Task 1 and consumed under that exact name in Tasks 3 and 4. `renderQueryLines(query, ctx)` and `queryArgsUsed(query, hoisted)` are defined in Task 3 with the signatures Task 4 calls. `renderPath`'s `prefix` is added in Task 3 and used in Task 4. `baseExpr` is exported in Task 4 Step 3 before its first use in Step 4.
+
+**Two suggestions from review, declined with precedent rather than preference.**
+
+`QueryParamSchema.arg` stays `z.string().min(1)` rather than `identifierField()`. `arg` is a *reference* to a declared argument, not a declaration, and the repo's precedent for exactly that is `body`'s key check at `src/spec.ts:243-250` — a `superRefine` testing `k in t.args`, with no identifier schema. Adding one would fire first and report "must be a valid JS identifier" where the actionable message is "names arg X, which the tool does not declare"; a non-identifier `arg` cannot name a declared argument anyway, since argument keys are identifier-validated at `src/spec.ts:198`.
+
+The `superRefine` reads `t.args` directly rather than guarding `!t.args ||`. `args` carries `.default({})`, so it is an object by the time any refinement runs, and `body`'s refinement three lines above does the same unguarded `k in t.args`. A guard here would be unreachable code, which this project declines on the same grounds recorded in ROADMAP's *Considered and declined* for coercing a row set whose guard already exists one level down.
 
 **Two risks flagged rather than hidden.**
 
