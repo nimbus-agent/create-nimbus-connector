@@ -28,6 +28,20 @@ is something an existing user needs told even when no subject line would say so.
   usefulness. A connector using `auth: "bearer"`, `auth: "basic"`, or `inlineHeaders` is
   unaffected.
 
+### Breaking (spec validation)
+
+* **validate:** eight identifiers are now reserved and a spec reusing one is rejected at parse
+  time: `runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`,
+  `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions` and `root`. Each is a name the
+  emitted `src/server.ts` declares or imports for the new `read-only-kit` style or a search
+  tool, so reusing one previously emitted two declarations of it and failed the generated
+  package's own `typecheck` — this moves that failure to parse time, where the error names the
+  field. Reserved unconditionally, matching how `token` and `cachedToken` were handled in 0.3.0.
+
+  **`root` is the one likely to affect an existing spec**, being an ordinary word: a search tool
+  with `rows` emits `const root = await <fetchHelper.local>(…)`. Rename the `local`; nothing
+  else changes.
+
 ### Bug Fixes
 
 * **emit(manifest):** a `filesystem` path containing `$&`, `` $` ``, `$'` or `$$` no longer
