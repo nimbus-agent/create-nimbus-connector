@@ -177,7 +177,7 @@ export function isTagsEntry(e: FieldEntry): e is z.infer<typeof TagsEntrySchema>
 /**
  * The per-connector search filter. `fields` omitted means the emitter cannot express the
  * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
- * an extractor, 7 are reachable with these entry kinds, 32 call a locally-defined helper and
+ * an extractor, 9 are reachable with these entry kinds, 30 call a locally-defined helper and
  * one is hand-rolled. See the Stage E extractor design.
  */
 export const SearchFilterSchema = z

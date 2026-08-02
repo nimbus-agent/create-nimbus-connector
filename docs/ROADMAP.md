@@ -187,6 +187,13 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+- **At most one extractor-branch search filter per connector.** The emitted `fieldsOf` function
+  is always that name, so a second search tool taking the extractor branch in the same
+  `src/search-filter.ts` would redeclare it — `validateSpec` rejects this at parse time rather
+  than auto-suffixing or adding a spec field to name the extractor. Measured: the only corpus
+  connector with two extractors in one file is `readwise` (`fieldsOf` and `bookFieldsOf`), and
+  it is already unreachable for an unrelated reason — it defines a local `tagNames` helper,
+  putting it in the 30-file group no entry kind reaches regardless.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
   still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
   define a local helper function or need logic no declarative field list expresses — a join, an

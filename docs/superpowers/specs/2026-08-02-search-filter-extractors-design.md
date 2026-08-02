@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 **Stage:** E — the corpus tail, first bullet ("bespoke field extractors")
-**Status:** approved, not yet implemented
+**Status:** implemented on branch `worktree-stage-e`
 
 ## Problem
 
@@ -258,12 +258,12 @@ Generated `test/sandbox.test.ts` is not evidence — it is wrapped in
 
 ## Docs
 
-- ROADMAP Stage E: replace the single bespoke-extractor bullet with the A/B/C breakdown and the
-  reach this change achieves.
-- ROADMAP *Known limitations*: add the guard, extractor-form, extractor-name and doc-comment
-  gaps that keep Group A from byte-matching.
-- ROADMAP: correct the multi-file bullet. It names `elasticsearch` and `storybook`; 16
-  connectors carry `src/tools.ts` and `server.ts` imports it in 15 of them.
+- ROADMAP Stage E now carries the A/B/C breakdown in place of the single bespoke-extractor
+  bullet, and states the reach this change achieves.
+- ROADMAP *Known limitations* records the guard, extractor-form, extractor-name and
+  doc-comment gaps that keep Group A from byte-matching.
+- ROADMAP's multi-file bullet is corrected: it named `elasticsearch` and `storybook` as its
+  only examples; 16 connectors carry `src/tools.ts` and `server.ts` imports it in 15 of them.
 - Live numbers stay out of the docs. `diff:golden` is the answer.
 
 ## Considered and declined
