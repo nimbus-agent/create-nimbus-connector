@@ -1,4 +1,10 @@
-import type { ConnectorSpec, ToolSpec } from "../spec.ts";
+import {
+  type ConnectorSpec,
+  type FieldEntry,
+  isPathEntry,
+  isTagsEntry,
+  type ToolSpec,
+} from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import type { GenerateTarget } from "./index.ts";
 
@@ -23,9 +29,66 @@ function renderStringArray(values: readonly string[]): string {
   return `[${values.map((v) => JSON.stringify(v)).join(", ")}]`;
 }
 
-function keyedFilter(tool: ToolSpec): string {
-  const keys = renderStringArray(tool.filter!.fields!);
-  const opts = tool.filter!.tags ? ", { tags: true }" : "";
+/**
+ * The keyed shape, or undefined when the entries need a bespoke extractor.
+ *
+ * `fieldsFromKeys` appends `tagText(row)` *after* the keyed fields when `opts.tags` is set, so
+ * a trailing `{ tags: "text" }` is byte-identical to legacy `tags: true` and is emitted as
+ * such — an author who prefers the newer spelling does not silently lose a byte-match. Trailing
+ * is load-bearing: that helper can only append, so a tag entry in any other position changes
+ * field order. `{ tags: "objects" }` has no equivalent — fieldsFromKeys hardcodes tagText.
+ */
+function keyedShape(tool: ToolSpec): { keys: string[]; tags: boolean } | undefined {
+  const entries = tool.filter!.fields!;
+  const last = entries.at(-1);
+  const trailingTagText = last !== undefined && isTagsEntry(last) && last.tags === "text";
+  const body = trailingTagText ? entries.slice(0, -1) : entries;
+  if (!body.every((e): e is string => typeof e === "string")) return undefined;
+  return { keys: body, tags: tool.filter!.tags || trailingTagText };
+}
+
+/** One element of the extractor's returned array. */
+function renderEntry(e: FieldEntry): string {
+  if (typeof e === "string") return `stringField(row, ${JSON.stringify(e)})`;
+  if (isPathEntry(e)) return `nestedString(row, ${renderStringArray(e.path)})`;
+  return e.tags === "objects" ? "tagNamesFromObjects(row)" : "tagText(row)";
+}
+
+/**
+ * The bespoke-extractor form. The guard is always asObjectish; argocd's asRecord is not
+ * derivable from the field list and stays a documented difference (Stage E design).
+ */
+function extractorFilter(tool: ToolSpec): string {
+  const entries = tool.filter!.fields!;
+  return [
+    "function fieldsOf(item: unknown): readonly string[] | null {",
+    "  const row = asObjectish(item);",
+    "  if (row === undefined) {",
+    "    return null;",
+    "  }",
+    "  return [",
+    ...entries.map((e) => `    ${renderEntry(e)},`),
+    "  ];",
+    "}",
+    "",
+    `export const ${tool.filter!.export} = makeQueryFilter(fieldsOf);`,
+  ].join("\n");
+}
+
+/** The shared primitives a set of entries names, for the import list. */
+function primitivesFor(entries: readonly FieldEntry[]): string[] {
+  const names = new Set<string>(["asObjectish"]);
+  for (const e of entries) {
+    if (typeof e === "string") names.add("stringField");
+    else if (isPathEntry(e)) names.add("nestedString");
+    else names.add(e.tags === "objects" ? "tagNamesFromObjects" : "tagText");
+  }
+  return [...names];
+}
+
+function keyedFilter(tool: ToolSpec, shape: { keys: string[]; tags: boolean }): string {
+  const keys = renderStringArray(shape.keys);
+  const opts = shape.tags ? ", { tags: true }" : "";
   return [
     `export const ${tool.filter!.export} = makeQueryFilter(`,
     `  fieldsFromKeys(${keys}${opts}),`,
@@ -63,15 +126,29 @@ export function emitSearchFilter(
   const tools = spec.tools.filter((t) => t.impl === "search");
   if (tools.length === 0) return undefined;
 
-  const anyKeyed = tools.some((t) => t.filter!.fields !== undefined);
+  const shapes = new Map<ToolSpec, { keys: string[]; tags: boolean } | undefined>();
+  for (const t of tools) {
+    shapes.set(t, t.filter!.fields === undefined ? undefined : keyedShape(t));
+  }
+
+  const keyedTools = tools.filter((t) => shapes.get(t) !== undefined);
+  const extractorTools = tools.filter(
+    (t) => t.filter!.fields !== undefined && shapes.get(t) === undefined,
+  );
   const anyStub = tools.some((t) => t.filter!.fields === undefined);
 
   // Only the symbols something in this file actually names — an unused import is a
   // noUnusedLocals error in the generated package, and biome's own lint rejects it too.
   const filterNames: string[] = [];
-  if (anyKeyed) filterNames.push("fieldsFromKeys", "makeQueryFilter");
+  if (keyedTools.length > 0) filterNames.push("fieldsFromKeys");
+  if (keyedTools.length > 0 || extractorTools.length > 0) filterNames.push("makeQueryFilter");
+  for (const t of extractorTools) {
+    for (const n of primitivesFor(t.filter!.fields!)) {
+      if (!filterNames.includes(n)) filterNames.push(n);
+    }
+  }
   filterNames.push("type SearchMatchOptions");
-  filterNames.sort((a, b) => a.replace("type ", "").localeCompare(b.replace("type ", "")));
+  filterNames.sort(byBareName);
 
   const importLines =
     target === "standalone"
@@ -98,7 +175,11 @@ export function emitSearchFilter(
   const sections = [
     importLines.join("\n"),
     `export type ${spec.title}SearchMatchOptions = SearchMatchOptions;`,
-    ...tools.map((t) => (t.filter!.fields === undefined ? stubFilter(t) : keyedFilter(t))),
+    ...tools.map((t) => {
+      if (t.filter!.fields === undefined) return stubFilter(t);
+      const shape = shapes.get(t);
+      return shape === undefined ? extractorFilter(t) : keyedFilter(t, shape);
+    }),
   ];
 
   return { path: ["src", "search-filter.ts"], content: `${sections.join("\n\n")}\n` };

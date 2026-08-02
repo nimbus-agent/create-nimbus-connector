@@ -27,6 +27,14 @@ const KEYED = {
   filter: { export: "filterMercuryAccounts", fields: ["id", "name"] },
 };
 
+const PATHS = {
+  ...KEYED,
+  filter: {
+    export: "filterMercuryAccounts",
+    fields: ["name", { path: ["spec", "source", "repoURL"] }],
+  },
+};
+
 describe("emitSearchFilter", () => {
   it("returns undefined for a spec with no search tool", () => {
     expect(
@@ -112,5 +120,91 @@ describe("emitSearchFilter", () => {
     expect(file.content).toContain(
       'import { type SearchMatchOptions } from "../../shared/search-filter.ts";',
     );
+  });
+
+  it("emits a fieldsOf extractor when a path entry is present", () => {
+    const file = emitSearchFilter(make([PATHS]), "monorepo")!;
+    expect(file.content).toContain("function fieldsOf(item: unknown): readonly string[] | null {");
+    expect(file.content).toContain("const row = asObjectish(item);");
+    expect(file.content).toContain('stringField(row, "name")');
+    expect(file.content).toContain('nestedString(row, ["spec", "source", "repoURL"])');
+    expect(file.content).toContain(
+      "export const filterMercuryAccounts = makeQueryFilter(fieldsOf);",
+    );
+  });
+
+  it("renders each tag format with its own helper", () => {
+    const objects = emitSearchFilter(
+      make([{ ...KEYED, filter: { export: "f", fields: ["a", { tags: "objects" }] } }]),
+      "monorepo",
+    )!;
+    expect(objects.content).toContain("tagNamesFromObjects(row)");
+
+    const midText = emitSearchFilter(
+      make([{ ...KEYED, filter: { export: "f", fields: [{ tags: "text" }, "a"] } }]),
+      "monorepo",
+    )!;
+    expect(midText.content).toContain("tagText(row)");
+    expect(midText.content).toContain("function fieldsOf(");
+  });
+
+  it("falls back to fieldsOf for multiple tag entries", () => {
+    // Only a SINGLE trailing {tags:"text"} converges, because fieldsFromKeys appends exactly one
+    // tagText. Two tag entries cannot be expressed by it, whatever their order.
+    const twoText = emitSearchFilter(
+      make([
+        { ...KEYED, filter: { export: "f", fields: ["a", { tags: "text" }, { tags: "text" }] } },
+      ]),
+      "monorepo",
+    )!;
+    expect(twoText.content).toContain("function fieldsOf(");
+    expect(twoText.content).not.toContain("fieldsFromKeys");
+
+    const mixed = emitSearchFilter(
+      make([
+        { ...KEYED, filter: { export: "f", fields: ["a", { tags: "text" }, { tags: "objects" }] } },
+      ]),
+      "monorepo",
+    )!;
+    expect(mixed.content).toContain("function fieldsOf(");
+    expect(mixed.content).toContain("tagText(row)");
+    expect(mixed.content).toContain("tagNamesFromObjects(row)");
+  });
+
+  it("converges a trailing {tags:'text'} with legacy tags:true, byte for byte", () => {
+    const entry = emitSearchFilter(
+      make([{ ...KEYED, filter: { export: "f", fields: ["id", { tags: "text" }] } }]),
+      "monorepo",
+    )!;
+    const legacy = emitSearchFilter(
+      make([{ ...KEYED, filter: { export: "f", fields: ["id"], tags: true } }]),
+      "monorepo",
+    )!;
+    expect(entry.content).toBe(legacy.content);
+    expect(entry.content).toContain('fieldsFromKeys(["id"], { tags: true })');
+    expect(entry.content).not.toContain("fieldsOf");
+  });
+
+  it("imports only the primitives the entries actually use", () => {
+    const file = emitSearchFilter(make([PATHS]), "monorepo")!;
+    expect(file.content).toContain("nestedString");
+    expect(file.content).not.toContain("tagText");
+    expect(file.content).not.toContain("tagNamesFromObjects");
+    // The emitted form is a function declaration that annotates its own signature, and the
+    // guard is always asObjectish.
+    expect(file.content).not.toContain("FieldExtractor");
+    expect(file.content).not.toContain("asRecord");
+  });
+
+  it("resolves the extractor primitives from the kit on standalone", () => {
+    const file = emitSearchFilter(make([PATHS]), "standalone")!;
+    expect(file.content).toContain('} from "@nimbus-dev/sdk/connector-kit";');
+    expect(file.content).not.toContain("../../shared/search-filter.ts");
+  });
+
+  it("leaves a plain-string-only filter on the fieldsFromKeys path", () => {
+    const file = emitSearchFilter(make([KEYED]), "monorepo")!;
+    expect(file.content).not.toContain("fieldsOf");
+    expect(file.content).toContain('fieldsFromKeys(["id", "name"])');
   });
 });
