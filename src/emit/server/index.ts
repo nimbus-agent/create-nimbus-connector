@@ -82,24 +82,76 @@ function searchTools(spec: ConnectorSpec): ToolSpec[] {
 }
 
 /**
+ * Whether this server must define searchToolInputSchema itself.
+ *
+ * Only a zero-arg search tool calls the helper at all — one that declares args inlines its
+ * merged z.object instead (renderSchema in search.ts). On the monorepo target the helper is
+ * imported from shared/mcp-search-tool.ts; on standalone it CANNOT be, because it is the one
+ * search symbol the SDK deliberately does not export: it constructs a zod schema, and
+ * `@nimbus-dev/sdk`'s empty `dependencies` is load-bearing (Stage D design §4.4, and the
+ * SDK-side commit says the same). Emitting the import anyway is what standalone acceptance
+ * caught — `TS2305: Module '"@nimbus-dev/sdk/connector-kit"' has no exported member
+ * 'searchToolInputSchema'`, and a matching bundler error, on both search fixtures.
+ */
+function needsSearchSchemaGlue(spec: ConnectorSpec, target: GenerateTarget): boolean {
+  return target === "standalone" && searchTools(spec).some((t) => Object.keys(t.args).length === 0);
+}
+
+/**
  * matchesResult is always needed by a search connector; searchToolInputSchema only by a
  * search tool that declares no args of its own — bitrise inlines its schema and never
  * calls the helper, so importing it unconditionally would be an unused import under the
- * generated package's own noUnusedLocals.
+ * generated package's own noUnusedLocals. On standalone it is never imported at all; see
+ * needsSearchSchemaGlue.
  */
-function searchKitNames(spec: ConnectorSpec): string[] {
+function searchKitNames(spec: ConnectorSpec, target: GenerateTarget): string[] {
   const tools = searchTools(spec);
   if (tools.length === 0) return [];
   const names = ["matchesResult"];
-  if (tools.some((t) => Object.keys(t.args).length === 0)) names.push("searchToolInputSchema");
+  if (target === "monorepo" && tools.some((t) => Object.keys(t.args).length === 0)) {
+    names.push("searchToolInputSchema");
+  }
+  // The two types the emitted glue's signature names. ZodObjectSchema may already be in the
+  // list from kitImportNames (standalone read-only-kit names it for the runReadOnly glue), so
+  // the standalone caller dedupes before rendering.
+  if (needsSearchSchemaGlue(spec, target)) {
+    names.push("type SearchMatchOptions", "type ZodObjectSchema");
+  }
   return names;
 }
 
-/** One import line naming every filter this server calls, in declaration order. */
-function filterImport(spec: ConnectorSpec): string | undefined {
-  const exports = searchTools(spec).map((t) => t.filter!.export);
+/**
+ * The specifier src/server.ts uses to reach src/search-filter.ts — the only relative import a
+ * generated connector has, and the only place the two targets disagree about an extension.
+ *
+ * The monorepo corpus writes "./search-filter.ts" and the monorepo tsconfig allows it. A
+ * standalone package's tsconfig deliberately does not: `allowImportingTsExtensions` is absent
+ * by design (see static.test.ts, "omits allowImportingTsExtensions — no .ts imports remain"),
+ * and until Stage D no emitted standalone file had a relative import at all, so nothing tested
+ * the claim. A search spec is the first one that does, and it failed exactly there — `TS5097:
+ * An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is
+ * enabled`. ".js" is the standard TypeScript-ESM spelling: tsc resolves it to the .ts source
+ * under `moduleResolution: "bundler"`, and both `bun` and `bun build` apply the same rewrite,
+ * which the two tools/list checks (source and bundled dist) prove rather than assume.
+ */
+function filterSpecifier(target: GenerateTarget): string {
+  return target === "monorepo" ? "./search-filter.ts" : "./search-filter.js";
+}
+
+/**
+ * One import line naming every filter this server calls.
+ *
+ * Alphabetised, not in declaration order: Biome's organizeImports sorts the names inside a
+ * single clause, so a spec whose filter exports are declared out of order fails the generated
+ * package's own `bun run lint`. zzsearchstub is exactly that spec — `filterZzsearchstubItems`
+ * is declared before `filterZzsearchstubEvents` — and it is how this surfaced. Single-filter
+ * connectors (mercury, zendesk, bitrise) cannot see the difference, which is why the golden
+ * fixtures stayed green through it.
+ */
+function filterImport(spec: ConnectorSpec, target: GenerateTarget): string | undefined {
+  const exports = biomeNamedImportOrder(searchTools(spec).map((t) => t.filter!.export));
   if (exports.length === 0) return undefined;
-  return `import { ${exports.join(", ")} } from "./search-filter.ts";`;
+  return `import { ${exports.join(", ")} } from "${filterSpecifier(target)}";`;
 }
 
 /**
@@ -157,13 +209,19 @@ function biomeNamedImportOrder(names: readonly string[]): string[] {
  * instead and never references `z` at all. A spec whose only tool(s) are zero-arg search
  * tools is the one shape that must NOT import zod, on pain of the same noUnusedLocals /
  * noUnusedVariables failure `usesJsonResult` above was fixed for.
+ *
+ * — except on standalone, where that same spec DOES need zod, because it defines
+ * searchToolInputSchema itself and the definition is a z.object literal. The two conditions
+ * are exact complements, so the whole rule is: zod is imported unless every tool is a zero-arg
+ * search tool AND the glue that would reintroduce it is not being emitted.
  */
-function usesZod(spec: ConnectorSpec): boolean {
+function usesZod(spec: ConnectorSpec, target: GenerateTarget): boolean {
+  if (needsSearchSchemaGlue(spec, target)) return true;
   return spec.tools.some((t) => t.impl !== "search" || Object.keys(t.args).length > 0);
 }
 
 function imports(spec: ConnectorSpec, target: GenerateTarget): string {
-  const zodNeeded = usesZod(spec);
+  const zodNeeded = usesZod(spec, target);
 
   const zodImport = 'import { z } from "zod";';
   const head =
@@ -180,13 +238,16 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     // own group behind a blank line — the kit is a package specifier, and
     // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
     // BEFORE "zod". It therefore belongs inside the first group, in that position.
+    // Deduped: a standalone read-only-kit spec with a zero-arg search tool reaches
+    // "type ZodObjectSchema" twice — once for the runReadOnly glue's ZodToolRegistrar, once
+    // for the searchToolInputSchema glue's return type. Two identical names in one clause is
+    // a TS2300 duplicate-identifier error, not merely untidy. zzsearch is that spec.
     const kitNames = biomeNamedImportOrder([
-      ...kitImportNames(spec, true, target),
-      ...searchKitNames(spec),
+      ...new Set([...kitImportNames(spec, true, target), ...searchKitNames(spec, target)]),
     ]);
     head.push(...renderNamedImport(kitNames, KIT));
     if (zodNeeded) head.push(zodImport);
-    const filters = filterImport(spec);
+    const filters = filterImport(spec, target);
     if (filters !== undefined) head.push("", filters);
     return head.join("\n");
   }
@@ -194,8 +255,8 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
   // monorepo — unchanged from Stage A
   if (zodNeeded) head.push(zodImport);
 
-  const search = searchKitNames(spec);
-  const filters = filterImport(spec);
+  const search = searchKitNames(spec, target);
+  const filters = filterImport(spec, target);
   const MCP_TOOL_KIT = "../../shared/mcp-tool-kit.ts";
 
   if (spec.style === "read-only-kit") {
@@ -214,7 +275,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     if (search.length > 0) {
       blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
     }
-    if (filters !== undefined) blocks.push({ from: "./search-filter.ts", lines: [filters] });
+    if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
     head.push(...sortedRelativeImportLines(blocks));
     return head.join("\n");
   }
@@ -230,7 +291,7 @@ function imports(spec: ConnectorSpec, target: GenerateTarget): string {
     if (search.length > 0) {
       blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
     }
-    if (filters !== undefined) blocks.push({ from: "./search-filter.ts", lines: [filters] });
+    if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
     head.push(...sortedRelativeImportLines(blocks));
   } else {
     head.push(
@@ -297,6 +358,31 @@ function renderRunReadOnlyGlue(): string {
   ].join("\n");
 }
 
+/**
+ * The standalone equivalent of shared/mcp-search-tool.ts's searchToolInputSchema, emitted for
+ * the same reason the runReadOnly glue above is: the symbol cannot come from the SDK. Here the
+ * obstacle is zod rather than @modelcontextprotocol/sdk — the helper's body IS a zod schema,
+ * and the SDK ships with no runtime dependencies at all. matchesResult, which needs nothing
+ * but the filter, is an SDK export and is imported normally.
+ *
+ * The explicit `ZodObjectSchema<SearchMatchOptions>` return type is not decoration. It is what
+ * fixes `p` in every emitted `async (p) => …` search handler to SearchMatchOptions, which is
+ * in turn what lets `matchesResult(rows, filter, p)` typecheck. Dropping it infers a
+ * structurally-similar-but-distinct zod output type and the handler parameter degrades to
+ * unknown at the registrar boundary. Copied verbatim from the shared module for that reason,
+ * including the `maxLimit` parameter every call site passes explicitly.
+ */
+function renderSearchSchemaGlue(): string {
+  return [
+    "function searchToolInputSchema(maxLimit: number): ZodObjectSchema<SearchMatchOptions> {",
+    "  return z.object({",
+    "    query: z.string().min(1),",
+    "    limit: z.number().int().min(1).max(maxLimit).optional(),",
+    "  });",
+    "}",
+  ].join("\n");
+}
+
 export function emitServer(spec: ConnectorSpec, target: GenerateTarget): GeneratedFile {
   const isHand = isHandStyle(spec);
   const readHelper = renderReadHelper(spec);
@@ -322,6 +408,9 @@ export function emitServer(spec: ConnectorSpec, target: GenerateTarget): Generat
     ...(writeHelper === undefined ? [] : [writeHelper]),
     ...(wiring(spec) === undefined ? [] : [wiring(spec)!]),
     ...(spec.style === "read-only-kit" && target === "standalone" ? [renderRunReadOnlyGlue()] : []),
+    // Before the registrations that call it, and before the runReadOnly wrapper on the styles
+    // that have one. Both glues are standalone-only, so no monorepo fixture can move.
+    ...(needsSearchSchemaGlue(spec, target) ? [renderSearchSchemaGlue()] : []),
     renderTools(spec),
     ...(tail(spec) === undefined ? [] : [tail(spec)!]),
   ].filter((s) => s.trim() !== "");

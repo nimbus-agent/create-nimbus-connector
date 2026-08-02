@@ -563,7 +563,10 @@ describe("a standalone package's merged KIT import lints clean under its own bio
         "  encodeBasicAuthHeader,",
         "  type McpListResult,",
         "  matchesResult,",
-        "  searchToolInputSchema,",
+        // Not searchToolInputSchema: the SDK does not export it (it builds a zod schema, and
+        // the SDK carries no runtime dependencies), so the standalone target defines it
+        // locally and imports the type its signature returns instead.
+        "  type SearchMatchOptions,",
         "  type ZodObjectSchema,",
         '} from "@nimbus-dev/sdk/connector-kit";',
       ].join("\n"),

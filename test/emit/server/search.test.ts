@@ -153,7 +153,7 @@ describe("emitServer search imports", () => {
     expect(out).not.toContain("searchToolInputSchema");
   });
 
-  it("imports both from the SDK kit on standalone, in Biome's real merged order", () => {
+  it("imports matchesResult from the SDK kit on standalone, in Biome's real merged order", () => {
     const out = emitServer(specWith([SEARCH]), "standalone").content;
     expect(out).not.toContain("../../shared/");
     // Pinned, not just toContain("matchesResult") — Biome buckets by the case-folded first
@@ -167,12 +167,54 @@ describe("emitServer search imports", () => {
         "  createZodToolRegistrar,",
         "  type McpListResult,",
         "  matchesResult,",
-        "  searchToolInputSchema,",
+        "  type SearchMatchOptions,",
         "  type ZodObjectSchema,",
         '} from "@nimbus-dev/sdk/connector-kit";',
       ].join("\n"),
     );
-    expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.ts";');
+    expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.js";');
+  });
+
+  it("defines searchToolInputSchema locally on standalone rather than importing it", () => {
+    // The SDK deliberately does not export it — it constructs a zod schema, and
+    // @nimbus-dev/sdk ships zero runtime dependencies. Importing it anyway typechecked in no
+    // configuration and failed the bundler too; standalone acceptance is what caught it.
+    const out = emitServer(specWith([SEARCH]), "standalone").content;
+    expect(out).not.toContain('searchToolInputSchema,\n} from "@nimbus-dev/sdk/connector-kit"');
+    expect(out).toContain(
+      "function searchToolInputSchema(maxLimit: number): ZodObjectSchema<SearchMatchOptions> {",
+    );
+    // The return-type annotation is what fixes `p` to SearchMatchOptions at the call site, so
+    // the glue must import zod even for a spec whose every tool is a zero-arg search tool —
+    // the one shape usesZod() would otherwise exclude.
+    expect(out).toContain('import { z } from "zod";');
+    expect(out).toContain("searchToolInputSchema(100)");
+  });
+
+  it("keeps importing the shared helper on monorepo, where it does resolve", () => {
+    const out = emitServer(specWith([SEARCH]), "monorepo").content;
+    expect(out).toContain(
+      'import { matchesResult, searchToolInputSchema } from "../../shared/mcp-search-tool.ts";',
+    );
+    expect(out).not.toContain("function searchToolInputSchema(");
+  });
+
+  it("alphabetises the filter names, which Biome's organizeImports requires", () => {
+    // Declared items-then-events; emitted events-then-items. A single-filter connector cannot
+    // see this, which is why every golden fixture stayed green while it was wrong.
+    const out = emitServer(
+      specWith([
+        { ...SEARCH, name: "mercury_b_search", filter: { export: "filterItems", fields: ["id"] } },
+        {
+          ...SEARCH,
+          name: "mercury_a_search",
+          path: "/api/v1/events",
+          filter: { export: "filterEvents", fields: ["id"] },
+        },
+      ]),
+      "monorepo",
+    ).content;
+    expect(out).toContain('import { filterEvents, filterItems } from "./search-filter.ts";');
   });
 
   it("emits no search imports for a spec with no search tool", () => {

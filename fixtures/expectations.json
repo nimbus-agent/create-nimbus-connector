@@ -56,6 +56,8 @@
   "discord": ["README.md", "test/sandbox.test.ts", "tsconfig.json"],
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
   "zzscratch": [],
+  "zzsearch": [],
+  "zzsearchstub": [],
   "zzstandalone": [],
   "zzstandalonehand": [],
   "zzwrite": [],

@@ -57,6 +57,15 @@ const FIXTURES = [
   // shipped. Its boolean arg covers the paired hoist defect from the same fix wave.
   "zzwriteonly",
   "zzwriterest",
+  // The read-only-kit style and the search path, which nothing else here compiles. Three
+  // things only a real tsc can decide meet in these two: the inlined runReadOnlyMcpConnector
+  // glue (standalone emits it rather than importing it, and it names two SDK types in its
+  // signature), the kit import list, and — in zzsearchstub — whether src/search-filter.ts
+  // names fieldsFromKeys, makeQueryFilter and SearchFilter and neither more nor less. An
+  // over- or under-named import there is a noUnusedLocals error or an unresolved one, and no
+  // substring assertion in test/ can see either.
+  "zzsearch",
+  "zzsearchstub",
 ] as const;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 

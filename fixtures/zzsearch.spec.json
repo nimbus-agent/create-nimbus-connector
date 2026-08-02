@@ -1,0 +1,39 @@
+{
+  "name": "zzsearch",
+  "title": "Zzsearch",
+  "displayName": "ZZ Search",
+  "description": "Throwaway standalone acceptance connector, read-only-kit style with search tools. Covers both search schema shapes in one package: a no-args tool that calls the shared searchToolInputSchema and plucks a `rows` envelope, and an args-carrying tool that inlines its own zod object and passes the response straight through.",
+  "serviceLabel": "ZZ Search",
+  "style": "read-only-kit",
+  "network": ["api.zzsearch.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZSEARCH_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": { "local": "zzGet", "base": "https://api.zzsearch.test", "headers": "headers" },
+  "tools": [
+    { "name": "zzsearch_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzsearch_item_search",
+      "description": "Substring search across items. Matches id, name, status and any tag names.",
+      "impl": "search",
+      "path": "/v1/items",
+      "rows": "items",
+      "filter": {
+        "export": "filterZzsearchItems",
+        "fields": ["id", "name", "status"],
+        "tags": true
+      }
+    },
+    {
+      "name": "zzsearch_build_search",
+      "description": "Substring search across one project's builds. Matches branch and status.",
+      "impl": "search",
+      "args": { "projectSlug": { "type": "string", "min": 1 } },
+      "path": "/v1/projects/${arg.projectSlug|enc}/builds",
+      "maxLimit": 200,
+      "filter": { "export": "filterZzsearchBuilds", "fields": ["branch", "status"] }
+    }
+  ]
+}
