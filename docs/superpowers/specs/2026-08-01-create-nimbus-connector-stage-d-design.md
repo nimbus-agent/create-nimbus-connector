@@ -709,7 +709,7 @@ indicating a current leak.
   fixture for this style is a search connector, so "the style renders correctly without search"
   still rests on synthetic fixtures. That is a limit of the corpus, not of the testing.
 - **The three real fixtures are 6/7, 6/7 and 4/7, not 7/7.** Unchanged from Task 10, restated
-  here because §9 is where a reader looks for the bar: the gaps are hand-written READMEs, a
+  here because §8 is where a reader looks for the bar: the gaps are hand-written READMEs, a
   sandbox test the real `bitrise` package does not contain, and two `bitrise` handlers the spec
   language cannot express. Each is on screen on every harness run rather than hidden by an
   expectation entry.
