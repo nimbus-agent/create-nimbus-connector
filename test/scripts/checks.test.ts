@@ -9,7 +9,11 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { type Check, formatCheckLines } from "../../scripts/_lib/checks.ts";
+import {
+  type Check,
+  formatCheckLines,
+  isUnpublishedFloorFailure,
+} from "../../scripts/_lib/checks.ts";
 
 describe("formatCheckLines", () => {
   it("prints nothing for an empty check list", () => {
@@ -39,6 +43,25 @@ describe("formatCheckLines", () => {
     expect(formatCheckLines(checks)).toEqual(["FAIL  bun run build"]);
   });
 
+  it("labels a skipped check SKIP and prints why", () => {
+    // A skip is neither outcome: the check did not pass, and reporting it as FAIL would make
+    // a known-unanswerable question look like a defect. The reason is always printed —
+    // a silent skip is how a gate quietly stops gating.
+    const checks: Check[] = [
+      {
+        name: "bun install",
+        ok: true,
+        skipped: true,
+        output: "@nimbus-dev/sdk ^1.15.0 is not on the registry yet",
+      },
+    ];
+
+    expect(formatCheckLines(checks)).toEqual([
+      "SKIP  bun install",
+      "@nimbus-dev/sdk ^1.15.0 is not on the registry yet",
+    ]);
+  });
+
   it("keeps the checks in the order they were collected", () => {
     // The harnesses push checks in execution order and the report is read as a timeline:
     // "install passed, tsc passed, lint failed" localises the break. Sorting or grouping
@@ -55,5 +78,53 @@ describe("formatCheckLines", () => {
       "boom",
       "PASS  bun run lint",
     ]);
+  });
+});
+
+/**
+ * The one condition under which a --registry fixture is unanswerable rather than broken: it
+ * declares an SDK floor that is not published yet. Narrow on purpose — every other install
+ * failure is a real failure, and a predicate that generalised even slightly would turn the
+ * registry gate into a gate that passes when the registry is down.
+ */
+describe("isUnpublishedFloorFailure", () => {
+  const real =
+    "bun install v1.3.14 (0d9b296a)\n" +
+    'error: No version matching "^1.15.0" found for specifier "@nimbus-dev/sdk" (but package exists)\n' +
+    "error: @nimbus-dev/sdk@^1.15.0 failed to resolve";
+
+  it("recognises bun's unresolvable-range message for the declared range", () => {
+    expect(isUnpublishedFloorFailure(real, "^1.15.0")).toBe(true);
+  });
+
+  it("rejects it when the range named is not the one the package declared", () => {
+    // Guards against reading someone else's unresolvable dependency as ours and skipping a
+    // fixture that genuinely failed.
+    expect(isUnpublishedFloorFailure(real, "^1.11.0")).toBe(false);
+  });
+
+  it("rejects a message about a different package", () => {
+    expect(
+      isUnpublishedFloorFailure(
+        'error: No version matching "^1.15.0" found for specifier "zod" (but package exists)',
+        "^1.15.0",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects every other install failure", () => {
+    for (const other of [
+      "error: failed to resolve: ENOTFOUND registry.npmjs.org",
+      "error: GET https://registry.npmjs.org/@nimbus-dev/sdk - 500",
+      'error: package "@nimbus-dev/sdk" not found',
+      "error: lockfile had changes, but lockfile is frozen",
+      "",
+    ]) {
+      expect(isUnpublishedFloorFailure(other, "^1.15.0")).toBe(false);
+    }
+  });
+
+  it("does not treat a published floor's successful install as a skip", () => {
+    expect(isUnpublishedFloorFailure("41 packages installed", "^1.11.0")).toBe(false);
   });
 });
