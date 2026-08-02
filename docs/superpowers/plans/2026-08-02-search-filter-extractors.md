@@ -34,9 +34,15 @@
 - Consumes: nothing from earlier tasks.
 - Produces: `FieldEntry` type and `SearchFilterSchema`. Later tasks rely on these exact shapes:
   - a plain key is a `string`
-  - a path entry is `{ readonly path: readonly string[] }` (length ≥ 2, each segment non-empty)
-  - a tag entry is `{ readonly tags: "text" | "objects" }`
-  - `filter.fields?: readonly FieldEntry[]`, `filter.tags: boolean` (defaulted, unchanged)
+  - a path entry is `{ path: string[] }` (length ≥ 2, each segment non-empty)
+  - a tag entry is `{ tags: "text" | "objects" }`
+  - `filter.fields?: FieldEntry[]`, `filter.tags: boolean` (defaulted, unchanged)
+
+  These are **mutable** arrays, because that is what `z.array()` infers and what `fields`
+  already infers today. Do not add `.readonly()` to make them match a `readonly` annotation:
+  a mutable array is assignable to a `readonly string[]` parameter, so `renderStringArray`
+  and `primitivesFor` accept them unchanged, and adding it would ripple through inferred
+  types across `ConnectorSpec` for no benefit.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -101,6 +107,15 @@ describe("SearchFilterSchema field entries", () => {
     ).toThrow(/tags/);
   });
 
+  it("reports a malformed entry with the three legal shapes, not \"Invalid input\"", () => {
+    // Verified against zod 4.4.2: an untagged union reports ONE issue, not one per branch,
+    // and its default message is the useless "Invalid input". The custom error is what makes
+    // the failure actionable.
+    expect(() =>
+      withFilter({ export: "filterX", fields: [{ pat: ["a", "b"] }] }),
+    ).toThrow(/a field entry must be a key string/);
+  });
+
   it("still accepts the flat 0.4.0 shape unchanged", () => {
     const spec = withFilter({ export: "filterX", fields: ["id", "name"], tags: true });
     expect(spec.tools[0]!.filter!.fields).toEqual(["id", "name"]);
@@ -137,7 +152,17 @@ const TagsEntrySchema = z.strictObject({
   tags: z.enum(["text", "objects"]),
 });
 
-export const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema]);
+/**
+ * The custom error is not decoration. Verified against zod 4.4.2: a failing untagged union
+ * reports a single issue whose default message is "Invalid input" — it names neither what was
+ * given nor what was expected. (It does *not* dump one failure per branch; that is zod 3
+ * behaviour.) This message is the only thing that makes a malformed entry actionable.
+ */
+export const FieldEntrySchema = z.union([z.string().min(1), PathEntrySchema, TagsEntrySchema], {
+  error:
+    'a field entry must be a key string, { "path": [...] } with two or more segments, or ' +
+    '{ "tags": "text" | "objects" }',
+});
 
 export type FieldEntry = z.infer<typeof FieldEntrySchema>;
 
@@ -202,10 +227,16 @@ export const SearchFilterSchema = z
 Run: `bun test test/spec.test.ts`
 Expected: PASS.
 
-Then run the whole suite — `SearchFilterSchema` is now a `ZodEffects` rather than a `ZodObject`, and `ToolSchema` calls `.optional()` on it:
+Then run the whole suite:
 
 Run: `bun test && bunx tsc --noEmit`
-Expected: PASS. If `.optional()` on the refined schema does not typecheck, move the `superRefine` onto `ToolSchema` instead, keyed on `t.filter`, and keep the messages identical.
+Expected: PASS.
+
+`ToolSchema` calls `.optional()` on `SearchFilterSchema`, which now carries a `superRefine`.
+That is safe here and needs no workaround: **verified against zod 4.4.2**, `.superRefine()` on
+a `strictObject` returns a `ZodObject`, not a `ZodEffects` — `.optional()`, `.extend()` and
+`.pick()` all remain present and working. The `ZodEffects`-loses-object-methods problem is zod 3
+behaviour and does not apply to this codebase.
 
 - [ ] **Step 5: Commit**
 
@@ -225,6 +256,16 @@ git commit -m "feat(spec): accept path and tag entries in filter.fields"
 **Interfaces:**
 - Consumes: `filter.export` from Task 1's schema.
 - Produces: nothing later tasks call directly. Task 4 and 5 fixtures must not use any newly reserved name.
+
+**Collision pre-check — already run, no action needed.** The reserved list constrains *this
+repository's* `fixtures/*.spec.json`, not Nimbus: Nimbus connectors are hand-written, not
+generated, so no Nimbus-side spec exists to collide. Checked on 2026-08-02 across all 17
+fixtures for `local`, `tokenLocal`, `baseConst`, `export` and argument names matching any of
+the eight new entries — **none**. Re-run it in Task 4 and 5 when adding a fixture:
+
+```bash
+grep -nE '"(local|tokenLocal|baseConst|export)"\s*:\s*"(fieldsOf|asObjectish|stringField|nestedString|tagText|tagNamesFromObjects|makeQueryFilter|fieldsFromKeys)"' fixtures/*.spec.json
+```
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -397,6 +438,27 @@ it("renders each tag format with its own helper", () => {
   )!;
   expect(midText.content).toContain("tagText(row)");
   expect(midText.content).toContain("function fieldsOf(");
+});
+
+it("falls back to fieldsOf for multiple tag entries", () => {
+  // Only a SINGLE trailing {tags:"text"} converges, because fieldsFromKeys appends exactly one
+  // tagText. Two tag entries cannot be expressed by it, whatever their order.
+  const twoText = emitSearchFilter(
+    make([{ ...KEYED, filter: { export: "f", fields: ["a", { tags: "text" }, { tags: "text" }] } }]),
+    "monorepo",
+  )!;
+  expect(twoText.content).toContain("function fieldsOf(");
+  expect(twoText.content).not.toContain("fieldsFromKeys");
+
+  const mixed = emitSearchFilter(
+    make([
+      { ...KEYED, filter: { export: "f", fields: ["a", { tags: "text" }, { tags: "objects" }] } },
+    ]),
+    "monorepo",
+  )!;
+  expect(mixed.content).toContain("function fieldsOf(");
+  expect(mixed.content).toContain("tagText(row)");
+  expect(mixed.content).toContain("tagNamesFromObjects(row)");
 });
 
 it("converges a trailing {tags:'text'} with legacy tags:true, byte for byte", () => {
