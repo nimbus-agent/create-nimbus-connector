@@ -1,0 +1,47 @@
+{
+  "name": "zzextract",
+  "title": "Zzextract",
+  "displayName": "ZZ Extract",
+  "description": "Throwaway standalone acceptance connector exercising all three filter entry kinds: plain keys, a dotted path, and both tag helpers.",
+  "serviceLabel": "ZZ Extract",
+  "style": "read-only-kit",
+  "network": ["api.zzextract.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZEXTRACT_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": {
+    "local": "zzGet",
+    "base": "https://api.zzextract.test",
+    "headers": "headers"
+  },
+  "tools": [
+    {
+      "name": "zzextract_app_search",
+      "description": "Substring search across apps. Matches name, nested repo URL and tag names.",
+      "impl": "search",
+      "path": "/v1/apps",
+      "rows": "items",
+      "filter": {
+        "export": "filterZzextractApps",
+        "fields": [
+          "name",
+          { "path": ["spec", "source", "repoURL"] },
+          { "tags": "objects" }
+        ]
+      }
+    },
+    {
+      "name": "zzextract_item_search",
+      "description": "Substring search across items. Matches id and status, plus plain tag names.",
+      "impl": "search",
+      "path": "/v1/items",
+      "rows": "items",
+      "filter": {
+        "export": "filterZzextractItems",
+        "fields": ["id", "status", { "tags": "text" }]
+      }
+    }
+  ]
+}
