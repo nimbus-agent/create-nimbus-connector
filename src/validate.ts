@@ -34,6 +34,33 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   // scope (see env.ts), so a `local` of that name would be declared twice.
   "trimTrailingSlash",
   "URLSearchParams",
+  // The read-only-kit style and search tools, all of them names the emitted src/server.ts
+  // declares or binds at module scope. Reserved unconditionally, matching how "token" and
+  // "cachedToken" are treated: the list is a flat set checked before any style or tool kind is
+  // considered, and making entries conditional would mean a spec validating or failing
+  // depending on a field elsewhere in the file.
+  //
+  //   runReadOnlyMcpConnector  imported (monorepo) or declared by the emitted glue (standalone)
+  //   ZodToolRegistrar         the glue's registrar type alias, standalone only
+  //   searchToolInputSchema    imported (monorepo) or declared by the emitted glue (standalone)
+  //   matchesResult            imported by every search connector
+  //   McpListResult
+  //   ZodObjectSchema          type imports the two standalone glues' signatures name
+  //   SearchMatchOptions
+  //
+  // "root" is the one that is not an import: renderSearchTool emits `const root = await
+  // <fetchHelper.local>(...)` for a search tool with `rows`. A fetch helper named "root" emits
+  // `const root = await root(...)`, which is a use-before-declaration error rather than a
+  // shadow. Function-scope rather than module-scope, but the failure mode and the fix are the
+  // same, and reserving it keeps the rule one rule.
+  "runReadOnlyMcpConnector",
+  "ZodToolRegistrar",
+  "searchToolInputSchema",
+  "matchesResult",
+  "McpListResult",
+  "ZodObjectSchema",
+  "SearchMatchOptions",
+  "root",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits
   // `function fetch()` shadowing the global, then calls it with two arguments.

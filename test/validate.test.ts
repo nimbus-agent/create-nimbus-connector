@@ -289,6 +289,33 @@ describe("validateSpec, identifiers the new Stage D conventions introduce", () =
     ).toThrow(/Identifier collision: "sentryGet"/);
   });
 
+  // Stage D added module-scope declarations that nothing claimed. Each of these is a name the
+  // emitter itself declares or binds in src/server.ts, so a spec reusing one emits two
+  // declarations of it and the collision surfaces only at the generated package's own tsc —
+  // which is precisely what this list exists to pull forward to parse time.
+  describe("Stage D reserved identifiers", () => {
+    for (const name of [
+      "runReadOnlyMcpConnector",
+      "ZodToolRegistrar",
+      "searchToolInputSchema",
+      "matchesResult",
+      "McpListResult",
+      "ZodObjectSchema",
+      "SearchMatchOptions",
+      "root",
+    ]) {
+      it(`rejects an env local named ${name}`, () => {
+        expect(() =>
+          validateSpec(
+            specWith({
+              env: [{ vars: ["SENTRY_TOKEN"], local: name, bindings: ["t"], auth: "bearer" }],
+            }),
+          ),
+        ).toThrow(new RegExp(`Identifier collision: "${name}"`));
+      });
+    }
+  });
+
   it("accepts the mercury shape, where the two names differ", () => {
     expect(() =>
       validateSpec(

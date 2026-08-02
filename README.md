@@ -1,8 +1,8 @@
 # create-nimbus-connector
 
-A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages. Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary. This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files, run through the same Biome formatter the real connectors are formatted with.
+A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages. Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary. This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus a seventh, `src/search-filter.ts`, when the spec declares a search tool — run through the same Biome formatter the real connectors are formatted with.
 
-Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation), [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing), and [`docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md`](./docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md) (Stage C — writes, HITL, OAuth, Gateway wiring).
+Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation), [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing), [`docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md`](./docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md) (Stage C — writes, HITL, OAuth, Gateway wiring), and [`docs/superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md`](./docs/superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md) (Stage D — the `read-only-kit` style and search tools).
 
 ## Scope
 
@@ -31,6 +31,51 @@ Originally (Stage A) that one request was always a GET with no body. **Stage C l
 
 **rest-kit gets writes almost free.** The rest-kit registrar (`makeRestToolRegistrar`, from the published SDK) already accepts an optional `buildInit` returning `{ method, body }`, so a write tool is a few extra lines in a factory that already existed. Hand-rolled has no such seam — a second helper (`<fetchHelper.local>Send`, taking `method` and a serialized body) is emitted alongside the read helper, conditionally: only when the spec contains a non-GET tool, so a read-only spec never touches that code path. Prefer **rest-kit** for a new write connector; hand-rolled write support exists for connectors that already use hand-rolled headers/auth shapes rest-kit does not fit.
 
+### The `read-only-kit` style
+
+`style` takes a third value, `"read-only-kit"`, alongside `"rest-kit"` and `"hand-rolled"`. It is the shape **60 of the 94** Nimbus connectors use, and it differs from `hand-rolled` in the server file's first and last lines only: instead of constructing an `McpServer`, building a registrar and connecting a transport, the registrations are wrapped in a call to the shared `runReadOnlyMcpConnector` helper. Every other rule — env accessors, the fetch helper, `headers`/`inlineHeaders`, tool rendering — is inherited from `hand-rolled` unchanged.
+
+```jsonc
+{ "style": "read-only-kit" }
+```
+
+Two things worth knowing:
+
+- **The name is a bootstrap convention, not a restriction.** `runReadOnlyMcpConnector` does not prevent a connector from declaring write tools, and nine connectors in the Nimbus corpus use it while declaring `hitlRequired: ["write"]`. Generated READMEs say so explicitly, because the name invites the opposite assumption. What a connector may actually do is what its `nimbus.extension.json` declares.
+- **Standalone packages inline the helper.** `runReadOnlyMcpConnector` imports `@modelcontextprotocol/sdk` directly and so cannot move into `@nimbus-dev/sdk`, whose zero runtime dependencies are load-bearing. The monorepo target imports it from `../../shared/`; the standalone target emits an equivalent local definition, and the call site is byte-identical either way.
+
+### Search tools: `impl: "search"`, `rows`, `maxLimit` and `filter`
+
+A fourth tool kind. `impl: "search"` registers a substring-search tool over one endpoint's rows, the form **45 Nimbus connectors** already use.
+
+```jsonc
+{
+  "name": "mercury_search",
+  "description": "Substring search across the user's Mercury accounts.",
+  "impl": "search",
+  "path": "/api/v1/accounts",
+  "rows": "accounts",
+  "maxLimit": 100,
+  "filter": {
+    "export": "filterMercuryAccounts",
+    "fields": ["id", "name", "status", "type", "kind", "legalBusinessName"]
+  }
+}
+```
+
+- **`rows`** (optional) names the property to pluck from the response envelope. Omitted means the response **is** the array. `matchesResult` guards with `Array.isArray` itself, so neither form needs a coercion.
+- **`maxLimit`** (default `100`) is the per-connector result cap. Corpus values: 100 (×24), 200 (×12), 2000 (×2), 50 (×1).
+- **`filter.export`** names the `export const` emitted into a **seventh file**, `src/search-filter.ts`, which a search spec adds to the six-file tree. Two tools may not share one export name.
+- **`filter.fields`** lists the top-level keys to match against, and `filter.tags: true` additionally matches tag names. Together these emit `makeQueryFilter(fieldsFromKeys([...]))`.
+- **A search tool is always a read.** `method`, `body` and a non-`read` `effect` are all validation errors on it — unlike a stub, it does not stand in for something that will later write.
+- **Argument-carrying search tools inline their schema.** With no args of its own a tool calls the shared `searchToolInputSchema(maxLimit)`; declaring args (`bitrise`'s `appSlug`, say) means the shared two-key helper cannot express the shape, so the merged `z.object({ …args, query, limit })` is emitted inline instead.
+
+**`filter.fields` is optional, and omitting it is the honest escape hatch.** 40 of the 49 filter files in the corpus hand-write an extractor this generator cannot express — nested paths, computed fields, conditional joins. For those, omit `fields` and the emitter writes a **throwing stub** typed as `SearchFilter` for you to replace. The stub replaces the *filter*, not the extractor, and that placement is load-bearing rather than stylistic: `makeQueryFilter` calls the extractor once per row, so a throwing *extractor* never fires on an empty result set and the tool would report `{ matches: [] }` as success. Throwing from the filter position fires on every invocation.
+
+**`style: "rest-kit"` cannot declare a search tool** — a hard validation error. `makeRestToolRegistrar` performs the request *and* wraps the result itself, leaving no seam between the response and the MCP result for a filter to run in. The corpus agrees: the intersection of the 10 rest-tool-kit users and the 45 `mcp-search-tool` users is empty. Use `read-only-kit` or `hand-rolled`.
+
+**Standalone search needs SDK ≥ 1.15.0**, and only a spec that declares a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is *not* in the SDK: `searchToolInputSchema` builds a zod schema, and `@nimbus-dev/sdk` ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
+
 ### OAuth: `client-credentials`
 
 An env entry may declare `"auth": "client-credentials"` instead of `"bearer"` or `"headers"`:
@@ -53,6 +98,8 @@ This exchanges the two `vars` (client id, then secret) for a bearer token by POS
 The emitter introduces module-scope names of its own, so a spec may not reuse them. `local` names, `registrar` names and similar spec-supplied identifiers are validated against `RESERVED_IDENTIFIERS` in `src/validate.ts`, which is the authoritative list; reusing one is a validation error rather than a package that emits two declarations of the same name and fails its own `typecheck`.
 
 `client-credentials` added `token`, `cachedToken` and `encodeBasicAuthHeader` to that list, and the write path added `URLSearchParams` and `<local>Send`. `token` and `cachedToken` are reserved unconditionally, not only for `client-credentials` specs — **a spec that named an env `local` `"token"` and validated under 0.2.2 will now be rejected.** Rename the local; nothing else changes.
+
+The `read-only-kit` style and search tools add eight more, reserved unconditionally for the same reason: `runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`, `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions` and `root`. The first seven are declared or imported at module scope in an emitted `src/server.ts`. **`root` is the one likely to bite**: a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`, so a fetch helper named `root` would emit `const root = await root(…)` — a use-before-declaration error rather than a shadow.
 
 ## Stage B: standalone connectors
 
