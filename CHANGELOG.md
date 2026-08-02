@@ -7,6 +7,19 @@ time, and these notes then move down with it. Recorded here because release-plea
 its entries from commit subjects, and a change to the BYTES a generated connector contains
 is something an existing user needs told even when no subject line would say so.
 
+### Features
+
+* **spec:** `filter.fields` widens from a flat list of plain-key strings to three entry
+  kinds — a plain key, `{ "path": [...] }` for a nested value, and `{ "tags": "text" |
+  "objects" }` — composing the primitives `shared/search-filter.ts` and
+  `@nimbus-dev/sdk/connector-kit` already ship, instead of always falling back to a throwing
+  stub the moment a filter needs more than top-level keys. Measured against the checkout at
+  `f4e9d93d`: of the 40 corpus filter files that hand-write an extractor, **9** are reachable
+  this way; the other 31 (30 defining a local helper function or needing logic no entry kind
+  expresses, one hand-rolled) still emit the stub. `filter.fields: string[]` and `filter.tags:
+  boolean` keep their exact current meaning and byte output — every published 0.4.0 spec
+  parses unchanged.
+
 ### Output changes (user-visible)
 
 * **emit(server):** an `auth: "headers"` env entry that declares a **single** variable now
@@ -41,6 +54,30 @@ is something an existing user needs told even when no subject line would say so.
   **`root` is the one likely to affect an existing spec**, being an ordinary word: a search tool
   with `rows` emits `const root = await <fetchHelper.local>(…)`. Rename the `local`; nothing
   else changes.
+
+* **validate:** eight more identifiers are reserved: `fieldsOf`, `asObjectish`, `stringField`,
+  `nestedString`, `tagText`, `tagNamesFromObjects`, `makeQueryFilter` and `fieldsFromKeys`. The
+  first six are declared or imported by the bespoke-extractor branch `filter.fields` can now
+  reach (see Features, above); the last two were already emitted by the Stage D keyed-filter
+  branch and simply never claimed until now. **`stringField` and `nestedString` are as ordinary
+  as `root` was** — an env accessor or hoisted argument local carrying either name previously
+  generated fine and now fails at parse time, naming the field.
+
+* **validate:** every `filter.export` is now claimed against every other emitted identifier, so
+  one colliding with the fetch helper, an env accessor, a hoisted argument local, or any
+  reserved name is a parse-time error rather than two declarations of the same name in the
+  generated package. This also closes a real bug: `filter.export: "makeQueryFilter"` previously
+  emitted `export const makeQueryFilter = makeQueryFilter(...)`, a self-reference that failed
+  the generated package's own typecheck.
+
+* **spec:** three shapes that previously generated a broken or misleading package are now
+  parse-time rejections. A `path` entry with fewer than two segments — a one-segment path emits
+  the same call as the plain-string spelling, so accepting both is an ambiguity rather than a
+  courtesy. Legacy `filter.tags: true` combined with a `fields` list that forces the extractor
+  branch — the extractor never reads `tags`, so it was silently dropped: the tool compiled,
+  passed every gate, and simply never matched on tags. And more than one search filter per
+  connector taking the extractor branch — the emitted extractor is always named `fieldsOf`, so a
+  second one is a duplicate declaration.
 
 ### Bug Fixes
 
