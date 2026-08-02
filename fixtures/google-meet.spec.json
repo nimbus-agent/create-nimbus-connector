@@ -9,12 +9,24 @@
   "syncInterval": 21600,
   "minNimbusVersion": "0.2.0",
   "env": [{ "vars": ["GOOGLE_OAUTH_ACCESS_TOKEN"], "local": "tokenHeaders", "bindings": ["t"], "auth": "bearer" }],
-  "fetchHelper": { "local": "meetFetch", "base": "https://meet.googleapis.com/v2" },
+  "fetchHelper": {
+    "local": "meetFetch",
+    "base": "https://meet.googleapis.com/v2",
+    "baseConst": "MEET_BASE"
+  },
   "tools": [
     {
       "name": "google_meet_list",
       "description": "List past Google Meet conference records (metadata: id, startTime, endTime, space). Pagination via pageToken.",
-      "impl": "stub"
+      "path": "/conferenceRecords",
+      "args": {
+        "pageSize": { "type": "number", "int": true, "min": 1, "max": 100, "optional": true, "default": 50 },
+        "pageToken": { "type": "string", "optional": true }
+      },
+      "query": [
+        { "name": "pageSize", "arg": "pageSize" },
+        { "name": "pageToken", "arg": "pageToken", "omitWhen": "empty" }
+      ]
     },
     {
       "name": "google_meet_get",
@@ -25,7 +37,25 @@
     {
       "name": "google_meet_search",
       "description": "Search past conference records (metadata only). Supports the Meet API filter expression and pagination.",
-      "impl": "stub"
+      "path": "/conferenceRecords",
+      "args": {
+        "pageSize": {
+          "type": "number",
+          "int": true,
+          "min": 1,
+          "max": 100,
+          "optional": true,
+          "default": 50,
+          "local": "searchPageSize"
+        },
+        "pageToken": { "type": "string", "optional": true },
+        "filter": { "type": "string", "optional": true }
+      },
+      "query": [
+        { "name": "pageSize", "arg": "pageSize" },
+        { "name": "pageToken", "arg": "pageToken", "omitWhen": "empty" },
+        { "name": "filter", "arg": "filter", "omitWhen": "empty" }
+      ]
     }
   ]
 }
