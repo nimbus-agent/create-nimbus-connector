@@ -63,7 +63,10 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "root",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits
-  // `function fetch()` shadowing the global, then calls it with two arguments.
+  // `function fetch()` shadowing the global, then calls it with two arguments. "URL" belongs
+  // here rather than beside "root" above: the conditional-query branch's `const u = new
+  // URL(<path>)` calls the global directly, the same shadow risk as "fetch" or "JSON", not
+  // the use-before-declaration risk "root" is reserved for.
   "fetch",
   "process",
   "JSON",
@@ -73,6 +76,7 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "Promise",
   "console",
   "RequestInit",
+  "URL",
   // Stage E's extractor branch. src/server.ts imports the filter export from
   // ./search-filter.ts, so that name lands in server.ts's module scope beside the fetch
   // helper; the rest are declared or imported by src/search-filter.ts itself.
@@ -96,14 +100,22 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "tagNamesFromObjects",
   "makeQueryFilter",
   "fieldsFromKeys",
-  // The conditional-query branch emits `const u = new URL(...)` inside the path callback and
-  // calls the URL global directly. `u` is function-scope rather than module-scope, which is
-  // exactly the case "root" above is reserved for: a fetch helper named `u` would produce a
-  // use-before-declaration, not a shadow. Corpus note: the URL local's name is genuinely split
-  // (search x23, u x20, params x15, qs x10), and `u` is chosen because it is what discord and
-  // google-meet write — the two connectors this branch exists to reproduce.
+  // The conditional-query branch's hand-rolled handler emits `const u = new URL(<path>)` and
+  // then, in the same scope, calls `await <fetchHelper.local>(path)`. Unlike "root" above,
+  // there is no self-reference in the initializer — `new URL(...)` never mentions the fetch
+  // helper, so the const finishes constructing cleanly. The failure lands one statement
+  // later: a fetch helper named "u" shadows that const, so the handler's own call resolves
+  // to the URL value instead of the function — a wrong-target call ("u is not callable" at
+  // tsc), not a use-before-declaration. In the rest-kit branch this never fires — the path
+  // callback never references the fetch helper, which lives in the module-scope factory
+  // instead — but the reservation stays unconditional, matching the rule this list already
+  // states: RESERVED_IDENTIFIERS is a flat set checked before any style is considered, and
+  // making an entry conditional would mean a spec validating or failing depending on a field
+  // elsewhere in the file. Corpus note: the URL local's name is genuinely split (search x23,
+  // u x20, params x15, qs x10), and "u" is chosen not for being the corpus majority but
+  // because it is what discord and google-meet write — the two connectors this branch exists
+  // to reproduce.
   "u",
-  "URL",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {

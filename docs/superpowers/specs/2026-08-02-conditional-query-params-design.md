@@ -164,13 +164,21 @@ branch. Nothing about this design touches it.
 
 `u` and `URL` join `RESERVED_IDENTIFIERS` in the same change.
 
-`u` is function-scope rather than module-scope, which is exactly the case `root` is already
-reserved for: `renderSearchTool` emits `const root = await <fetchHelper.local>(...)`, so a fetch
-helper named `root` produces a use-before-declaration rather than a shadow. A fetch helper or
-hoisted local named `u` would collide with the emitted `const u = new URL(...)` the same way.
+`u` is not the same hazard `root` is reserved for. `root` is a true use-before-declaration:
+`renderSearchTool` emits `const root = await <fetchHelper.local>(...)`, so a fetch helper named
+`root` makes the initializer reference its own not-yet-initialized binding. `u`'s initializer,
+`const u = new URL(<path>)`, never mentions the fetch helper — it constructs cleanly. The hazard
+is one statement later: the hand-rolled handler then calls `await <fetchHelper.local>(path)` in
+the same scope, so a fetch helper named `u` shadows the URL const, and that call resolves to the
+URL value instead of the function — a wrong-target call (`u is not callable` at `tsc`), not a
+use-before-declaration. In the rest-kit branch this never fires, since the path callback never
+references the fetch helper (it lives in the module-scope factory instead), but the reservation
+stays unconditional — `RESERVED_IDENTIFIERS` is a flat set checked before any style is
+considered.
 
-`URL` is a global the emitted code calls directly, joining `fetch`, `JSON`, `String` and the
-others already listed for that reason.
+`URL` is a global the emitted code calls directly (`new URL(...)`), joining `fetch`, `JSON`,
+`String` and the others already listed for that reason — the same shadow risk as those, not the
+use-before-declaration risk `root` is reserved for.
 
 ## Rejections
 
