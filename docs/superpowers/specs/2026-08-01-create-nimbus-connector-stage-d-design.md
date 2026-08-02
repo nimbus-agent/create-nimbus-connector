@@ -1,7 +1,9 @@
 # create-nimbus-connector — Stage D design
 
-**Status:** designed, not implemented.
-**Date:** 2026-08-01
+**Status:** implemented on `feat/stage-d-search`; see §8 for the acceptance run. One gate is
+red and stays red until the SDK release lands — `standalone-acceptance --registry` cannot
+resolve `@nimbus-dev/sdk ^1.15.0`, because the search kit is unmerged (§6 step 4).
+**Date:** 2026-08-01, acceptance recorded 2026-08-02
 **Predecessors:** Stage A (generator, monorepo target), Stage B (standalone target), Stage C (writes, `hitlRequired`, `client-credentials`, Gateway wiring — published as `create-nimbus-connector@0.3.3`)
 
 Stage D adds the connector shape that Stages A–C left untouched: the `runReadOnlyMcpConnector`
@@ -583,3 +585,131 @@ endpoint returning 100,000 rows carries the whole memory cost and would draw no 
 `snowflake` and `tableau` at 2000 would draw one for a cap that costs nothing. Warning on the
 response size would be defensible; warning on `maxLimit` would train authors to lower a number
 that is not the problem.
+
+---
+
+## 8. Acceptance results
+
+Recorded 2026-08-02, on `feat/stage-d-search`, Tasks 11–13. Every command below was run in
+this session against this branch; output is pasted as observed, not summarized and not copied
+from the plan.
+
+**1. `bun test`**
+
+```
+bun test v1.3.14 (0d9b296a)
+
+ 692 pass
+ 0 fail
+ 1195 expect() calls
+Ran 692 tests across 42 files. [7.32s]
+```
+
+**2. `bunx tsc --noEmit`**
+
+No output, exit 0.
+
+**3. `bunx biome check src/ test/ scripts/`**
+
+Exit 0. `Checked 91 files in 30ms. No fixes applied. Found 7 infos.` — infos, not errors, and
+the same pre-existing `useLiteralKeys` / `useTemplate` set Stage C recorded (5 then; the two
+added are in the Stage D scripts and are the same two rules).
+
+**4. `bun run diff:golden --nimbus-root C:/gitrep/Nimbus`**
+
+```
+PASS  bitrise  4/7 files identical (expected partial, 2 stub tool(s))
+PASS  datadog  6/6 files identical
+PASS  discord  3/6 files identical (expected partial, 1 stub tool(s))
+PASS  google-meet  2/6 files identical (expected partial, 2 stub tool(s))
+PASS  grafana  6/6 files identical
+PASS  mercury  6/7 files identical (expected partial)
+PASS  newrelic  6/6 files identical
+PASS  sentry  6/6 files identical
+PASS  zendesk  6/7 files identical (expected partial)
+PASS  zzscratch  0/6 files identical (expected partial)
+PASS  zzsearch  0/7 files identical (expected partial)
+PASS  zzsearchstub  0/7 files identical (expected partial)
+PASS  zzstandalone  0/6 files identical (expected partial)
+PASS  zzstandalonehand  0/6 files identical (expected partial)
+PASS  zzwrite  0/6 files identical (expected partial)
+PASS  zzwriteonly  0/6 files identical (expected partial)
+PASS  zzwriterest  0/6 files identical (expected partial)
+
+All fixtures match their declared expectations.
+```
+
+17 fixtures — the 15 Stage C left plus `zzsearch` and `zzsearchstub`. §4.1's byte-safety
+invariant holds: `newrelic`, `datadog`, `grafana` and `sentry` are still 6/6. The three real
+Stage D fixtures land at the §5.1 measured bar (6/7, 6/7, 4/7), not the 7/7 this design
+originally predicted, for the reasons §5.2 limits 4–6 give.
+
+**5. `bun run acceptance C:/gitrep/Nimbus`**
+
+```
+PASS  tsc --noEmit
+PASS  biome check
+PASS  audit:package-readmes
+PASS  monorepo working tree clean
+```
+
+**6. `bun run standalone-acceptance C:/gitrep/nimbus-sdk/.claude/worktrees/connector-kit-search`**
+
+7 fixtures × 10 checks, `All standalone acceptance checks passed.` The SDK root is the
+worktree holding the unmerged `feat/connector-kit-search` branch, which is what local-checkout
+mode is for: it answers "does an unreleased SDK branch satisfy the contract?".
+
+This is the run that earned its keep. All 20 of `zzsearch`'s and `zzsearchstub`'s checks failed
+the first time, on **three defects no unit test in this repository could see and no monorepo
+fixture could reach** — see the Task 11 commit for the full account. In summary:
+`searchToolInputSchema` was imported from an SDK that deliberately does not export it (its body
+is a zod schema; the SDK's empty `dependencies` is load-bearing); the emitted
+`"./search-filter.ts"` specifier tripped `TS5097` under a standalone tsconfig that omits
+`allowImportingTsExtensions` by design; and filter names were emitted in declaration order,
+which Biome's `organizeImports` rejects inside a clause. A fourth was latent — a standalone
+`read-only-kit` spec with a zero-arg search tool names `type ZodObjectSchema` from both emitted
+glues, which is `TS2300` until deduped.
+
+**7. `bun run standalone-acceptance --registry` — FAILS, and is expected to.**
+
+54 PASS, 16 FAIL. Every one of the 16 belongs to `zzsearch` or `zzsearchstub`; the five
+non-search fixtures pass all 50 of their checks. The first failure states the whole cause:
+
+```
+error: No version matching "^1.15.0" found for specifier "@nimbus-dev/sdk" (but package exists)
+```
+
+**This gate cannot pass until the SDK release lands, and reporting the local-checkout run in its
+place would be a false green.** §6 step 4 is the critical path and it is not finished: the
+search kit sits on an unmerged, unpushed `feat/connector-kit-search`, and `@nimbus-dev/sdk` is
+at 1.14.0 on the registry.
+
+**8. External repositories and scratch state**
+
+`git -C C:/gitrep/Nimbus status --short` → `?? facebook-post.txt` only, pre-existing and not
+this project's. `git -C C:/gitrep/nimbus-sdk status --short` → clean, as is the worktree.
+19 stale `cnc-prompt-*` / `cnc-help-*` directories were found under `%TEMP%` and removed; a
+full `bun test` afterwards left **zero**, so they predate `test/support/tmp.ts` rather than
+indicating a current leak.
+
+### 8.1 Where a claim had to be qualified rather than asserted outright
+
+- **The registry gate is red, not green.** Item 7 above. Standalone search is proven against an
+  SDK *branch*, not against a published artifact. Local-checkout mode cannot see a `dist`
+  missing from the published tarball's `files` array; only `--registry` can, and it has not run
+  to completion for a search fixture.
+- **The SDK floor is a prediction.** `^1.15.0` is the next minor after main's 1.14.0 and is not
+  yet published. This design and the plan both said `^1.12.0`; releases 1.12.0, 1.13.0 and
+  1.14.0 all shipped without the search kit while this stage was being built, so that floor
+  would have resolved 1.14.x and left every emitted kit import unresolvable — see §4.5. If the
+  SDK's release train moves again before the kit merges, this number moves with it.
+- **The style alone is still never byte-proven**, exactly as §5.2 limit 1 says. `zzsearch` and
+  `zzsearchstub` raise the evidence for the standalone `read-only-kit` path from snapshots to a
+  real `tsc`, a real `biome check` and a real `tools/list` over stdio — but every *corpus*
+  fixture for this style is a search connector, so "the style renders correctly without search"
+  still rests on synthetic fixtures. That is a limit of the corpus, not of the testing.
+- **The three real fixtures are 6/7, 6/7 and 4/7, not 7/7.** Unchanged from Task 10, restated
+  here because §9 is where a reader looks for the bar: the gaps are hand-written READMEs, a
+  sandbox test the real `bitrise` package does not contain, and two `bitrise` handlers the spec
+  language cannot express. Each is on screen on every harness run rather than hidden by an
+  expectation entry.
