@@ -6,6 +6,36 @@ Full design rationale, the two emission styles, and the acceptance criteria this
 
 Stuck on how to express a service as a spec, or wondering whether a change would be welcome before writing it? Ask in [Nimbus Discussions](https://github.com/nimbus-agent/Nimbus/discussions) — the one board for the whole organisation — and keep bugs in the generator itself as issues here.
 
+## Documentation
+
+**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough.
+This README is the *reference*: what the spec language can express, and the rules that reject a
+spec.
+
+| | |
+| --- | --- |
+| [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
+| [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built |
+| [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known gaps |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) · [GOVERNANCE.md](./docs/GOVERNANCE.md) · [RELEASING.md](./docs/RELEASING.md) · [SECURITY.md](./SECURITY.md) | Working on it |
+| [GLOSSARY.md](./docs/GLOSSARY.md) | Terms as this repo uses them |
+| [CLAUDE.md](./CLAUDE.md) | Context for Claude Code |
+
+### Which scaffolder do I want?
+
+The org ships two, and they do different jobs:
+
+- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a
+  package byte-identical to the 94 hand-written Nimbus connectors. Reach for it when you are
+  wrapping a REST API and want output that matches the corpus exactly.
+- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)**
+  — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`,
+  which performs the contract-version handshake before serving MCP. Reach for it when you want
+  a blank project to write by hand, or when you need Python.
+
+[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool
+and the three capabilities that must land first.
+
 ## Scope
 
 Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools. A tool spec that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Fields the emitters cannot render are a **hard validation error**, not an automatic downgrade to a stub — see the design doc's "Validation" section. `hitl` on a tool is the one field still rejected outright; declare a tool's write-intent through `effect` instead (below).
@@ -119,7 +149,7 @@ The standalone `src/server.ts` imports its helpers from a single published entry
 
 **`@nimbus-dev/sdk` 1.11.0 is published.** It ships the `./connector-kit` export a standalone connector's `package.json` depends on, so `bun install` in a generated standalone package resolves that dependency from the registry with no local checkout and no rewrite. `bun run standalone-acceptance --registry` (see below) proves it end to end against the published tarball.
 
-**This CLI is published to npm** as `create-nimbus-connector` (latest `0.3.2`), so standalone generation needs no checkout of this repo: `bunx create-nimbus-connector <name> --standalone`. From a checkout, the equivalent is `bun src/cli.ts <name> --standalone`.
+**This CLI is published to npm** as [`create-nimbus-connector`](https://www.npmjs.com/package/create-nimbus-connector), so standalone generation needs no checkout of this repo: `bunx create-nimbus-connector <name> --standalone`. From a checkout, the equivalent is `bun src/cli.ts <name> --standalone`.
 
 ## Usage
 
@@ -141,6 +171,14 @@ The published package's `bin` is `src/cli.ts`, which carries a `#!/usr/bin/env b
 - `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
 - `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit two Gateway-side scaffold files into `<nimbus-root>/packages/gateway/src/connectors/`. See "Gateway wiring" below. Off by default; normal generation is unaffected by its absence. Passing it with `--standalone` is an **error**, not a silent no-op: a standalone connector does not live in the Nimbus repo and is not registered with its Gateway.
 - `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts` in the target directory. An **error** when passed without `--gateway-wiring`. Without `--force`, `--gateway-wiring` refuses to write over a file it did not create — including a real, hand-authored sync file already in the monorepo.
+- `--help` — print usage. Every flag in that text is one `parseFlags` actually parses; `test/cli.test.ts` asserts the two agree, so an undocumented flag is a failing test.
+- `--version` — print the version.
+
+An unrecognised flag is an error with a did-you-mean suggestion, never silently ignored.
+
+> **Connector output overwrites without asking.** Generation creates parent directories and writes each file; there is no existence check and no prompt, so generating into a directory that already holds a connector replaces those files in place. Use `--dry-run` first. The two `--gateway-wiring` files are the only exception, and they refuse to overwrite without `--force`.
+
+For a task-ordered walkthrough rather than this reference, see [`docs/USAGE.md`](./docs/USAGE.md).
 
 ### Licensing of generated connectors
 

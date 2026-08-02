@@ -1,0 +1,62 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/configure/
+# The CodeRabbit GitHub App must have access to this repository (org-level
+# install on nimbus-agent, or add create-nimbus-connector to the app's repo list).
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_filters:
+    # Checked-in generated connector packages. They are byte-exact golden DATA, not
+    # source: they are meant to look like the corpus, they import packages this repo
+    # does not depend on, and "improving" them would break the snapshot they exist to be.
+    - "!fixtures/snapshots/**"
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: >-
+        This is create-nimbus-connector — an MIT-licensed generator that emits Nimbus
+        MCP connector packages whose bytes must match hand-written connectors exactly.
+        Two rules dominate. (1) LICENSING: this repo is MIT and the Nimbus monorepo is
+        AGPL-3.0-only — flag anything that looks like connector or shared/ source
+        copied in from Nimbus, which is a licensing violation rather than a style
+        issue. (2) BYTE SAFETY: newrelic, datadog, grafana and sentry reproduce 6/6
+        files and must stay there, so flag any new emitter path NOT gated on a spec
+        field those four never set. Also flag: emitters that hand-align indentation
+        (output is unformatted and formatAll() runs real Biome — only line breaks are
+        the emitter's business); a new module-scope name emitted into src/server.ts
+        that was not added to RESERVED_IDENTIFIERS in src/validate.ts; any spec field
+        the emitter silently ignores or downgrades rather than rejecting (unexpressible
+        input must be a hard validation error); and String.prototype.replace called
+        with a string replacement built from spec input, since $&, $`, $' and $$ expand
+        and have corrupted an emitted manifest before.
+    - path: "scripts/**/*.ts"
+      instructions: >-
+        These are the acceptance harnesses. Their whole value is that they can go RED,
+        so flag anything that could make one pass while asserting nothing: a check that
+        silently skips when its input is missing, a swallowed non-zero exit, a
+        broadened error predicate, or a summary that reports success over a reduced
+        fixture set. Note especially that --registry mode and local-checkout mode
+        answer different questions (published artifact vs unreleased SDK branch) and
+        must never be conflated in reporting.
+    - path: "test/**/*.ts"
+      instructions: >-
+        Flag tests that assert on substrings where the real property is structural —
+        emitted TypeScript should be proven to compile (see emitted-typecheck.test.ts)
+        rather than pattern-matched. Flag any test weakened to pass rather than fixed,
+        and any new in-process test that merely duplicates an existing subprocess test
+        to raise a coverage number (see bunfig.toml, which explains why src/cli.ts and
+        src/prompts.ts are excluded from the metric).
+    - path: "fixtures/expectations.json"
+      instructions: >-
+        This file lists, per fixture, which files are EXPECTED to match the real
+        connector. Removing a file from a list to make a failing diff disappear is
+        never acceptable — a genuine gap stays listed as a gap so it shows on every
+        run. Scrutinise any deletion here and ask what stopped matching.
+chat:
+  auto_reply: true
