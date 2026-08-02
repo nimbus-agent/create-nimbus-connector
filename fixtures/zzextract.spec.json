@@ -27,6 +27,7 @@
         "export": "filterZzextractApps",
         "fields": [
           "name",
+          { "tags": "text" },
           { "path": ["spec", "source", "repoURL"] },
           { "tags": "objects" }
         ]

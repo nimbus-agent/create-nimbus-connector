@@ -17,8 +17,8 @@ is something an existing user needs told even when no subject line would say so.
   `f4e9d93d`: of the 40 corpus filter files that hand-write an extractor, **9** are reachable
   this way; the other 31 (30 defining a local helper function or needing logic no entry kind
   expresses, one hand-rolled) still emit the stub. `filter.fields: string[]` and `filter.tags:
-  boolean` keep their exact current meaning and byte output — every published 0.4.0 spec
-  parses unchanged.
+  boolean` keep their exact current meaning and byte output; see **Breaking** below for the
+  identifiers now reserved.
 
 ### Output changes (user-visible)
 
