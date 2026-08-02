@@ -15,8 +15,9 @@ governs one question: **what the generator emits, and how we know it is right.**
   that answer wins over preference. "27 of 29 manifests write it collapsed" settles a formatting
   debate. Measure before arguing, and record the measurement next to the choice.
 - **A gap is documented, never hidden.** Where the generator cannot reproduce something, it says
-  so — a stub tool, a limitation in the design doc, a file omitted from an expectation entry.
-  Editing `expectations.json` to make a diff disappear is the one thing that is never acceptable.
+  so — a stub tool, an entry under [Known limitations](./ROADMAP.md#known-limitations), a file
+  omitted from an expectation entry. Editing `expectations.json` to make a diff disappear is the
+  one thing that is never acceptable.
 - **No check that passes while asserting nothing.** A gate must state what it proves. A gate that
   silently skips when its input is missing is worse than no gate, because it reads as coverage.
 - **Emitted bytes are a public interface.** Users regenerate connectors. A change to the bytes is
@@ -35,13 +36,20 @@ governs one question: **what the generator emits, and how we know it is right.**
 **Ordinary changes** — a new spec field, an emitter fix, a fixture — are decided in the pull
 request.
 
-**Stage-shaped changes** — anything that widens what the spec language can express — get a
-design document under `docs/superpowers/specs/` before implementation, and an implementation
-plan beside it. Four stages have gone through this. The design records what was measured, what
-was decided and why, and afterwards what was actually observed, including where a claim had to
-be qualified. This is the heaviest process in the repo and it exists because the alternative —
-discovering the corpus does not look the way you assumed, halfway through an emitter — has been
-expensive.
+**Stage-shaped changes** — anything that widens what the spec language can express — start by
+**measuring the corpus**, before any code. Four stages have gone through this, and it exists
+because the alternative is expensive: discovering the corpus does not look the way you assumed,
+halfway through an emitter.
+
+State in the PR what you counted and how, what you decided, and what you decided *against*.
+Then put the durable half where it will still be read: a gap the generator cannot close goes
+under [Known limitations](./ROADMAP.md#known-limitations), a measured-and-rejected proposal
+under [Considered and declined](./ROADMAP.md#considered-and-declined), and a measurement that
+justifies a default goes in the README beside the field it justifies.
+
+Earlier stages produced long standalone design documents. Those have been retired into the
+pages above — reasoning that lives only in a dated document nobody opens again is reasoning
+that gets re-litigated.
 
 **Changes that move locked bytes** need explicit justification in the PR, plus a `diff:golden`
 run showing the four locked fixtures still at 6/6.

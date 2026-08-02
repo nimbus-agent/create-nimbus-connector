@@ -1,52 +1,72 @@
 # create-nimbus-connector
 
-A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages. Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary. This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus a seventh, `src/search-filter.ts`, when the spec declares a search tool — run through the same Biome formatter the real connectors are formatted with.
+A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages.
 
-Full design rationale, the two emission styles, and the acceptance criteria this project is held to live in [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) (Stage A — monorepo-internal generation), [`docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md`](./docs/superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) (Stage B — standalone generation and publishing), [`docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md`](./docs/superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md) (Stage C — writes, HITL, OAuth, Gateway wiring), and [`docs/superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md`](./docs/superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md) (Stage D — the `read-only-kit` style and search tools).
+Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary.
 
-Stuck on how to express a service as a spec, or wondering whether a change would be welcome before writing it? Ask in [Nimbus Discussions](https://github.com/nimbus-agent/Nimbus/discussions) — the one board for the whole organisation — and keep bugs in the generator itself as issues here.
+This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus a seventh, `src/search-filter.ts`, when the spec declares a search tool — run through the same Biome formatter the real connectors are formatted with.
+
+The bar it is held to is **byte reproduction**: generate from a spec describing an existing connector, and diff the output against the real directory. `newrelic`, `datadog`, `grafana` and `sentry` come out byte-identical.
+
+```bash
+bunx create-nimbus-connector acme --standalone
+```
 
 ## Documentation
 
-**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough.
-This README is the *reference*: what the spec language can express, and the rules that reject a
-spec.
+**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. This README is the *reference*: what the spec language can express, and the rules that reject a spec.
 
 | | |
 | --- | --- |
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
-| [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built |
-| [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known gaps |
+| [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
+| [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) · [GOVERNANCE.md](./docs/GOVERNANCE.md) · [RELEASING.md](./docs/RELEASING.md) · [SECURITY.md](./SECURITY.md) | Working on it |
 | [GLOSSARY.md](./docs/GLOSSARY.md) | Terms as this repo uses them |
 | [CLAUDE.md](./CLAUDE.md) | Context for Claude Code |
+
+Stuck on how to express a service as a spec, or wondering whether a change would be welcome before writing it? Ask in [Nimbus Discussions](https://github.com/nimbus-agent/Nimbus/discussions) — the one board for the whole organisation — and keep bugs in the generator itself as issues here.
 
 ### Which scaffolder do I want?
 
 The org ships two, and they do different jobs:
 
-- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a
-  package byte-identical to the 94 hand-written Nimbus connectors. Reach for it when you are
-  wrapping a REST API and want output that matches the corpus exactly.
-- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)**
-  — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`,
-  which performs the contract-version handshake before serving MCP. Reach for it when you want
-  a blank project to write by hand, or when you need Python.
+- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package byte-identical to the 94 hand-written Nimbus connectors. Reach for it when you are wrapping a REST API and want output that matches the corpus exactly.
+- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`, which performs the contract-version handshake before serving MCP. Reach for it when you want a blank project to write by hand, or when you need Python.
 
-[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool
-and the three capabilities that must land first.
+[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool and the three capabilities that must land first.
+
+## The two targets
+
+**Standalone** connectors are self-contained — installable and runnable anywhere, with no Nimbus checkout. `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, and the package gains `dev` and `build` scripts. This is what a third-party connector wants.
+
+```bash
+bunx create-nimbus-connector acme --standalone
+```
+
+**Monorepo-internal** connectors — the default — live at `packages/mcp-connectors/<name>/` inside a Nimbus checkout, where the `../../shared/*` relative imports resolve as-is.
+
+```bash
+bunx create-nimbus-connector acme
+```
+
+**This CLI, and every connector it generates, is Bun-only.** `nimbus.extension.json` declares `"runtime": "bun"`, `test/sandbox.test.ts` imports `bun:test`, the standalone `build` script targets Bun, and `src/cli.ts` carries a `#!/usr/bin/env bun` shebang — so Bun is required however the CLI is invoked, `bunx` included. There is no Node, npm or pnpm path in this project or its output. The one exception is publishing: `.github/workflows/release.yml` runs `npm publish --provenance` in CI, because that is the only way to attach a sigstore attestation to an npm tarball.
 
 ## Scope
 
-Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools. A tool spec that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Fields the emitters cannot render are a **hard validation error**, not an automatic downgrade to a stub — see the design doc's "Validation" section. `hitl` on a tool is the one field still rejected outright; declare a tool's write-intent through `effect` instead (below).
+Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools.
 
-Originally (Stage A) that one request was always a GET with no body. **Stage C lifted that**: `method` and `body` are now supported, and only GET-with-no-body remains the default. `POST`, `PUT`, `PATCH` and `DELETE` are all supported, each with an optional JSON body.
+A tool that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at.
+
+**Fields the emitters cannot render are a hard validation error, never an automatic downgrade.** A spec that would silently generate something other than what it describes is rejected instead. `hitl` on a tool is the one field rejected outright; declare write-intent through `effect`.
+
+**Spec surface is a cost, and it is deliberately controlled.** Byte-exactness pushes some purely cosmetic choices into the spec — real connectors hoist defaulted args to hand-picked short names (`const lim = p.limit ?? 10`, `const q = p.query ?? ""`), and there is no derivable rule for that. So `local` and `bindings` are permitted everywhere as optional strings with sensible defaults. Beyond those, a new field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff instead. A generator whose input is harder to write than its output is a failed generator.
 
 ### Writes: `method`, `effect` and `body`
 
 ```jsonc
 {
-  "name": "zzwrite_item_create",
+  "name": "acme_item_create",
   "description": "Create an item.",
   "impl": "rest",
   "method": "POST",
@@ -57,28 +77,30 @@ Originally (Stage A) that one request was always a GET with no body. **Stage C l
 ```
 
 - **`method`** (`"GET" | "POST" | "PUT" | "PATCH" | "DELETE"`, default `"GET"`) is the HTTP verb, nothing more.
-- **`effect`** (`"read" | "write" | "delete"`, default `"read"`) is the author's declaration of intent, and drives the manifest's `hitlRequired` array (the deduplicated set of non-`read` effects across a spec's tools, emitted in the corpus's fixed capability order — `write` before `delete`, which is the order used by all 23 Nimbus manifests declaring both, and by none in reverse). It is deliberately **not** derived from `method` — in the Nimbus corpus a POST is not necessarily a write: `dagster` POSTs GraphQL *queries* and `ramp` POSTs to *exchange an OAuth token*. A REST GET may not carry a write or delete effect (that combination is a hard validation error); a write or delete effect may pair with any non-GET method, including `DELETE` with `effect: "write"` — deleting a webhook subscription, for instance, is not destructive to user data, and `effect` is the author's judgement rather than something read off the verb.
-- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg *not* referenced in the tool's path** — `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`, and a `DELETE` whose only arg appears in the path sends no body (and no `Content-Type` header) at all. An explicit `body` mapping overrides the default entirely and wins even for a path arg named there deliberately.
-- **`impl: "get"` is a deprecated alias for `"rest"`.** `create-nimbus-connector@0.2.2` is published without `method`, so specs already written against it (which all say `"impl": "get"`, implying a GET) still parse unchanged — `"get"` is normalised to `"rest"` at parse time.
+- **`effect`** (`"read" | "write" | "delete"`, default `"read"`) is the author's declaration of intent, and drives the manifest's `hitlRequired` array (the deduplicated set of non-`read` effects, emitted in the corpus's fixed capability order — `write` before `delete`, the order used by all 23 Nimbus manifests declaring both and by none in reverse). It is deliberately **not** derived from `method` — in the Nimbus corpus a POST is not necessarily a write: `dagster` POSTs GraphQL *queries* and `ramp` POSTs to *exchange an OAuth token*. A REST GET may not carry a write or delete effect (a hard validation error); a write or delete effect may pair with any non-GET method, including `DELETE` with `effect: "write"` — deleting a webhook subscription is not destructive to user data, and `effect` is the author's judgement rather than something read off the verb.
+- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg *not* referenced in the tool's path** — `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`, and a `DELETE` whose only arg appears in the path sends no body (and no `Content-Type` header) at all. An explicit `body` mapping overrides the default entirely.
+- **`impl: "get"` is a deprecated alias for `"rest"`**, so specs written before `method` existed still parse; it is normalised at parse time.
 
-**rest-kit gets writes almost free.** The rest-kit registrar (`makeRestToolRegistrar`, from the published SDK) already accepts an optional `buildInit` returning `{ method, body }`, so a write tool is a few extra lines in a factory that already existed. Hand-rolled has no such seam — a second helper (`<fetchHelper.local>Send`, taking `method` and a serialized body) is emitted alongside the read helper, conditionally: only when the spec contains a non-GET tool, so a read-only spec never touches that code path. Prefer **rest-kit** for a new write connector; hand-rolled write support exists for connectors that already use hand-rolled headers/auth shapes rest-kit does not fit.
+**An unset optional boolean renders `false` in the URL but is omitted from a JSON body.** This looks like an inconsistency and is deliberate, so it is pinned by tests rather than left to be "fixed" later. It is reachable only when a spec gives an explicit `body` mapping re-including an arg the path already references. A query string carries text and the corpus decided what that text is — `newrelic` emits `p.only_open === true ? "true" : "false"`, and changing it drops a byte-exact fixture. A JSON body carries types, and every API distinguishes a `false` the caller asserted from a key the caller never sent; emitting `false` for an unset optional would fabricate an assertion the author never made, and would be wrong exactly where the server's own default is `true`.
 
-### The `read-only-kit` style
+**rest-kit gets writes almost free.** Its registrar (`makeRestToolRegistrar`) already accepts an optional `buildInit` returning `{ method, body }`. Hand-rolled has no such seam — a second helper (`<fetchHelper.local>Send`) is emitted alongside the read helper, and only when the spec contains a non-GET tool, so a read-only spec never reaches that code path. Prefer **rest-kit** for a new write connector; hand-rolled write support exists for connectors whose auth shape rest-kit does not fit.
 
-`style` takes a third value, `"read-only-kit"`, alongside `"rest-kit"` and `"hand-rolled"`. It is the shape **60 of the 94** Nimbus connectors use, and it differs from `hand-rolled` in the server file's first and last lines only: instead of constructing an `McpServer`, building a registrar and connecting a transport, the registrations are wrapped in a call to the shared `runReadOnlyMcpConnector` helper. Every other rule — env accessors, the fetch helper, `headers`/`inlineHeaders`, tool rendering — is inherited from `hand-rolled` unchanged.
+### Styles: `rest-kit`, `hand-rolled`, `read-only-kit`
 
-```jsonc
-{ "style": "read-only-kit" }
-```
+`style` decides how a connector registers its tools, and it has the widest blast radius of any field.
 
-Two things worth knowing:
+- **`rest-kit`** — `makeRestToolRegistrar` performs the request and wraps the result. **Cannot declare an OAuth `client-credentials` env entry, and cannot declare a search tool** — it does both halves itself, leaving no seam for a token exchange or a filter to run in. Both are hard validation errors.
+- **`hand-rolled`** — the connector builds its own `McpServer`, registrar and fetch helper. The general case.
+- **`read-only-kit`** — the shape **60 of the 94** Nimbus connectors use. Identical to `hand-rolled` except in the server file's first and last lines: instead of constructing an `McpServer`, building a registrar and connecting a transport, the registrations are wrapped in `runReadOnlyMcpConnector`. Every other rule is inherited unchanged.
 
-- **The name is a bootstrap convention, not a restriction.** `runReadOnlyMcpConnector` does not prevent a connector from declaring write tools, and nine connectors in the Nimbus corpus use it while declaring `hitlRequired: ["write"]`. Generated READMEs say so explicitly, because the name invites the opposite assumption. What a connector may actually do is what its `nimbus.extension.json` declares.
+Two things worth knowing about `read-only-kit`:
+
+- **The name is a bootstrap convention, not a restriction.** It does not prevent a connector from declaring write tools, and nine corpus connectors use it while declaring `hitlRequired: ["write"]`. Generated READMEs say so explicitly, because the name invites the opposite assumption. What a connector may actually do is what its `nimbus.extension.json` declares.
 - **Standalone packages inline the helper.** `runReadOnlyMcpConnector` imports `@modelcontextprotocol/sdk` directly and so cannot move into `@nimbus-dev/sdk`, whose zero runtime dependencies are load-bearing. The monorepo target imports it from `../../shared/`; the standalone target emits an equivalent local definition, and the call site is byte-identical either way.
 
 ### Search tools: `impl: "search"`, `rows`, `maxLimit` and `filter`
 
-A fourth tool kind. `impl: "search"` registers a substring-search tool over one endpoint's rows, the form **45 Nimbus connectors** already use.
+`impl: "search"` registers a substring-search tool over one endpoint's rows — the form **45 Nimbus connectors** already use.
 
 ```jsonc
 {
@@ -97,80 +119,65 @@ A fourth tool kind. `impl: "search"` registers a substring-search tool over one 
 
 - **`rows`** (optional) names the property to pluck from the response envelope. Omitted means the response **is** the array. `matchesResult` guards with `Array.isArray` itself, so neither form needs a coercion.
 - **`maxLimit`** (default `100`) is the per-connector result cap. Corpus values: 100 (×24), 200 (×12), 2000 (×2), 50 (×1).
-- **`filter.export`** names the `export const` emitted into a **seventh file**, `src/search-filter.ts`, which a search spec adds to the six-file tree. Two tools may not share one export name.
-- **`filter.fields`** lists the top-level keys to match against, and `filter.tags: true` additionally matches tag names. Together these emit `makeQueryFilter(fieldsFromKeys([...]))`.
+- **`filter.export`** names the `export const` emitted into the seventh file, `src/search-filter.ts`. Two tools may not share one export name.
+- **`filter.fields`** lists the top-level keys to match against; `filter.tags: true` additionally matches tag names. Together they emit `makeQueryFilter(fieldsFromKeys([...]))`.
 - **A search tool is always a read.** `method`, `body` and a non-`read` `effect` are all validation errors on it — unlike a stub, it does not stand in for something that will later write.
-- **Argument-carrying search tools inline their schema.** With no args of its own a tool calls the shared `searchToolInputSchema(maxLimit)`; declaring args (`bitrise`'s `appSlug`, say) means the shared two-key helper cannot express the shape, so the merged `z.object({ …args, query, limit })` is emitted inline instead.
+- **Argument-carrying search tools inline their schema.** With no args of its own a tool calls the shared `searchToolInputSchema(maxLimit)`; declaring args means the shared two-key helper cannot express the shape, so the merged `z.object({ …args, query, limit })` is emitted inline instead.
 
-**`filter.fields` is optional, and omitting it is the honest escape hatch.** 40 of the 49 filter files in the corpus hand-write an extractor this generator cannot express — nested paths, computed fields, conditional joins. For those, omit `fields` and the emitter writes a **throwing stub** typed as `SearchFilter` for you to replace. The stub replaces the *filter*, not the extractor, and that placement is load-bearing rather than stylistic: `makeQueryFilter` calls the extractor once per row, so a throwing *extractor* never fires on an empty result set and the tool would report `{ matches: [] }` as success. Throwing from the filter position fires on every invocation.
+**`filter.fields` is optional, and omitting it is the honest escape hatch.** 40 of the 49 filter files in the corpus hand-write an extractor this generator cannot express — nested paths, computed fields, conditional joins. Omit `fields` and the emitter writes a **throwing stub** typed as `SearchFilter` for you to replace. The stub replaces the *filter*, not the extractor, and that placement is load-bearing rather than stylistic: `makeQueryFilter` calls the extractor once per row, so a throwing *extractor* never fires on an empty result set and the tool would report `{ matches: [] }` as success. Throwing from the filter position fires on every invocation.
 
-**`style: "rest-kit"` cannot declare a search tool** — a hard validation error. `makeRestToolRegistrar` performs the request *and* wraps the result itself, leaving no seam between the response and the MCP result for a filter to run in. The corpus agrees: the intersection of the 10 rest-tool-kit users and the 45 `mcp-search-tool` users is empty. Use `read-only-kit` or `hand-rolled`.
-
-**Standalone search needs SDK ≥ 1.15.0**, and only a spec that declares a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is *not* in the SDK: `searchToolInputSchema` builds a zod schema, and `@nimbus-dev/sdk` ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
+**Standalone search needs `@nimbus-dev/sdk` ≥ 1.15.0**, and only a spec declaring a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is deliberately *not* in the SDK: `searchToolInputSchema` builds a zod schema, and the SDK ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
 
 ### OAuth: `client-credentials`
 
-An env entry may declare `"auth": "client-credentials"` instead of `"bearer"` or `"headers"`:
+An env entry may declare `"auth": "client-credentials"` instead of `"bearer"`, `"basic"` or `"headers"`:
 
 ```jsonc
 {
-  "vars": ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  "vars": ["ACME_CLIENT_ID", "ACME_CLIENT_SECRET"],
   "local": "authHeaders",
   "auth": "client-credentials",
-  "tokenUrl": "https://api.zzwrite.test/oauth/token",
+  "tokenUrl": "https://api.acme.com/oauth/token",
   "scope": "items:readwrite",
   "credentialsIn": "basic"
 }
 ```
 
-This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches the token until it expires: `expires_in` is read and the token is renewed a little early (the skew is halved for short-lived tokens, which would otherwise be treated as already expired and re-exchanged on every call). A response with no `expires_in` is cached for the process lifetime, since treating its absence as "expired" would re-exchange on every call. There is no refresh-token flow — no connector in the corpus has one. `credentialsIn` controls how the client id/secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` connector does); `"body"` puts `client_id`/`client_secret` in the form body (as Nimbus's `looker`, `powerbi`, `teams` and `wiz` connectors do). `scope` is optional; the two `vars` and `style: "hand-rolled"` are required — `client-credentials` is **hand-rolled only** (`style: "rest-kit"` is a validation error), because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
+This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches it: `expires_in` is read and the token renewed a little early, with the skew halved for short-lived tokens that would otherwise be treated as already expired and re-exchanged on every call. A response with no `expires_in` is cached for the process lifetime, since treating its absence as "expired" would re-exchange on every call.
+
+There is **no refresh-token flow and no authorization-code flow** — no connector in the corpus has either, so adding them would be speculative.
+
+`credentialsIn` controls how the id and secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` does); `"body"` puts `client_id`/`client_secret` in the form body (as `looker`, `powerbi`, `teams` and `wiz` do). `scope` is optional. The two `vars` and `style: "hand-rolled"` are required — **`client-credentials` is hand-rolled only**, because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
 
 ### Reserved identifiers
 
-The emitter introduces module-scope names of its own, so a spec may not reuse them. `local` names, `registrar` names and similar spec-supplied identifiers are validated against `RESERVED_IDENTIFIERS` in `src/validate.ts`, which is the authoritative list; reusing one is a validation error rather than a package that emits two declarations of the same name and fails its own `typecheck`.
+The emitter declares module-scope names of its own, so a spec may not reuse them. `local` names, `registrar` names and similar spec-supplied identifiers are validated against `RESERVED_IDENTIFIERS` in `src/validate.ts`, which is the authoritative list. Reusing one is a validation error rather than a package that emits two declarations of the same name and fails its own `typecheck`.
 
-`client-credentials` added `token`, `cachedToken` and `encodeBasicAuthHeader` to that list, and the write path added `URLSearchParams` and `<local>Send`. `token` and `cachedToken` are reserved unconditionally, not only for `client-credentials` specs — **a spec that named an env `local` `"token"` and validated under 0.2.2 will now be rejected.** Rename the local; nothing else changes.
+The list covers the OAuth path (`token`, `cachedToken`, `encodeBasicAuthHeader`), the write path (`URLSearchParams`, `<local>Send`), the `read-only-kit` and search paths (`runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`, `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions`, `root`), and the globals emitted code calls (`fetch`, `process`, `JSON`, …).
 
-The `read-only-kit` style and search tools add eight more, reserved unconditionally for the same reason: `runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`, `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions` and `root`. The first seven are declared or imported at module scope in an emitted `src/server.ts`. **`root` is the one likely to bite**: a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`, so a fetch helper named `root` would emit `const root = await root(…)` — a use-before-declaration error rather than a shadow.
+They are reserved **unconditionally**, not only for specs that use the feature — the list is checked before any style or tool kind is considered, and conditional entries would mean a spec validating or failing depending on a field elsewhere in the file. Two names are worth calling out:
 
-## Stage B: standalone connectors
+- **`token`** — a spec that named an env `local` `"token"` and validated under 0.2.2 is now rejected. Rename the local; nothing else changes.
+- **`root`** — an ordinary word, and a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`. A fetch helper named `root` would emit `const root = await root(…)`, a use-before-declaration error rather than a shadow.
 
-By default, generated connectors are **monorepo-internal**: they live at `packages/mcp-connectors/<name>/` inside a Nimbus checkout, where the `../../shared/*` relative imports (`mcp-tool-kit.ts`, `rest-tool-kit.ts`, etc.) resolve as-is.
-
-Pass `--standalone` to generate a connector that is self-contained instead — installable and runnable anywhere, with no Nimbus checkout required:
-
-```
-bun src/cli.ts <name> --standalone
-```
-
-The standalone `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, instead of `../../shared/*`. Its generated `package.json` depends on `"@nimbus-dev/sdk": "^1.11.0"` (see `src/emit/package-json.ts`), and it gains `dev` and `build` scripts (`bun build src/server.ts --outdir dist --target bun`) that monorepo-target output does not have.
-
-**This CLI, and every connector it generates, is Bun-only** (design doc decisions B6 and B7): `nimbus.extension.json` declares `"runtime": "bun"` for every connector, `test/sandbox.test.ts` imports `bun:test`, and the standalone `build` script targets Bun. `src/cli.ts` carries a `#!/usr/bin/env bun` shebang. There is no Node, npm, or pnpm path anywhere in this project or its output. The one exception is publishing: `.github/workflows/release.yml` sets up Node and runs `npm publish --provenance` in CI, because that is the only way to attach a sigstore provenance attestation to an npm tarball — everything else, including the check that proves the packed tarball actually runs, stays Bun-only.
-
-**`@nimbus-dev/sdk` 1.11.0 is published.** It ships the `./connector-kit` export a standalone connector's `package.json` depends on, so `bun install` in a generated standalone package resolves that dependency from the registry with no local checkout and no rewrite. `bun run standalone-acceptance --registry` (see below) proves it end to end against the published tarball.
-
-**This CLI is published to npm** as [`create-nimbus-connector`](https://www.npmjs.com/package/create-nimbus-connector), so standalone generation needs no checkout of this repo: `bunx create-nimbus-connector <name> --standalone`. From a checkout, the equivalent is `bun src/cli.ts <name> --standalone`.
-
-## Usage
+## CLI reference
 
 ```
 bunx create-nimbus-connector <name>   # the published CLI, no checkout needed
 bun src/cli.ts <name>                 # from a checkout of this repo
 ```
 
-Runs an interactive prompt session (name, title, description, network hosts, env vars, tools, ...) and writes the generated files to `packages/mcp-connectors/<name>/` (relative to the current directory), or to `<name>/` when `--standalone` is passed.
-
-The published package's `bin` is `src/cli.ts`, which carries a `#!/usr/bin/env bun` shebang — so Bun is required to run the CLI however it is invoked, `bunx` included. (Generated standalone connectors need no checkout either — their `@nimbus-dev/sdk` dependency resolves from the registry.)
+With a positional name it runs an interactive prompt session (name, display name, service label, description, base API URL, auth type, credential env var, tools) and writes to `packages/mcp-connectors/<name>/` relative to the current directory, or to `<name>/` when `--standalone` is passed.
 
 ### Flags
 
-- `--spec <path>` — skip the interactive prompts and load a `ConnectorSpec` JSON file instead (see `fixtures/*.spec.json` for examples, e.g. `fixtures/sentry.spec.json`). Mutually exclusive with a positional `<name>` — the name comes from the spec file.
-- `--standalone` — generate a self-contained connector (imports `@nimbus-dev/sdk/connector-kit`, gains `dev`/`build` scripts) instead of the default monorepo-internal shape. Defaults the output directory to `<name>/` instead of `packages/mcp-connectors/<name>/`.
-- `--dry-run` — don't write anything; print the file tree that would be created (path + byte size per file).
+- `--spec <path>` — skip the prompts and load a `ConnectorSpec` JSON file instead (see `fixtures/*.spec.json`, e.g. `fixtures/sentry.spec.json`). Mutually exclusive with a positional `<name>` — the name comes from the spec file.
+- `--standalone` — generate a self-contained connector instead of the monorepo-internal shape. Defaults the output directory to `<name>/`.
+- `--dry-run` — write nothing; print the file tree that would be created, with a byte size per file.
 - `--out-dir <path>` — write to a directory other than the default.
-- `--license <spdx>` — **standalone only.** Set the generated package's license, in `package.json` and the README's License section. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
-- `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit two Gateway-side scaffold files into `<nimbus-root>/packages/gateway/src/connectors/`. See "Gateway wiring" below. Off by default; normal generation is unaffected by its absence. Passing it with `--standalone` is an **error**, not a silent no-op: a standalone connector does not live in the Nimbus repo and is not registered with its Gateway.
-- `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts` in the target directory. An **error** when passed without `--gateway-wiring`. Without `--force`, `--gateway-wiring` refuses to write over a file it did not create — including a real, hand-authored sync file already in the monorepo.
+- `--license <spdx>` — **standalone only.** Set the generated package's license. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
+- `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit the Gateway wiring skeleton. Passing it with `--standalone` is an **error**: a standalone connector is not registered with any Gateway.
+- `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts`. An **error** without `--gateway-wiring`.
 - `--help` — print usage. Every flag in that text is one `parseFlags` actually parses; `test/cli.test.ts` asserts the two agree, so an undocumented flag is a failing test.
 - `--version` — print the version.
 
@@ -178,154 +185,55 @@ An unrecognised flag is an error with a did-you-mean suggestion, never silently 
 
 > **Connector output overwrites without asking.** Generation creates parent directories and writes each file; there is no existence check and no prompt, so generating into a directory that already holds a connector replaces those files in place. Use `--dry-run` first. The two `--gateway-wiring` files are the only exception, and they refuse to overwrite without `--force`.
 
-For a task-ordered walkthrough rather than this reference, see [`docs/USAGE.md`](./docs/USAGE.md).
+```bash
+bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
+bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
+bun src/cli.ts acme --standalone --license MIT
+```
 
 ### Licensing of generated connectors
 
-A **monorepo** connector is `AGPL-3.0-only`. It lives inside the AGPL Nimbus repo and imports AGPL code through `../../shared/*`, and its `package.json` is byte-diffed against 94 real connectors — so this is fixed, not a default.
+A **monorepo** connector is `AGPL-3.0-only`. It lives inside the AGPL Nimbus repo and imports AGPL code through `../../shared/*`, and its `package.json` is byte-diffed against real connectors — so this is fixed, not a default.
 
-A **standalone** connector is none of those things: it is your own code, produced by an MIT-licensed tool, depending only on the MIT `@nimbus-dev/sdk`. Nothing about it obliges copyleft, so it is **not** stamped AGPL. It defaults to `UNLICENSED` — npm's marker for "no license granted" — which is a deliberate non-choice rather than a wrong choice made on your behalf. Pass `--license <spdx>` to set a real one:
+A **standalone** connector is none of those things: it is your own code, produced by an MIT-licensed tool, depending only on the MIT `@nimbus-dev/sdk`. Nothing about it obliges copyleft, so it is **not** stamped AGPL. It defaults to `UNLICENSED` — npm's marker for "no license granted" — a deliberate non-choice rather than a wrong choice made on your behalf. Pass `--license <spdx>` to set a real one:
 
-```
-bun src/cli.ts acme --standalone --license MIT
+```bash
 bun src/cli.ts acme --standalone --license "Apache-2.0"
 bun src/cli.ts acme --standalone --license "MIT OR Apache-2.0"
 ```
 
-The value is validated as an SPDX identifier or expression before anything is written; a malformed one fails at parse time rather than landing in a `package.json` npm will later reject. This is a syntax check, not a lookup against the SPDX license list — `LicenseRef-<name>` is accepted deliberately.
-
-Examples:
-
-```
-bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
-bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
-bun src/cli.ts --spec fixtures/zzstandalone.spec.json --standalone --out-dir /tmp/zzstandalone-preview
-```
+The value is validated as an SPDX identifier or expression before anything is written, so a malformed one fails at parse time rather than landing in a `package.json` npm will later reject. It is a syntax check, not a lookup against the SPDX list — `LicenseRef-<name>` is accepted deliberately.
 
 ## Gateway wiring
 
-```
-bun src/cli.ts <name> --spec fixtures/<name>.spec.json --gateway-wiring C:\gitrep\Nimbus
+A first-party connector also needs type-coupled registration in the Gateway, which no connector package contains. This is opt-in, monorepo-target only, and off by default — normal generation never touches Nimbus's Gateway.
+
+```bash
+bun src/cli.ts --spec fixtures/acme.spec.json --gateway-wiring /path/to/Nimbus
 ```
 
-Opt-in, monorepo-target only, and off by default — normal generation never touches Nimbus's Gateway. When passed, two additional files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
+Two files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
 
-- **`<name>-sync.ts`** — a `create<Name>Syncable(): Syncable` matching the Gateway's own `Syncable` interface (`serviceId`, `defaultIntervalMs`, `sync()`), draining the spec's first `*_list` tool. Its `sync()` body **throws** rather than doing anything.
+- **`<name>-sync.ts`** — a `create<Name>Syncable(): Syncable` matching the Gateway's own interface (`serviceId`, `defaultIntervalMs`, `sync()`). Its `sync()` body **throws**.
 - **`<name>-mapping.ts`** — a `map<Name>ItemToItem` stub with the expected signature, whose body also **throws**.
 
-Both are **skeletons, not implementations** — deliberately. The Gateway's ~98 real `*-sync.ts` files are not one formulaic shape: the "drain a list tool and upsert" assembly this project could plausibly generate appears in exactly 2 of them; the rest (including this project's own four golden fixtures) are hand-authored with direct `fetch` calls, cursor pagination, and connector-specific option objects. Generating a working `sync()` would mean reproducing AGPL source nearly verbatim in an MIT repository, and asserting a shape that fits 2 of 98 connectors. So the tool emits only what the type system dictates — the shape, not anyone's implementation choices — plus a TODO comment, and leaves the real work to a human. It saves the boilerplate of the two files' scaffolding; it does not produce a working syncable.
+**Both are skeletons, not implementations, deliberately.** The Gateway's ~98 real `*-sync.ts` files are not one formulaic shape: the "drain a list tool and upsert" assembly this project could plausibly generate appears in exactly **2** of them; the rest are hand-authored with direct `fetch` calls, cursor pagination and connector-specific options. Generating a working `sync()` would mean reproducing AGPL source nearly verbatim in an MIT repository, and asserting a shape that fits 2 of 98 connectors. So the tool emits what the type system dictates — the shape, not anyone's implementation choices — plus a TODO, and leaves the real work to a human. `<name>-mapping.ts`'s body is unknowable from a spec for a related reason: no spec field describes a service's API response shape.
 
-`<name>-mapping.ts`'s body is unknowable from a connector spec for the same reason: no spec field describes a service's API response shape.
+**Writing refuses to overwrite an existing target file** unless `--force` is passed. Nimbus already ships hand-authored files such as `newrelic-sync.ts`; an unguarded write on a connector reusing one of those names would destroy it.
 
-### Checking the skeleton still fits Nimbus
-
-```
-bun run wiring:conformance --nimbus-root C:\gitrep\Nimbus
-```
-
-`test/emit/emitted-typecheck.test.ts` compiles the emitted pair against a stand-in written *in this repo*, because this repo is MIT and Nimbus is AGPL-3.0-only, so the real `sync/types.ts` cannot be vendored. That proves the skeleton is internally well-typed and free of unread declarations — and proves nothing about whether it still matches Nimbus. Not hypothetical: the stand-in shipped with `upserted`/`deleted` while the real `SyncResult` spells them `itemsUpserted`/`itemsDeleted`.
-
-This script reads the real interface and checks two things: the emitted skeleton supplies every member `Syncable` requires, and the stand-in agrees with the real field names. It reads Nimbus and writes nothing to it.
-
-Like `diff:golden`, it needs a Nimbus checkout and therefore does not run in CI — a test that silently skipped when the root is absent would be green while asserting nothing. Run it before merging a wiring change.
-
-**Writing refuses to overwrite an existing target file** unless `--force` is passed — Nimbus already ships hand-authored files such as `newrelic-sync.ts` and `datadog-sync.ts`, and an unguarded write on a connector reusing one of those names would destroy it.
-
-**Two files are never written, only printed**: `platform/assemble-sync-registrations.ts` (93+ entries) and `connectors/connector-catalog.ts` (`CONNECTOR_SERVICE_IDS` plus the `tsc`-enforced matching `CONNECTOR_SYNC_INTERVAL_MS` entry). The CLI prints the exact lines to paste into each, rather than editing either — patching a large file it does not own, in another repository under another licence, risks silent corruption; a two-line paste the author controls is the safer trade.
-
-## The golden-fixture diff harness
-
-`fixtures/*.spec.json` are hand-written specs modelled on real connectors already in the Nimbus monorepo. The harness regenerates each one in memory and byte-diffs it against the real file on disk, so the acceptance bar for the generator is "reproduces a real connector exactly," not "produces something that looks plausible."
-
-```
-bun run diff:golden                                    # all fixtures, resolves Nimbus by sibling-dir/env probing
-bun run diff:golden sentry --nimbus-root C:\gitrep\Nimbus
-bun run diff:golden sentry datadog --nimbus-root D:\Nimbus
-```
-
-`--nimbus-root <path>` points at a Nimbus checkout explicitly. Resolution order if omitted: `--nimbus-root` flag, then `$NIMBUS_ROOT`, then a sibling directory of this repo named `Nimbus` or `nimbus`. A resolved path must contain the marker file `packages/mcp-connectors/shared/mcp-tool-kit.ts`, or resolution fails loudly rather than producing a wall of missing-file errors.
-
-Each fixture's expected set of byte-identical file paths (out of 6) is checked in at `fixtures/expectations.json`. The harness fails if reality diverges from that set **in either direction** — a file that stopped matching, or one that newly matches without being declared, which would leave the expectations file and the design doc's gap report stale.
-
-It records *which* files match rather than how many, deliberately: for a partial fixture such as `discord` (3 of 6), a count alone reports PASS when a change newly matches `README.md` while breaking `package.json`.
-
-## The acceptance harness
-
-`bun run acceptance <nimbus-root>` proves a generated connector doesn't just diff cleanly against a real one, but actually compiles and lints **inside** a live Nimbus checkout: it generates a throwaway `zzscratch` connector into `packages/mcp-connectors/zzscratch/`, runs `tsc --noEmit`, `biome check`, and `bun run audit:package-readmes` against it, then deletes it — via `try/finally`, so the scratch connector is removed even if generation or a check throws. It finishes by asserting `git status --short packages/mcp-connectors/` is empty in the target checkout, so a bug can never leave someone else's working tree dirty.
-
-```
-bun run acceptance C:\gitrep\Nimbus
-```
-
-## The runtime acceptance harness
-
-```
-bun run runtime:acceptance --registry          # or --sdk-root <path> for a local SDK
-```
-
-Every other check in this repo is **static**: string assertions, `tsc`, `biome`, a byte-diff against the corpus, and `tools/list` — which proves a generated server starts and describes itself, but never *invokes* a tool. Until this harness existed, no generated connector's `fetch` had ever run, and every belief about runtime behaviour was inference from reading the emitted text.
-
-This one stands up a `Bun.serve` on an ephemeral loopback port, points a generated connector's base URL at it, drives the connector over stdio with real `tools/call` requests, and asserts on the traffic it actually produces:
-
-- the bearer token arrives as `Authorization: Bearer …`
-- an unset optional boolean is `?flag=false` in the URL and **absent** from the JSON body — the decision in the Stage C spec §8, which had been reached by argument and never executed
-- a boolean in a body is a real JSON `true`, not the string `"true"`
-- a defaulted arg is sent with its default applied
-- path args are percent-encoded, and excluded from the default write body (D5)
-- a `DELETE` whose only arg is in the path sends no body at all
-- a non-2xx response becomes a tool error naming the status
-- `client-credentials` exchanges its token **before** the API call, sends the id and secret where `credentialsIn` says, and **caches** — two tool calls produce one exchange
-
-It needs the SDK installed from npm, and nothing else — no Nimbus checkout — so unlike `diff:golden` and `wiring:conformance` it **does** run automatically, in `.github/workflows/acceptance.yml`, alongside the standalone acceptance harness: on pull requests that touch `src/`, `scripts/` or `fixtures/`, and daily.
-
-That workflow is deliberately separate from the merge gate. Both harnesses reach the npm registry, so a registry outage would otherwise red-X pull requests that changed nothing related. The daily run exists because the published SDK can change without anything in this repo changing, which is exactly what `--registry` mode is for.
-
-## The standalone acceptance harness
-
-Stage A's acceptance harness proves a monorepo-target connector against a live Nimbus checkout. There is no equivalent live ground truth for standalone connectors — no standalone Nimbus connector exists yet — so `bun run standalone-acceptance` substitutes a live end-to-end run: generate a `--standalone` connector into a temp directory outside the monorepo, resolve its `@nimbus-dev/sdk` dependency (see the two modes below), `bun install`, `bunx tsc --noEmit`, run the generated package's own `bun run typecheck` and `bun run lint` scripts (which resolve `tsc` and `biome` through its own `node_modules`, and re-check the emitted formatting and import order against the emitted `biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio (`initialize` → `tools/list`, no credentials in the environment) against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the temp directory whether or not any step threw.
-
-### Two modes
-
-They resolve `@nimbus-dev/sdk` from different places and answer different questions, so both are kept. Passing both is an error, not a precedence question.
-
-```
-bun run standalone-acceptance --registry                      # the published tarball
-bun run standalone-acceptance C:\gitrep\nimbus-sdk            # a local SDK checkout
-bun run standalone-acceptance --sdk-root C:\gitrep\nimbus-sdk
-```
-
-**`--registry`** installs exactly what the generator emitted — `"@nimbus-dev/sdk": "^1.11.0"`, unmodified — from npm. This is the strongest proof Stage B can offer, because it verifies the artifact real consumers actually get: a `dist` missing from the published `files` array surfaces here and nowhere else in this project. Run it before publishing this CLI.
-
-**Local checkout** (the default) rewrites the dependency to `file:<sdk-root>/sdks/typescript` first. This is the **pre-release gate**: it can be pointed at an SDK branch that is not on npm and cannot be, so it stays useful for every future SDK change. Run it before releasing an SDK version.
-
-`<sdk-root>` may be given positionally or as `--sdk-root <path>`, and resolves the same way `--nimbus-root` does: the argument, then `$NIMBUS_SDK_ROOT`, then a sibling directory of this repo named `nimbus-sdk`, requiring the marker file `sdks/typescript/package.json`.
-
-In local-checkout mode the SDK must already be built (`dist/connector-kit/index.js` present), because `bunx tsc --noEmit` resolves the kit's types from `dist/connector-kit/index.d.ts` and the `node_modules` check asserts `dist/connector-kit/index.js` is on disk. That is genuine `dist` coverage for **types** and for **install-time existence** — but not for runtime JS, and this harness does *not* exercise the resolution path a real npm consumer takes. Two reasons: the SDK declares `"files": ["dist", "src"]`, so a `file:` dependency installs both; and Bun applies the SDK's `"bun"` export condition, which points `./connector-kit` at TypeScript source (`src/connector-kit/index.ts`), so both `bun src/server.ts` and `bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the SDK's own `node-smoke` CI job (`sdks/typescript/scripts/smoke-esm.mjs`), not this harness — and that stays true in `--registry` mode, which changes where the package comes from, not which export condition Bun applies to it. What `--registry` adds is proof that the published tarball *contains* `dist` at all.
-
-## SonarCloud coverage
-
-SonarCloud reported **0.0% coverage on new code** on every pull request for a long time — not because the code was untested, but because **Automatic Analysis cannot ingest a coverage report**, and none was ever uploaded. `.github/workflows/sonar.yml` replaces it with a CI-based analysis that runs `bun test --coverage --coverage-reporter=lcov` and uploads `coverage/lcov.info`.
-
-The two modes are mutually exclusive: SonarCloud **refuses** a CI analysis while Automatic Analysis is enabled. Switching over therefore has an order, and getting it wrong leaves the project with no analysis at all:
-
-1. Add a `SONAR_TOKEN` repository (or organization) secret — SonarCloud → My Account → Security → Generate Token. Without it the scanner cannot authenticate at all: it fails with *"Not authorized or project not found"* before it ever reaches the analysis-mode question.
-2. Turn Automatic Analysis off: SonarCloud → the project → Administration → Analysis Method. SonarCloud refuses a CI analysis while it is on, so this cannot wait until after the merge.
-3. Re-run the `sonar` check on the pull request. It should now pass.
-4. Merge.
-
-Both switches precede the merge, deliberately. The alternative — merge first, then disable — means merging a pull request whose own checks are red, which is a habit worth not starting. The cost is a short window between steps 2 and 3 where `main` has no analysis at all; that window is minutes, and the pull request's own run covers the code going into it.
-
-`bunfig.toml`'s per-file `coverageThreshold` still applies during this run, so the gate does not become advisory just because a reporter was added.
+**Two files are never written, only printed**: `platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The CLI prints the exact lines to paste into each rather than editing them — patching a large file it does not own, in another repository under another licence, risks silent corruption; a two-line paste the author controls is the safer trade.
 
 ## Development
 
-```
-bun test                              # unit tests for the emitters, independent of any monorepo checkout
+```bash
+bun test                              # emitters, independent of any checkout
 bunx tsc --noEmit
 bunx biome check src/ test/ scripts/
 ```
 
-`generate(spec)` (pure, no filesystem/env/clock access) and `formatAll(files)` (the only stage that touches Biome) are split deliberately so the emitters are unit-testable without a monorepo, and so the CLI, `--dry-run`, and the golden harness all format through the identical code path. See the design doc's "Generation is a pure function" section for the full rationale.
+`generate(spec)` is pure — no filesystem, env or clock — and `formatAll(files)` is the only stage that touches Biome. The split is deliberate: it makes the emitters unit-testable without a monorepo, and it means the CLI, `--dry-run` and the golden harness all format through the identical code path.
+
+Several gates need a checkout of the Nimbus monorepo or the SDK and therefore cannot run in CI. [CONTRIBUTING.md](./CONTRIBUTING.md) lists what to run before opening a PR, and [ARCHITECTURE.md](./docs/ARCHITECTURE.md#the-verification-layers) explains what each harness proves and — just as importantly — what it does not.
 
 ## License
 

@@ -23,22 +23,22 @@ package byte-identical to a hand-written one.
 - [CHANGELOG.md](../CHANGELOG.md) — including hand-written notes for output changes that no
   commit subject would surface
 
-## Design history
+## Where the reasoning lives
 
-`superpowers/specs/` holds one design document per stage and `superpowers/plans/` the
-implementation plan beside it. Each design records what was measured in the Nimbus corpus, what
-was decided and why, and — after implementation — what was actually observed, including where a
-claim had to be qualified rather than asserted.
+This project was built in four stages, each with a long design document and implementation plan
+recording what was measured in the Nimbus corpus and what was decided. Those documents have been
+retired — their durable conclusions are folded into the pages above, and git history has the
+originals:
 
-They are the reason numbers are not repeated elsewhere: they are dated, they record the
-measurement method, and they are not rewritten when the corpus moves.
+- **What the generator cannot do, and why** → [ROADMAP.md § Known limitations](./ROADMAP.md#known-limitations)
+- **Proposals measured and rejected** → [ROADMAP.md § Considered and declined](./ROADMAP.md#considered-and-declined)
+- **How each harness works and what it proves** → [ARCHITECTURE.md § The verification layers](./ARCHITECTURE.md#the-verification-layers)
+- **Corpus measurements behind a default** → the [README](../README.md), next to the field they justify
+- **The traps that bite an agent working here** → [CLAUDE.md](../CLAUDE.md)
 
-| Stage | What it added |
-| --- | --- |
-| [A](./superpowers/specs/2026-07-30-create-nimbus-connector-stage-a-design.md) | The generator, the six-file tree, the golden-fixture harness |
-| [B](./superpowers/specs/2026-07-30-create-nimbus-connector-stage-b-design.md) | Standalone connectors, the SDK kit, npm publishing |
-| [C](./superpowers/specs/2026-07-31-create-nimbus-connector-stage-c-design.md) | Writes, HITL, OAuth `client-credentials`, Gateway wiring |
-| [D](./superpowers/specs/2026-08-01-create-nimbus-connector-stage-d-design.md) | The `read-only-kit` style and search tools |
+**Live numbers are not written down anywhere.** Fixture counts and pass rates move with the
+corpus; `bun run diff:golden --nimbus-root <path>` is the answer, and a document restating it
+would go stale silently.
 
 ## The other repos
 

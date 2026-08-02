@@ -132,6 +132,124 @@ ordering is by how much of the world they need.
 server and asserting on the requests they actually make — the only check that observes runtime
 behaviour rather than inferring it from text.
 
+### 2. The golden-fixture harness, in detail
+
+```bash
+bun run diff:golden                                        # all fixtures
+bun run diff:golden sentry --nimbus-root /path/to/Nimbus
+bun run diff:golden sentry datadog --nimbus-root /path/to/Nimbus
+```
+
+Resolution order for the Nimbus root: the `--nimbus-root` flag, then `$NIMBUS_ROOT`, then a
+sibling directory named `Nimbus` or `nimbus`. A resolved path must contain the marker file
+`packages/mcp-connectors/shared/mcp-tool-kit.ts` or resolution fails loudly, rather than
+producing a wall of missing-file errors.
+
+`fixtures/expectations.json` records, per fixture, **which** files are expected to match — not
+how many. That distinction is load-bearing: for a partial fixture at 3 of 6, a count alone
+reports PASS when a change newly matches `README.md` while breaking `package.json`. The harness
+fails when reality diverges **in either direction**, so an unexpected *improvement* also fails
+— otherwise the expectations file and the documented gaps go stale silently.
+
+### 3. The monorepo acceptance harness
+
+```bash
+bun run acceptance /path/to/Nimbus
+```
+
+Generates a throwaway `zzscratch` connector into `packages/mcp-connectors/zzscratch/`, runs the
+monorepo's own `tsc --noEmit`, `biome check` and `bun run audit:package-readmes` against it,
+then deletes it in a `finally` so it is removed even if a check throws. It finishes by asserting
+`git status --short packages/mcp-connectors/` is empty in the target checkout, so a bug can
+never leave someone else's working tree dirty.
+
+### 4. The standalone acceptance harness, and its two modes
+
+There is no live ground truth for standalone connectors — no standalone Nimbus connector exists
+yet — so this harness substitutes an end-to-end run: generate into a temp directory outside the
+monorepo, resolve `@nimbus-dev/sdk`, `bun install`, `bunx tsc --noEmit`, run the generated
+package's **own** `typecheck` and `lint` scripts (which resolve `tsc` and `biome` through its
+own `node_modules`, and re-check the emitted formatting and import order against the emitted
+`biome.json`), assert no `../../` import escapes `src/`, drive the server over real MCP stdio
+against both `src/server.ts` and the `bun run build`-produced `dist/server.js`, then remove the
+temp directory whether or not a step threw.
+
+```bash
+bun run standalone-acceptance --registry                 # the published tarball
+bun run standalone-acceptance /path/to/nimbus-sdk        # a local SDK checkout
+```
+
+**The two modes answer different questions and both are kept.** Passing both is an error, not a
+precedence question.
+
+- **`--registry`** installs exactly what the generator emitted, unmodified, from npm. It is the
+  only check that verifies the artifact real consumers get: a `dist` missing from the published
+  `files` array surfaces here and nowhere else. Run it before publishing this CLI.
+- **Local checkout** rewrites the dependency to `file:<sdk-root>/sdks/typescript`. It is the
+  pre-release gate — it can be pointed at an SDK branch that is not on npm and cannot be, so it
+  stays useful for every future SDK change. Run it before releasing an SDK version.
+
+**A fixture whose declared SDK floor is not published yet reports `SKIP`, not `FAIL`.** The
+registry mode's question is genuinely unanswerable for such a fixture, and answering "no" would
+be wrong — but the skip is narrow by construction. `isUnpublishedFloorFailure` requires bun's
+own unresolvable-range message naming both the exact declared range and `@nimbus-dev/sdk`; an
+outage, a 500, a missing package or a frozen lockfile all still fail. A skipped run prints what
+was skipped and does **not** print the sentence a fully-verified run prints, and nothing in the
+predicate names a version or a fixture, so it expires by itself the moment the release lands.
+
+In local-checkout mode the SDK must already be built, because `tsc` resolves the kit's types
+from `dist/connector-kit/index.d.ts`. That is genuine `dist` coverage for **types** and for
+**install-time existence**, but not for runtime JS: Bun applies the SDK's `"bun"` export
+condition, which points `./connector-kit` at TypeScript source, so both `bun src/server.ts` and
+`bun dist/server.js` run the kit from source. Runtime coverage of the built `dist` JS is the
+SDK's own `node-smoke` CI job. What `--registry` adds is proof the published tarball *contains*
+`dist` at all.
+
+### The wiring conformance script
+
+```bash
+bun run wiring:conformance --nimbus-root /path/to/Nimbus
+```
+
+`test/emit/emitted-typecheck.test.ts` compiles the emitted Gateway wiring pair against a
+stand-in written *in this repo*, because Nimbus is AGPL-3.0-only and its real `sync/types.ts`
+cannot be vendored. That proves the skeleton is internally well-typed and free of unread
+declarations — and proves **nothing** about whether it still matches Nimbus.
+
+That is not hypothetical: the stand-in once shipped with `upserted`/`deleted` while the real
+`SyncResult` spells them `itemsUpserted`/`itemsDeleted`, and every test was green.
+
+This script reads the real interface and checks two things — that the emitted skeleton supplies
+every member `Syncable` requires, and that the stand-in agrees with the real field names. It
+reads Nimbus and writes nothing to it. Like `diff:golden` it needs a checkout and so cannot run
+in CI; run it before merging a wiring change.
+
+### 5. The runtime acceptance harness
+
+Every other check is static — string assertions, `tsc`, `biome`, a byte-diff, and `tools/list`,
+which proves a server starts and describes itself but never *invokes* a tool. Until this harness
+existed, no generated connector's `fetch` had ever run and every belief about runtime behaviour
+was inference from reading emitted text.
+
+It stands up a `Bun.serve` on an ephemeral loopback port, points a generated connector's base
+URL at it, drives the connector over stdio with real `tools/call` requests, and asserts on the
+traffic produced: that the bearer token arrives as `Authorization: Bearer …`; that an unset
+optional boolean is `?flag=false` in the URL and **absent** from the JSON body; that a boolean
+in a body is a real JSON `true`, not `"true"`; that a defaulted arg is sent with its default
+applied; that path args are percent-encoded and excluded from the default write body; that a
+`DELETE` whose only arg is in the path sends no body; that a non-2xx becomes a tool error naming
+the status; and that `client-credentials` exchanges its token *before* the API call, sends the
+credentials where `credentialsIn` says, and **caches** — two tool calls producing one exchange.
+
+It needs only the SDK from npm and no Nimbus checkout, so unlike `diff:golden` and
+`wiring:conformance` it **does** run in CI, in `.github/workflows/acceptance.yml`, on pull
+requests touching `src/`, `scripts/` or `fixtures/`, and daily.
+
+That workflow is deliberately separate from the merge gate: both network-dependent harnesses
+live there, so a registry outage cannot red-X a pull request that changed nothing related. The
+daily run exists because the published SDK can change without anything in this repo changing —
+which is exactly what `--registry` mode is for.
+
 ## Why the fixtures are hand-written
 
 The repo is MIT and Nimbus is AGPL-3.0-only, so no connector source may be copied here. The
