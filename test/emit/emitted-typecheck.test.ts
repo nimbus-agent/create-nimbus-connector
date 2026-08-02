@@ -190,7 +190,11 @@ export function makeQueryFilter(
 }
 // Stage E's extractor branch. Signatures match the real shared/search-filter.ts primitives —
 // written from src/emit/search-filter.ts's assumptions, NOT copied from the AGPL-3.0-only
-// Nimbus checkout.
+// Nimbus checkout. One deliberate exception: FieldExtractor above is narrower than the real
+// type (\`readonly (string | null | undefined)[] | null\`, vs. this stand-in's \`readonly
+// string[] | null\`). Safe because narrowing a PARAMETER type can only make this stand-in
+// over-reject something the real primitives would accept, never under-reject something they
+// would not — so it cannot hide a genuine incompatibility.
 export function asObjectish(_value: unknown): Record<string, unknown> | undefined {
   throw new Error("stub");
 }
@@ -540,8 +544,12 @@ describe("a generated package containing a bespoke fieldsOf extractor typechecks
    * two-segment path (nestedString), a non-trailing `{"tags":"objects"}` (tagNamesFromObjects)
    * and a trailing `{"tags":"text"}` (tagText) — the guard (asObjectish) is unconditional. A
    * wrong import name or a signature mismatch between the emitted `fieldsOf` and the shared
-   * primitives (e.g. the null return asObjectish's guard produces) now fails here instead of
-   * only in a gate CI cannot run.
+   * primitives (e.g. the null return asObjectish's guard produces) now fails here — but only
+   * against the stand-in above, written from this emitter's own assumptions. As with the
+   * wiring stand-in at the top of this file, a mismatch against Nimbus's actual
+   * `shared/search-filter.ts` does NOT fail here: there is no `wiring-conformance`-style check
+   * for these primitives, so upstream drift in the real signatures is caught only by
+   * `diff:golden` and `standalone-acceptance --registry`, not by this test.
    */
   const extractorSpec = parseSpec({
     name: "zzextract",

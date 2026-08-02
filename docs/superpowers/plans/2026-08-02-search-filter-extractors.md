@@ -826,7 +826,7 @@ Replace:
       generator emits a throwing stub for.
 ```
 
-with a `[~]` item recording the A/B/C breakdown (7 reachable / 32 local-helper / 1 hand-rolled) and stating that `filter.fields` now takes path and tag entries. Do not restate a pass rate.
+with a `[~]` item recording the A/B/C breakdown (9 reachable / 30 local-helper / 1 hand-rolled) and stating that `filter.fields` now takes path and tag entries. Do not restate a pass rate.
 
 - [ ] **Step 2: Correct the multi-file bullet**
 
