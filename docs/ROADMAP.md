@@ -128,10 +128,17 @@ rather than skipping them.
 The shapes still unreachable, each already measured and documented as a limitation rather than
 discovered later:
 
-- [ ] **Bespoke field extractors.** 40 of the 49 filter files hand-write an extractor the
-      generator emits a throwing stub for.
-- [ ] **Multi-file connectors.** `elasticsearch` and `storybook` split tools into
-      `src/tools.ts`; the generator assumes one source file.
+- [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
+      tag entries, composing the primitives `shared/search-filter.ts` already exports instead
+      of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
+      40 corpus filter files that hand-write an extractor: **7** are reachable this way, **32**
+      call a locally-defined helper or bind locals before their return array and stay
+      unreachable, and **1** (`zoom`) is hand-rolled and does not use `makeQueryFilter` at all.
+      See [Known limitations](#known-limitations) for the byte gap that keeps even the 7 from
+      matching.
+- [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
+      `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
+      file.
 - [ ] **Conditional paths and enum arguments.** `bitrise`'s two non-search tools select an
       endpoint from whether an optional arg is present and map a `z.enum` through a lookup.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
@@ -180,8 +187,11 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
-- **Bespoke search extractors.** Most corpus filter files hand-write an extractor reaching
-  nested or computed fields. `filter.fields` omitted emits a throwing stub for these.
+- **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
+  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 32
+  call a locally-defined helper or bind locals before their return array — joins, array
+  flattening and coercion that no declarative field list expresses — and one (`zoom`) does not
+  use `makeQueryFilter` at all.
 
 **Shape variance the emitter models one way.**
 
@@ -198,6 +208,17 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
   other two cannot byte-match.
+- **The 7 reachable extractor files never byte-match**, even though `filter.fields` now
+  expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter always
+  writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits arrays,
+  `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
+  `const buildFields: FieldExtractor = (item) => …`, an arrow expression with an explicit type
+  annotation, where the emitter always writes a `function fieldsOf(item: unknown)` declaration.
+  The extractor's name: `firebase` calls it `releaseFields` and `testflight` calls it
+  `buildFields`; the emitter's is always `fieldsOf`. And a hand-written 4–5 line doc comment
+  explaining the service's response shape, present in `canva`, `figma`, `firebase`,
+  `salesforce` and `testflight` — the same content gap already recorded above for
+  hand-authored READMEs, not a formatting one.
 
 **Absences.**
 
