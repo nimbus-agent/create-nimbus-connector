@@ -51,6 +51,13 @@ is something an existing user needs told even when no subject line would say so.
   written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
   which is new in this same unreleased range.
 
+## [0.4.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.3...create-nimbus-connector-v0.4.0) (2026-08-02)
+
+
+### Features
+
+* Stage D — the read-only-kit style and search tools ([#47](https://github.com/nimbus-agent/create-nimbus-connector/issues/47)) ([82e9508](https://github.com/nimbus-agent/create-nimbus-connector/commit/82e9508a6e108bf04ecccc0a34c819d197de3e80))
+
 ## [0.3.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.2...create-nimbus-connector-v0.3.3) (2026-08-01)
 
 
