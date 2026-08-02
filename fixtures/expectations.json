@@ -53,6 +53,13 @@
     "src/search-filter.ts",
     "tsconfig.json"
   ],
+  "dependencytrack": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
   "discord": ["README.md", "test/sandbox.test.ts", "tsconfig.json"],
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
   "zzscratch": [],

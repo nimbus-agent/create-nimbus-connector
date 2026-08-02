@@ -124,6 +124,7 @@ describe("the checked-in fixtures/expectations.json", () => {
     expect(Object.keys(loaded).sort()).toEqual([
       "bitrise",
       "datadog",
+      "dependencytrack",
       "discord",
       "google-meet",
       "grafana",
