@@ -63,7 +63,12 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   if (!guarded && !plain) return undefined;
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
 
-  return { vars: [variable], local: String(fn["id"] ? (fn["id"] as AstNode)["name"] : ""), bindings: [binding], required: guarded };
+  return {
+    vars: [variable],
+    local: String(fn["id"] ? (fn["id"] as AstNode)["name"] : ""),
+    bindings: [binding],
+    required: guarded,
+  };
 }
 
 export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): EnvEntry[] {
