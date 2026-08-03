@@ -141,4 +141,70 @@ describe("recognizeFetchHelper", () => {
     const { claims } = run("async function g(): Promise<void> {}");
     expect(claims.claims()).toEqual([]);
   });
+
+  // Gap 1: rejects base template with accessor taking arguments
+  it("rejects base template with accessor taking arguments", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://${region(x)}${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Gap 2: pathPart with non-matching ternary should not set normalizeLeadingSlash
+  it("does not set normalizeLeadingSlash for non-matching ternary", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const pathPart = somethingElse();",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims, statements } = run(src);
+    // Helper should be recognized (valid helper), but normalizeLeadingSlash must NOT be set
+    expect(fields).toEqual({
+      local: "probeGet",
+      base: "https://api.example.com",
+      serviceLabel: "Probe",
+      inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+    });
+    // normalizeLeadingSlash should not be present in the result
+    expect(fields?.normalizeLeadingSlash).toBeUndefined();
+    expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  // Gap 3: rejects inline header with accessor taking arguments
+  it("rejects inline header with accessor taking arguments", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey(token), Accept: "application/json" },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

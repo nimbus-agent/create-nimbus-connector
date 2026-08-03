@@ -73,6 +73,8 @@ function reconstructBase(template: AstNode): string | undefined {
       if (expr?.type === "CallExpression") {
         const callee = expr["callee"] as AstNode;
         if (callee.type !== "Identifier") return undefined;
+        const args = (expr["arguments"] as AstNode[]) ?? [];
+        if (args.length !== 0) return undefined;
         const name = String(callee["name"] ?? "");
         parts.push(`\${env.${name}}`);
       } else {
@@ -88,7 +90,10 @@ function headerValue(value: AstNode): string | undefined {
   if (typeof value["value"] === "string") return value["value"];
   if (value.type === "CallExpression") {
     const callee = value["callee"] as AstNode;
-    if (callee.type === "Identifier") return `\${env.${String(callee["name"])}}`;
+    if (callee.type === "Identifier") {
+      const args = (value["arguments"] as AstNode[]) ?? [];
+      if (args.length === 0) return `\${env.${String(callee["name"])}}`;
+    }
   }
   return undefined;
 }
@@ -167,6 +172,7 @@ function countFetchCalls(fn: AstNode): number {
 /**
  * Detect the normalizeLeadingSlash pattern:
  * const pathPart = path.startsWith("/") ? path : `/${path}`;
+ * Validates the full shape, not just the variable name.
  */
 function hasNormalizeLeadingSlash(fn: AstNode): boolean {
   const statements = ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
@@ -176,7 +182,42 @@ function hasNormalizeLeadingSlash(fn: AstNode): boolean {
     if (!decl) continue;
     const id = decl["id"] as AstNode;
     if ((id["name"] as string) !== "pathPart") continue;
-    // Found the pathPart declaration, assume normalizeLeadingSlash is present
+
+    // Validate the init expression is a ConditionalExpression with the required shape
+    const init = decl["init"] as AstNode | undefined;
+    if (init?.type !== "ConditionalExpression") return false;
+
+    // Test: path.startsWith("/")
+    const test = init["test"] as AstNode | undefined;
+    if (test?.type !== "CallExpression") return false;
+    const testCallee = test["callee"] as AstNode | undefined;
+    if (testCallee?.type !== "MemberExpression") return false;
+    const testObject = testCallee["object"] as AstNode | undefined;
+    if (testObject?.type !== "Identifier" || testObject["name"] !== "path") return false;
+    const testProperty = testCallee["property"] as AstNode | undefined;
+    if (testProperty?.type !== "Identifier" || testProperty["name"] !== "startsWith") return false;
+    const testArgs = (test["arguments"] as AstNode[]) ?? [];
+    if (testArgs.length !== 1) return false;
+    const testArg = testArgs[0];
+    if (!testArg || typeof testArg["value"] !== "string" || testArg["value"] !== "/") return false;
+
+    // Consequent: path (Identifier)
+    const consequent = init["consequent"] as AstNode | undefined;
+    if (consequent?.type !== "Identifier" || consequent["name"] !== "path") return false;
+
+    // Alternate: `/${path}` (TemplateLiteral)
+    const alternate = init["alternate"] as AstNode | undefined;
+    if (alternate?.type !== "TemplateLiteral") return false;
+    const altQuasis = (alternate["quasis"] as AstNode[]) ?? [];
+    const altExpressions = (alternate["expressions"] as AstNode[]) ?? [];
+    if (altQuasis.length !== 2 || altExpressions.length !== 1) return false;
+    const firstQuasi = altQuasis[0];
+    const firstCooked = (firstQuasi?.["value"] as { cooked?: string } | undefined)?.cooked;
+    if (firstCooked !== "/") return false;
+    const pathExpr = altExpressions[0];
+    if (pathExpr?.type !== "Identifier" || pathExpr["name"] !== "path") return false;
+
+    // All checks passed
     return true;
   }
   return false;
