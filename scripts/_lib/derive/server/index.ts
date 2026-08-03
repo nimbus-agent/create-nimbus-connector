@@ -46,7 +46,7 @@ function getMcpServerInfo(node: AstNode): { varName: string; connectorName: stri
 
 function hasMcpToolKitImport(node: AstNode): boolean {
   const source = importSource(node);
-  return source !== undefined && source.endsWith("/mcp-tool-kit.ts");
+  return source?.endsWith("/mcp-tool-kit.ts") === true;
 }
 
 function isConstFrom(node: AstNode, callee: string): boolean {
@@ -71,7 +71,11 @@ function isConnect(node: AstNode, mcpVar: string): boolean {
   const callee = call["callee"] as AstNode;
   if (callee.type !== "MemberExpression") return false;
   const receiver = callee["object"] as AstNode;
-  return receiver.type === "Identifier" && receiver["name"] === mcpVar && (callee["property"] as AstNode)["name"] === "connect";
+  return (
+    receiver.type === "Identifier" &&
+    receiver["name"] === mcpVar &&
+    (callee["property"] as AstNode)["name"] === "connect"
+  );
 }
 
 /**
@@ -120,7 +124,14 @@ export function recognizeFrame(
   const optionalFrameImports = statements.filter((s) => isFrameImport(s) && s !== toolKitImport);
 
   // All five required elements found. Claim them and all optional frame imports.
-  const framesToClaim = [toolKitImport, mcpServerNode, registrarNode, transportNode, connectNode, ...optionalFrameImports];
+  const framesToClaim = [
+    toolKitImport,
+    mcpServerNode,
+    registrarNode,
+    transportNode,
+    connectNode,
+    ...optionalFrameImports,
+  ];
   claims.claim(framesToClaim, "frame");
   return { name: connectorName };
 }
