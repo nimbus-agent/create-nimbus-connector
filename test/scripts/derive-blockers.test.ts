@@ -40,7 +40,13 @@ describe("blockerFor", () => {
   });
 
   it("collapses whitespace and truncates a long statement", () => {
-    const source = `const x = {\n  a: 1,\n${"  // ".repeat(1)}\n};`;
-    expect(first(source).detail).not.toContain("\n");
+    const source = `const x = {
+      a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: 9, a10: 10,
+      a11: 11, a12: 12, a13: 13, a14: 14, a15: 15, a16: 16, a17: 17,
+    };`;
+    const b = first(source);
+    expect(b.detail).not.toContain("\n");
+    expect(b.detail.endsWith("…")).toBe(true);
+    expect(b.detail).toHaveLength(101);
   });
 });
