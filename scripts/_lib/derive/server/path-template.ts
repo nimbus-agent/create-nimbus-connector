@@ -1,6 +1,18 @@
 import type { AstNode } from "../ast.ts";
 
 /**
+ * A hoisted local, as the caller (Task 9, reading the hoist statement itself) resolves it:
+ * which spec arg it came from, and whether the hoist was the boolean form or the
+ * default-value form. Both forms produce a bare identifier reference at the *use* site — the
+ * two are indistinguishable from a path-template expression alone — so the mode has to be
+ * carried in from where it's actually decided, `renderHoists`' choice of hoist statement:
+ *
+ *   const <local> = <param>.<name> === true ? "true" : "false";   // boolean  -> bool: true
+ *   const <local> = <param>.<name> ?? <default>;                  // default  -> bool: false
+ */
+export type PathLocal = { arg: string; bool: boolean };
+
+/**
  * The inverse of src/emit/server/path-template.ts's rendering.
  *
  * `argExpression` (in the forward emitter) wraps an argument's reference according to its
@@ -10,18 +22,14 @@ import type { AstNode } from "../ast.ts";
  * Recovering a placeholder is reading that same shape back off: unwrap the mode's wrapper (if
  * any), then resolve the bare reference through `locals` or a direct property read.
  *
- * A bare hoisted-local Identifier always recovers as `|bool}`, never plain `|raw}` (the
- * default when a placeholder carries no mode suffix): renderHoists's boolean branch and its
- * default-value branch both produce a bare identifier, so the two are indistinguishable from
- * the emitted AST alone. `|bool}` is the shape that actually appears in the corpus's
- * bare-hoisted-local usage (newrelic's `only_open`); a raw-mode bare hoisted default is not
- * observed here, and if one exists elsewhere it would be mis-recovered as `|bool}` rather than
- * rejected — a real gap, not a defect this recognizer can close without more information than
- * the emitted source carries.
+ * A bare hoisted-local Identifier recovers as `|bool}` when `locals` says it came from the
+ * boolean hoist form, and as an unsuffixed raw placeholder when it says it came from the
+ * default-value form — see `PathLocal`. An identifier not present in `locals` at all is not a
+ * hoisted local this recognizer can name, and returns undefined rather than guessing.
  */
 export function recognizePath(
   node: AstNode,
-  locals: ReadonlyMap<string, string>,
+  locals: ReadonlyMap<string, PathLocal>,
 ): string | undefined {
   if (node.type === "StringLiteral") {
     return typeof node["value"] === "string" ? node["value"] : undefined;
@@ -56,14 +64,15 @@ const WRAPPER_MODES: Readonly<Record<string, "num" | "enc">> = {
 /**
  * Resolves the arg name behind a bare reference: a hoisted local via `locals`, or a direct
  * `p.<name>` property read — the two forms a mode's wrapper argument (or an unwrapped raw
- * placeholder) can take.
+ * placeholder) can take. Only the name is relevant here — a wrapper's mode (num/enc) is fixed
+ * by the wrapper function itself, not by whether the hoist was the boolean or default form.
  */
 function argNameFromExpr(
   expression: AstNode,
-  locals: ReadonlyMap<string, string>,
+  locals: ReadonlyMap<string, PathLocal>,
 ): string | undefined {
   if (expression.type === "Identifier") {
-    return locals.get(String(expression["name"]));
+    return locals.get(String(expression["name"]))?.arg;
   }
   if (expression.type === "MemberExpression") {
     const object = expression["object"] as AstNode;
@@ -77,11 +86,12 @@ function argNameFromExpr(
 
 function placeholderFor(
   expression: AstNode,
-  locals: ReadonlyMap<string, string>,
+  locals: ReadonlyMap<string, PathLocal>,
 ): string | undefined {
   if (expression.type === "Identifier") {
-    const argName = locals.get(String(expression["name"]));
-    return argName === undefined ? undefined : `\${arg.${argName}|bool}`;
+    const local = locals.get(String(expression["name"]));
+    if (local === undefined) return undefined;
+    return local.bool ? `\${arg.${local.arg}|bool}` : `\${arg.${local.arg}}`;
   }
   if (expression.type === "MemberExpression") {
     const argName = argNameFromExpr(expression, locals);
