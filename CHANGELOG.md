@@ -117,6 +117,13 @@ is something an existing user needs told even when no subject line would say so.
   written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
   which is new in this same unreleased range.
 
+## [0.6.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.5.0...create-nimbus-connector-v0.6.0) (2026-08-03)
+
+
+### Features
+
+* Stage E — conditional query parameters, and the corpus reach with its method ([#54](https://github.com/nimbus-agent/create-nimbus-connector/issues/54)) ([b635ec3](https://github.com/nimbus-agent/create-nimbus-connector/commit/b635ec3bb779589d2379416b903a47583c19333e))
+
 ## [0.5.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.4.0...create-nimbus-connector-v0.5.0) (2026-08-02)
 
 
