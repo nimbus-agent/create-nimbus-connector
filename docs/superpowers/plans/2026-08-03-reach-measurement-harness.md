@@ -1525,6 +1525,21 @@ describe("recognizeTools", () => {
   it("returns an empty list for a module with no reg calls", () => {
     expect(run("const a = 1;").tools).toEqual([]);
   });
+
+  it("refuses a conditional that is not the boolean hoist, rather than claiming it wrongly", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ limit: z.number().optional() }),",
+      "  async (p) => {",
+      '    const mode = p.limit === 0 ? "a" : "b";',
+      "    return jsonResult(await nrGet(`/x?m=${mode}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    expect(run(source).tools).toBeUndefined();
+  });
 });
 ```
 
@@ -1557,7 +1572,17 @@ function isRegCall(node: AstNode): AstNode | undefined {
   return callee.type === "Identifier" && callee["name"] === "reg" ? call : undefined;
 }
 
-/** `const only = p.only_open === true ? "true" : "false";` -> ["only", "only_open"]. */
+/**
+ * `const only = p.only_open === true ? "true" : "false";` -> `["only", "only_open"]`.
+ *
+ * Every part of the shape is checked, not merely enough of it to extract a name. renderHoists
+ * writes exactly one form for a boolean, so a conditional differing anywhere is not a hoist —
+ * and reading `p.limit === 0 ? "a" : "b"` as one would CLAIM a statement the emitter could not
+ * have written, derive `${arg.limit|bool}`, and then fail the byte-diff with no bucket naming
+ * why. Over-claiming is what the totality rule exists to prevent, and it has to be prevented
+ * inside the matchers too: the rule only sees statements nobody claimed, not statements someone
+ * claimed wrongly.
+ */
 function hoistedLocal(statement: AstNode): [string, string] | undefined {
   if (statement.type !== "VariableDeclaration") return undefined;
   const declarator = (statement["declarations"] as AstNode[])[0];
@@ -1565,9 +1590,16 @@ function hoistedLocal(statement: AstNode): [string, string] | undefined {
   const init = declarator?.["init"] as AstNode | undefined;
   if (typeof local !== "string" || init?.type !== "ConditionalExpression") return undefined;
 
+  if ((init["consequent"] as AstNode)["value"] !== "true") return undefined;
+  if ((init["alternate"] as AstNode)["value"] !== "false") return undefined;
+
   const test = init["test"] as AstNode;
-  const member = test["left"] as AstNode | undefined;
-  const argName = (member?.["property"] as AstNode | undefined)?.["name"];
+  if (test.type !== "BinaryExpression" || test["operator"] !== "===") return undefined;
+  if ((test["right"] as AstNode)["value"] !== true) return undefined;
+
+  const member = test["left"] as AstNode;
+  if (member.type !== "MemberExpression") return undefined;
+  const argName = (member["property"] as AstNode)["name"];
   return typeof argName === "string" ? [local, argName] : undefined;
 }
 
@@ -1659,7 +1691,7 @@ export function recognizeTools(
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `bun test test/scripts/derive-tools-hand.test.ts`
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -2287,7 +2319,7 @@ git commit -m "feat(reach): tier connectors and summarise the corpus"
   - `type Baseline = { nimbusCommit: string; tiers: Record<string, Tier> }`
   - `buildBaseline(commit: string, results: readonly ConnectorResult[]): Baseline`
   - `compareBaseline(baseline: Baseline, results: readonly ConnectorResult[], commit: string): { refusal?: string; regressions: { name: string; from: Tier; to: Tier }[] }`
-  - `assertComparable(args: { commit: string; dirty: boolean }): string | undefined` — the refusal message, or `undefined` when comparison is allowed
+  - `assertComparable(args: { commit: string; dirty: boolean; gitError?: string }): string | undefined` — the refusal message, or `undefined` when comparison is allowed
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2326,6 +2358,12 @@ describe("assertComparable", () => {
 
   it("refuses when the root is not a git checkout", () => {
     expect(assertComparable({ commit: "", dirty: false })).toMatch(/not a git checkout/i);
+  });
+
+  it("names git itself as the problem when git could not run at all", () => {
+    const message = assertComparable({ commit: "", dirty: false, gitError: "spawn git ENOENT" });
+    expect(message).toMatch(/spawn git ENOENT/);
+    expect(message).not.toMatch(/not a git checkout/i);
   });
 });
 
@@ -2390,7 +2428,17 @@ export function buildBaseline(commit: string, results: readonly ConnectorResult[
  * packages/mcp-connectors — the only tree this harness reads — so unrelated work elsewhere in
  * the monorepo does not make the gate something to work around.
  */
-export function assertComparable(args: { commit: string; dirty: boolean }): string | undefined {
+export function assertComparable(args: {
+  commit: string;
+  dirty: boolean;
+  gitError?: string;
+}): string | undefined {
+  // Distinguished from "not a git checkout" because the two send a developer to different
+  // problems: one is fixed by installing git, the other by pointing --nimbus-root somewhere
+  // else. A single message covering both would be wrong half the time.
+  if (args.gitError !== undefined && args.gitError !== "") {
+    return `git could not run against the Nimbus root: ${args.gitError}. A baseline needs git to name the commit it measured; the plain report still works without --baseline.`;
+  }
   if (args.commit === "") {
     return "The Nimbus root is not a git checkout, so a baseline cannot name what it measured. The plain report still works without --baseline.";
   }
@@ -2428,7 +2476,7 @@ export function compareBaseline(
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `bun test test/scripts/reach-baseline.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -2530,6 +2578,16 @@ export function connectorDirs(root: string): string[] {
     .sort();
 }
 
+/**
+ * Reads the real connector, normalising line endings on THAT side only — the same asymmetry
+ * scripts/_lib/golden-diff.ts's diffAgainstReal uses, and for the same reason: normalise what
+ * this repository does not control, compare verbatim what it produces. Normalising the
+ * generated side too would mask a CRLF leak from the emitter rather than surface it.
+ *
+ * Safe because .gitattributes pins `* text=auto eol=lf`, so the working tree is LF even under
+ * core.autocrlf=true. Verified on Windows: all six emitted files are LF-only, including
+ * README.md, which formatAll does not touch.
+ */
 function readReal(dir: string): Map<string, string> {
   const out = new Map<string, string>();
   const walk = (sub: string): void => {
@@ -2543,12 +2601,21 @@ function readReal(dir: string): Map<string, string> {
   return out;
 }
 
-/** Empty string on any failure, which `assertComparable` reads as "not a git checkout". */
-export function git(root: string, args: string[]): string {
+/**
+ * Runs git, reporting *why* it produced nothing.
+ *
+ * `error` is what separates "git is not installed" from "this directory is not a checkout".
+ * Collapsing both to an empty string sends a developer whose PATH is missing git off to check
+ * their --nimbus-root, which is the wrong problem and the wrong fix.
+ */
+export function git(root: string, args: string[]): { value: string; error: string } {
   try {
-    return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
-  } catch {
-    return "";
+    return {
+      value: execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim(),
+      error: "",
+    };
+  } catch (err) {
+    return { value: "", error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -2625,9 +2692,13 @@ async function main(argv: readonly string[]): Promise<void> {
 
   if (!baseline) return;
 
-  const commit = git(root, ["rev-parse", "HEAD"]);
-  const dirty = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]) !== "";
-  const refusal = assertComparable({ commit, dirty });
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
+  const refusal = assertComparable({
+    commit: head.value,
+    dirty: status.value !== "",
+    gitError: head.error,
+  });
   if (refusal !== undefined) {
     console.log(`\n${refusal}`);
     process.exit(2);
@@ -2636,7 +2707,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
     typeof compareBaseline
   >[0];
-  const { refusal: mismatch, regressions } = compareBaseline(stored, results, commit);
+  const { refusal: mismatch, regressions } = compareBaseline(stored, results, head.value);
   if (mismatch !== undefined) {
     console.log(`\n${mismatch}`);
     process.exit(2);
@@ -2696,20 +2767,24 @@ async function main(argv: readonly string[]): Promise<void> {
   const { nimbusRoot } = parseArgs(argv);
   const root = resolveNimbusRoot({ flag: nimbusRoot, env: process.env["NIMBUS_ROOT"], scriptDir });
 
-  const commit = git(root, ["rev-parse", "HEAD"]);
-  const dirty = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]) !== "";
-  const refusal = assertComparable({ commit, dirty });
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
+  const refusal = assertComparable({
+    commit: head.value,
+    dirty: status.value !== "",
+    gitError: head.error,
+  });
   if (refusal !== undefined) {
     console.log(refusal);
     process.exit(2);
   }
 
   const results = selectConnectors([], connectorDirs(root)).map((name) => measure(name, root));
-  const baseline = buildBaseline(commit, results);
+  const baseline = buildBaseline(head.value, results);
   writeFileSync(BASELINE_PATH, `${JSON.stringify(baseline, undefined, 2)}\n`);
 
   console.log(`Wrote ${BASELINE_PATH}`);
-  console.log(`  measured at Nimbus ${commit}`);
+  console.log(`  measured at Nimbus ${head.value}`);
   console.log(`  ${results.length} connectors recorded`);
 }
 
