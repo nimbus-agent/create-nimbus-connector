@@ -213,8 +213,10 @@ export function recognizeFetchHelper(
     if (base === undefined || serviceLabel === undefined || local === "") continue;
 
     // Either inline headers or accessor, but not both
-    if ((inlineHeadersObj !== undefined && headersAccessorName !== undefined) ||
-        (inlineHeadersObj === undefined && headersAccessorName === undefined)) {
+    if (
+      (inlineHeadersObj !== undefined && headersAccessorName !== undefined) ||
+      (inlineHeadersObj === undefined && headersAccessorName === undefined)
+    ) {
       continue;
     }
 

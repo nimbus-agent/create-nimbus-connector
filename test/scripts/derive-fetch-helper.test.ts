@@ -31,7 +31,7 @@ const DATADOG = [
 
 const GRAFANA = [
   "async function grafanaGet(path: string): Promise<unknown> {",
-  "  const pathPart = path.startsWith(\"/\") ? path : `/${path}`;",
+  '  const pathPart = path.startsWith("/") ? path : `/${path}`;',
   "  const res = await fetch(`${baseUrl()}${pathPart}`, {",
   "    headers: authHeaders(),",
   "  });",
