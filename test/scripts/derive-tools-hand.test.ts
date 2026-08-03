@@ -24,7 +24,11 @@ const BLOCK = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  return { tools: recognizeTools(statements, claims), unclaimed: claims.unclaimed(statements) };
+  return {
+    tools: recognizeTools(statements, claims),
+    unclaimed: claims.unclaimed(statements),
+    claims,
+  };
 }
 
 describe("recognizeTools", () => {
@@ -140,5 +144,82 @@ describe("recognizeTools", () => {
       ");",
     ].join("\n");
     expect(run(source).tools).toBeUndefined();
+  });
+
+  it("refuses a reg(...) call with a fifth argument, rather than reading only the first four", () => {
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")), "extra");';
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a reg(...) call missing its handler argument (three arguments), rather than reading a partial call", () => {
+    const source = 'reg("t", "d", z.object({}));';
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a block handler with no statements at all, rather than treating it as an empty-but-valid body", () => {
+    const source = ["reg(", '  "t",', '  "d",', "  z.object({}),", "  async (p) => {},", ");"].join(
+      "\n",
+    );
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a hoist position statement declaring more than one variable, e.g. const a = 1, b = 2;", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ only_open: z.boolean().optional() }),",
+      "  async (p) => {",
+      "    const a = 1, b = 2;",
+      "    return jsonResult(await nrGet(`/x`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a hoist position statement whose declarator id is a destructuring pattern, not a plain identifier", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ only_open: z.boolean().optional() }),",
+      "  async (p) => {",
+      "    const { only_open } = p;",
+      "    return jsonResult(await nrGet(`/x`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("does not recognize a reg(...) call reached through a member expression, e.g. obj.reg(...)", () => {
+    // isRegCall requires an Identifier callee named "reg" — a member-expression callee is a
+    // different shape (and not one renderTool ever emits), so the statement is simply not a
+    // reg call at all: it is skipped rather than fed to recognizeOne, tools is the successful
+    // (but empty) result, and the statement itself is left unclaimed.
+    const source = 'obj.reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")));';
+    const { tools, unclaimed } = run(source);
+    expect(tools).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a handler whose jsonResult(...) call has more than one argument, rather than reading only the first", () => {
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x"), "extra"));';
+    const { tools, claims } = run(source);
+    expect(tools).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
   });
 });
