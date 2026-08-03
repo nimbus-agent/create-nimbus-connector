@@ -42,4 +42,20 @@ describe("deriveManifest", () => {
   it("throws on malformed JSON", () => {
     expect(() => deriveManifest("{not json")).toThrow();
   });
+
+  it("omits id when it is not present in the manifest", () => {
+    const noId = JSON.stringify({
+      displayName: "New Relic",
+      version: "0.1.0",
+      description: "Query New Relic.",
+      author: "Nimbus",
+      entrypoint: "dist/server.js",
+      runtime: "bun",
+      permissions: { network: ["api.newrelic.com"] },
+      hitlRequired: [],
+      syncInterval: 300,
+      minNimbusVersion: "0.2.0",
+    });
+    expect(deriveManifest(noId)).not.toHaveProperty("id");
+  });
 });
