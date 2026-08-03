@@ -97,8 +97,10 @@ machinery already emits `const lim = p.limit ?? 50;` for any argument declaring 
 `ArgSchema.local` already names that const. Repeating the default in `query` would give one
 value two sources of truth that could disagree.
 
-This is also what makes `discord` byte-reachable with no new machinery: its `lim` is exactly
-`ArgSchema`'s existing `local`.
+This is also why reproducing the corpus's hoisting shape for `discord` needed no new machinery:
+its `lim` is exactly `ArgSchema`'s existing `local`, so putting the default on the argument
+rather than the query entry means the existing hoist machinery already emits
+`const lim = p.limit ?? 50;`, and `ArgSchema.local` already names that const.
 
 ## Rendering
 
@@ -137,9 +139,10 @@ asked of what is actually emitted rather than restated, so the implementation mu
 rather than assume it.
 
 **Consequence for the `discord` fixture:** it currently declares no `baseConst`, so `baseExpr`
-would inline the literal where the real connector writes `${DISCORD_API}`. Byte-matching
-`discord` requires adding `"baseConst": "DISCORD_API"` to its fixture spec. That is a fixture
-change, not a design constraint.
+would inline the literal where the real connector writes `${DISCORD_API}`. Declaring
+`"baseConst": "DISCORD_API"` on its fixture spec makes the emitted base match the real
+connector's hoisted const rather than inlining the literal — one divergence fewer, not a byte
+match. That is a fixture change, not a design constraint.
 
 ### Encoding
 
@@ -239,6 +242,11 @@ Each is a parse-time error naming the offending field:
 - **`query` present while `path` contains `?`.** Two mechanisms writing one query string is the
   ambiguity class the DSL already rejects `{id}` and `/:id` for. When a tool needs `query`, its
   whole query string moves there.
+- **`query` present on a tool whose `path` does not begin with `/`.** `renderPath` threads the
+  query branch's base straight into the template with no separator, and never applies the
+  leading-slash normalization `renderFetchHelper`'s own `pathPart` guard applies — a path
+  missing its leading slash would silently fuse onto the base with nothing between them, and
+  the malformed URL would only be visible once the connector makes a request.
 - **An empty `query` array.** Consistent with `fields`: an empty list expresses nothing and is
   more likely a mistake than an intent.
 - **`omitWhen: "empty"` on an arg not declaring `type: "string"`.** Comparing a number or

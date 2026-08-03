@@ -196,10 +196,15 @@ The three items under [Consolidation](#consolidation), then retiring
 Stage E asks for the corpus reach to be published **with its method**, because the number is
 easy to get wrong and was — three times, each wrong in a way the next pass exposed.
 
-**The question.** For how many of the 40 hand-written extractor files could the generator emit
-a filter that behaves the same? Two extractors behave the same when, for any row that
-connector's API actually returns, the haystack `filterByQuery` builds contains the same
-substrings in the same order — so `.includes(needle)` answers identically for every query.
+**The question.** For how many of the 40 hand-written extractor files can the three entry
+kinds — a plain key, a nested-path read, a tag helper — express the file's whole field list?
+That is the *expressible* question, and it is narrower than *generatable*: a connector can be
+expressible and still not be one the generator actually emits, when a separate rule blocks it.
+`readwise` is the case in point — its field lists are expressible, but it declares two
+extractors and this generator allows at most one per connector, so it is expressible without
+being generatable. Two extractors behave the same when, for any row that connector's API
+actually returns, the haystack `filterByQuery` builds contains the same substrings in the same
+order — so `.includes(needle)` answers identically for every query.
 
 **The method.** Read every file. For each element of the returned array, classify it as a plain
 key, a nested-path read of any depth, or a tag helper — and for every *local* helper, diff its

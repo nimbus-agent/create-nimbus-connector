@@ -123,6 +123,9 @@ all — the hoist resolves it to a concrete value before the query line ever run
 - `query` on a `"search"` tool — it builds its query string from `filter`, not `query`.
 - `query` together with a `path` that already contains `"?"` — both write the query string;
   a tool that needs `query` moves its whole query string there instead.
+- `query` on a tool whose `path` does not begin with `"/"` — the `query` branch builds an
+  absolute URL by joining the base to `path` directly, with no separator, so `path` must carry
+  its own leading slash.
 - an entry whose `arg` does not name a key the tool's `args` declares.
 - two entries sharing the same `name` — the second would silently win at runtime.
 - `omitWhen: "empty"` on a non-`string` arg — comparing a `number` or `boolean` to `""` does
