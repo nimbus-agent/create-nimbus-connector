@@ -109,7 +109,11 @@ as a number that drifted down for no stated reason.
 ### Parser
 
 `@babel/parser`, as a **devDependency**. MIT, pure JavaScript, no runtime dependencies and no
-native binary.
+native binary. Called as
+`parse(source, { sourceType: "module", plugins: ["typescript"] })` — connector source carries
+type annotations and generics, which the base parser rejects outright. No `jsx` or `decorators`
+plugin: neither appears in the corpus, and a plugin list longer than the syntax in play only
+widens what parses without widening what is recognized.
 
 The existing `typescript` devDependency cannot do this: it is `^7.0.2`, the native port, and it
 exposes no AST — `createSourceFile`, `SyntaxKind` and `forEachChild` are all `undefined`.
@@ -133,6 +137,19 @@ type Derivation =
 subtree it recognized, and returns the spec fields that would have produced it. Statement
 granularity is the unit because statements are what the emitter writes.
 
+A claim is a **`[start, end)` byte range** taken from the Babel node, not a statement index. Two
+consequences, both required rather than incidental:
+
+- **A matcher may claim several statements at once**, which it must, because the emitter writes
+  multi-statement constructs: the hoisted argument consts that precede a handler, the
+  `const u = new URL(...)` / `u.searchParams.set(...)` / return trio of the query branch, and the
+  `token` / `cachedToken` / `tokenExpiresAt` bindings the client-credentials branch emits
+  together. A matcher that could only claim one statement would leave the others unclaimed and
+  fail every connector using those branches.
+- **Coverage is containment, not identity.** A statement is covered when its range lies inside
+  some claimed range, so nested statements inside a claimed arrow-function body need no separate
+  claim, and the walker needs no notion of which list a node came from.
+
 **The totality rule.** After every matcher has run, walk each top-level and function-body
 statement in `src/server.ts`. Any statement not covered by a claim fails the connector. **There
 is no ignore-the-rest path.** This is the whole difference between this harness and the method
@@ -155,6 +172,26 @@ offending sub-expression, so an inlined default like `p.pageSize ?? 50` lands in
 its own bucket rather than inside a general "unknown" pile. The rule is not weakened; the report
 is made specific enough to act on.
 
+### No escape hatch
+
+There is no "hand-written block" claim, and there will not be one. A connector whose
+`src/server.ts` contains a construct the spec language cannot express **is** blocked, permanently
+if the construct is one this generator has declined to support — `zoom`, which does not use
+`makeQueryFilter` at all, is the clearest case. That is not a shortcoming of the measurement; it
+is the measurement. An escape hatch would let unrecognized code count as recognized, which is the
+same silence the totality rule exists to remove, reintroduced under a friendlier name.
+
+This does mean the histogram mixes two populations: constructs the spec language could grow to
+express, and constructs it never will. **The harness does not attempt to separate them**, because
+that separation is a judgement recorded in `docs/ROADMAP.md`'s *Known limitations* and *Considered
+and declined*, and a copy of it in code would go stale exactly the way a restated number does.
+Reading the histogram against those two lists is the maintainer's step, and it is a short one:
+the buckets are named after the constructs those sections already name.
+
+The corollary is worth stating plainly, since it sets expectations for anyone trying to move the
+number: `server-identical` is not a tier every connector can eventually reach. Some are
+permanently blocked, by decisions already made and written down.
+
 ## Output
 
 ```
@@ -171,6 +208,12 @@ dependency on the formatter matching the one the monorepo used: the same banner,
 warning, and the same hard failure when Biome is unavailable, because unformatted output would
 produce spurious diffs indistinguishable from reach regressions.
 
+Formatting costs nothing worth designing around, and the reason is worth recording so it is not
+re-litigated: `formatAll` does **not** shell out. `src/format.ts` loads `@biomejs/js-api` with the
+`@biomejs/wasm-nodejs` backend once, in-process, and calls `formatContent` on strings — no child
+process, no CLI, no temp files. Scaling from `diff:golden`'s fixtures to 94 connectors multiplies
+the number of in-process calls and nothing else.
+
 ## The baseline
 
 `fixtures/reach-baseline.json` records each connector's tier and the Nimbus commit it was
@@ -180,6 +223,17 @@ measured at, obtained with `git -C <root> rev-parse HEAD`.
 refused, not warned about** — a verdict spanning two corpora is precisely the false green this
 repository is organized against. If the root is not a git checkout, `--baseline` and
 `reach:baseline` both refuse; the plain report still works.
+
+**A dirty checkout is refused on the same grounds.** A commit SHA describes a tree, and if the
+working tree differs from it, the baseline would file measurements of bytes that exist nowhere
+under a SHA that claims otherwise — a false green with a paper trail, which is worse than no
+record. Both `--baseline` and `reach:baseline` refuse when
+`git -C <root> status --porcelain -- packages/mcp-connectors` is non-empty.
+
+Scoped to that path deliberately: it is the only tree this harness reads, and refusing on
+unrelated dirt elsewhere in the monorepo — a stray build artifact, an in-progress change to the
+gateway — would make the gate annoying enough to be worked around, which is the failure mode that
+ends with someone passing `--force`.
 
 The file follows `fixtures/expectations.json`'s rule: it is re-baselined when the corpus moves,
 never edited to make a run pass.
