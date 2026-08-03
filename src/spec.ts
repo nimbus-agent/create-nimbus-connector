@@ -126,9 +126,11 @@ export function needsExtractor(filter: { fields?: readonly FieldEntry[] }): bool
 /**
  * The per-connector search filter. `fields` omitted means the emitter cannot express the
  * extraction and emits a throwing stub instead — of the 40 corpus filter files that hand-write
- * an extractor, 9 are reachable with these entry kinds, 30 define a local helper function or
- * need logic no path/tag entry can express (a join, an array flatten, a coercion), and one is
- * hand-rolled. See the Stage E extractor design.
+ * an extractor, 26 can be expressed with these entry kinds and 14 cannot, the latter needing a
+ * join over a non-`tags` array, a numeric coercion, an alternate tag shape, or a conditional
+ * search. Defining a local helper does NOT by itself put a file out of reach: a helper that
+ * walks a nested path is exactly a `path` entry, which is why an earlier count said 9. See
+ * ROADMAP's "Measuring reach" for the method.
  */
 export const SearchFilterSchema = z
   .strictObject({
@@ -185,6 +187,47 @@ export const SearchFilterSchema = z
     }
   });
 
+/**
+ * Whether a query entry's value can genuinely be `undefined` at the point
+ * `renderQueryLines` (src/emit/server/query.ts) reads it — i.e. whether `omitWhen`'s guard
+ * has anything to omit. Requires all three: `"optional": true` (a required arg's value
+ * always exists by the time the handler runs), no `"default"` (the hoist emits
+ * `p.x ?? <default>`, never `undefined`), and not type `"boolean"` (`isHoisted` in
+ * `src/emit/server/args.ts` hoists every boolean regardless of `default`, and
+ * `renderHoists` emits `p.x === true ? "true" : "false"`, also never `undefined`).
+ *
+ * One predicate governs both directions of "does `omitWhen` make sense on this entry", so
+ * they cannot independently drift: `omitWhen` SET on an arg this returns `false` for is a
+ * dead guard (can never omit); `omitWhen` ABSENT on an arg this returns `true` for is a
+ * missing guard — `searchParams.set` receives a value that can be `undefined`, which is
+ * `TS2345` for a string arg (the wrapped-in-`String()` cases compile, but send the literal
+ * query value `"undefined"` on the wire, since `String(undefined) === "undefined"`).
+ */
+function canOmitQueryValue(arg: z.infer<typeof ArgSchema>): boolean {
+  return arg.optional && arg.default === undefined && arg.type !== "boolean";
+}
+
+/**
+ * One query-string parameter. `name` is the key as the API spells it and is deliberately not
+ * an identifier check — `page[size]` is a real corpus key.
+ *
+ * `omitWhen` is an enum rather than a boolean because the guard it selects is one of two
+ * specific predicates, not a yes/no: `"absent"` tests only `!== undefined` (circleci's
+ * `pageToken`, github-actions's `branch`/`event`/`status`, github's `page`), `"empty"` adds
+ * `&& !== ""` (discord/google-meet/google-photos's `after`/`pageToken`/`filter`). Both are
+ * genuine author variance in the corpus — three connectors each way — not one canonical form
+ * with an optional second clause, so a guarded entry must say which predicate it means; there
+ * is no default between them. `omitWhen` itself stays optional — undefined means the entry is
+ * set unconditionally, which is the third real shape (`limit`).
+ */
+export const QueryParamSchema = z.strictObject({
+  name: z.string().min(1),
+  arg: z.string().min(1),
+  omitWhen: z.enum(["absent", "empty"]).optional(),
+});
+
+export type QueryParam = z.infer<typeof QueryParamSchema>;
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -198,6 +241,10 @@ export const ToolSchema = z
       )
       .default({}),
     path: z.string().optional(),
+    query: z
+      .array(QueryParamSchema)
+      .min(1, "a query must declare at least one parameter")
+      .optional(),
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
@@ -260,6 +307,133 @@ export const ToolSchema = z
   })
   .refine((t) => t.impl === "search" || (t.rows === undefined && t.maxLimit === 100), {
     message: '"rows" and "maxLimit" are only valid on a tool with "impl": "search"',
+  })
+  .refine((t) => !(t.impl === "stub" && t.query !== undefined), {
+    message: 'a "stub" tool issues no request, so "query" has nothing to describe',
+  })
+  // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
+  // never reads t.query — accepted at parse time and then silently discarded at emit time,
+  // the exact "accepted then discarded" failure this project has already fixed once (see
+  // the omitWhen/needsExtractor checks above). rest-kit tools cannot be impl: "search" at
+  // all (the schema's own rest-kit refine above rejects it), so this only ever fires for
+  // hand-rolled or read-only-kit.
+  .refine((t) => !(t.impl === "search" && t.query !== undefined), {
+    message:
+      'a "search" tool builds its query string from "filter", so "query" has nothing to describe',
+  })
+  .refine((t) => !(t.query !== undefined && (t.path ?? "").includes("?")), {
+    message:
+      '"query" and a "?" inside "path" both write the query string — use one. A tool that ' +
+      'needs "query" moves its whole query string there.',
+  })
+  .superRefine((t, ctx) => {
+    if (t.query === undefined) return;
+
+    // renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
+    // (the fetch helper's base) straight into the template with no separator — it never
+    // applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
+    // applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
+    // cleanly; a path that does not silently fuses onto the base with nothing between them
+    // (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
+    // only visible once the connector makes a request. Rejecting here, rather than teaching
+    // renderPath the same normalization, keeps that guard in the one place
+    // (fetch-helper.ts) that owns it.
+    //
+    // Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
+    // impl/path pairing refine above), and this check evaluated `""` as that stub's path
+    // would fire alongside the "stub" + "query" rejection a few refines up — two issues for
+    // one mistake, with the correct one buried under noise. The stub case is already
+    // rejected there; this check has nothing to add for it.
+    if (t.path !== undefined && !t.path.startsWith("/")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["path"],
+        message:
+          `tool ${JSON.stringify(t.name)} declares "query", so "path" must begin with "/" ` +
+          `— got ${JSON.stringify(t.path)}`,
+      });
+    }
+
+    const seen = new Set<string>();
+    for (const [i, q] of t.query.entries()) {
+      // `q.arg in t.args` reaches inherited properties (`"toString"` would pass with an empty
+      // `args: {}`), and the renderer would then emit a reference to `Object.prototype`'s
+      // method instead of failing loudly. `Object.hasOwn` checks only t.args's own keys.
+      const declared = Object.hasOwn(t.args, q.arg);
+      if (!declared) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "arg"],
+          message: `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, which the tool does not declare`,
+        });
+      }
+      if (seen.has(q.name)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "name"],
+          message: `"query" declares ${JSON.stringify(q.name)} twice — the second would silently win`,
+        });
+      }
+      seen.add(q.name);
+
+      // Both checks below are skipped when the arg itself is undeclared — the "does not
+      // declare" issue above already covers that case, and `arg.type`/`arg.default` would
+      // have nothing real to report on.
+      if (!declared) continue;
+      const arg = t.args[q.arg]!;
+
+      // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
+      // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
+      if (q.omitWhen === "empty" && arg.type !== "string") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "omitWhen"],
+          message:
+            `"query" entry ${JSON.stringify(q.name)} sets omitWhen: "empty", but arg ` +
+            `${JSON.stringify(q.arg)} declares type ${JSON.stringify(arg.type)} — comparing ` +
+            `a ${arg.type} to "" does not typecheck`,
+        });
+      }
+
+      // omitWhen's guard only omits anything if the value it tests can genuinely be
+      // undefined — canOmitQueryValue's exact predicate. Both directions of that question
+      // are checked here, off the one predicate, so they cannot drift apart: no corpus
+      // connector combines omitWhen with a dead guard (github writes
+      // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
+      // with no default and type number).
+      if (q.omitWhen === undefined) {
+        // A value that CAN be undefined and has no guard reaches searchParams.set
+        // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
+        // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
+        // since the non-string branch wraps in String(...) and String(undefined) ===
+        // "undefined". Neither is visible to a spec author until the generated package is
+        // built or the request is inspected — this rejection is what makes it visible here.
+        if (canOmitQueryValue(arg)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["query", i, "omitWhen"],
+            message:
+              `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
+              'which can be undefined ("optional": true, no "default", not type "boolean") ' +
+              'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
+              'parameter is sent as an unconditional (and possibly literal-"undefined") value',
+          });
+        }
+      } else if (!canOmitQueryValue(arg)) {
+        const violations: string[] = [];
+        if (!arg.optional) violations.push('is not declared "optional": true');
+        if (arg.default !== undefined) violations.push('declares a "default"');
+        if (arg.type === "boolean") violations.push('is type "boolean"');
+        ctx.addIssue({
+          code: "custom",
+          path: ["query", i, "omitWhen"],
+          message:
+            `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
+            `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
+            "undefined, so the guard can never omit the parameter",
+        });
+      }
+    }
   });
 
 export const EnvSchema = z

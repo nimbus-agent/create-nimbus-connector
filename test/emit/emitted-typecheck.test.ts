@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generate } from "../../src/emit/index.ts";
@@ -217,6 +217,38 @@ export async function runReadOnlyMcpConnector(
   _serverName: string,
   _register: (reg: ZodToolRegistrar) => void,
 ): Promise<void> {}
+`;
+
+/**
+ * A second, generically-typed stand-in for `shared/mcp-tool-kit.ts`, used ONLY by the
+ * conditional-query-parameter compile below — NOT a replacement for MCP_TOOL_KIT_STANDIN
+ * above, which every other describe block in this file keeps using unchanged.
+ *
+ * MCP_TOOL_KIT_STANDIN's `ZodToolRegistrar` deliberately types its handler's argument as
+ * `never` ("loosely typed on purpose... not to reproduce every real overload" — see that
+ * const's own comment) because no test that uses it ever reads a field off the handler
+ * argument. This test is the first one that does: `p.limit`, `p.channelId`, `p.after`. A
+ * `never`-typed `p` would fail every one of those with `TS2339`, which is not the defect
+ * this test exists to catch — it exists to catch a wrong query/URL shape, not the stand-in's
+ * own looseness. `T` is inferred from the emitted `z.object({...})` schema argument, exactly
+ * as the real generated call site expects.
+ */
+const QUERY_TOOL_KIT_STANDIN = `import type { ZodObject, ZodRawShape, z } from "zod";
+export type ZodToolRegistrar = <T extends ZodRawShape>(
+  name: string,
+  description: string,
+  schema: ZodObject<T>,
+  handler: (args: z.infer<ZodObject<T>>) => Promise<unknown>,
+) => void;
+export function createRegisterSimpleTool(_server: unknown): unknown {
+  throw new Error("stub");
+}
+export function createZodToolRegistrar(_register: unknown): ZodToolRegistrar {
+  throw new Error("stub");
+}
+export function mcpJsonResult(_data: unknown): unknown {
+  throw new Error("stub");
+}
 `;
 
 describe("emitted --gateway-wiring output typechecks", () => {
@@ -627,6 +659,114 @@ describe("a generated package containing a bespoke fieldsOf extractor typechecks
     expect(output).not.toContain("TS6133"); // declared but never read (unused import)
     expect(output).not.toContain("TS2307"); // cannot find module (unresolved import)
     expect(output).not.toContain("TS2345"); // argument not assignable (fieldsOf vs FieldExtractor)
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a generated package with a conditional query parameter typechecks", () => {
+  /**
+   * A read-only-kit spec with one tool carrying both an unconditional query parameter
+   * (`limit`) and a conditional one (`after`, omitWhen: "empty") — the only CI-runnable gate
+   * that compiles the emitted `new URL(...)`/`searchParams` shape rather than string-matching
+   * it. `fetchHelper.baseConst` is set deliberately: renderBaseConst (fetch-helper.ts) emits
+   * the module-scope base const only when a read or write helper is also emitted, on the
+   * theory that a spec whose tools are all stubs would otherwise declare a const nothing
+   * reads. A query tool is a third reader of that const (baseExpr(spec) is spliced into the
+   * path template's `prefix` so `new URL(...)` gets an absolute URL) — this spec's only tool
+   * is a non-stub GET, which is also what makes renderReadHelper emit a helper, so the const
+   * is never actually unreachable. Compiling here, rather than asserting the string, is what
+   * would catch it if that reasoning were ever wrong: an unemitted `DISCORD_API` const would
+   * fail as `TS2304: Cannot find name 'DISCORD_API'`, not silently pass a substring check.
+   */
+  const spec = parseSpec({
+    name: "discord",
+    displayName: "Discord",
+    description: "Discord connector.",
+    serviceLabel: "Discord",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "discordGet",
+      base: "https://discord.com/api/v10",
+      baseConst: "DISCORD_API",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "discord_channel_messages",
+        description: "List recent messages in a channel.",
+        path: "/channels/${arg.channelId|enc}/messages",
+        args: {
+          channelId: { type: "string", min: 1 },
+          limit: { type: "number", optional: true, default: 50 },
+          after: { type: "string", optional: true },
+        },
+        query: [
+          { name: "limit", arg: "limit" },
+          { name: "after", arg: "after", omitWhen: "empty" },
+        ],
+      },
+    ],
+  });
+
+  it("emits the module-scope base const the query branch's prefix references", () => {
+    const out = emitServer(spec, "monorepo").content;
+    expect(out).toContain('const DISCORD_API = "https://discord.com/api/v10";');
+    expect(out).toContain("new URL(`${DISCORD_API}/channels/");
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions", async () => {
+    const dir = tmp.make("cnc-query-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "discord", "src"), { recursive: true });
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), QUERY_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+    // This is the first compile in this file whose spec has a non-search tool with declared
+    // args, so it is the first that actually needs `zod` to resolve — every earlier compile's
+    // spec is either wiring-only or a zero-arg search tool (usesZod is false for those; see
+    // src/emit/server/index.ts). `moduleResolution: "bundler"` walks up through node_modules
+    // directories from the compiled file, same as classic Node resolution, so a junction here
+    // is enough to reach this project's own real `zod` dependency without a `bun install` in
+    // the throwaway temp dir — same real-dependency approach standalone-acceptance uses, just
+    // without a package manager in the loop.
+    symlinkSync(
+      join(REPO_ROOT, "node_modules", "zod"),
+      join(dir, "node_modules", "zod"),
+      "junction",
+    );
+
+    await initFormatter();
+    const srcFiles = generate(spec, { target: "monorepo" }).filter((f) => f.path[0] === "src");
+    expect(srcFiles.map((f) => f.path.join("/")).sort()).toEqual(["src/server.ts"]);
+    for (const f of formatAll(srcFiles)) {
+      writeFileSync(join(dir, "discord", ...f.path), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "discord", "tsconfig.json");
+    // Same DOM-lib substitution as the other monorepo compiles above, and for the same
+    // reason: this tsconfig lives in a throwaway temp dir with no node_modules/@types/bun to
+    // resolve `types: ["bun"]` against.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: { ...NIMBUS_COMPILER_OPTIONS, types: [], lib: ["ESNext", "DOM"] },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    expect(output).not.toContain("TS6133"); // declared but never read (unused import/local)
+    expect(output).not.toContain("TS2304"); // cannot find name (the base const gate)
+    expect(output).not.toContain("TS2345"); // argument not assignable
     expect(output).toBe("");
     expect(ok).toBe(true);
   }, 120_000);

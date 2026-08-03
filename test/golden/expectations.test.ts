@@ -129,6 +129,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       "google-meet",
       "grafana",
       "mercury",
+      "netlify",
       "newrelic",
       "sentry",
       "zendesk",

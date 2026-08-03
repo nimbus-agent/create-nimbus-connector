@@ -1193,3 +1193,314 @@ describe("SearchFilterSchema field entries", () => {
     ).not.toThrow();
   });
 });
+
+describe("ToolSchema query parameters", () => {
+  const withQuery = (tool: Record<string, unknown>) =>
+    parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "discordGet",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "t", description: "T.", path: "/messages", ...tool }],
+    });
+
+  it("accepts an unconditional and a conditional parameter", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" }, after: { type: "string", optional: true } },
+      query: [
+        { name: "limit", arg: "limit" },
+        { name: "after", arg: "after", omitWhen: "empty" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "limit", arg: "limit" },
+      { name: "after", arg: "after", omitWhen: "empty" },
+    ]);
+  });
+
+  it("accepts a query key that is not a JS identifier", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" } },
+      query: [{ name: "page[size]", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query![0]!.name).toBe("page[size]");
+  });
+
+  it("accepts omitWhen: absent on a string arg with no default", () => {
+    const spec = withQuery({
+      args: { after: { type: "string", optional: true } },
+      query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "after", arg: "after", omitWhen: "absent" }]);
+  });
+
+  it("accepts omitWhen: absent on a numeric arg with no default — github's page", () => {
+    const spec = withQuery({
+      args: {
+        perPage: { type: "number", optional: true, default: 30 },
+        page: { type: "number", optional: true },
+      },
+      query: [
+        { name: "per_page", arg: "perPage" },
+        { name: "page", arg: "page", omitWhen: "absent" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "per_page", arg: "perPage" },
+      { name: "page", arg: "page", omitWhen: "absent" },
+    ]);
+  });
+
+  it("rejects an omitWhen value that is neither absent nor empty", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after", omitWhen: "bogus" }],
+      }),
+    ).toThrow(/omitWhen/);
+  });
+
+  it('rejects omitWhen: "empty" on a non-string arg', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page", omitWhen: "empty" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("rejects omitWhen combined with an arg declaring a default", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true, default: "x" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it("rejects omitWhen on an arg that is not optional", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it("rejects omitWhen on a boolean arg — isHoisted hoists every boolean regardless of default", () => {
+    expect(() =>
+      withQuery({
+        args: { flag: { type: "boolean", optional: true } },
+        query: [{ name: "flag", arg: "flag", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"flag"/);
+  });
+
+  // The mirror of the omitWhen-forbidden checks above: an arg whose value CAN be undefined
+  // (optional, no default, not boolean) and declares no omitWhen reaches searchParams.set
+  // unconditionally — TS2345 in the generated package for a string arg (set(key, value)
+  // rejects `string | undefined`), and a literal "?<name>=undefined" on the wire for a
+  // numeric one (the non-string branch wraps in String(...), and String(undefined) ===
+  // "undefined"). Both parsed clean before canOmitQueryValue's bidirectional check.
+  it("rejects an optional string query arg with no omitWhen — would fail set()'s own typecheck", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it('rejects an optional numeric query arg with no omitWhen — would send a literal "undefined"', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("still accepts a defaulted optional arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number", optional: true, default: 50 } },
+      query: [{ name: "limit", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "limit", arg: "limit" }]);
+  });
+
+  it("still accepts a required arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { id: { type: "string" } },
+      query: [{ name: "id", arg: "id" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "id", arg: "id" }]);
+  });
+
+  it("rejects a query arg that is not declared", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "after", arg: "after" }] })).toThrow(
+      /"after"/,
+    );
+  });
+
+  it("rejects a query arg named after an inherited Object property", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "k", arg: "toString" }] })).toThrow(
+      /"toString"/,
+    );
+  });
+
+  it("rejects two entries writing the same query key", () => {
+    expect(() =>
+      withQuery({
+        args: { a: { type: "string" }, b: { type: "string" } },
+        query: [
+          { name: "limit", arg: "a" },
+          { name: "limit", arg: "b" },
+        ],
+      }),
+    ).toThrow(/"limit"/);
+  });
+
+  it("rejects query on a stub tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
+  // A stub has no "path" by construction (the impl/path pairing refine), so the
+  // path-must-begin-with-"/" check below evaluated an empty "path" against a stub and fired
+  // a second, spurious issue alongside the correct one above. Guarded on t.path !== undefined
+  // so only the stub rejection reports.
+  it("rejects query on a stub tool with only the stub message, not the path message", () => {
+    let message = "";
+    try {
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/"stub" tool issues no request, so "query" has nothing to describe/);
+    expect(message).not.toMatch(/must begin with/);
+  });
+
+  // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
+  // never reads t.query — accepted at parse time, silently discarded at emit time. The stub
+  // rejection above closes the same hole for stubs; this closes it for search tools.
+  it("rejects query on a search tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "search",
+            path: "/messages",
+            filter: { export: "filterDiscordMessages", fields: ["id"] },
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
+  it("rejects query when the path already carries a query string", () => {
+    expect(() =>
+      withQuery({
+        path: "/messages?limit=50",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/\?/);
+  });
+
+  it("rejects an empty query array", () => {
+    expect(() => withQuery({ args: {}, query: [] })).toThrow();
+  });
+
+  // renderPath's query-branch prefix (the fetch helper's base) joins directly onto the path
+  // template with no separator and none of renderFetchHelper's leading-slash normalization —
+  // a slashless path fuses onto the base ("https://x.testitems" instead of
+  // "https://x.test/items"). Rejected here rather than left to be discovered in a request.
+  it('rejects query on a tool whose path does not begin with "/"', () => {
+    expect(() =>
+      withQuery({
+        path: "messages",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"t".*"\/"/);
+  });
+
+  it('accepts query on a tool whose path begins with "/"', () => {
+    const spec = withQuery({
+      path: "/messages",
+      args: { after: { type: "string" } },
+      query: [{ name: "after", arg: "after" }],
+    });
+    expect(spec.tools[0]!.path).toBe("/messages");
+  });
+
+  it("leaves a tool with no query untouched", () => {
+    const spec = withQuery({ args: {} });
+    expect(spec.tools[0]!.query).toBeUndefined();
+  });
+});

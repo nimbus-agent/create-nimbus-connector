@@ -63,7 +63,10 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "root",
   // Globals the emitted code calls directly — a `local` that shadows one produces valid
   // syntax that fails only at `tsc` (or worse, at runtime), e.g. `local: "fetch"` emits
-  // `function fetch()` shadowing the global, then calls it with two arguments.
+  // `function fetch()` shadowing the global, then calls it with two arguments. "URL" belongs
+  // here rather than beside "root" above: the conditional-query branch's `const u = new
+  // URL(<path>)` calls the global directly, the same shadow risk as "fetch" or "JSON", not
+  // the use-before-declaration risk "root" is reserved for.
   "fetch",
   "process",
   "JSON",
@@ -73,6 +76,7 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "Promise",
   "console",
   "RequestInit",
+  "URL",
   // Stage E's extractor branch. src/server.ts imports the filter export from
   // ./search-filter.ts, so that name lands in server.ts's module scope beside the fetch
   // helper; the rest are declared or imported by src/search-filter.ts itself.
@@ -96,6 +100,37 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "tagNamesFromObjects",
   "makeQueryFilter",
   "fieldsFromKeys",
+  // The conditional-query branch's hand-rolled handler emits `const u = new URL(<path>)` and
+  // then, in the same scope, calls `await <fetchHelper.local>(path)`. Unlike "root" above,
+  // there is no self-reference in the initializer — `new URL(...)` never mentions the fetch
+  // helper, so the const finishes constructing cleanly. The failure lands one statement
+  // later: a fetch helper named "u" shadows that const, so the handler's own call resolves
+  // to the URL value instead of the function — a wrong-target call ("u is not callable" at
+  // tsc), not a use-before-declaration. In the rest-kit branch this never fires — the path
+  // callback never references the fetch helper, which lives in the module-scope factory
+  // instead — but the reservation stays unconditional, matching the rule this list already
+  // states: RESERVED_IDENTIFIERS is a flat set checked before any style is considered, and
+  // making an entry conditional would mean a spec validating or failing depending on a field
+  // elsewhere in the file. Corpus note: the URL local's name is genuinely split (search x23,
+  // u x20, params x15, qs x10), and "u" is chosen not for being the corpus majority but
+  // because it is what discord and google-meet write — the two connectors this branch exists
+  // to reproduce.
+  "u",
+  // Task 4 fix round 2: the query branch's absolute-URL passthrough (fetch-helper.ts's
+  // hasQueryTool gate) declares `const url = path.startsWith("http") ? path : ...` at
+  // function scope, inside `renderFetchHelper` (the read helper) and `renderWriteHelper` —
+  // and it was already there, unconditionally, in `renderRestKitFetchHelper` before this
+  // feature existed. Two collisions, same shape as "u"'s reservation above: a fetch helper
+  // named "url" shadows the passthrough const, so the emitted `fetch(url, ...)` calls a
+  // string with .startsWith() semantics gone (a compile error only if url() is then called
+  // as a function, e.g. via `headers: url()`); a `baseConst: "url"` shadows it the other way
+  // — the passthrough's own initializer references `${base}` where `base` resolves to
+  // `${url}`, so `const url = ... : \`${url}${path}\`` reads `url` before its own
+  // declaration finishes (TS2448). Reserved unconditionally, not only when a query tool
+  // exists: RESERVED_IDENTIFIERS is checked before any tool kind is considered, and rest-kit
+  // has emitted this same `const url` unconditionally since before "u"/"URL" were reserved —
+  // this entry was simply missed then.
+  "url",
 ];
 
 function claim(seen: Map<string, string>, name: string, owner: string): void {
@@ -171,10 +206,9 @@ export function validateSpec(spec: ConnectorSpec): void {
   // second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
   // implementation, and because both hoist, the second silently wins for both makeQueryFilter
   // calls. Corpus measurement: the only corpus connector with two extractors in one file is
-  // readwise (`fieldsOf` and `bookFieldsOf`), and readwise defines a local `tagNames` helper,
-  // which puts it in the group this design cannot reach regardless — no connector reachable by
-  // this design needs two. Rejected rather than adding a spec field to name the extractor or
-  // auto-suffixing it, per the Stage E design's declined-options list.
+  // readwise (`fieldsOf` and `bookFieldsOf`) — its field lists are otherwise expressible, so
+  // this rule alone is what keeps it unreachable. Rejected rather than adding a spec field to
+  // name the extractor or auto-suffixing it, per the Stage E design's declined-options list.
   const extractorTools = spec.tools.filter(
     (t) => t.filter !== undefined && needsExtractor(t.filter),
   );

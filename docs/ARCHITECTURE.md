@@ -91,6 +91,7 @@ server/env.ts           credential accessors, the auth modes
 server/fetch-helper.ts  the read and write helpers
 server/args.ts          zod argument schemas
 server/path-template.ts the ${env.X} / ${arg.X|enc} DSL
+server/query.ts         conditional query-string parameters (query + omitWhen)
 server/body.ts          request bodies for write tools
 server/tools-hand.ts    hand-rolled + read-only-kit registrations
 server/tools-rest.ts    rest-kit registrations

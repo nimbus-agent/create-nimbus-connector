@@ -131,16 +131,43 @@ discovered later:
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
       of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
-      40 corpus filter files that hand-write an extractor: **9** are reachable this way, **30**
-      define a local helper function or need logic no path can express — a join, an array
-      flatten, a coercion — and stay unreachable, and **1** (`zoom`) is hand-rolled and does not
-      use `makeQueryFilter` at all. See [Known limitations](#known-limitations) for the byte gap
-      that keeps 8 of the 9 from matching — the ninth, `dependencytrack`, already does.
+      40 corpus filter files that hand-write an extractor, **26 can be expressed** and **14
+      cannot** — "expressed" means the entry kinds can state the field list, not that the
+      generator can actually emit the file. `readwise` is one of the 26 by that measure, but
+      `src/validate.ts` separately rejects it because it declares two extractor-taking filters
+      (`fieldsOf` and `bookFieldsOf`), and this generator allows at most one per connector (see
+      [Known limitations](#known-limitations)). So **25** of the 26 are generatable today. The
+      method, and why an earlier count said 9, are in [Measuring reach](#measuring-reach).
+
+      Of the 26: **22** produce an identical haystack; **3** (`prefect`, `readwise`, `ramp`)
+      differ only in whitespace. For `prefect` and `ramp`, a local helper filters empty parts
+      before joining where the shared entry does not — `ramp` is the one where that is
+      observable, since a query spanning an absent middle field would match the hand-written
+      filter and not the generated one. `readwise` runs the opposite direction: its local
+      `tagNames` does *not* filter empty parts, while the shared `tagNamesFromObjects` filters
+      `name !== ""`, so there the generated haystack is the narrower one. **1** (`stackoverflow`)
+      rests on an API assumption this repository cannot verify, and drops out if it is wrong.
+
+      The 14 that cannot each have a named cause: a join over a non-`tags` array (`snyk`,
+      `airflow`, `greenhouse`, `mendeley`, `wiz`), a numeric coercion (`databricks`, `dbt`),
+      an alternate tag shape (`dagster` reads key *and* value, `zotero` reads `tag["tag"]`,
+      `intercom` nests at `row.tags.tags[]`, `flagsmith` maps numbers through `String`),
+      a conditional array search (`flux`), a per-item concatenation (`mlflow`), and `zoom`,
+      which is hand-rolled and does not use `makeQueryFilter` at all.
+
+      See [Known limitations](#known-limitations) for the separate question of byte-matching,
+      which only `dependencytrack` currently achieves.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file.
-- [ ] **Conditional paths and enum arguments.** `bitrise`'s two non-search tools select an
-      endpoint from whether an optional arg is present and map a `z.enum` through a lookup.
+- [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
+      guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
+      sent only when an optional argument is present or non-empty. See the README for the
+      field and its rejections, and [Known limitations](#known-limitations) for what it still
+      doesn't reach.
+- [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
+      still select an endpoint from whether an optional arg is present and map a `z.enum`
+      through a lookup table. Neither construct exists in the spec language.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
       than `fetch`.
 - [ ] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
@@ -164,6 +191,50 @@ The three items under [Consolidation](#consolidation), then retiring
 
 ---
 
+## Measuring reach
+
+Stage E asks for the corpus reach to be published **with its method**, because the number is
+easy to get wrong and was — three times, each wrong in a way the next pass exposed.
+
+**The question.** For how many of the 40 hand-written extractor files can the three entry
+kinds — a plain key, a nested-path read, a tag helper — express the file's whole field list?
+That is the *expressible* question, and it is narrower than *generatable*: a connector can be
+expressible and still not be one the generator actually emits, when a separate rule blocks it.
+`readwise` is the case in point — its field lists are expressible, but it declares two
+extractors and this generator allows at most one per connector, so it is expressible without
+being generatable. Two extractors behave the same when, for any row that connector's API
+actually returns, the haystack `filterByQuery` builds contains the same substrings in the same
+order — so `.includes(needle)` answers identically for every query.
+
+**The method.** Read every file. For each element of the returned array, classify it as a plain
+key, a nested-path read of any depth, or a tag helper — and for every *local* helper, diff its
+guard and body against the shared primitive rather than matching on its name. A file is
+expressible only if every element maps to one of the three entry kinds; one unexpressible
+element disqualifies the file, since the emitter writes one extractor, not a partial one.
+
+**Why the earlier numbers were wrong**, recorded because each error was a method error:
+
+- **12** came from pattern-matching helper names instead of reading bodies.
+- **7** came from a script whose range was `/^function fieldsOf/,/^}/`, which cannot see
+  `firebase` and `testflight` — they write `const releaseFields: FieldExtractor = (item) => …`,
+  an arrow. Structurally identical files landed on opposite sides of the split.
+- **9** came from asking a *structural* question — "does this file define a local function?" —
+  when the goal is a *semantic* one. A helper that walks a path is expressible; a helper that
+  joins an array is not. Defining a helper says nothing on its own. This is the error that
+  understated reach by more than half, and `netlify` is the fixture that demonstrates it:
+  its `subStringField(row, "build_settings", "repo_url")` is exactly
+  `nestedString(row, ["build_settings", "repo_url"])`.
+
+**A pattern worth naming**, since it caused two of the three: a check for `String(` also matches
+inside `nestedString(`, and a check for `.join(` fires on helpers that are exact
+re-implementations of `tagText`. Both silently move files to the wrong side.
+
+The counts this method produces are in [Stage E](#stage-e--the-corpus-tail-). They describe
+*behaviour*, not bytes — byte-matching is a stricter question, answered in
+[Known limitations](#known-limitations) and, live, by `diff:golden`.
+
+---
+
 ## Known limitations
 
 Measured, not guessed, and each one visible on every harness run rather than hidden in an
@@ -178,10 +249,43 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 
 **Constructs outside the spec language.**
 
-- **Conditional query parameters.** `new URL(...)` plus conditional `searchParams.set(...)` —
-  a parameter added only when an optional arg is present. The path DSL renders one fixed
-  template per tool. This is the single most common reason a fixture stubs a tool, and it is
-  why `discord` and `google-meet` do not reach zero diff.
+- **Conditional query parameters, the remaining gaps.** The construct itself — `query` plus
+  `omitWhen` — now exists; the gaps are narrower now. An **inlined default**: real connectors
+  write `p.pageSize ?? 50` at the call site, but a `default`-bearing arg is always hoisted to a
+  named const above the handler (`isHoisted` in `src/emit/server/args.ts`), so `google-meet`'s
+  `pageSize`/`searchPageSize` differ from the real file on that one line even though the
+  request they build is identical. **Repeating, multi-value parameters** — `gmail` sends the
+  same key more than once via `searchParams.append`, not `.set` — are out of scope; `query`
+  models one value per name. **A slashless path**: the query branch threads the fetch helper's
+  base straight into `renderPath`'s `prefix` with no separator and none of the leading-slash
+  normalization the non-query path gets, so `query` is rejected at parse time on any tool whose
+  `path` does not begin with `/`.
+- **An upstream defect this generator deliberately does not reproduce.** `discord`, `circleci`,
+  `google-meet` and `google-photos`'s hand-written path builders return
+  `` `${u.pathname}${u.search}` ``. `u.pathname` already carries the base's own path component
+  — the base is spliced into `new URL(...)` as a literal string prefix, not passed as the
+  URL's origin — and the connector's fetch helper prepends that same base a second time. The
+  real `discord` connector therefore requests
+  `https://discord.com/api/v10/api/v10/channels/123/messages`, a doubled `/api/v10`; verified
+  by running the connector's own code. `github` and `github-actions` write the identical
+  `u.pathname`/`u.search` pattern and escape only because `api.github.com` has no path
+  component to double. This generator emits `` `${u}` `` — the absolute URL — instead, which
+  the fetch helper's own `startsWith("http")` short-circuit passes through untouched,
+  producing one correct request. That is a deliberate divergence from a defect, not a
+  generator shortcoming, and it is why `discord` and `google-meet` do not byte-match
+  `src/server.ts` even though both now use `query` for real, non-stub tools.
+- **`auth: "bearer"` cannot express two real shapes**, surfaced by the `discord` fixture.
+  Discord's own scheme is a literal `Bot ${token}`, not `Bearer ${token}`, and it sends a
+  static `User-Agent` header alongside the `Authorization` one. No env field today carries an
+  alternate scheme string or a static extra header, so this connector's auth shape is not
+  reachable regardless of what `query` can express.
+- **A validator over-rejection in hoisted-argument-local uniqueness.** `src/validate.ts`
+  claims every tool's hoisted argument locals into one map shared across the whole connector,
+  but each is emitted inside its own tool's arrow function (`renderHoists`), so two tools
+  declaring the same defaulted arg name can never actually collide in the generated file — the
+  spec is rejected anyway. `fixtures/google-meet.spec.json` carries `"local":
+  "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
+  and not fixed here.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
   optional arg is present, or mapping a `z.enum` through a lookup table.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
@@ -191,9 +295,10 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   is always that name, so a second search tool taking the extractor branch in the same
   `src/search-filter.ts` would redeclare it — `validateSpec` rejects this at parse time rather
   than auto-suffixing or adding a spec field to name the extractor. Measured: the only corpus
-  connector with two extractors in one file is `readwise` (`fieldsOf` and `bookFieldsOf`), and
-  it is already unreachable for an unrelated reason — it defines a local `tagNames` helper,
-  putting it in the 30-file group no entry kind reaches regardless.
+  connector with two extractors in one file is `readwise` (`fieldsOf` and `bookFieldsOf`). Its
+  field lists are otherwise expressible — it is one of the 26 counted under
+  [Measuring reach](#measuring-reach) — so this rule is the sole reason it is not generatable
+  today, not a second, independent gap stacked on top of one.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
   still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
   define a local helper function or need logic no declarative field list expresses — a join, an
@@ -216,8 +321,12 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
   other two cannot byte-match.
-- **8 of the 9 reachable extractor files still do not byte-match**, even though `filter.fields`
-  now expresses their field lists. The guard: `argocd` writes `asRecord(item)`, the emitter
+- **Expressible is not the same as byte-identical, and almost none of the 26 byte-match.**
+  Expressing a field list correctly says nothing about reproducing the file that carries it —
+  `netlify` is the clearest case, generated correctly and textually different on every line of
+  its extractor, because the real file declares a local `subStringField` where the emitter
+  calls the shared `nestedString`. Four gaps account for the rest. The guard: `argocd` writes
+  `asRecord(item)`, the emitter
   always writes `asObjectish(item)`, and the two differ semantically (`asObjectish` admits
   arrays, `asRecord` rejects them). The extractor form: `firebase` and `testflight` write
   `const buildFields: FieldExtractor = (item) => …`, an arrow expression with an explicit type
@@ -226,10 +335,10 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   `buildFields`; the emitter's is always `fieldsOf`. And a hand-written 4–5 line doc comment
   explaining the service's response shape, present in `canva`, `figma`, `firebase`, `hubspot`,
   `miro`, `salesforce` and `testflight` — the same content gap already recorded above for
-  hand-authored READMEs, not a formatting one. The ninth, `dependencytrack`, **does** byte-match:
-  it guards with `asObjectish`, names its extractor `fieldsOf`, and carries no hand-written doc
-  comment, so none of the four gaps above applies to it — the exception shows these are gaps in
-  what a spec can carry, not a ceiling the emitter itself imposes.
+  hand-authored READMEs, not a formatting one. `dependencytrack` **does** byte-match: it guards
+  with `asObjectish`, names its extractor `fieldsOf`, and carries no hand-written doc comment,
+  so none of the four gaps applies to it — the exception shows these are gaps in what a spec
+  can carry, not a ceiling the emitter itself imposes.
 
 **Absences.**
 
