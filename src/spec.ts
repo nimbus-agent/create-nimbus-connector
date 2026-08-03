@@ -338,13 +338,19 @@ export const ToolSchema = z
     // only visible once the connector makes a request. Rejecting here, rather than teaching
     // renderPath the same normalization, keeps that guard in the one place
     // (fetch-helper.ts) that owns it.
-    if (!(t.path ?? "").startsWith("/")) {
+    //
+    // Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
+    // impl/path pairing refine above), and this check evaluated `""` as that stub's path
+    // would fire alongside the "stub" + "query" rejection a few refines up — two issues for
+    // one mistake, with the correct one buried under noise. The stub case is already
+    // rejected there; this check has nothing to add for it.
+    if (t.path !== undefined && !t.path.startsWith("/")) {
       ctx.addIssue({
         code: "custom",
         path: ["path"],
         message:
           `tool ${JSON.stringify(t.name)} declares "query", so "path" must begin with "/" ` +
-          `— got ${JSON.stringify(t.path ?? "")}`,
+          `— got ${JSON.stringify(t.path)}`,
       });
     }
 

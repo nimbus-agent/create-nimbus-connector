@@ -1394,6 +1394,42 @@ describe("ToolSchema query parameters", () => {
     ).toThrow(/query/);
   });
 
+  // A stub has no "path" by construction (the impl/path pairing refine), so the
+  // path-must-begin-with-"/" check below evaluated an empty "path" against a stub and fired
+  // a second, spurious issue alongside the correct one above. Guarded on t.path !== undefined
+  // so only the stub rejection reports.
+  it("rejects query on a stub tool with only the stub message, not the path message", () => {
+    let message = "";
+    try {
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/"stub" tool issues no request, so "query" has nothing to describe/);
+    expect(message).not.toMatch(/must begin with/);
+  });
+
   // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
   // never reads t.query — accepted at parse time, silently discarded at emit time. The stub
   // rejection above closes the same hole for stubs; this closes it for search tools.
