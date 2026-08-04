@@ -9,7 +9,6 @@
  * No derived spec is ever written to disk. The output is a number and a histogram.
  */
 
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,13 +54,25 @@ export function parseArgs(argv: readonly string[]): {
   return { names, nimbusRoot, baseline, verbose };
 }
 
+/**
+ * Deliberately NOT `localeCompare`, which is what SonarCloud's S2871 message suggests.
+ * `src/golden/expectations.ts` already rejected it for this codebase and says why: it is
+ * locale- and ICU-dependent, so it can order the same two names differently on two machines.
+ * Only display order is at stake here, and a comparator that varies by runner is the property
+ * to avoid. Code-unit order is what the default `.sort()` already did — this makes it explicit.
+ */
+const byCodeUnit = (a: string, b: string): number => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
+
 /** Exported for scripts/reach-baseline.ts, so the two commands cannot measure differently. */
 export function connectorDirs(root: string): string[] {
   const dir = join(root, "packages", "mcp-connectors");
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && e.name !== "shared")
     .map((e) => e.name)
-    .sort();
+    .sort(byCodeUnit);
 }
 
 /**
@@ -70,14 +81,22 @@ export function connectorDirs(root: string): string[] {
  * `error` is what separates "git is not installed" from "this directory is not a checkout".
  * Collapsing both to an empty string sends a developer whose PATH is missing git off to check
  * their --nimbus-root, which is the wrong problem and the wrong fix.
+ *
+ * `Bun.spawnSync` rather than node:child_process's execFileSync, matching how every other
+ * script in this repo shells out (src/golden/run.ts, scripts/runtime-acceptance.ts): this is
+ * a Bun-only project, so reaching for the node compatibility layer here bought nothing.
  */
 export function git(root: string, args: string[]): { value: string; error: string } {
   try {
-    return {
-      value: execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim(),
-      error: "",
-    };
+    const r = Bun.spawnSync(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) {
+      const stderr = r.stderr.toString().trim();
+      return { value: "", error: stderr === "" ? `git exited ${String(r.exitCode)}` : stderr };
+    }
+    return { value: r.stdout.toString().trim(), error: "" };
   } catch (err) {
+    // Bun throws rather than returning a non-zero exit code when the binary is absent, which
+    // is the "git is not installed" case assertComparable reports differently.
     return { value: "", error: err instanceof Error ? err.message : String(err) };
   }
 }
