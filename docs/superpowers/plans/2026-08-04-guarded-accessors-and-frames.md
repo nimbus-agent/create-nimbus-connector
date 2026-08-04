@@ -811,8 +811,13 @@ Nothing consumes this yet; the retrofit is the next commit."
 
 ## Task 2: Make `AstNode` opaque and retrofit every reader
 
-Turns the convention into a compile error, then fixes every resulting error. **Zero behaviour
-change** — that is the acceptance bar, and it is checked three ways.
+Turns the convention into a compile error, then fixes every resulting error.
+
+**Behaviour-preserving at every site except two named ones.** Step 5 items 2 and 3 deliberately
+widen `.min(-5)` and `?? -1` from blocked to recognized, via `numericValue`. That widening is the
+task's requirement, not a defect — and it is invisible to the acceptance bar below because no
+corpus connector reaches either recognizer with a negative literal today. Everything else must be
+byte-for-byte identical in behaviour, checked three ways.
 
 **Files:**
 - Modify: `scripts/_lib/derive/ast.ts` (remove the index signature)
