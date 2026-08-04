@@ -30,12 +30,27 @@ This plan covers **commits 1–3** of the design's seven-commit sequence
 plus the blocker split and a re-baseline: the accessor layer, the frame restructure, both new
 frames, and `tools-rest`.
 
-**The `search`, `search-filter`, `query` and `body` recognizers get their own plan, written after
-Task 7 lands.** This is deliberate, not a truncation. Those four recognizers are written *against*
-the accessor layer, and the layer's final shape — which accessors exist, what they return — is an
-output of Tasks 1–2, not an input. The predecessor plan's ~11 defects came from writing recognizer
-code against an interface that did not exist yet. Plan 1 still delivers working, independently
-valuable software: both frames land, fixtures move, and the histogram stops hiding 70 connectors.
+**Plan 2, written after Task 7 lands, owns four recognizers and one env shape:**
+
+| deferred item | design § | corpus reach |
+| --- | --- | --- |
+| `search` + `search-filter` (widens `SourceFiles`) | §4 | 49 of the 60 read-only-kit connectors |
+| `query` | §5 | 10 connectors |
+| `body` | §5 | 33 connectors |
+| `client-credentials` env shape (`zzwrite`) | §6, commit 6b | 4 connectors |
+
+The deferral is deliberate, not a truncation. Those recognizers are written *against* the accessor
+layer, and the layer's final shape — which accessors exist, what they return — is an output of
+Tasks 1–2, not an input. The predecessor plan's ~11 defects came from writing recognizer code
+against an interface that did not exist yet.
+
+`client-credentials` is listed here rather than only in this plan's *Self-Review* because it is the
+one deferred item the design marked **optional**, which is exactly the kind of item that drifts. It
+is deferred, not dropped: plan 2 either implements it or records why it stays a documented
+exclusion.
+
+Plan 1 still delivers working, independently valuable software on its own: both frames land,
+fixtures move, and the histogram stops hiding 70 connectors.
 
 ## Global Constraints
 
@@ -897,12 +912,33 @@ function kindOf(node: AstNode): string {
   if (fn !== undefined) return `function:${fn}`;
   return `statement:${node.type}`;
 }
+
+/**
+ * The histogram bucket for one unclaimed statement.
+ *
+ * `kind` is deliberately coarse and `detail` deliberately specific: the bucket is what gets
+ * counted and compared across connectors, while the detail is what makes a near-miss
+ * actionable — an inlined `?? 50` reads as its own line rather than disappearing into a pile
+ * labelled "unknown".
+ */
+export function blockerFor(node: AstNode, source: string): Blocker {
+  const text = node.start === null || node.end === null ? "" : source.slice(node.start, node.end);
+  const collapsed = text.replaceAll(/\s+/g, " ").trim();
+  return {
+    kind: kindOf(node),
+    detail: collapsed.length > MAX_DETAIL ? `${collapsed.slice(0, MAX_DETAIL)}…` : collapsed,
+    line: node.loc?.start.line ?? 0,
+  };
+}
 ```
+
+That is the **whole file** — `blockerFor` is unchanged from the current source and reproduced here
+so the listing can be applied without deleting the module's only consumed export. It reads `start`,
+`end` and `loc`, all of which `AstNode` still carries after Step 2.
 
 `expressionOf` and `functionName` are the strict accessors from Task 1, and they are strict enough
 here: an ExpressionStatement always carries an `expression`, and a FunctionDeclaration's `id` is an
-Identifier or absent. Only the callee read needs the lenient `labelName`. Keep `blockerFor` exactly
-as it is — it reads only `start`, `end` and `loc`, all of which `AstNode` still carries.
+Identifier or absent. Only the callee read needs the lenient `labelName`.
 
 - [ ] **Step 5: Retrofit the six recognizers, one file at a time**
 
@@ -1257,6 +1293,14 @@ In `scripts/_lib/derive/server/index.ts`, add above the existing hand-rolled log
 `recognizeFrame`:
 
 ```ts
+/**
+ * The leading slash is load-bearing, not incidental: it makes this a path-SEGMENT match rather
+ * than a substring one, so a hypothetical "my-run-read-only-mcp-connector.ts" cannot satisfy it.
+ * `hasMcpToolKitImport` uses the same "/mcp-tool-kit.ts" form for the same reason. The emitter
+ * writes exactly "../../shared/run-read-only-mcp-connector.ts" (RUN_READ_ONLY in
+ * src/emit/server/index.ts), so there is no slashless case to accommodate — and widening to
+ * accommodate one that cannot occur only widens what gets claimed.
+ */
 const RUN_READ_ONLY_SUFFIX = "/run-read-only-mcp-connector.ts";
 
 /**
@@ -1515,8 +1559,14 @@ Create `scripts/_lib/derive/server/tools-rest.ts`, inverting `renderRestKitTools
 - `pathFn` has three in-scope forms: `() => <pathExpr>`, `(parsed) => <pathExpr>`, and
   `(parsed) => { <hoists> return <pathExpr>; }`. The query branch — a block whose body contains
   `const u = new URL(...)` — is **plan 2's**; refuse it.
-- The path parameter is `parsed`, not `p` (`PARAM` in `tools-rest.ts`), so `recognizePath` is
-  called with locals keyed the same way `tools-hand.ts` does but against that name.
+- **Do not thread a parameter name into `recognizePath`.** Its signature is
+  `recognizePath(node, locals)` — there is no param-name parameter, and adding one would be a
+  behaviour change to a module this task does not own. `argNameFromExpr` resolves
+  `<anything>.<name>` without checking the receiver at all, deliberately: `tools-hand.ts`'s
+  `memberArgName` documents the reason — "pinning a check here that the use site doesn't make
+  would only create a second, inconsistent notion of 'the param'". `tools-rest.ts` inherits that
+  behaviour unchanged. The emitter's own `PARAM` is `"parsed"` here versus `"p"` in
+  `tools-hand.ts`, and the recognizer needs to know that for **nothing** — which is the point.
 - All-or-nothing: if any call fails, return `undefined` without claiming.
 
 Claim the factory const and every tool call. Do **not** claim the `rest-tool-kit.ts` import; that
@@ -1781,9 +1831,9 @@ re-baseline and docs → Task 7. §4 (search, search-filter) and §5 (query, bod
 deferred to plan 2**, stated in *Scope of this plan* with the reason. §7 (consequences for other
 documents) → Task 7 Steps 3–4.
 
-**Known gap, stated rather than hidden:** design §6's commit 6b (client-credentials, `zzwrite`) is
-in neither plan. It is an `env.ts` exclusion covering 4 corpus connectors and was marked optional
-in the design; it should be picked up in plan 2 or dropped explicitly, not left to drift.
+Design §6's commit 6b (client-credentials, `zzwrite`) is assigned to plan 2 in *Scope of this
+plan*, alongside the four deferred recognizers, rather than left implicit — it is the one deferred
+item the design marked optional, which is the kind that drifts.
 
 **Type consistency.** `Frame` is introduced in Task 3 (`frame.ts`) and consumed unchanged in Tasks
 4–5. `ToolFields` is reused from `tools-hand.ts` by `tools-rest.ts` rather than redeclared.
