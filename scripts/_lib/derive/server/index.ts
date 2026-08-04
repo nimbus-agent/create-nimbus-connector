@@ -7,6 +7,8 @@ import {
   callTo,
   constDecl,
   expressionOf,
+  identName,
+  ifStatement,
   importSource,
   isIdent,
   methodCallTo,
@@ -334,4 +336,142 @@ export function recognizeFrame(
     toolStatements: statements,
     verifyStatements: statements,
   };
+}
+
+/**
+ * `await runReadOnlyMcpConnector("nimbus-<name>", <identifier>);` — the read-only-kit near miss:
+ * every part of `readOnlyWrapper` matches except the callback, which is a bare identifier (a
+ * named function reference) rather than an inline `(reg) => { ... }` arrow.
+ *
+ * Ten corpus connectors write exactly this — `argocd`, `bigeye`, `flux`, `looker`, `mlflow`,
+ * `monte-carlo`, `powerbi`, `snowflake`, `tableau`, `workday` — passing an already-declared
+ * `function registerXTools(reg) { ... }` by name instead of inlining it at the call site. This is
+ * why Task 4's read-only-kit frame moved 50 connectors rather than the ~60 predicted: the
+ * shortfall is exactly this shape. `readOnlyWrapper` refuses it (its arrow-fn check is a claim,
+ * so it cannot be loosened — see this module's docstring for that function), but naming it here
+ * costs nothing, because this function only labels, never claims.
+ */
+function isNamedReadOnlyCallback(node: AstNode): boolean {
+  const args = callTo(awaited(expressionOf(node)), "runReadOnlyMcpConnector", 2);
+  if (args === undefined) return false;
+  const full = stringLit(args[0]);
+  if (full === undefined || !full.startsWith("nimbus-")) return false;
+  return identName(args[1]) !== undefined;
+}
+
+/**
+ * `statements`, plus — for every top-level `if (...) { ... }` — that `if`'s own consequent
+ * block spliced in too.
+ *
+ * All ten `frame:readonly-callback-not-inline` corpus connectors gate their call behind
+ * `if (import.meta.main) { await runReadOnlyMcpConnector(...) }`, a "only run when executed
+ * directly" idiom `recognizeReadOnlyFrame` does not look inside — its top-level scan is a CLAIM
+ * (see its docstring on why a partially-claimed module is worse than an unrecognized one), and
+ * widening it to reach one statement inside an arbitrary `if` would risk claiming code the
+ * emitter cannot reproduce the surrounding shape of. This function exists only so the LABEL can
+ * see one level deeper than the claim does — nothing here is pinned to `import.meta.main`
+ * specifically (checking a MetaProperty precisely would need its own read.ts accessor for a
+ * fact this diagnostic does not need to be exact about), because a label may be more permissive
+ * than a recognizer.
+ */
+function withTopLevelIfBodies(statements: readonly AstNode[]): AstNode[] {
+  const out: AstNode[] = [];
+  for (const statement of statements) {
+    out.push(statement);
+    const parts = ifStatement(statement);
+    const body = parts === undefined ? undefined : blockBody(parts.consequent);
+    if (body !== undefined) out.push(...body);
+  }
+  return out;
+}
+
+/**
+ * `const <x> = createZodToolRegistrar(<identifier>);` — the registrar near miss: the outer call
+ * is right, but its argument is a bare identifier rather than the inlined
+ * `createRegisterSimpleTool(<mcpVar>)` call `isRegistrarConst` requires. Eleven corpus connectors
+ * write exactly this — `discord`, `github`, and (found only by reading the nine hand-rolled
+ * connectors Task 6 was asked to investigate rather than assumed) `bitbucket`, `confluence`,
+ * `gitlab`, `jira`, `linear`, `notion`, `obsidian`, `slack`, `teams` — hoisting
+ * `createRegisterSimpleTool(mcp)` to its own `const registerSimpleTool = ...;` one line above.
+ *
+ * Deliberately does not check the identifier's NAME (`registerSimpleTool` in every corpus
+ * instance) — see this module's header on labels being allowed more leniency than claims: this
+ * function never claims the statement, so pinning a name that a hypothetical differently-named
+ * two-line split would fail to match would only make the diagnostic wrong, not the recognizer.
+ */
+function isBareIdentifierRegistrar(node: AstNode): boolean {
+  const decl = constDecl(node);
+  const outerArgs = callTo(decl?.init, "createZodToolRegistrar", 1);
+  return outerArgs !== undefined && identName(outerArgs[0]) !== undefined;
+}
+
+/**
+ * `await <mcpVar>.connect(new StdioServerTransport());` — the transport near miss: the connect
+ * call is right, but the transport is constructed inline rather than bound to its own const
+ * `transportVarName` requires. Six corpus connectors write exactly this — `gmail`, `google-meet`,
+ * `google-photos`, `onedrive`, `outlook`, and `google-drive` (found the same way as the registrar
+ * near miss above: by reading the source, not by assuming the original three-axis count was
+ * complete).
+ */
+function isInlinedTransportConnect(node: AstNode, mcpVar: string): boolean {
+  const call = awaited(expressionOf(node));
+  const args = methodCallTo(call, mcpVar, "connect", 1);
+  return args !== undefined && newOf(args[0], "StdioServerTransport", 0) !== undefined;
+}
+
+/**
+ * Names the frame element that blocked a module `recognizeFrame` refused, for the histogram
+ * only — never called when `recognizeFrame` succeeded, and never used to claim anything. This is
+ * why it may be more permissive than a recognizer (see read.ts's label-only section): a wrong
+ * LABEL misdescribes a bucket, but a wrong CLAIM misdescribes what the emitter can reproduce, and
+ * only the latter is the defect this codebase guards against.
+ *
+ * Re-runs the read-only-kit discriminator first (the two frames are mutually exclusive — see
+ * `recognizeFrame`'s docstring), searching one level inside a top-level `if` too (see
+ * `withTopLevelIfBodies`) so the ten `if (import.meta.main) { ... }`-gated connectors this axis
+ * covers are still found — then the five hand-rolled/rest-kit elements in the same order
+ * `recognizeFrame` checks them, stopping at the first that fails. Two of those five carry a
+ * near-miss check of their own, run only once the strict form is absent: a module can be BOTH
+ * "no registrar const recognized" and "a bare-identifier registrar const exists" is never true at
+ * once, because the strict check in `recognizeFrame` above already accepts the inlined form.
+ *
+ * `apple`, `fastmail`, `imap` and `protonmail` land on the plain `frame:no-registrar` here, not a
+ * near miss: none of them calls `createZodToolRegistrar` at all — each registers its tools
+ * through a single hand-authored `registerXTools(server, ...)` call instead, a shape this
+ * function does not try to name more specifically because doing so would require modeling that
+ * call, which is `deriveSpec`'s job downstream of frame recognition, not frame recognition's.
+ */
+export function frameFailureKind(statements: readonly AstNode[]): string {
+  const runImport = statements.find(
+    (s) => importSource(s)?.endsWith(RUN_READ_ONLY_SUFFIX) === true,
+  );
+  if (runImport !== undefined && withTopLevelIfBodies(statements).some(isNamedReadOnlyCallback)) {
+    return "frame:readonly-callback-not-inline";
+  }
+
+  const toolKitImport = statements.find(hasMcpToolKitImport);
+  if (toolKitImport === undefined) return "frame:no-kit-import";
+
+  const mcpInfo = statements.map(getMcpServerInfo).find((info) => info !== undefined);
+  if (mcpInfo === undefined) return "frame:no-mcp-server";
+  const { varName: mcpVar } = mcpInfo;
+
+  const registrarNode = statements.find((s) => isRegistrarConst(s, mcpVar));
+  if (registrarNode === undefined) {
+    return statements.some(isBareIdentifierRegistrar)
+      ? "frame:registrar-not-inlined"
+      : "frame:no-registrar";
+  }
+
+  const transportVar = statements.map(transportVarName).find((v) => v !== undefined);
+  if (transportVar === undefined) {
+    return statements.some((s) => isInlinedTransportConnect(s, mcpVar))
+      ? "frame:tail-inlined-transport"
+      : "frame:no-transport";
+  }
+
+  const connectNode = statements.find((s) => isConnect(s, mcpVar, transportVar));
+  if (connectNode === undefined) return "frame:no-connect";
+
+  return "frame:unrecognized";
 }

@@ -217,11 +217,14 @@ describe("deriveSpec", () => {
   });
 
   it("blocks a style whose frame it does not recognize", () => {
+    // "read-only-kit.ts" is not "run-read-only-mcp-connector.ts" — neither the read-only nor
+    // the mcp-tool-kit import suffix matches, so this is a missing-kit-import blocker, named by
+    // frameFailureKind rather than the old bare "no-frame" bucket it replaced (Task 6).
     const server = 'import { runReadOnlyMcpConnector } from "../../shared/read-only-kit.ts";';
     const result = deriveSpec({ server, manifest: MANIFEST });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.blockers[0]?.kind).toBe("no-frame");
+    expect(result.blockers[0]?.kind).toBe("frame:no-kit-import");
   });
 
   it("blocks a frame with no fetch helper, even though totality is satisfied", () => {

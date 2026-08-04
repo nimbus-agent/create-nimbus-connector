@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseModule } from "../../scripts/_lib/derive/ast.ts";
 import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import { recognizeFrame } from "../../scripts/_lib/derive/server/index.ts";
+import { frameFailureKind, recognizeFrame } from "../../scripts/_lib/derive/server/index.ts";
 
 const FRAME = [
   'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
@@ -232,5 +232,100 @@ describe("recognizeFrame", () => {
     // this test rather than silently making the two styles indistinguishable.
     const frame = recognizeFrame(parseModule(FRAME), createClaimSet());
     expect(frame?.style).toBe("hand-rolled");
+  });
+});
+
+describe("frameFailureKind", () => {
+  it("names the two-line registrar idiom (discord, github, and 9 more found by measurement)", () => {
+    const source = FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      [
+        "const registerSimpleTool = createRegisterSimpleTool(mcp);",
+        "const reg = createZodToolRegistrar(registerSimpleTool);",
+      ].join("\n"),
+    );
+    expect(frameFailureKind(parseModule(source))).toBe("frame:registrar-not-inlined");
+  });
+
+  it("names the inlined transport tail (gmail, onedrive, outlook, google-*)", () => {
+    const source = FRAME.replace(
+      "const transport = new StdioServerTransport();\nawait mcp.connect(transport);",
+      "await mcp.connect(new StdioServerTransport());",
+    );
+    expect(frameFailureKind(parseModule(source))).toBe("frame:tail-inlined-transport");
+  });
+
+  it("names a missing kit import", () => {
+    expect(frameFailureKind(parseModule("const x = 1;"))).toBe("frame:no-kit-import");
+  });
+
+  it("names a missing McpServer const when the kit import is present but no server const is", () => {
+    const source = FRAME.split("\n")
+      .filter((line) => !line.startsWith("const mcp = new McpServer"))
+      .join("\n");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-mcp-server");
+  });
+
+  // apple, fastmail, imap and protonmail: no createZodToolRegistrar call anywhere — each
+  // registers its tools through a single hand-authored `registerXTools(server, ...)` call
+  // instead. Not a near miss (no bare-identifier createZodToolRegistrar call exists to spot),
+  // so this is the plain "no registrar recognized at all" bucket, not "not inlined".
+  it("names a missing registrar when no createZodToolRegistrar call exists at all", () => {
+    const source = FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      "registerNewrelicTools(mcp);",
+    );
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-registrar");
+  });
+
+  it("names a missing transport when neither a transport const nor an inlined one exists", () => {
+    const source = FRAME.replace(
+      "const transport = new StdioServerTransport();\nawait mcp.connect(transport);",
+      "await mcp.connect(somethingElse);",
+    );
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-transport");
+  });
+
+  it("names a missing connect call when the transport const exists but nothing connects it", () => {
+    const source = FRAME.replace("await mcp.connect(transport);", "doSomethingElse();");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-connect");
+  });
+
+  // Task 4's read-only-kit frame moved 50 connectors rather than the ~60 predicted; the
+  // shortfall is exactly this shape — argocd, bigeye, flux, looker, mlflow, monte-carlo,
+  // powerbi, snowflake, tableau, workday all pass an already-declared function by name rather
+  // than inlining the `(reg) => { ... }` arrow the emitter always writes, AND all ten gate the
+  // call behind `if (import.meta.main) { ... }` — an entrypoint guard `recognizeReadOnlyFrame`'s
+  // top-level scan does not look inside, since doing so there would be a claim, not a label.
+  it("names the named-callback read-only idiom, gated behind if (import.meta.main)", () => {
+    const source = [
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      "function registerZzTools(reg) {}",
+      "if (import.meta.main) {",
+      '  await runReadOnlyMcpConnector("nimbus-zzreadonly", registerZzTools);',
+      "}",
+    ].join("\n");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
+  });
+
+  // The bare (un-gated) form of the same near miss — no corpus connector writes this today, but
+  // withTopLevelIfBodies only ADDS candidate statements, so the un-nested form must keep working.
+  it("also names the named-callback idiom when it is not gated behind an if at all", () => {
+    const source = [
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      "function registerZzTools(reg) {}",
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", registerZzTools);',
+    ].join("\n");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
+  });
+
+  // frameFailureKind is only ever called by deriveSpec once recognizeFrame has already
+  // returned undefined for the same statements, so a module that satisfies every element this
+  // function checks can never reach it through that path — recognizeFrame would have recognized
+  // it first. Calling it directly on a fully valid frame is synthetic, not a corpus shape, but
+  // it is what proves the function is total (always returns a string, never falls off the end)
+  // rather than merely "total for the shapes seen so far".
+  it("falls back to frame:unrecognized for a module its own checks cannot fault", () => {
+    expect(frameFailureKind(parseModule(FRAME))).toBe("frame:unrecognized");
   });
 });

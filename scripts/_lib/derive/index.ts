@@ -5,7 +5,7 @@ import { createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeEnv } from "./server/env.ts";
 import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
-import { recognizeFrame } from "./server/index.ts";
+import { frameFailureKind, recognizeFrame } from "./server/index.ts";
 import { recognizeTools } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
 
@@ -106,7 +106,7 @@ export function deriveSpec(files: SourceFiles): Derivation {
   const claims = createClaimSet();
   const frame = recognizeFrame(statements, claims);
   if (frame === undefined) {
-    return blocked("no-frame", "src/server.ts is not a recognized frame");
+    return blocked(frameFailureKind(statements), "src/server.ts is not a recognized frame");
   }
 
   // rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
