@@ -507,14 +507,28 @@ export type Arrow = {
   readonly params: readonly AstNode[];
   readonly body: AstNode;
   readonly isBlock: boolean;
+  readonly isAsync: boolean;
 };
 
+/**
+ * `isAsync` mirrors `isAsyncFunction`'s `raw(node)["async"]` read, on the arrow's own node —
+ * the two node types (`ArrowFunctionExpression`, `FunctionDeclaration`) carry the flag under the
+ * same key but are distinct types, so this is not reachable through `isAsyncFunction` itself. A
+ * caller pinning an arrow shape the emitter always writes non-async (the read-only-kit wrapper's
+ * callback, src/emit/server/index.ts's `renderTools`) reads this rather than accepting `async` on
+ * the strength of params/body alone.
+ */
 export function arrowFn(node: AstNode | undefined): Arrow | undefined {
   if (node?.type !== "ArrowFunctionExpression") return undefined;
   const params = childList(node, "params");
   const body = child(node, "body");
   if (params === undefined || body === undefined) return undefined;
-  return { params, body, isBlock: body.type === "BlockStatement" };
+  return {
+    params,
+    body,
+    isBlock: body.type === "BlockStatement",
+    isAsync: raw(node)["async"] === true,
+  };
 }
 
 export type Conditional = {

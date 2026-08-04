@@ -236,6 +236,11 @@ describe("statement and function readers", () => {
     expect(arrowFn(initOf("(a) => 1"))?.isBlock).toBe(false);
   });
 
+  it("reads an arrow's async flag, on the arrow's own node rather than isAsyncFunction's", () => {
+    expect(arrowFn(initOf("async (a) => { return 1; }"))?.isAsync).toBe(true);
+    expect(arrowFn(initOf("(a) => { return 1; }"))?.isAsync).toBe(false);
+  });
+
   it("reads a return argument, and undefined for a bare return", () => {
     const arrow = arrowFn(initOf("() => { return 7; }"));
     expect(numberLit(returnArgument(blockBody(arrow?.body)?.[0]))).toBe(7);

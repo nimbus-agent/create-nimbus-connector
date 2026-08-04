@@ -46,9 +46,13 @@ function isFrameImport(node: AstNode): boolean {
  * `await runReadOnlyMcpConnector("nimbus-<name>", (reg) => { ... });`
  *
  * Every part is pinned, because this statement is VERIFIED and never CLAIMED (see frame.ts):
- * the await, the callee identity, arity 2, the "nimbus-" prefixed string literal, and a
- * single-parameter arrow with a block body. Returning the body statements is what lets
- * deriveSpec swap this one statement for its children in verifyStatements.
+ * the await, the callee identity, arity 2, the "nimbus-" prefixed string literal, a
+ * single-parameter arrow named exactly `reg`, a block body, and — not async.
+ * src/emit/server/index.ts's `renderTools` writes only `(reg) => {`, never `async (reg) => {`,
+ * and no corpus connector uses the async form either, so refusing it is lossless: accepting it
+ * would make "every part is pinned" false for a shape this emitter cannot produce. Returning the
+ * body statements is what lets deriveSpec swap this one statement for its children in
+ * verifyStatements.
  */
 function readOnlyWrapper(node: AstNode): { name: string; body: AstNode[] } | undefined {
   const args = callTo(awaited(expressionOf(node)), "runReadOnlyMcpConnector", 2);
@@ -58,7 +62,7 @@ function readOnlyWrapper(node: AstNode): { name: string; body: AstNode[] } | und
   if (full === undefined || !full.startsWith("nimbus-")) return undefined;
 
   const arrow = arrowFn(args[1]);
-  if (arrow === undefined || arrow.params.length !== 1) return undefined;
+  if (arrow === undefined || arrow.params.length !== 1 || arrow.isAsync) return undefined;
   if (!isIdent(arrow.params[0], "reg")) return undefined;
   const body = blockBody(arrow.body);
   if (body === undefined) return undefined;

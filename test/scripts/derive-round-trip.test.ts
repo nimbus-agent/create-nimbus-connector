@@ -33,16 +33,29 @@ const ROUND_TRIP = [
  * gap is on screen on every run rather than implied by absence — the same reason
  * fixtures/expectations.json omits a file instead of hiding it.
  *
- * "rest-kit frame" is a `style: "rest-kit"` fixture: recognizeFrame has no rest-kit branch, so
- * the frame matches nothing and every kit-specific statement (the shared-kit import, the
- * kit-factory const-call, each per-tool registrar call) is reported through `no-frame`. That is
- * a different emitted shape this plan's recognizers do not model, not a bug in a single
+ * "rest-kit frame" is every `style: "rest-kit"` fixture (`discord`, `google-meet`,
+ * `zzstandalone`, `zzwriterest`). rest-kit still emits the same `McpServer`/registrar/transport/
+ * connect prologue and epilogue hand-rolled writes, so recognizeFrame's HAND-ROLLED branch
+ * matches it — not `no-frame` — and leaves the rest-kit-specific statements (the
+ * `rest-tool-kit.ts` import, the fetch-helper function, the `makeRestToolRegistrar` const-call,
+ * each per-tool `register<X>Tool` call) unclaimed instead. Measured at HEAD: `discord` and
+ * `zzwriterest` report `import-from:../../shared/rest-tool-kit.ts`,
+ * `const-call:makeRestToolRegistrar`, `call:register<X>Tool` — never `no-frame`. That is a
+ * different emitted shape this plan's recognizers do not model, not a bug in a single
  * recognizer.
  *
  * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
  * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
  * scripts/_lib/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
  * hands off to does not exist yet, so these still block, just past the frame rather than at it.
+ * The label names the blocker landing the search recognizer would newly reach, not necessarily
+ * the ONLY one currently reported: `zzextract`, `zzsearch` and `zzsearchstub` block on search
+ * alone, but `mercury` (also `statement:VariableDeclaration`, `function:authHeader`,
+ * `function:mercuryGet`), `bitrise` (`statement:VariableDeclaration`, `function:bitriseGet`),
+ * `netlify` (`function:authHeader`, `function:netlifyGet`), `zendesk`
+ * (`function:trimTrailingSlash`, `function:authHeader`) and `dependencytrack`
+ * (`function:trimTrailingSlash`) additionally block on a fetch-helper shape this plan's
+ * recognizers do not model either — landing the search recognizer will not unblock those five.
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.
  *

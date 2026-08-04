@@ -13,6 +13,20 @@ const READ_ONLY = [
   "});",
 ].join("\n");
 
+/**
+ * A refused module must claim NOTHING — see recognizeReadOnlyFrame's docstring in
+ * scripts/_lib/derive/server/index.ts. A recognizer that partially claims a module it ultimately
+ * refuses would leave the totality rule reporting blockers for statements a DIFFERENT recognizer
+ * would have claimed, which reads as a spec-language gap when it is a wrong-recognizer gap. Every
+ * rejection case below is routed through this so that property is checked on each pin, not just
+ * asserted once in the abstract.
+ */
+function expectRejected(source: string): void {
+  const claims = createClaimSet();
+  expect(recognizeFrame(parseModule(source), claims)).toBeUndefined();
+  expect(claims.claims()).toEqual([]);
+}
+
 describe("recognizeFrame, read-only-kit", () => {
   it("recovers the name and style", () => {
     const frame = recognizeFrame(parseModule(READ_ONLY), createClaimSet());
@@ -38,25 +52,78 @@ describe("recognizeFrame, read-only-kit", () => {
   });
 
   it("NEVER claims the wrapper, so a statement inside it stays visible", () => {
-    // The containment hazard, asserted directly. If the frame claimed the wrapper, this
-    // unrecognized statement would be covered transitively and the totality rule would pass
-    // on a connector whose tools were never read — a false `emits`.
+    // The containment hazard, asserted directly against the SPECIFIC statement it would hide,
+    // not merely "something is unclaimed" — recognizeReadOnlyFrame claims only imports, so
+    // `const BASE = ...` is unclaimed regardless of what happens to the wrapper. That made the
+    // original version of this assertion (`unclaimed.length > 0`) pass even when the wrapper WAS
+    // claimed, because the wrapper claim just reduced 3 unclaimed statements to 1 rather than 0.
+    // Pointing at the unrecognized call inside the callback closes that gap: if the wrapper were
+    // ever claimed, containment would cover this statement too, and `covers` below would flip.
     const source = READ_ONLY.replace("});", "  someUnrecognizedCall();\n});");
     const statements = parseModule(source);
     const claims = createClaimSet();
     const frame = recognizeFrame(statements, claims);
 
-    const unclaimed = claims.unclaimed(frame!.verifyStatements);
-    expect(unclaimed.length).toBeGreaterThan(0);
+    const inner = frame!.toolStatements[1]!;
+    expect(inner.type).toBe("ExpressionStatement");
+    expect(claims.covers(inner)).toBe(false);
+    expect(claims.unclaimed(frame!.verifyStatements)).toContain(inner);
   });
 
   it("rejects a wrapper whose callback is not a single-parameter arrow", () => {
-    const source = READ_ONLY.replace("(reg) =>", "(reg, extra) =>");
-    expect(recognizeFrame(parseModule(source), createClaimSet())).toBeUndefined();
+    expectRejected(READ_ONLY.replace("(reg) =>", "(reg, extra) =>"));
   });
 
   it("rejects a non-awaited wrapper — the emitter always writes await", () => {
-    const source = READ_ONLY.replace("await runReadOnly", "runReadOnly");
-    expect(recognizeFrame(parseModule(source), createClaimSet())).toBeUndefined();
+    expectRejected(READ_ONLY.replace("await runReadOnly", "runReadOnly"));
+  });
+
+  it("rejects a wrapper whose sole parameter is not named exactly `reg`", () => {
+    expectRejected(READ_ONLY.replace("(reg) =>", "(registrar) =>"));
+  });
+
+  it("rejects a wrapper whose callback is expression-bodied rather than a block", () => {
+    const source = [
+      'import { z } from "zod";',
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", (reg) => reg("a", "d", z.object({}), async () => jsonResult(await zzGet("/a"))));',
+    ].join("\n");
+    expectRejected(source);
+  });
+
+  it('rejects a connector-name literal missing the "nimbus-" prefix', () => {
+    expectRejected(READ_ONLY.replace('"nimbus-zzreadonly"', '"zzreadonly"'));
+  });
+
+  it("rejects a wrapper call with a third argument — arity is pinned at exactly 2", () => {
+    expectRejected(READ_ONLY.replace("});", "}, true);"));
+  });
+
+  it("refuses (rather than picking one) when a module has two wrappers", () => {
+    const source = [
+      'import { z } from "zod";',
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", (reg) => {',
+      '  reg("a", "d", z.object({}), async () => jsonResult(await zzGet("/a")));',
+      "});",
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", (reg) => {',
+      '  reg("b", "d2", z.object({}), async () => jsonResult(await zzGet("/b")));',
+      "});",
+    ].join("\n");
+    expectRejected(source);
+  });
+
+  it("requires the run-read-only import source to end on a path SEGMENT, not merely a substring", () => {
+    // "shared-run-read-only-mcp-connector.ts" ends with the same characters as the real suffix
+    // but with no preceding "/" — a hypothetical sibling file, not the emitter's own import. The
+    // whole module is refused (falls through to the hand-rolled branch, which also does not
+    // match), not just this one statement.
+    expectRejected(
+      READ_ONLY.replace("/run-read-only-mcp-connector.ts", "-run-read-only-mcp-connector.ts"),
+    );
+  });
+
+  it("rejects an async callback — the emitter never writes async (reg) =>", () => {
+    expectRejected(READ_ONLY.replace("(reg) =>", "async (reg) =>"));
   });
 });
