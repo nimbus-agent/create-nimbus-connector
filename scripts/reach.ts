@@ -28,7 +28,12 @@ import {
   summaryLines,
   walkConnector,
 } from "./_lib/reach.ts";
-import { assertComparable, compareBaseline } from "./_lib/reach-baseline.ts";
+import {
+  assertComparable,
+  baselineScopeRefusal,
+  compareBaseline,
+  connectorsTreeRefusal,
+} from "./_lib/reach-baseline.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const BASELINE_PATH = join(scriptDir, "..", "fixtures", "reach-baseline.json");
@@ -139,6 +144,13 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   const { names, nimbusRoot, baseline, verbose } = parseArgs(argv);
+
+  const scopeRefusal = baselineScopeRefusal(names, baseline);
+  if (scopeRefusal !== undefined) {
+    console.log(`\n${scopeRefusal}`);
+    process.exit(2);
+  }
+
   const root = resolveNimbusRoot({ flag: nimbusRoot, env: process.env["NIMBUS_ROOT"], scriptDir });
 
   const selected = selectConnectors(names, connectorDirs(root));
@@ -169,10 +181,13 @@ async function main(argv: readonly string[]): Promise<void> {
 
   const head = git(root, ["rev-parse", "HEAD"]);
   const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
+  // A failed `git status` must not be read as "clean": status.value === "" either way, so
+  // status.error (not just head.error) has to reach assertComparable or a non-zero exit here
+  // makes the dirty gate silently disappear.
   const refusal = assertComparable({
     commit: head.value,
     dirty: status.value !== "",
-    gitError: head.error,
+    gitError: head.error !== "" ? head.error : status.error,
   });
   if (refusal !== undefined) {
     console.log(`\n${refusal}`);
@@ -183,6 +198,11 @@ async function main(argv: readonly string[]): Promise<void> {
   // not on HEAD: see reach-baseline.ts's assertComparable docstring for why a commit SHA is the
   // wrong key.
   const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
+  const treeRefusal = connectorsTreeRefusal(connectorsTree.error);
+  if (treeRefusal !== undefined) {
+    console.log(`\n${treeRefusal}`);
+    process.exit(2);
+  }
   const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
     typeof compareBaseline
   >[0];

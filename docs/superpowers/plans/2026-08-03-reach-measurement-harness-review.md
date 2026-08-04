@@ -1,7 +1,7 @@
 # Review: Corpus Reach Measurement Harness Implementation Plan
 
 **Review Date:** 2026-08-03  
-**Review Target:** [`2026-08-03-reach-measurement-harness.md`](file:///C:/gitrep/create-nimbus-connector/docs/superpowers/plans/2026-08-03-reach-measurement-harness.md)
+**Review Target:** [`2026-08-03-reach-measurement-harness.md`](./2026-08-03-reach-measurement-harness.md)
 
 ---
 

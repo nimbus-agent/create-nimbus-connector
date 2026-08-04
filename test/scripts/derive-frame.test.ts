@@ -98,4 +98,34 @@ describe("recognizeFrame", () => {
     expect(recognizeFrame(statements, claims)).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
+
+  // Over-claiming defect: isConstFrom(node, "createZodToolRegistrar", 1) checked only the outer
+  // callee and argument COUNT, so createZodToolRegistrar(unrelated) — a single-argument call to
+  // the right name whose argument is not createRegisterSimpleTool(mcp) at all — matched anyway.
+  // isRegistrarConst now verifies the argument's own identity down to the mcp binding it must
+  // close over.
+  it("rejects createZodToolRegistrar called with an argument that is not createRegisterSimpleTool(mcp)", () => {
+    const source = FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      "const reg = createZodToolRegistrar(unrelated);",
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Over-claiming defect: isConnect checked only the receiver (`mcp`) and the property name
+  // (`connect`), never the call's argument — `await mcp.connect(other)` matched just as readily
+  // as `await mcp.connect(transport)`. isConnect now requires exactly one argument matching the
+  // transport const's own variable name.
+  it("rejects await mcp.connect(other) where other is not the transport variable", () => {
+    const source = FRAME.replace("await mcp.connect(transport);", "await mcp.connect(other);");
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

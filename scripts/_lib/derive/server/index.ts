@@ -67,12 +67,12 @@ function hasMcpToolKitImport(node: AstNode): boolean {
 /**
  * `const <x> = <callee>(...)` / `new <callee>(...)` with exactly `expectedArgs` arguments.
  *
- * The argument count is checked, not just the callee name: `createZodToolRegistrar(
- * createRegisterSimpleTool(mcp))` always takes exactly one argument and `new
- * StdioServerTransport()` always takes zero, per src/emit/server/index.ts's `wiring()`. An
- * extra argument — `createZodToolRegistrar(createRegisterSimpleTool(mcp), { strict: true })`,
- * say — is a call this emitter never writes, and accepting it on the callee name alone would
- * claim a statement whose actual behaviour this recognizer never verified.
+ * The argument count is checked, not just the callee name — `new StdioServerTransport()`
+ * always takes zero, per src/emit/server/index.ts's `wiring()`. This is deliberately NOT used
+ * for the registrar const any more: that call's single argument is itself a call
+ * (`createRegisterSimpleTool(mcp)`) whose own identity — the callee name and the mcp variable
+ * it closes over — this function never looked at, so `createZodToolRegistrar(unrelated)`
+ * passed it on argument COUNT alone. See `isRegistrarConst` below.
  */
 function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boolean {
   if (node.type !== "VariableDeclaration") return false;
@@ -83,8 +83,60 @@ function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boole
   return (init["callee"] as AstNode)["name"] === callee;
 }
 
-/** `await <mcpVar>.connect(transport);` where mcpVar matches the McpServer const's variable name. */
-function isConnect(node: AstNode, mcpVar: string): boolean {
+/**
+ * `const <x> = createZodToolRegistrar(createRegisterSimpleTool(<mcpVar>));` — the registrar
+ * const, checked all the way down to the identity of its argument's argument.
+ *
+ * `isConstFrom(node, "createZodToolRegistrar", 1)` alone accepted ANY single-argument call to
+ * that name — `createZodToolRegistrar(unrelated)` claimed the statement just as readily as the
+ * real shape, because argument count is not argument identity. This requires the sole argument
+ * to itself be a zero-ambiguity call to `createRegisterSimpleTool` whose own sole argument is
+ * the exact `mcp` binding introduced by the `McpServer` const — the emitter never writes
+ * anything else here.
+ */
+function isRegistrarConst(node: AstNode, mcpVar: string): boolean {
+  if (node.type !== "VariableDeclaration") return false;
+  const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
+  if (init?.type !== "CallExpression") return false;
+  const outerCallee = init["callee"] as AstNode;
+  if (outerCallee.type !== "Identifier" || outerCallee["name"] !== "createZodToolRegistrar") {
+    return false;
+  }
+  const outerArgs = (init["arguments"] as AstNode[]) ?? [];
+  if (outerArgs.length !== 1) return false;
+
+  const inner = outerArgs[0] as AstNode;
+  if (inner.type !== "CallExpression") return false;
+  const innerCallee = inner["callee"] as AstNode;
+  if (innerCallee.type !== "Identifier" || innerCallee["name"] !== "createRegisterSimpleTool") {
+    return false;
+  }
+  const innerArgs = (inner["arguments"] as AstNode[]) ?? [];
+  if (innerArgs.length !== 1) return false;
+  const innerArg = innerArgs[0] as AstNode;
+  return innerArg.type === "Identifier" && innerArg["name"] === mcpVar;
+}
+
+/**
+ * `const <x> = new StdioServerTransport();` — the transport const's OWN variable name, read off
+ * alongside the shape `isConstFrom` already verifies. Needed so `isConnect` can require the
+ * connect call's argument to be that exact binding rather than any identifier at all.
+ */
+function transportVarName(node: AstNode): string | undefined {
+  if (!isConstFrom(node, "StdioServerTransport", 0)) return undefined;
+  const id = (node["declarations"] as AstNode[])[0]?.["id"] as AstNode | undefined;
+  return id?.type === "Identifier" ? String(id["name"]) : undefined;
+}
+
+/**
+ * `await <mcpVar>.connect(<transportVar>);` — both identities checked, not just the receiver.
+ *
+ * Previously this verified only that the receiver was the `mcp` binding and the property name
+ * was `connect`, never looking at the call's argument at all — `await mcp.connect(other)`
+ * claimed the statement just as readily as the real one. `connect()` always takes exactly the
+ * transport const introduced two statements earlier, per src/emit/server/index.ts's `wiring()`.
+ */
+function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean {
   if (node.type !== "ExpressionStatement") return false;
   const await_ = node["expression"] as AstNode;
   if (await_.type !== "AwaitExpression") return false;
@@ -93,11 +145,12 @@ function isConnect(node: AstNode, mcpVar: string): boolean {
   const callee = call["callee"] as AstNode;
   if (callee.type !== "MemberExpression") return false;
   const receiver = callee["object"] as AstNode;
-  return (
-    receiver.type === "Identifier" &&
-    receiver["name"] === mcpVar &&
-    (callee["property"] as AstNode)["name"] === "connect"
-  );
+  if (receiver.type !== "Identifier" || receiver["name"] !== mcpVar) return false;
+  if ((callee["property"] as AstNode)["name"] !== "connect") return false;
+  const args = (call["arguments"] as AstNode[]) ?? [];
+  if (args.length !== 1) return false;
+  const arg = args[0] as AstNode;
+  return arg.type === "Identifier" && arg["name"] === transportVar;
 }
 
 /**
@@ -130,17 +183,21 @@ export function recognizeFrame(
   if (!mcpInfo) return undefined;
   const { varName: mcpVar, connectorName } = mcpInfo;
 
-  // (3) Find registrar const (REQUIRED). createZodToolRegistrar(createRegisterSimpleTool(mcp))
-  // always takes exactly one argument.
-  const registrarNode = statements.find((s) => isConstFrom(s, "createZodToolRegistrar", 1));
+  // (3) Find registrar const (REQUIRED): createZodToolRegistrar(createRegisterSimpleTool(mcp)),
+  // with mcp the exact variable bound in (2).
+  const registrarNode = statements.find((s) => isRegistrarConst(s, mcpVar));
   if (!registrarNode) return undefined;
 
-  // (4) Find transport const (REQUIRED). new StdioServerTransport() always takes zero.
-  const transportNode = statements.find((s) => isConstFrom(s, "StdioServerTransport", 0));
+  // (4) Find transport const (REQUIRED): new StdioServerTransport(), taking its variable name
+  // so (5) can require the connect call's argument to be this exact binding.
+  const transportNode = statements.find((s) => transportVarName(s) !== undefined);
   if (!transportNode) return undefined;
+  const transportVar = transportVarName(transportNode);
+  if (transportVar === undefined) return undefined;
 
-  // (5) Find connect call with the correct mcp variable (REQUIRED).
-  const connectNode = statements.find((s) => isConnect(s, mcpVar));
+  // (5) Find connect call with the correct mcp variable AND the correct transport variable
+  // (REQUIRED).
+  const connectNode = statements.find((s) => isConnect(s, mcpVar, transportVar));
   if (!connectNode) return undefined;
 
   // Gather optional frame imports (does not affect recognition, but are claimed when present).

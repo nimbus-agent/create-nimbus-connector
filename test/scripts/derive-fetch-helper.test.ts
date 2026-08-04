@@ -414,4 +414,26 @@ describe("recognizeFetchHelper", () => {
       expect(claims.claims()).toEqual([]);
     });
   });
+
+  // Over-claiming defect: reconstructBase dropped the quasi trailing the path expression
+  // without checking it, so a template with text after `${path}` (`.json`) derived a base that
+  // silently lost the suffix instead of being rejected. `${path}` here (with nothing after it)
+  // is the one shape reconstructBase may accept; anything else after the expression must reject.
+  it("rejects a fetch URL template with text after the path expression", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}.json`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

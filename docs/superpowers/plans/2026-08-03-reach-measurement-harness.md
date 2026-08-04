@@ -6,7 +6,7 @@
 > wrong git object, among others. `scripts/_lib/derive/` (and the rest of `scripts/_lib/`) as
 > committed is the authority on current behaviour, not the snippets below. The ledger that
 > records what was fixed and why is gitignored and does not ship with this repository.
-
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `bun run reach`, which derives a spec from each connector in a Nimbus checkout, regenerates it, byte-compares the result, and reports how far it got plus a histogram of what blocked the rest.

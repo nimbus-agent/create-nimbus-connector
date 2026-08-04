@@ -70,26 +70,36 @@ Follows the `diff:golden` split, for the reason `scripts/_lib/golden-diff.ts`'s 
 `bunfig.toml` enforces `coverageThreshold` **per file**, and Bun reports a file the moment a test
 imports it, so everything a test touches must be decidable from its arguments.
 
+This is the plan-of-record, not as-built — see the *Status* line above and the executed plan's
+own post-execution note. What actually shipped:
+
 ```
-scripts/reach.ts              thin shell: args, resolve root, enumerate, print; import.meta.main guarded
-scripts/reach-baseline.ts     rewrites the baseline; shares the pipeline, per the snapshot:update precedent
-scripts/_lib/reach.ts         tiering, verdict lines, histogram, baseline comparison — pure, tested
+scripts/reach.ts               thin shell: args, resolve root, enumerate, print; import.meta.main guarded
+scripts/reach-baseline.ts      rewrites the baseline; its own strict arg parsing (--nimbus-root
+                                only — no scoped-baseline flag exists to honor), shares the
+                                measurement pipeline with scripts/reach.ts
+scripts/_lib/reach.ts          tiering, verdict lines, histogram — pure, tested
+scripts/_lib/reach-baseline.ts baseline build/compare and the refusals around it — pure, tested
 scripts/_lib/derive/
-  parse.ts                    @babel/parser wrapper + the claim-tracking walker
-  manifest.ts                 spec fields recoverable from nimbus.extension.json
-  server/args.ts              \
-  server/body.ts               \
-  server/env.ts                 \  one recognizer module per src/emit/server/ module,
-  server/fetch-helper.ts        /  named to match, one-to-one
-  server/path-template.ts      /
-  server/query.ts             /
-  server/search.ts           /
-  server/tools-hand.ts      /
-  server/tools-rest.ts     /
-  search-filter.ts            recognizers for src/emit/search-filter.ts
-  index.ts                    deriveSpec(files) -> Derivation
-fixtures/reach-baseline.json  per-connector tier + the Nimbus commit it was measured at
+  ast.ts                        @babel/parser wrapper — shipped in place of the planned parse.ts
+  claims.ts                     the claim-tracking walker — shipped in place of the planned parse.ts
+  blockers.ts                   blocker kind/detail formatting
+  manifest.ts                   spec fields recoverable from nimbus.extension.json
+  server/args.ts                 \  one recognizer module per src/emit/server/ module this plan
+  server/env.ts                   \ actually built a recognizer for, named to match
+  server/fetch-helper.ts          /
+  server/path-template.ts        /
+  server/tools-hand.ts          /
+  server/index.ts               frame recognition — the hand-rolled McpServer/registrar/
+                                 transport/connect wiring src/emit/server/index.ts's wiring() writes
+  index.ts                     deriveSpec(files) -> Derivation
+fixtures/reach-baseline.json   per-connector tier + the connectorsTree it was measured against
 ```
+
+**Not built — plan 2's territory:** `server/body.ts`, `server/query.ts`, `server/search.ts`,
+`server/tools-rest.ts`, and a top-level `search-filter.ts` (recognizers for
+`src/emit/search-filter.ts`). No recognizer in this plan derives a spec through those emitter
+paths; a connector that uses them blocks today, by design — see *No escape hatch* below.
 
 **The deriver lives under `scripts/_lib/`, not `src/`.** `package.json`'s `files` is
 `["src", "README.md"]`, so anything under `src/` ships to npm; a dev-only deriver there would put
@@ -216,13 +226,29 @@ the number of in-process calls and nothing else.
 
 ## The baseline
 
-`fixtures/reach-baseline.json` records each connector's tier and the Nimbus commit it was
-measured at, obtained with `git -C <root> rev-parse HEAD`.
+`fixtures/reach-baseline.json` records each connector's tier and `connectorsTree` — the tree
+object of `packages/mcp-connectors`, obtained with `git -C <root> rev-parse
+HEAD:packages/mcp-connectors` — **not** the Nimbus commit. That was the plan-of-record key, and
+implementation refused it: keying on `HEAD` made `--baseline` refuse a corpus that had not moved
+the moment the commit did — a merge, a revert, or an unrelated change elsewhere in the monorepo
+all move `HEAD` while leaving `packages/mcp-connectors` byte-identical. Keying on that
+subtree's own object id means two different commits that happen to carry the same
+`packages/mcp-connectors` compare cleanly, which is the actual invariant this harness needs:
+same bytes measured, same baseline valid, regardless of which commit produced them.
 
-`--baseline` compares and exits non-zero on any tier regression. **Comparing across revisions is
+`--baseline` compares and exits non-zero on any tier regression. **Comparing across trees is
 refused, not warned about** — a verdict spanning two corpora is precisely the false green this
 repository is organized against. If the root is not a git checkout, `--baseline` and
 `reach:baseline` both refuse; the plain report still works.
+
+**`--baseline` always compares the full corpus, never a subset.** Combining it with connector
+names on the command line is refused rather than honored: `compareBaseline` reads every
+baselined connector absent from the current run as having regressed to `blocked`, so scoping the
+run while comparing against the full baseline would invent regressions for every connector left
+out, not report a smaller true result. There is no scoped-baseline format that would make
+"regressed" mean the same thing across both a full and a partial run, so this refuses instead of
+inventing one. The same reasoning makes `reach:baseline` (which always writes the FULL corpus)
+refuse any argument besides `--nimbus-root`, rather than silently ignoring one.
 
 **A dirty checkout is refused on the same grounds.** A commit SHA describes a tree, and if the
 working tree differs from it, the baseline would file measurements of bytes that exist nowhere

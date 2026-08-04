@@ -75,6 +75,13 @@ function argNameFromExpr(
     return locals.get(String(expression["name"]))?.arg;
   }
   if (expression.type === "MemberExpression") {
+    // A computed member (`p[key]`) has an Identifier `property` too — it's the KEY variable's
+    // name, not a property name. Reading it unguarded would name an arg after whatever local
+    // happens to be used as the index (`${arg.key}`), an arg the connector never declared.
+    // recognizeArgs in args.ts:53 already guards this exact hazard on object keys; this is the
+    // same guard on the read side. Computed member reads are out of this recognizer's modeled
+    // shapes, so reject rather than misname.
+    if (expression["computed"] === true) return undefined;
     const object = expression["object"] as AstNode;
     const property = expression["property"] as AstNode;
     if (object.type === "Identifier" && property.type === "Identifier") {

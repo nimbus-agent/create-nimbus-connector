@@ -1,7 +1,7 @@
 # Review: Corpus reach measurement
 
 **Review Date:** 2026-08-03  
-**Review Target:** [`2026-08-03-from-connector-reach-design.md`](file:///C:/gitrep/create-nimbus-connector/docs/superpowers/specs/2026-08-03-from-connector-reach-design.md)
+**Review Target:** [`2026-08-03-from-connector-reach-design.md`](./2026-08-03-from-connector-reach-design.md)
 
 ---
 

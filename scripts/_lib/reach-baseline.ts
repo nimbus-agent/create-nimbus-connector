@@ -44,6 +44,48 @@ export function assertComparable(args: {
   return undefined;
 }
 
+/**
+ * Whether `--baseline` may run given the connector names on the command line.
+ *
+ * `--baseline` compares the FULL corpus against fixtures/reach-baseline.json. `compareBaseline`
+ * treats every baseline connector absent from the CURRENT run as having regressed to "blocked"
+ * (see its `now.get(name) ?? "blocked"` below) — correct when a run is short a connector because
+ * something crashed, wrong when it is short 93 connectors because the caller only asked to
+ * measure one. `bun run reach --baseline newrelic` would report 93 invented regressions from a
+ * perfectly legal, narrower invocation. There is no scoped-baseline format to invent that would
+ * make "regressed" mean the same thing across both call shapes, so this refuses rather than
+ * approximating one.
+ */
+export function baselineScopeRefusal(
+  names: readonly string[],
+  baseline: boolean,
+): string | undefined {
+  if (!baseline || names.length === 0) return undefined;
+  return (
+    "--baseline compares the full corpus against fixtures/reach-baseline.json; combining it " +
+    `with connector name(s) (${names.join(", ")}) would read every OTHER baselined connector ` +
+    'as having regressed to "blocked". Run --baseline alone against the full corpus, or drop ' +
+    "--baseline to measure just those connector(s)."
+  );
+}
+
+/**
+ * Whether the connectors-tree lookup (`git rev-parse HEAD:packages/mcp-connectors`) itself
+ * succeeded — checked separately from `assertComparable`'s `gitError`, which only covers the
+ * commands run BEFORE deciding a checkout is comparable at all. This is one step later: the
+ * command that supplies the actual baseline key. Swallowing its error the same way `head.error`
+ * used to be swallowed turns a failed lookup into the tree key `""`, which reach-baseline.ts
+ * would then happily WRITE as the baseline's connectorsTree and reach.ts would then happily
+ * COMPARE against — an empty string is a valid-looking key, not a visible failure.
+ */
+export function connectorsTreeRefusal(error: string): string | undefined {
+  if (error === "") return undefined;
+  return (
+    `git could not read the tree object of packages/mcp-connectors: ${error}. A baseline is ` +
+    "keyed on that tree, so it can be neither recorded nor compared without it."
+  );
+}
+
 export function compareBaseline(
   baseline: Baseline,
   results: readonly ConnectorResult[],

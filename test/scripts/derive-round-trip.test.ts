@@ -11,10 +11,11 @@ import { displayPath } from "../../src/types.ts";
  * Fixtures whose emitted src/server.ts + nimbus.extension.json this plan's recognizers derive,
  * and which then re-emit byte-identical output for every file the fixture produces. Confirmed
  * by running the full parseSpec -> generate -> deriveSpec -> parseSpec -> generate pipeline
- * against every fixture in fixtures/ (see task-11-report.md for the full sweep): 6 of 20
- * fixtures derive, and all 6 round-trip 6/6 files. newrelic/datadog/grafana/sentry are the
- * byte-locked corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are
- * synthetic "hand-rolled" fixtures that exercise the same frame from the opposite direction.
+ * against every fixture in fixtures/, and the "accounts for every fixture in fixtures/" test
+ * below re-confirms it on every run rather than trusting a count recorded here that would go
+ * stale silently as fixtures are added. newrelic/datadog/grafana/sentry are the byte-locked
+ * corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are synthetic
+ * "hand-rolled" fixtures that exercise the same frame from the opposite direction.
  */
 const ROUND_TRIP = ["newrelic", "datadog", "grafana", "sentry", "zzscratch", "zzstandalonehand"];
 

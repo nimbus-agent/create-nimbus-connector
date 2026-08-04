@@ -84,6 +84,17 @@ function reconstructBase(template: AstNode): string | undefined {
     }
   }
 
+  // The quasi trailing the path expression (quasis[numToUse + 1], i.e. the template's LAST
+  // quasi) is never pushed onto `parts` above — it comes after the identifier this function
+  // treats as the path, so it is not part of the base. It is only safe to drop when it is
+  // empty: `` `https://api.example.com${path}` `` has "" there, but
+  // `` `https://api.example.com${path}.json` `` has ".json", and dropping that unchecked
+  // derives base "https://api.example.com" while silently losing the ".json" suffix — a wrong
+  // claim, not a rejection. Reject instead.
+  const trailing = quasis[numToUse + 1];
+  const trailingCooked = (trailing?.["value"] as { cooked?: string } | undefined)?.cooked;
+  if (trailingCooked !== "") return undefined;
+
   return parts.join("");
 }
 
