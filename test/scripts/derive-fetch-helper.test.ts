@@ -189,6 +189,54 @@ describe("recognizeFetchHelper", () => {
     expect(claims.unclaimed(statements)).toEqual([]);
   });
 
+  // Defect: a SpreadElement in the headers object has no `key`, and indexing into it
+  // unguarded crashed the whole sweep on discord, google-meet, zzstandalone, zzwriterest,
+  // zzwrite and zzwriteonly. Must reject the helper, not throw.
+  it("rejects (without crashing) a headers object containing a spread", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { ...common, "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Same hazard one level up: a spread in the fetch options object itself, before `headers` is
+  // located within it. This must not crash either — and here the spread genuinely does not
+  // bear on `headers`, so the helper is still legitimately recognized; the recognizer records
+  // nothing about the spread it skipped, so this is not an over-claim.
+  it("does not crash on a fetch options object containing a spread", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      "    ...commonOptions,",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields } = run(src);
+    expect(fields).toEqual({
+      local: "probeGet",
+      base: "https://api.example.com",
+      serviceLabel: "Probe",
+      inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
+    });
+  });
+
   // Gap 3: rejects inline header with accessor taking arguments
   it("rejects inline header with accessor taking arguments", () => {
     const src = [

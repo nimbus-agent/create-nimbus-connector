@@ -99,13 +99,27 @@ function headerValue(value: AstNode): string | undefined {
 }
 
 /**
+ * Find a plain `key: value` property by its key name. A `SpreadElement` (`{ ...opts, headers:
+ * {...} }`) has no `key` — indexing into it unguarded is what crashed this recognizer on
+ * discord, google-meet and four zz* fixtures. Skipping non-`ObjectProperty` entries here means
+ * a spread anywhere in the options object simply does not match, rather than crashing.
+ */
+function findObjectProperty(properties: readonly AstNode[], name: string): AstNode | undefined {
+  return properties.find((p) => {
+    if (p.type !== "ObjectProperty") return false;
+    const key = p["key"] as AstNode;
+    return key.type === "Identifier" && key["name"] === name;
+  });
+}
+
+/**
  * Extract inline headers from an ObjectExpression headers object.
  * Returns the headers object or undefined if not inline form.
  */
 function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undefined {
   const options = (fetchCall["arguments"] as AstNode[])[1];
   const properties = (options?.["properties"] as AstNode[] | undefined) ?? [];
-  const headers = properties.find((p) => (p["key"] as AstNode)["name"] === "headers");
+  const headers = findObjectProperty(properties, "headers");
   const headersValue = headers?.["value"] as AstNode | undefined;
 
   // Must be an ObjectExpression for inline headers
@@ -116,6 +130,10 @@ function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undef
 
   const out: Record<string, string> = {};
   for (const entry of entries) {
+    // Same SpreadElement hazard as findObjectProperty, one level down: `{ ...common,
+    // "X-Api-Key": k }` as the headers object itself. Not a plain key/value headers object, so
+    // reject the whole helper rather than reading past what this shape models.
+    if (entry.type !== "ObjectProperty") return undefined;
     const key = entry["key"] as AstNode;
     const name = typeof key["value"] === "string" ? key["value"] : String(key["name"] ?? "");
     const value = headerValue(entry["value"] as AstNode);
@@ -132,7 +150,7 @@ function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undef
 function headersAccessor(fetchCall: AstNode): string | undefined {
   const options = (fetchCall["arguments"] as AstNode[])[1];
   const properties = (options?.["properties"] as AstNode[] | undefined) ?? [];
-  const headers = properties.find((p) => (p["key"] as AstNode)["name"] === "headers");
+  const headers = findObjectProperty(properties, "headers");
   const headersValue = headers?.["value"] as AstNode | undefined;
 
   // Must be a zero-argument CallExpression with Identifier callee
