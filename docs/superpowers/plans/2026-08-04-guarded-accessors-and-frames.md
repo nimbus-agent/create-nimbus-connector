@@ -1629,10 +1629,32 @@ import: present → `style: "rest-kit"` and claim it too; absent → `style: "ha
 - [ ] **Step 5: Wire it into `deriveSpec`**
 
 In `scripts/_lib/derive/index.ts`, branch on `frame.style === "rest-kit"` to call
-`recognizeRestTools` instead of `recognizeTools`, and build the spec's `serviceLabel`, `env` and
-`fetchHelper` from its result rather than from `recognizeEnv` / `recognizeFetchHelper` — rest-kit
-emits neither env accessors nor a read helper (`emitServer` gates both on `isHandStyle`). The env
-entry is a single one naming `tokenEnv` with `auth: "bearer"`.
+`recognizeRestTools` instead of `recognizeTools`, and build the spec's `serviceLabel` and `env`
+from its result rather than from `recognizeEnv` — rest-kit emits no env accessors, since
+`emitServer` gates `renderEnvAccessors` on `isHandStyle`. The env entry is a single one naming
+`tokenEnv` with `auth: "bearer"`.
+
+**Rest-kit DOES emit a read helper, and it is a different shape.** `renderReadHelper` does *not*
+gate on `isHandStyle` — `src/emit/server/fetch-helper.ts:191-192` reads
+`if (spec.style === "rest-kit") return renderFetchHelper(spec);`, routing to
+`renderRestKitFetchHelper`, whose own comment records that this is deliberate: *"rest-kit is
+unconditional, and not for symmetry's sake — `makeRestToolRegistrar` is handed the helper."*
+Confirmed by generating `zzstandalone`, whose `src/server.ts` carries a top-level
+`async function zzFetch(token: string, path: string, init?: RequestInit)`.
+
+Two consequences, and both are hard blockers rather than polish:
+
+- That `FunctionDeclaration` is a top-level statement. Unrecognized, it stays unclaimed and the
+  totality rule blocks the module before `deriveSpec` ever reaches the `no-fetch-helper` check.
+- `FetchHelperSchema` requires `base` (`z.string().min(1)`, no default), and the helper body is
+  its only source. The factory object yields the helper's *name*, never its base URL.
+
+So `rest-kit` needs its own fetch-helper recognizer. It belongs in
+`scripts/_lib/derive/server/fetch-helper.ts`, **not** in `tools-rest.ts` — the emitter function
+being inverted lives in `src/emit/server/fetch-helper.ts`, and the one-recognizer-per-emitter-module
+mapping is what makes a missing recognizer visible in review. Export it alongside the existing
+`recognizeFetchHelper`, which cannot be reused: it requires exactly one parameter named `path`,
+and the rest-kit helper takes three.
 
 - [ ] **Step 6: Move `zzstandalone` into `ROUND_TRIP`**
 
