@@ -8,6 +8,7 @@ export type FetchHelperFields = {
   inlineHeaders?: Record<string, string>;
   headers?: string;
   normalizeLeadingSlash?: true;
+  jsonFallbackRaw?: true;
 };
 
 function walk(node: unknown, visit: (n: AstNode) => void): void {
@@ -241,6 +242,96 @@ function hasNormalizeLeadingSlash(fn: AstNode): boolean {
   return false;
 }
 
+function bodyStatements(fn: AstNode): AstNode[] {
+  return ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
+}
+
+/** `JSON.parse(text) as unknown` — the argument both of renderFetchHelper's return forms share. */
+function isJsonParseTextAsUnknown(node: AstNode | undefined): boolean {
+  if (node?.type !== "TSAsExpression") return false;
+  const typeAnnotation = node["typeAnnotation"] as AstNode | undefined;
+  if (typeAnnotation?.type !== "TSUnknownKeyword") return false;
+  const expr = node["expression"] as AstNode | undefined;
+  if (expr?.type !== "CallExpression") return false;
+  const callee = expr["callee"] as AstNode | undefined;
+  if (callee?.type !== "MemberExpression") return false;
+  const object = callee["object"] as AstNode | undefined;
+  const property = callee["property"] as AstNode | undefined;
+  if (object?.type !== "Identifier" || object["name"] !== "JSON") return false;
+  if (property?.type !== "Identifier" || property["name"] !== "parse") return false;
+  const args = (expr["arguments"] as AstNode[] | undefined) ?? [];
+  return args.length === 1 && args[0]?.type === "Identifier" && args[0]["name"] === "text";
+}
+
+/** `return JSON.parse(text) as unknown;` — the plain (jsonFallbackRaw: false) return form. */
+function isPlainJsonReturn(node: AstNode): boolean {
+  return (
+    node.type === "ReturnStatement" &&
+    isJsonParseTextAsUnknown(node["argument"] as AstNode | undefined)
+  );
+}
+
+/** `return { raw: text };` — the catch arm's fallback, exactly. */
+function isRawFallbackReturn(node: AstNode): boolean {
+  if (node.type !== "ReturnStatement") return false;
+  const arg = node["argument"] as AstNode | undefined;
+  if (arg?.type !== "ObjectExpression") return false;
+  const properties = (arg["properties"] as AstNode[] | undefined) ?? [];
+  if (properties.length !== 1) return false;
+  const prop = properties[0]!;
+  if (prop.type !== "ObjectProperty") return false;
+  const key = prop["key"] as AstNode;
+  const value = prop["value"] as AstNode;
+  return (
+    key.type === "Identifier" &&
+    key["name"] === "raw" &&
+    value.type === "Identifier" &&
+    value["name"] === "text"
+  );
+}
+
+/**
+ * `try { return JSON.parse(text) as unknown; } catch { return { raw: text }; }` — the
+ * jsonFallbackRaw: true form, pinned exactly: a bare `catch` (no binding), a one-statement
+ * try block, a one-statement catch block, no finally. Anything else with a TryStatement in
+ * this position (a caught binding, extra statements, a different fallback value) is not this
+ * shape and is refused rather than approximated.
+ */
+function isJsonFallbackTry(node: AstNode): boolean {
+  if (node.type !== "TryStatement") return false;
+  if (node["finalizer"] != null) return false;
+  const block = node["block"] as AstNode | undefined;
+  const blockBody =
+    block?.type === "BlockStatement" ? (block["body"] as AstNode[] | undefined) : undefined;
+  if (blockBody === undefined || blockBody.length !== 1 || !isPlainJsonReturn(blockBody[0]!)) {
+    return false;
+  }
+  const handler = node["handler"] as AstNode | undefined;
+  if (handler?.type !== "CatchClause" || handler["param"] != null) return false;
+  const handlerBlock = handler["body"] as AstNode | undefined;
+  const handlerBody =
+    handlerBlock?.type === "BlockStatement"
+      ? (handlerBlock["body"] as AstNode[] | undefined)
+      : undefined;
+  return (
+    handlerBody !== undefined && handlerBody.length === 1 && isRawFallbackReturn(handlerBody[0]!)
+  );
+}
+
+/**
+ * The read helper's final statement, classified against the only two shapes
+ * `renderFetchHelper` can end with: `true` for the jsonFallbackRaw try/catch, `false` for the
+ * plain return, `undefined` for anything else (reject the whole helper — Gap C).
+ */
+function classifyJsonFallback(fn: AstNode): boolean | undefined {
+  const statements = bodyStatements(fn);
+  const last = statements.at(-1);
+  if (last === undefined) return undefined;
+  if (isPlainJsonReturn(last)) return false;
+  if (isJsonFallbackTry(last)) return true;
+  return undefined;
+}
+
 /**
  * The read helper, as src/emit/server/fetch-helper.ts writes it. Recognized by shape rather
  * than by name: the local is derived from the spec by formula, so matching on a name would
@@ -281,6 +372,9 @@ export function recognizeFetchHelper(
 
     const normalizeLeadingSlash = hasNormalizeLeadingSlash(s) ? true : undefined;
 
+    const jsonFallback = classifyJsonFallback(s);
+    if (jsonFallback === undefined) continue;
+
     claims.claim(s, "fetch-helper");
     return {
       local,
@@ -289,6 +383,7 @@ export function recognizeFetchHelper(
       ...(inlineHeadersObj !== undefined && { inlineHeaders: inlineHeadersObj }),
       ...(headersAccessorName !== undefined && { headers: headersAccessorName }),
       ...(normalizeLeadingSlash !== undefined && { normalizeLeadingSlash }),
+      ...(jsonFallback && { jsonFallbackRaw: true as const }),
     };
   }
   return undefined;

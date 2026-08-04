@@ -64,17 +64,19 @@ describe("recognizeTools", () => {
     expect(unclaimed).toEqual([]);
   });
 
-  it("reads a block-with-hoist tool, recovering the hoisted boolean through the path, without inferring handlerStyle", () => {
+  it("reads a block-with-hoist tool, recovering the hoisted boolean and its local name through the path, without inferring handlerStyle", () => {
     const { result } = run(BLOCK);
     // A block body forced by a hoist is not evidence of handlerStyle: "block" — see the BLOCK
     // constant's comment — so the connector-level field stays omitted, and the per-tool
     // ToolFields carries no handlerStyle at all (it is not a schema field on a tool).
+    // Gap A: the hoist statement names its own const "only", which differs from the arg's own
+    // key "only_open" — renderHoists writes `a.local ?? name`, so that's `local: "only"`.
     expect(result).toEqual({
       tools: [
         {
           name: "newrelic_alert_violations",
           description: "List recent alert violations.",
-          args: { only_open: { type: "boolean", optional: true } },
+          args: { only_open: { type: "boolean", optional: true, local: "only" } },
           path: "/v2/alerts_violations.json?only_open=${arg.only_open|bool}",
         },
       ],
@@ -115,7 +117,7 @@ describe("recognizeTools", () => {
     expect(run(source).result).toBeUndefined();
   });
 
-  it("recognizes a hoisted default-value local (bool: false) through the path, not just the boolean form", () => {
+  it("recognizes a hoisted default-value local (bool: false) through the path, recovering the default literal (Gap B)", () => {
     const source = [
       "reg(",
       '  "zzwrite_item_create",',
@@ -128,16 +130,88 @@ describe("recognizeTools", () => {
       ");",
     ].join("\n");
     const { result } = run(source);
+    // The hoist's own const name is "scope", same as the arg's key, so no `local` is fed
+    // back (Gap A only applies when the two differ) — but the `??` right-hand side "all" is
+    // otherwise unrecoverable (renderZodSchema never encodes it), so `default` always is.
     expect(result).toEqual({
       tools: [
         {
           name: "zzwrite_item_create",
           description: "Create item.",
-          args: { scope: { type: "string", optional: true } },
+          args: { scope: { type: "string", optional: true, default: "all" } },
           path: "/v1/items?scope=${arg.scope}",
         },
       ],
     });
+  });
+
+  it("recognizes a numeric default literal (the real datadog_incident_list / sentry_issue_list shape)", () => {
+    const source = [
+      "reg(",
+      '  "datadog_incident_list",',
+      '  "List incidents.",',
+      "  z.object({ limit: z.number().int().min(1).max(50).optional() }),",
+      "  async (p) => {",
+      "    const lim = p.limit ?? 10;",
+      "    return jsonResult(await ddGet(`/api/v2/incidents?page[size]=${String(lim)}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result } = run(source);
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "datadog_incident_list",
+          description: "List incidents.",
+          args: {
+            limit: {
+              type: "number",
+              int: true,
+              min: 1,
+              max: 50,
+              optional: true,
+              default: 10,
+              local: "lim",
+            },
+          },
+          path: "/api/v2/incidents?page[size]=${arg.limit|num}",
+        },
+      ],
+    });
+  });
+
+  it("refuses a ?? hoist whose right-hand side is not a string/number/boolean literal, rather than guessing a default", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ scope: z.string().optional() }),",
+      "  async (p) => {",
+      "    const scope = p.scope ?? fallbackScope();",
+      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a hoist naming an arg the z.object({...}) schema does not declare", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ other: z.string().optional() }),",
+      "  async (p) => {",
+      '    const scope = p.scope ?? "all";',
+      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
   });
 
   it("refuses a hoist whose right-hand side of === is not literal true, rather than mis-reading it as the boolean form", () => {

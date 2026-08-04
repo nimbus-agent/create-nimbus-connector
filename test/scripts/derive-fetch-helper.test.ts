@@ -104,7 +104,7 @@ describe("recognizeFetchHelper", () => {
     expect(claims.unclaimed(statements)).toEqual([]);
   });
 
-  it("recognizes grafana (normalizeLeadingSlash, env base)", () => {
+  it("recognizes grafana (normalizeLeadingSlash, env base, jsonFallbackRaw)", () => {
     const { fields, claims, statements } = run(GRAFANA);
     expect(fields).toEqual({
       local: "grafanaGet",
@@ -112,6 +112,7 @@ describe("recognizeFetchHelper", () => {
       serviceLabel: "Grafana",
       headers: "authHeaders",
       normalizeLeadingSlash: true,
+      jsonFallbackRaw: true,
     });
     expect(claims.unclaimed(statements)).toEqual([]);
   });
@@ -249,6 +250,100 @@ describe("recognizeFetchHelper", () => {
       "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
       "  }",
       "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // --- Gap C: jsonFallbackRaw, recovered from the read helper's final statement.
+
+  it("omits jsonFallbackRaw for the plain `return JSON.parse(text) as unknown;` ending", () => {
+    // NEWRELIC already exercises this path (see its own test above) — this one pins the
+    // absence explicitly, independent of any other field.
+    const { fields } = run(NEWRELIC);
+    expect(fields?.jsonFallbackRaw).toBeUndefined();
+  });
+
+  it("rejects a try/catch whose catch has a bound parameter, rather than treating it as the fallback shape", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    return JSON.parse(text) as unknown;",
+      "  } catch (err) {",
+      "    return { raw: text };",
+      "  }",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a try/catch whose catch returns something other than { raw: text }", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    return JSON.parse(text) as unknown;",
+      "  } catch {",
+      "    return null;",
+      "  }",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a try/catch with an extra statement in the try block", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    const parsed = JSON.parse(text) as unknown;",
+      "    return parsed;",
+      "  } catch {",
+      "    return { raw: text };",
+      "  }",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a final statement that is neither the plain return nor the fallback try/catch", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return text;",
       "}",
     ].join("\n");
     const { fields, claims } = run(src);

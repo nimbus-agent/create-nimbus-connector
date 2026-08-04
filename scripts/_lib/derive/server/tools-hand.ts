@@ -79,28 +79,59 @@ function booleanHoistArg(init: AstNode): string | undefined {
 }
 
 /**
- * `p.scope ?? "all"` -> "scope".
+ * A literal `renderHoists` can write as a `??` default's right-hand side —
+ * `JSON.stringify(a.default)` on a value typed `z.union([z.string(), z.number(), z.boolean()])`
+ * in ArgSchema (booleans never actually reach here: `a.type === "boolean"` always takes the
+ * ternary form above instead, per `renderHoists`'s own branch — but a literal is a literal,
+ * and the boundary this recognizer draws is the AST shape, not which combinations the schema
+ * happens to allow today). Anything else — an identifier, a template literal, `null` — is not
+ * one of these three node types and is refused.
+ */
+function hoistDefaultLiteral(node: AstNode): string | number | boolean | undefined {
+  if (node.type === "StringLiteral" && typeof node["value"] === "string") return node["value"];
+  if (node.type === "NumericLiteral" && typeof node["value"] === "number") return node["value"];
+  if (node.type === "BooleanLiteral" && typeof node["value"] === "boolean") return node["value"];
+  return undefined;
+}
+
+/**
+ * `p.scope ?? "all"` -> `{ arg: "scope", default: "all" }`.
  *
  * Pinned to the `??` operator specifically. renderHoists never writes `||` for a default value,
  * so a matcher accepting `||` too would recover the same placeholder for a shape the emitter
- * could not actually have produced — a wrong match dressed as a success.
+ * could not actually have produced — a wrong match dressed as a success. The default's VALUE is
+ * recovered here too (Gap B): it is only ever visible at this statement — `renderZodSchema`
+ * never encodes `a.default` in the schema text, so an arg's default is otherwise unrecoverable.
  */
-function defaultHoistArg(init: AstNode): string | undefined {
+function defaultHoistArg(
+  init: AstNode,
+): { arg: string; default: string | number | boolean } | undefined {
   if (init.type !== "LogicalExpression" || init["operator"] !== "??") return undefined;
-  return memberArgName(init["left"] as AstNode);
+  const arg = memberArgName(init["left"] as AstNode);
+  if (arg === undefined) return undefined;
+  const value = hoistDefaultLiteral(init["right"] as AstNode);
+  if (value === undefined) return undefined;
+  return { arg, default: value };
 }
 
 /**
  * One hoisted-argument const statement, in either of renderHoists's two forms:
  *
  *   const <local> = <param>.<name> === true ? "true" : "false";   // -> bool: true
- *   const <local> = <param>.<name> ?? <default>;                  // -> bool: false
+ *   const <local> = <param>.<name> ?? <default>;                  // -> bool: false, + default
  *
  * The two forms produce an indistinguishable bare identifier at the path-template use site, so
  * `bool` has to be decided here, at the statement that actually carries the distinction, and
  * threaded into `recognizePath`'s `locals` map — see `PathLocal`'s docstring.
+ *
+ * `local` — the const's own identifier — is returned alongside `pathLocal` because it is Gap
+ * A's only source too: `renderHoists` writes `a.local ?? name`, so the const name IS `a.local`
+ * whenever it differs from the arg's own key, and this statement is the only place that name
+ * appears in the emitted module.
  */
-function hoistedLocal(statement: AstNode): [string, PathLocal] | undefined {
+function hoistedLocal(
+  statement: AstNode,
+): { local: string; pathLocal: PathLocal; default?: string | number | boolean } | undefined {
   if (statement.type !== "VariableDeclaration") return undefined;
   const declarations = statement["declarations"] as AstNode[];
   if (declarations.length !== 1) return undefined;
@@ -111,10 +142,16 @@ function hoistedLocal(statement: AstNode): [string, PathLocal] | undefined {
   if (typeof local !== "string") return undefined;
 
   const boolArg = booleanHoistArg(init);
-  if (boolArg !== undefined) return [local, { arg: boolArg, bool: true }];
+  if (boolArg !== undefined) return { local, pathLocal: { arg: boolArg, bool: true } };
 
-  const defaultArg = defaultHoistArg(init);
-  if (defaultArg !== undefined) return [local, { arg: defaultArg, bool: false }];
+  const defaultHoist = defaultHoistArg(init);
+  if (defaultHoist !== undefined) {
+    return {
+      local,
+      pathLocal: { arg: defaultHoist.arg, bool: false },
+      default: defaultHoist.default,
+    };
+  }
 
   return undefined;
 }
@@ -183,22 +220,45 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
   if (statements.length === 0) return undefined;
 
   const locals = new Map<string, PathLocal>();
+  // Keyed by arg name (pathLocal.arg), not by the const's own identifier — that is what
+  // toolArgs is keyed by too, and it's the join key for feeding Gap A/B back into the arg.
+  const hoistMeta = new Map<string, { local: string; default?: string | number | boolean }>();
   for (const statement of statements.slice(0, -1)) {
     const hoist = hoistedLocal(statement);
     if (hoist === undefined) return undefined;
-    locals.set(hoist[0], hoist[1]);
+    locals.set(hoist.local, hoist.pathLocal);
+    hoistMeta.set(hoist.pathLocal.arg, { local: hoist.local, default: hoist.default });
   }
 
   const last = statements.at(-1) as AstNode;
   if (last.type !== "ReturnStatement") return undefined;
   const path = pathFromJsonResult(last["argument"] as AstNode | undefined, locals);
-  return path === undefined
-    ? undefined
-    : {
-        fields: { name, description, args: toolArgs, path },
-        isBlock: true,
-        hasHoists: locals.size > 0,
+  if (path === undefined) return undefined;
+
+  // Gap A / Gap B: renderZodSchema never encodes `local` or `default` in the schema text
+  // itself (recognizeArgs, above, cannot see either), so both are only visible here, at the
+  // hoist statement — merge them back onto the matching arg now that both are known.
+  let mergedArgs = toolArgs;
+  if (hoistMeta.size > 0) {
+    mergedArgs = { ...toolArgs };
+    for (const [argName, meta] of hoistMeta) {
+      const arg = mergedArgs[argName];
+      // A hoist naming an arg the schema doesn't declare is an inconsistency this recognizer
+      // does not understand — reject the tool rather than guess which side is wrong.
+      if (arg === undefined) return undefined;
+      mergedArgs[argName] = {
+        ...arg,
+        ...(meta.local !== argName ? { local: meta.local } : {}),
+        ...(meta.default !== undefined ? { default: meta.default } : {}),
       };
+    }
+  }
+
+  return {
+    fields: { name, description, args: mergedArgs, path },
+    isBlock: true,
+    hasHoists: locals.size > 0,
+  };
 }
 
 /**

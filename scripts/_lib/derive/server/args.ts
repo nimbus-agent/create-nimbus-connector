@@ -6,6 +6,20 @@ export type ArgFields = {
   int?: true;
   min?: number;
   max?: number;
+  /**
+   * The hoisted const name, when it differs from the arg's own key. Not recoverable from the
+   * `z.object({...})` schema this file reads — `renderZodSchema` never encodes it — so it is
+   * left unset here and filled in by tools-hand.ts's `recognizeOne`, which reads it off the
+   * hoist statement itself (renderHoists writes `a.local ?? name`; see Gap A).
+   */
+  local?: string;
+  /**
+   * Same story as `local`: `renderZodSchema` never encodes a default value in the schema text
+   * (`.optional()` is the only trace an optional-with-default arg leaves there), so this is
+   * left unset here and filled in by tools-hand.ts from the `?? <default>` hoist statement
+   * (Gap B).
+   */
+  default?: string | number | boolean;
 };
 
 const BASE_TYPES = new Set(["string", "number", "boolean"]);
