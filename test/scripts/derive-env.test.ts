@@ -80,6 +80,22 @@ describe("recognizeEnv", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
+  it('rejects a method call on the binding that is not .replace(/\\/$/, "") — a wrong callee, not a wrong expression shape', () => {
+    // Distinct from the BinaryExpression case above: this is a CallExpression on the binding
+    // itself (matchTransformExpr's MemberExpression branch), just not the one transform this
+    // recognizer models. `.replace` with the wrong pattern would be the same kind of near miss;
+    // a different method name entirely is the more obviously-real-world one.
+    const source = [
+      "function weird(): string {",
+      '  const b = process.env["V"]?.trim();',
+      "  return b.toUpperCase();",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
   // --- Step B: model every real emitted shape.
 
   it("recovers transform: stripTrailingSlash with no prefix/suffix", () => {

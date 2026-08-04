@@ -197,6 +197,83 @@ describe("recognizeTools", () => {
     expect(claims.claims()).toEqual([]);
   });
 
+  // Four more non-literal RHS shapes for the same `?? <default>` guard, each pinned to its own
+  // node type so a future change to hoistDefaultLiteral can't silently start accepting one.
+  // `-1` matters most: Babel parses a negative number literal as a UnaryExpression wrapping a
+  // NumericLiteral, not a NumericLiteral itself — a "helpful" unwrap of UnaryExpression would
+  // start recovering `default: -1` for a shape the emitter never actually writes (ArgSchema's
+  // `min`/`max` are the only place a negative number appears in this corpus, and JSON.stringify
+  // of a negative JS number is a plain NumericLiteral token, not a unary minus — this shape
+  // isn't reachable from any valid spec, but the recognizer's job is refusing what it reads,
+  // not what a schema currently allows).
+  it("refuses a ?? hoist whose right-hand side is null", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ scope: z.string().optional() }),",
+      "  async (p) => {",
+      "    const scope = p.scope ?? null;",
+      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a ?? hoist whose right-hand side is an array literal", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ scope: z.string().optional() }),",
+      "  async (p) => {",
+      "    const scope = p.scope ?? [1, 2, 3];",
+      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a ?? hoist whose right-hand side is an object literal", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ scope: z.string().optional() }),",
+      "  async (p) => {",
+      "    const scope = p.scope ?? ({ a: 1 });",
+      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a ?? hoist whose right-hand side is a negative number (UnaryExpression, not NumericLiteral)", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ scope: z.number().optional() }),",
+      "  async (p) => {",
+      "    const scope = p.scope ?? -1;",
+      "    return jsonResult(await nrGet(`/x?s=${String(scope)}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
   it("refuses a hoist naming an arg the z.object({...}) schema does not declare", () => {
     const source = [
       "reg(",
