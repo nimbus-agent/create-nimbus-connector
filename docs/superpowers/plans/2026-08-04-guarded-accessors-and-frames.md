@@ -133,6 +133,7 @@ import {
   awaited,
   blockBody,
   boolLit,
+  calleeOf,
   callTo,
   conditional,
   constDecl,
@@ -222,9 +223,7 @@ describe("callTo", () => {
 
 describe("methodCallTo", () => {
   it("matches receiver, property and arity together", () => {
-    expect(methodCallTo(initOf("u.searchParams.set(a, b)"), "searchParams", "set", 2)).toHaveLength(
-      2,
-    );
+    expect(methodCallTo(initOf("mcp.connect(transport)"), "mcp", "connect", 1)).toHaveLength(1);
   });
 
   it("rejects a computed property — u[set](a, b) is not u.set(a, b)", () => {
@@ -232,7 +231,35 @@ describe("methodCallTo", () => {
   });
 
   it("rejects a different receiver", () => {
-    expect(methodCallTo(initOf("v.set(a, b)"), "u", "set", 2)).toBeUndefined();
+    expect(methodCallTo(initOf("v.connect(t)"), "mcp", "connect", 1)).toBeUndefined();
+  });
+
+  it("rejects a wrong arity", () => {
+    expect(methodCallTo(initOf("mcp.connect(a, b)"), "mcp", "connect", 1)).toBeUndefined();
+  });
+
+  /**
+   * `u.searchParams.set(k, v)` is a TWO-level chain: the callee's object is itself a
+   * MemberExpression, not an Identifier. methodCallTo models a ONE-level receiver and must
+   * refuse it — widening the receiver check to also accept the inner member's property name
+   * would make `methodCallTo(x, "searchParams", "set", 2)` match `anything.searchParams.set(...)`,
+   * dropping the identity of `u` entirely. That is a matcher validating part of a shape and
+   * claiming the whole of it: the exact defect class this module exists to make impossible,
+   * reintroduced into the module built to prevent it.
+   *
+   * The query recognizer that needs this shape composes it from the strict primitives instead —
+   * asserted below so the composition is a tested route rather than a hopeful one.
+   */
+  it("refuses a two-level chain, which composes from the primitives instead", () => {
+    const call = initOf("u.searchParams.set(k, v)");
+    expect(methodCallTo(call, "searchParams", "set", 2)).toBeUndefined();
+    expect(methodCallTo(call, "u", "set", 2)).toBeUndefined();
+
+    const callee = calleeOf(call);
+    expect(memberName(callee)).toBe("set");
+    const inner = memberObject(callee);
+    expect(memberName(inner)).toBe("searchParams");
+    expect(identName(memberObject(inner))).toBe("u");
   });
 });
 
@@ -514,6 +541,21 @@ export function functionName(node: AstNode | undefined): string | undefined {
 export function callArgs(node: AstNode | undefined): AstNode[] | undefined {
   if (node?.type !== "CallExpression") return undefined;
   return childList(node, "arguments");
+}
+
+/**
+ * The callee of a plain CallExpression, for chains `methodCallTo` deliberately does not model.
+ *
+ * `methodCallTo` handles a ONE-level receiver (`mcp.connect(t)`). A two-level chain
+ * (`u.searchParams.set(k, v)`) has a MemberExpression where that receiver would be, and widening
+ * `methodCallTo` to accept it would drop the identity of `u` — a matcher claiming a shape it only
+ * partly checked. A caller that needs the two-level form composes it instead:
+ * `memberName(calleeOf(c))` -> "set", `memberName(memberObject(calleeOf(c)))` -> "searchParams",
+ * `identName(memberObject(memberObject(calleeOf(c))))` -> "u". Every step keeps its own guard.
+ */
+export function calleeOf(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "CallExpression") return undefined;
+  return child(node, "callee");
 }
 
 /** `<callee>(...)` with exactly `argc` arguments -> those arguments. */
