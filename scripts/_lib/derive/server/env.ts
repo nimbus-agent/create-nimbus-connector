@@ -58,8 +58,7 @@ function envVarRead(init: AstNode | undefined): string | undefined {
   const member = optionalMemberObject(callee) ?? memberObject(callee);
   const computed = computedMember(member);
   if (computed === undefined) return undefined;
-  if (memberOn(computed.object, "process") !== "env") return undefined;
-  return stringLit(computed.key);
+  return memberOn(computed.object, "process") === "env" ? computed.key : undefined;
 }
 
 type ReadLine = { var: string; binding: string; default?: string };
@@ -217,6 +216,16 @@ type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] }
  * is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
+  // Undisclosed-until-review widening (see task-2-report.md's fix report): `objectProps` merges
+  // an Identifier key and a same-named StringLiteral key into the one resolved name via
+  // `identName ?? stringLit`, so `{ "Authorization": …, "Accept": … }` — string-literal keys —
+  // now classifies the same as the bare `{ Authorization: …, Accept: … }` form `returnLines`
+  // actually writes. The pre-retrofit code required an Identifier specifically at both
+  // positions and would have refused the string-literal form. This is the same merge the task
+  // 2 brief explicitly sanctioned at server/index.ts's getMcpServerInfo (its Step 5, item 4);
+  // it is bounded to a byte mismatch (a claimed function whose `auth` return is a form the
+  // emitter never writes regenerates non-identical bytes, not a wrong `EnvEntry`) rather than a
+  // silent behavioural success, so it is accepted rather than special-cased back out.
   const properties = objectProps(arg);
   if (properties === undefined || properties.length !== reads.length + 1) return undefined;
 

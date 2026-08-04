@@ -236,6 +236,50 @@ describe("recognizeFetchHelper", () => {
     });
   });
 
+  // I-2: a computed `headers` key (`{ [headers]: … }`) must not be read as though it declared a
+  // property literally named "headers" just because the indexing variable happens to share that
+  // name — the same KEY VARIABLE hazard `memberName`/`memberObject` guard on the member-expression
+  // side. Reject rather than extract, the safe direction.
+  it("rejects a computed [headers] key rather than treating it as the literal headers property", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    [headers]: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Same hazard for hasUnexpectedFetchOption: a computed key elsewhere in the fetch options
+  // object (not itself named "headers") is unresolvable, not simply "not headers, therefore
+  // fine" — it must block the whole helper rather than be waved through.
+  it("rejects a computed key elsewhere in the fetch options object, rather than ignoring it", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "    [opt]: controller.signal,",
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
   // Gap 3: rejects inline header with accessor taking arguments
   it("rejects inline header with accessor taking arguments", () => {
     const src = [

@@ -24,6 +24,7 @@ import {
   importNames,
   importSource,
   isAsyncFunction,
+  isComputedProperty,
   labelCallee,
   labelFirstInit,
   labelName,
@@ -349,26 +350,40 @@ describe("Task 2 accessors", () => {
 
   it("optionalMemberName/optionalMemberObject reject a computed member and a plain one", () => {
     expect(optionalCallCallee(initOf("x.trim()"))).toBeUndefined();
-    const computedCallee = optionalCallCallee(initOf("x?.[trim]()"));
-    expect(optionalMemberName(computedCallee)).toBeUndefined();
-    // A plain (non-optional) MemberExpression is not an OptionalMemberExpression either.
-    expect(optionalMemberName(memberObjectHelperCallee())).toBeUndefined();
 
-    function memberObjectHelperCallee() {
-      return calleeOf(initOf("x.trim()"));
-    }
+    // Anchored: confirm the callee really did parse as an OptionalMemberExpression before
+    // checking that optionalMemberName still refuses it for being computed — otherwise this
+    // assertion would pass just as well if optionalCallCallee itself had returned undefined.
+    const computedCallee = optionalCallCallee(initOf("x?.[trim]()"));
+    expect(computedCallee?.type).toBe("OptionalMemberExpression");
+    expect(optionalMemberName(computedCallee)).toBeUndefined();
+
+    // A plain (non-optional) MemberExpression is not an OptionalMemberExpression either.
+    const plainCallee = calleeOf(initOf("x.trim()"));
+    expect(plainCallee?.type).toBe("MemberExpression");
+    expect(optionalMemberName(plainCallee)).toBeUndefined();
   });
 
-  it("computedMember reads a deliberately computed member's object and key, unlike memberName", () => {
+  it("computedMember reads a deliberately computed member's object and its resolved literal key, unlike memberName", () => {
     const m = computedMember(initOf('process.env["VAR"]'));
+    // Anchored: `m?.key` can only equal "VAR" when `m` is actually defined, so this also proves
+    // `m` is not undefined before the next assertion relies on that.
+    expect(m?.key).toBe("VAR");
     expect(identName(m?.object)).toBeUndefined(); // process.env is itself a MemberExpression
-    expect(stringLit(m?.key)).toBe("VAR");
     // memberName/memberObject reject the same node — computedMember is their deliberate inverse.
     expect(memberName(initOf('process.env["VAR"]'))).toBeUndefined();
   });
 
   it("computedMember rejects a non-computed member", () => {
     expect(computedMember(initOf("p.limit"))).toBeUndefined();
+  });
+
+  it("computedMember rejects a non-literal (identifier) key, since it resolves the key itself now", () => {
+    // process.env[key] would otherwise be misread as env var "key" — the exact hazard this
+    // accessor's docstring says resolving the key (rather than handing back an unresolved node)
+    // exists to prevent. `process.env["VAR"]` is the only computed member src/emit/server/
+    // writes, so requiring a literal key here is lossless.
+    expect(computedMember(initOf("process.env[key]"))).toBeUndefined();
   });
 
   it("functionParams/functionBody/isAsyncFunction read a FunctionDeclaration's shape", () => {
@@ -396,14 +411,24 @@ describe("Task 2 accessors", () => {
     // A SpreadElement has no key/value pair — objectProperty returns undefined, not a crash.
     expect(objectProperty(props?.[1])).toBeUndefined();
     // Unlike objectProps, objectProperty does NOT reject a computed key — it hands back the
-    // key node as written, for a caller (fetch-helper.ts's findObjectProperty) that resolves
-    // it itself.
+    // key node as written, for a caller that discriminates the key node's own shape itself
+    // (pairing with isComputedProperty below when the caller instead needs to know computed-ness).
     const computed = objectProperty(props?.[2]);
     expect(computed).toBeDefined();
   });
 
   it("objectExpressionProperties rejects a non-ObjectExpression", () => {
     expect(objectExpressionProperties(initOf("1"))).toBeUndefined();
+  });
+
+  it("isComputedProperty distinguishes a computed key from a literal one", () => {
+    const props = objectExpressionProperties(initOf("({ a: 1, [k]: 2 })"));
+    expect(props).toHaveLength(2);
+    expect(isComputedProperty(props?.[0])).toBe(false);
+    expect(isComputedProperty(props?.[1])).toBe(true);
+    // Not an ObjectProperty at all — a SpreadElement, say — is not "computed" either.
+    const withSpread = objectExpressionProperties(initOf("({ ...rest })"));
+    expect(isComputedProperty(withSpread?.[0])).toBe(false);
   });
 
   it("ifStatement reads test/consequent/alternate, alternate undefined when absent", () => {

@@ -172,21 +172,27 @@ export function optionalMemberObject(node: AstNode | undefined): AstNode | undef
 }
 
 /**
- * `<receiver>[<literal>]` -> its receiver and its literal key node, when the member IS computed.
+ * `<receiver>["<literal>"]` -> its receiver and its literal string key, when the member IS
+ * computed.
  *
  * The inverse case from `memberName`/`memberObject`: those two exist to reject a computed member
  * because an unguarded read of its `property` would name things after the KEY VARIABLE rather
  * than a property. Here the key is exactly what is wanted — `process.env["VAR"]` is written
- * computed on purpose — so the hazard does not apply and the key node is handed back for the
- * caller to resolve with `stringLit` (never `identName`, which would reintroduce it).
+ * computed on purpose — so the hazard does not apply to the OBJECT side. It still applies to the
+ * key itself, though: `process.env[key]` has a computed `property` too, an Identifier naming the
+ * KEY VARIABLE rather than an env var — resolving it through `stringLit` rather than handing the
+ * node back is what keeps that guard "where the value is obtained" (this module's header) rather
+ * than delegated to whichever caller remembers to call `stringLit` and not `identName`.
+ * `process.env["VAR"]` is the only computed member `src/emit/server/` writes, so requiring a
+ * literal key here is lossless.
  */
 export function computedMember(
   node: AstNode | undefined,
-): { object: AstNode; key: AstNode } | undefined {
+): { object: AstNode; key: string } | undefined {
   if (node?.type !== "MemberExpression") return undefined;
   if (raw(node)["computed"] !== true) return undefined;
   const object = child(node, "object");
-  const key = child(node, "property");
+  const key = stringLit(child(node, "property"));
   if (object === undefined || key === undefined) return undefined;
   return { object, key };
 }
@@ -356,6 +362,21 @@ export function objectProperty(
   const value = child(node, "value");
   if (key === undefined || value === undefined) return undefined;
   return { key, value };
+}
+
+/**
+ * Whether an ObjectProperty's key is computed (`{ [x]: v }`), rather than a literal name.
+ *
+ * `objectProperty` deliberately hands back a computed key's `key` node — an Identifier — same as
+ * a literal one, so a caller resolving it with `identName` alone cannot tell "the property is
+ * literally named x" from "the property is named whatever the variable x holds", the same KEY
+ * VARIABLE hazard `memberName`/`memberObject` guard on the member-expression side. A caller that
+ * treats `objectProperty`'s key as a literal property name (rather than discriminating the key
+ * node's own Identifier/StringLiteral shape, which is what `objectProperty`'s own docstring is
+ * about) needs this check first.
+ */
+export function isComputedProperty(node: AstNode | undefined): boolean {
+  return node?.type === "ObjectProperty" && raw(node)["computed"] === true;
 }
 
 /**

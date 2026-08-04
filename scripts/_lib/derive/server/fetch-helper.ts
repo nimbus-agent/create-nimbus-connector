@@ -16,6 +16,7 @@ import {
   identName,
   ifStatement,
   isAsyncFunction,
+  isComputedProperty,
   isIdent,
   memberOn,
   methodCallTo,
@@ -124,9 +125,15 @@ function headerValue(value: AstNode): string | undefined {
  * discord, google-meet and four zz* fixtures. `objectProperty` returns undefined for a
  * SpreadElement rather than a key, so a spread anywhere in the options object simply does not
  * match, rather than crashing.
+ *
+ * A computed key (`{ [headers]: {...} }`) is rejected too: `objectProperty`'s `key` for it is an
+ * Identifier naming the KEY VARIABLE, not the literal "headers" — `isIdent(parts.key, name)`
+ * would otherwise read `{ [headers]: v }` as though it declared a property literally named
+ * "headers" whenever that variable happened to share the name being searched for.
  */
 function findObjectProperty(properties: readonly AstNode[], name: string): AstNode | undefined {
   return properties.find((p) => {
+    if (isComputedProperty(p)) return false;
     const parts = objectProperty(p);
     return parts !== undefined && isIdent(parts.key, name);
   });
@@ -281,11 +288,19 @@ function isThrowGuard(stmt: AstNode): boolean {
  * options object is a shape this recognizer already lived with, not a new gap this rewrite
  * opens). `objectProperty` returns undefined for a SpreadElement, which this treats the same as
  * `p.type !== "ObjectProperty"` did before: tolerated, not "headers", skipped.
+ *
+ * A computed key (`{ [headers]: … }`) is treated as unexpected — the safe direction — rather
+ * than resolved: `identName(parts.key)` on a computed property's key names the KEY VARIABLE, not
+ * a property, and `{ [headers]: … }` reading as though it declared a property literally named
+ * "headers" is the exact hazard `findObjectProperty` above guards against; a mutation this
+ * recognizer cannot name honestly should block the fetch helper, not be waved through as "not
+ * headers, therefore fine".
  */
 function hasUnexpectedFetchOption(properties: readonly AstNode[]): boolean {
   return properties.some((p) => {
     const parts = objectProperty(p);
     if (parts === undefined) return false;
+    if (isComputedProperty(p)) return true;
     const name = identName(parts.key) ?? stringLit(parts.key);
     return name !== "headers";
   });

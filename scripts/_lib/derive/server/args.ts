@@ -46,8 +46,10 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
   // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
   // variable's name, not a property name. Unguarded, this would accept `z[object](...)` as
   // `z.object(...)` whenever the index variable happened to be named "object". Same hazard as
-  // the object-key guard below and server/index.ts's isConnect. `memberName`/`memberObject`
-  // carry this guard already.
+  // `objectProps` below guards on an object literal's OWN keys (a computed `{ [KEY]:
+  // z.string() }` would otherwise derive an arg literally named "KEY", the identifier's own
+  // name, rather than being refused) and server/index.ts's isConnect guards on a member call's
+  // receiver. `memberName`/`memberObject` carry this guard already.
   const callee = calleeOf(node);
   if (memberName(callee) !== "object") return undefined;
   if (!isIdent(memberObject(callee), "z")) return undefined;
