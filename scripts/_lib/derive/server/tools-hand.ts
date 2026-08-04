@@ -135,11 +135,15 @@ function defaultHoistArg(
  * A's only source too: `renderHoists` writes `a.local ?? name`, so the const name IS `a.local`
  * whenever it differs from the arg's own key, and this statement is the only place that name
  * appears in the emitted module.
+ *
+ * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
+ * — without it, `let <local> = p.<name> ?? <default>;` passed every check below and was claimed
+ * as the documented `const` hoist, same gap as server/index.ts's isRegistrarConst.
  */
 function hoistedLocal(
   statement: AstNode,
 ): { local: string; pathLocal: PathLocal; default?: string | number | boolean } | undefined {
-  if (statement.type !== "VariableDeclaration") return undefined;
+  if (statement.type !== "VariableDeclaration" || statement["kind"] !== "const") return undefined;
   const declarations = statement["declarations"] as AstNode[];
   if (declarations.length !== 1) return undefined;
   const id = declarations[0]?.["id"] as AstNode | undefined;

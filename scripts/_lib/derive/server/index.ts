@@ -28,9 +28,14 @@ function isFrameImport(node: AstNode): boolean {
  * "some `name` property is present, ignore the rest". A wholesale `version: "2.4.1"` swap or an
  * added third property (a `capabilities` block, say) is a shape this emitter never writes, and
  * must be rejected rather than accepted on the strength of the `name` property alone.
+ *
+ * `let`/`var` both produce a VariableDeclaration node too — `node["kind"]` is what actually
+ * distinguishes them from `const`. Without this check, `let mcp = new McpServer(...)` passed
+ * every check below and was claimed as the documented `const` frame, the same gap
+ * `isRegistrarConst` closed for the registrar const (see its comment below).
  */
 function getMcpServerInfo(node: AstNode): { varName: string; connectorName: string } | undefined {
-  if (node.type !== "VariableDeclaration") return undefined;
+  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return undefined;
   const varName = ((node["declarations"] as AstNode[])[0]?.["id"] as AstNode)?.["name"];
   if (typeof varName !== "string") return undefined;
 
@@ -73,9 +78,14 @@ function hasMcpToolKitImport(node: AstNode): boolean {
  * (`createRegisterSimpleTool(mcp)`) whose own identity — the callee name and the mcp variable
  * it closes over — this function never looked at, so `createZodToolRegistrar(unrelated)`
  * passed it on argument COUNT alone. See `isRegistrarConst` below.
+ *
+ * Also checks `node["kind"] === "const"` — the same `let`/`var` gap `isRegistrarConst` and
+ * `getMcpServerInfo` close, here for the transport const: without it, `let transport = new
+ * StdioServerTransport()` passed every check below and was claimed as the documented `const`
+ * frame.
  */
 function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boolean {
-  if (node.type !== "VariableDeclaration") return false;
+  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return false;
   const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
   if (init?.type !== "CallExpression" && init?.type !== "NewExpression") return false;
   const args = (init["arguments"] as AstNode[]) ?? [];

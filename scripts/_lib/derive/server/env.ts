@@ -49,9 +49,13 @@ type ReadLine = { var: string; binding: string; default?: string };
 /**
  * One `const <binding> = process.env["<VAR>"]?.trim();` line, or its defaulted form
  * `... || "<default>"` — the two shapes `readLines` in src/emit/server/env.ts writes.
+ *
+ * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
+ * — without it, `let <binding> = process.env[...]?.trim();` passed every check below and was
+ * claimed as the documented `const` read line, same gap as server/index.ts's isRegistrarConst.
  */
 function parseReadLine(stmt: AstNode): ReadLine | undefined {
-  if (stmt.type !== "VariableDeclaration") return undefined;
+  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return undefined;
   const declarations = stmt["declarations"] as AstNode[] | undefined;
   if (declarations === undefined || declarations.length !== 1) return undefined;
   const declarator = declarations[0]!;

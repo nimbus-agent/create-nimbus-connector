@@ -157,4 +157,34 @@ describe("recognizeFrame", () => {
     expect(recognizeFrame(statements, claims)).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
+
+  // Same class as Fix 2 above, but for getMcpServerInfo: before this fix it never read `kind`,
+  // so `let mcp = new McpServer(...)` passed every check below and was claimed as the documented
+  // `const` frame.
+  it("rejects a `let` McpServer const instead of claiming it as the documented `const` frame", () => {
+    const source = FRAME.replace(
+      'const mcp = new McpServer({ name: "nimbus-newrelic", version: "0.1.0" });',
+      'let mcp = new McpServer({ name: "nimbus-newrelic", version: "0.1.0" });',
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Same class as Fix 2 above, but for isConstFrom (the transport const's own matcher): before
+  // this fix it never read `kind`, so `let transport = new StdioServerTransport()` passed every
+  // check below and was claimed as the documented `const` frame.
+  it("rejects a `let` transport const instead of claiming it as the documented `const` frame", () => {
+    const source = FRAME.replace(
+      "const transport = new StdioServerTransport();",
+      "let transport = new StdioServerTransport();",
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

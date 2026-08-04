@@ -206,9 +206,13 @@ function countFetchCalls(fn: AstNode): number {
  * Matched positionally against ONE statement (the candidate first statement of the body) rather
  * than scanned for anywhere in the function — see recognizeFetchHelper's own comment on why the
  * whole body is now walked positionally instead of independently probed for each shape.
+ *
+ * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
+ * — without it, `let pathPart = ...` passed every check below and was claimed as the documented
+ * `const` line, same gap as server/index.ts's isRegistrarConst.
  */
 function isPathPartConst(stmt: AstNode): boolean {
-  if (stmt.type !== "VariableDeclaration") return false;
+  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return false;
   const decls = (stmt["declarations"] as AstNode[]) ?? [];
   if (decls.length !== 1) return false;
   const decl = decls[0]!;
@@ -260,9 +264,13 @@ function bodyStatements(fn: AstNode): AstNode[] {
 /**
  * `const res = await fetch(<url>, <options>);` — the fetch call statement itself, matched
  * positionally. Returns the CallExpression so the caller can read its url/options arguments.
+ *
+ * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
+ * — without it, `let res = await fetch(...)` passed every check below and was claimed as the
+ * documented `const` line, same gap as server/index.ts's isRegistrarConst.
  */
 function matchFetchStatement(stmt: AstNode): AstNode | undefined {
-  if (stmt.type !== "VariableDeclaration") return undefined;
+  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return undefined;
   const decls = (stmt["declarations"] as AstNode[]) ?? [];
   if (decls.length !== 1) return undefined;
   const decl = decls[0]!;
@@ -280,9 +288,13 @@ function matchFetchStatement(stmt: AstNode): AstNode | undefined {
 
 /**
  * `const text = await res.text();` — matched positionally, exactly.
+ *
+ * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
+ * — without it, `let text = await res.text();` passed every check below and was claimed as the
+ * documented `const` line, same gap as server/index.ts's isRegistrarConst.
  */
 function isTextStatement(stmt: AstNode): boolean {
-  if (stmt.type !== "VariableDeclaration") return false;
+  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return false;
   const decls = (stmt["declarations"] as AstNode[]) ?? [];
   if (decls.length !== 1) return false;
   const decl = decls[0]!;
