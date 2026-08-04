@@ -155,6 +155,33 @@ and exports total accessors — each returning `T | undefined`, never throwing:
 | `arrowFn(n)` | `ArrowFunctionExpression`, returning params and whether the body is a block |
 | `awaited(n)` | `AwaitExpression` |
 
+**That table is representative, not exhaustive.** Child access — `blockBody`, `returnArgument`,
+`importSource`, `importNames`, the three limbs of a `ConditionalExpression`, template-literal
+quasis and expressions — is reached the same way, by a named accessor that checks the parent's
+node type first. The rule the retrofit establishes and every new recognizer inherits: **reaching a
+node field that has no accessor means adding one, never widening a type or casting.** There is no
+cast outside `read.ts`, and `tsc` is what enforces it.
+
+A generic `getChildren(node): AstNode[]` is deliberately **not** provided, despite being the
+obvious way to satisfy a traverser. An untyped child list hands back nodes stripped of which slot
+they came from, which is the precise information the guards depend on — it is how a computed
+member's key identifier gets read as a property name. Access is by named, shape-checked slot or it
+is not access. Nor is a traverser needed: `claims.ts` does not walk the tree (`unclaimed` filters
+the list it is given, `covers` compares byte ranges), and every recognizer descends through the
+construct it is matching, which is exactly what makes the match total.
+
+**`numericValue` is separate from `numberLit`, because the spec permits negatives.** `ArgSchema`
+declares `min: z.number().optional()`, `max: z.number().optional()` and
+`default: z.union([z.string(), z.number(), z.boolean()])` — none of the three constrains sign — so
+`z.number().min(-5)` and `default: -1` are expressible and the emitter writes them. Babel parses
+`-5` as a `UnaryExpression` wrapping a `NumericLiteral`, so a strict `numberLit` at those sites
+would manufacture a blocker on a connector the generator can actually reproduce, which is the
+class of fake blocker this whole branch exists to remove. Both accessors therefore exist:
+`numberLit` for positions where the emitter can only write a bare literal (`maxLimit`, which
+`ToolSchema` pins to `.int().positive()`), and `numericValue` — accepting unary `-` and `+` over a
+`NumericLiteral` — for `min`, `max` and a numeric `default`. Each call site picks deliberately
+rather than inheriting a permissive default.
+
 The property that matters: `computed`, `kind` and arity are checked at the only place the value
 can be obtained, so they cannot be skipped. Rejecting stays the safe default — a rejection is a
 visible blocker, a wrong claim is a wrong number.
@@ -224,6 +251,12 @@ unchecked: recognition pins the `await`, the callee identity, arity 2, the `"nim
 string literal, and a single-parameter `(reg) =>` arrow with a block body. It is fully verified and
 never granted coverage, so nothing inside it inherits a claim.
 
+**Exactly one statement is removed — the wrapper itself.** Every other top-level statement stays
+in `verifyStatements` and must still be claimed or become a blocker: the imports, the base const,
+the env accessors, the fetch helpers, and anything else the file happens to contain. The
+substitution is a swap of one statement for its children, not a switch from checking the module to
+checking the callback. A stray top-level helper is as visible after this change as before it.
+
 For hand-rolled and rest-kit, both lists are the top-level list and nothing is removed.
 
 Env accessors, the base const and the fetch helpers stay at module top level for read-only-kit
@@ -258,13 +291,45 @@ New `scripts/_lib/derive/server/tools-rest.ts` inverts `renderRestKitTools`:
 Note rest-kit emits neither env accessors nor a read helper, so `fetchHelper` is recovered from
 the factory object and the path expressions rather than from a helper function.
 
-**An open question this design does not resolve.** Seven rest-kit connectors — `discord`,
-`github`, `gmail`, `google-meet`, `google-photos`, `onedrive`, `outlook` — report `no-frame`
-despite calling `createZodToolRegistrar`, while `circleci`, `github-actions` and `pagerduty` clear
-the frame and block later. Diagnosing that difference is the first task of this commit. If it is a
-shape the emitter cannot produce, the outcome is a documented limitation in *Known limitations*,
-not a recognizer to widen — and widening the recognizer to swallow it would be the same silence
-the totality rule exists to remove.
+### Why seven rest-kit connectors report `no-frame` — diagnosed
+
+The reach design left this open; it is now answered, and the answer is a limitation
+`docs/ROADMAP.md` **already records**, under *Shape variance the emitter models one way*:
+
+> **Wiring and tail idiom.** Roughly half the rest-kit corpus writes the one-line registrar form
+> and half the two-line one; likewise the transport tail. There is no majority to converge on, so
+> the emitter picks one and the other half differs.
+
+Two independent idiom axes, each with two forms, and the emitter writes one of each:
+
+| axis | the emitter's form | the other form |
+| --- | --- | --- |
+| registrar | `createZodToolRegistrar(createRegisterSimpleTool(x))` inlined | the inner call bound to its own const first |
+| transport tail | `const transport = new StdioServerTransport();` then `await x.connect(transport)` | `await x.connect(new StdioServerTransport())` |
+
+That accounts for all ten rest-kit connectors exactly: `circleci`, `github-actions` and
+`pagerduty` match the emitter on both axes and clear the frame; `discord` and `github` take the
+other registrar form; `gmail`, `google-meet`, `google-photos`, `onedrive` and `outlook` take the
+other tail form. Seven failures, fully explained, with no unexplained residue.
+
+**The recognizer is not widened to accept either variant.** Both are shapes
+`src/emit/server/index.ts` cannot produce, so claiming them would be a wrong claim — the "no
+escape hatch" rule applies here exactly as it does to `zoom`. A connector on the far side of
+either axis can never reach `server-identical`, by a decision already made and written down.
+
+### `no-frame` is split into named blockers
+
+What the diagnosis *does* change is the reporting. `no-frame` is currently one opaque bucket
+holding 81 connectors, which is what made this question expensive enough to defer in the first
+place — a bucket that large is a wall, not a finding. When frame recognition fails, the deriver
+will name the element that failed rather than the fact that some element did:
+`frame:registrar-not-inlined`, `frame:tail-inlined-transport`, `frame:no-mcp-server`,
+`frame:no-kit-import`, and so on.
+
+This is the *"blockers are discovered, not enumerated"* principle applied to the one place the
+reach implementation did not apply it. It costs nothing at claim time — the frame recognizer
+already tests each element separately — and it turns a documented limitation into a bucket the
+histogram counts, instead of leaving it indistinguishable from a genuine spec-language gap.
 
 ## 4. search — the widest single unlock
 
@@ -287,10 +352,25 @@ Two recognizers:
   local pair.
 - **`derive/search-filter.ts`**, inverting `emitSearchFilter`, with **its own totality rule over
   the filter file's statements** — the same discipline, applied to the second file rather than
-  assumed away. It recognizes the type alias (which is where `title` becomes recoverable), the
-  keyed `makeQueryFilter(fieldsFromKeys([…]{, { tags: true }}))` form, the `fieldsOf` extractor
-  form over its four primitives (`stringField`, `nestedString`, `tagText`, `tagNamesFromObjects`),
-  and the throwing stub.
+  assumed away. It recognizes the file's **import statements** (below), the type alias (which is
+  where `title` becomes recoverable), the keyed
+  `makeQueryFilter(fieldsFromKeys([…]{, { tags: true }}))` form, the `fieldsOf` extractor form over
+  its four primitives (`stringField`, `nestedString`, `tagText`, `tagNamesFromObjects`), and the
+  throwing stub.
+
+**The filter file's imports are recognized, not waved through**, and the distinction earns its
+keep. Every emitted filter file opens with one or two import statements — `fieldsFromKeys`,
+`makeQueryFilter`, whichever primitives the extractors name, `type SearchMatchOptions`, and
+`type SearchFilter` from a second module when any tool is a stub. Left unrecognized they would
+block every filter file on its own preamble; claimed blindly they would prove nothing.
+
+The right treatment is available because `emitSearchFilter` derives that list from the body
+(`filterNames`, built from `primitivesFor` and the keyed/extractor/stub split, then sorted by
+`byBareName`). So the recognizer reads the body first, computes the import list the emitter
+*would* have written, and requires the file's actual imports to match it — name set, module
+split, and order. A mismatch is a blocker naming the discrepancy. That converts the preamble from
+an obstacle into a cross-check on the body recognition, which is a stronger reading of the file
+than skipping it and a strictly stronger one than claiming it.
 
 The extractor form is where the corpus is thinnest and the roadmap most detailed. The recognizer
 models what the **emitter** writes and nothing else: `asObjectish` (never `asRecord`), the
@@ -329,7 +409,7 @@ neither list can drift.
 | --- | --- | --- |
 | 1 | guarded accessors + opaque `AstNode`, seven modules retrofitted | none — behaviour-identical |
 | 2 | read-only-kit frame | new synthetic `zzreadonly` |
-| 3 | rest-kit frame + `tools-rest` | `zzstandalone` |
+| 3 | rest-kit frame + `tools-rest` + the `no-frame` blocker split | `zzstandalone` |
 | 4 | `search` + `search-filter` | `bitrise`, `dependencytrack`, `mercury`, `netlify`, `zendesk`, `zzextract`, `zzsearch`, `zzsearchstub` |
 | 5 | `query` | `discord`, `google-meet` |
 | 6 | `body` | `zzwriterest`, `zzwriteonly` |
@@ -377,7 +457,9 @@ re-baselined because the corpus measurement moved, never edited to make a run pa
 - **`docs/ROADMAP.md`** — Stage E's hand counts (16 multi-file, 5 CLI-backed) are replaced by the
   measured ranking, or removed in favour of pointing at `bun run reach`, per this file's own rule
   against restating live numbers. *Measuring reach* gains a note that the corpus-wide question is
-  now answered across all three frame styles rather than one.
+  now answered across all three frame styles rather than one. *Shape variance the emitter models
+  one way* gains the exact split behind its "roughly half … and half" sentence, now that the
+  connectors on each side of both idiom axes are enumerated (§3) rather than estimated.
 - **`docs/superpowers/specs/2026-08-03-from-connector-reach-design.md`** — its *Not built — plan
   2's territory* paragraph is superseded; a pointer to this document is added rather than editing
   the historical record.
@@ -386,8 +468,10 @@ re-baselined because the corpus measurement moved, never edited to make a run pa
 
 ## 8. Known risks
 
-- **The seven unexplained rest-kit `no-frame` connectors** (§3). Diagnosed at the start of commit
-  3; may convert into a documented limitation rather than a recognizer.
+- **Seven rest-kit connectors are permanently short of `server-identical`** (§3) — the registrar
+  and transport-tail idiom variance, already recorded in *Known limitations*. Diagnosed rather
+  than open, but it caps what commit 3 can deliver: those seven move from `no-frame` to a named
+  idiom blocker, not into a passing tier.
 - **The retrofit in commit 1 is broad** — seven modules, ~1,800 lines. It is behaviour-preserving
   by construction, and the unchanged reach histogram is the check that it was.
 - **Branch size.** Seven new modules and their tests, roughly doubling `scripts/_lib/derive/`.
