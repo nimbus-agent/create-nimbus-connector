@@ -1,7 +1,9 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
+  arrowFn,
   awaited,
+  blockBody,
   callTo,
   constDecl,
   expressionOf,
@@ -20,10 +22,95 @@ const FRAME_IMPORTS = new Set([
   "zod",
 ]);
 
+/**
+ * The leading slash is load-bearing, not incidental: it makes this a path-SEGMENT match rather
+ * than a substring one, so a hypothetical "my-run-read-only-mcp-connector.ts" cannot satisfy it.
+ * `hasMcpToolKitImport` uses the same "/mcp-tool-kit.ts" form for the same reason. The emitter
+ * writes exactly "../../shared/run-read-only-mcp-connector.ts" (RUN_READ_ONLY in
+ * src/emit/server/index.ts), so there is no slashless case to accommodate — and widening to
+ * accommodate one that cannot occur only widens what gets claimed.
+ */
+const RUN_READ_ONLY_SUFFIX = "/run-read-only-mcp-connector.ts";
+
 function isFrameImport(node: AstNode): boolean {
   const source = importSource(node);
   if (source === undefined) return false;
-  return FRAME_IMPORTS.has(source) || source.endsWith("/mcp-tool-kit.ts");
+  return (
+    FRAME_IMPORTS.has(source) ||
+    source.endsWith("/mcp-tool-kit.ts") ||
+    source.endsWith(RUN_READ_ONLY_SUFFIX)
+  );
+}
+
+/**
+ * `await runReadOnlyMcpConnector("nimbus-<name>", (reg) => { ... });`
+ *
+ * Every part is pinned, because this statement is VERIFIED and never CLAIMED (see frame.ts):
+ * the await, the callee identity, arity 2, the "nimbus-" prefixed string literal, and a
+ * single-parameter arrow with a block body. Returning the body statements is what lets
+ * deriveSpec swap this one statement for its children in verifyStatements.
+ */
+function readOnlyWrapper(node: AstNode): { name: string; body: AstNode[] } | undefined {
+  const args = callTo(awaited(expressionOf(node)), "runReadOnlyMcpConnector", 2);
+  if (args === undefined) return undefined;
+
+  const full = stringLit(args[0]);
+  if (full === undefined || !full.startsWith("nimbus-")) return undefined;
+
+  const arrow = arrowFn(args[1]);
+  if (arrow === undefined || arrow.params.length !== 1) return undefined;
+  if (!isIdent(arrow.params[0], "reg")) return undefined;
+  const body = blockBody(arrow.body);
+  if (body === undefined) return undefined;
+
+  return { name: full.slice("nimbus-".length), body };
+}
+
+/**
+ * The read-only-kit frame: no `McpServer`, no transport, no registrar const — every
+ * registration lives inside `await runReadOnlyMcpConnector("nimbus-<name>", (reg) => { ... })`.
+ *
+ * Returns undefined and claims NOTHING when the module is not this frame, for the same reason
+ * the hand-rolled recognizer below does: a partially claimed module reports blockers that read
+ * as a spec-language gap when they are really a wrong-recognizer gap.
+ *
+ * See frame.ts's docstring for why the wrapper itself is verified but never claimed.
+ */
+function recognizeReadOnlyFrame(
+  statements: readonly AstNode[],
+  claims: ClaimSet,
+): Frame | undefined {
+  const runImport = statements.find(
+    (s) => importSource(s)?.endsWith(RUN_READ_ONLY_SUFFIX) === true,
+  );
+  if (runImport === undefined) return undefined;
+
+  let wrapper: AstNode | undefined;
+  let recognized: { name: string; body: AstNode[] } | undefined;
+  for (const statement of statements) {
+    const match = readOnlyWrapper(statement);
+    if (match === undefined) continue;
+    // Two wrappers is a shape the emitter never writes; refuse rather than pick one.
+    if (wrapper !== undefined) return undefined;
+    wrapper = statement;
+    recognized = match;
+  }
+  if (wrapper === undefined || recognized === undefined) return undefined;
+
+  // Claim the frame's IMPORTS only. The wrapper is deliberately absent from this list: claiming
+  // it would cover every registration inside it by containment.
+  const frameImports = statements.filter((s) => isFrameImport(s) || s === runImport);
+  claims.claim(frameImports, "frame");
+
+  // Exactly one statement is swapped — the wrapper, for its body. Everything else stays.
+  const verifyStatements = statements.flatMap((s) => (s === wrapper ? recognized.body : [s]));
+
+  return {
+    name: recognized.name,
+    style: "read-only-kit",
+    toolStatements: recognized.body,
+    verifyStatements,
+  };
 }
 
 /**
@@ -157,6 +244,12 @@ export function recognizeFrame(
   statements: readonly AstNode[],
   claims: ClaimSet,
 ): Frame | undefined {
+  // read-only-kit has no McpServer const, so a module cannot match both this and the
+  // hand-rolled shape below — but trying the cheap unambiguous discriminator first keeps the
+  // two frames' failure modes separate rather than falling through hand-rolled's five checks.
+  const readOnly = recognizeReadOnlyFrame(statements, claims);
+  if (readOnly !== undefined) return readOnly;
+
   // (1) Find mcp-tool-kit.ts import (REQUIRED).
   const toolKitImport = statements.find(hasMcpToolKitImport);
   if (!toolKitImport) return undefined;

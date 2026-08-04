@@ -15,21 +15,36 @@ import { displayPath } from "../../src/types.ts";
  * below re-confirms it on every run rather than trusting a count recorded here that would go
  * stale silently as fixtures are added. newrelic/datadog/grafana/sentry are the byte-locked
  * corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are synthetic
- * "hand-rolled" fixtures that exercise the same frame from the opposite direction.
+ * "hand-rolled" fixtures that exercise the same frame from the opposite direction; zzreadonly is
+ * a synthetic "read-only-kit" fixture with no search tool, proving that frame end-to-end.
  */
-const ROUND_TRIP = ["newrelic", "datadog", "grafana", "sentry", "zzscratch", "zzstandalonehand"];
+const ROUND_TRIP = [
+  "newrelic",
+  "datadog",
+  "grafana",
+  "sentry",
+  "zzreadonly",
+  "zzscratch",
+  "zzstandalonehand",
+];
 
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it. Listed so the
  * gap is on screen on every run rather than implied by absence — the same reason
  * fixtures/expectations.json omits a file instead of hiding it.
  *
- * "read-only-kit frame" and "rest-kit frame" are `style: "read-only-kit"` / `style: "rest-kit"`
- * fixtures: recognizeFrame's hand-rolled shape either does not match at all (read-only-kit,
- * reported as the `no-frame` blocker) or matches only the frame while leaving every
- * kit-specific statement (the shared-kit import, the kit-factory const-call, each per-tool
- * registrar call) unclaimed (rest-kit). Both are a different emitted shape this plan's
- * recognizers do not model, not a bug in a single recognizer.
+ * "rest-kit frame" is a `style: "rest-kit"` fixture: recognizeFrame has no rest-kit branch, so
+ * the frame matches nothing and every kit-specific statement (the shared-kit import, the
+ * kit-factory const-call, each per-tool registrar call) is reported through `no-frame`. That is
+ * a different emitted shape this plan's recognizers do not model, not a bug in a single
+ * recognizer.
+ *
+ * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
+ * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
+ * scripts/_lib/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
+ * hands off to does not exist yet, so these still block, just past the frame rather than at it.
+ * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
+ * without a search tool in the way.
  *
  * "client-credentials auth" (zzwrite) and "write body" (zzwriteonly) are documented exclusions
  * inside the recognizers themselves: server/env.ts's `recognizeOne` docstring says the
@@ -38,16 +53,16 @@ const ROUND_TRIP = ["newrelic", "datadog", "grafana", "sentry", "zzscratch", "zz
  * 2's territory.
  */
 const BLOCKED: Record<string, string> = {
-  bitrise: "read-only-kit frame",
-  dependencytrack: "read-only-kit frame",
+  bitrise: "search tool",
+  dependencytrack: "search tool",
   discord: "rest-kit frame",
   "google-meet": "rest-kit frame",
-  mercury: "read-only-kit frame",
-  netlify: "read-only-kit frame",
-  zendesk: "read-only-kit frame",
-  zzextract: "read-only-kit frame",
-  zzsearch: "read-only-kit frame",
-  zzsearchstub: "read-only-kit frame",
+  mercury: "search tool",
+  netlify: "search tool",
+  zendesk: "search tool",
+  zzextract: "search tool",
+  zzsearch: "search tool",
+  zzsearchstub: "search tool",
   zzstandalone: "rest-kit frame",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
