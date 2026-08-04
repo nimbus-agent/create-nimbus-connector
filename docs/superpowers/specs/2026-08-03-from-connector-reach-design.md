@@ -101,6 +101,8 @@ fixtures/reach-baseline.json   per-connector tier + the connectorsTree it was me
 `src/emit/search-filter.ts`). No recognizer in this plan derives a spec through those emitter
 paths; a connector that uses them blocks today, by design — see *No escape hatch* below.
 
+Plan 2 is [`2026-08-04-completing-the-recognizer-set-design.md`](./2026-08-04-completing-the-recognizer-set-design.md).
+
 **The deriver lives under `scripts/_lib/`, not `src/`.** `package.json`'s `files` is
 `["src", "README.md"]`, so anything under `src/` ships to npm; a dev-only deriver there would put
 unreachable code and an unresolvable `@babel/parser` import into every published tarball. Keeping

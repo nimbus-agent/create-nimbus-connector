@@ -159,7 +159,10 @@ discovered later:
       which only `dependencytrack` currently achieves.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
-      file.
+      file. Carrying the file and being *blocked by* it are different questions — `bun run
+      reach --verbose` separates the `import-from:./tools.ts` bucket (blocked by the import
+      itself) from connectors that block earlier, on a frame element the tools file is never
+      read past; see [Known limitations](#known-limitations) for those frame buckets.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
       sent only when an optional argument is present or non-empty. See the README for the
@@ -169,7 +172,12 @@ discovered later:
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
-      than `fetch`.
+      than `fetch`: `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai`. All five
+      write that CLI logic in `src/tools.ts`, so `bun run reach` reports them under
+      `import-from:./tools.ts`, not under a CLI-shaped bucket of their own — the construct
+      itself is never reached. A separate set (`aws`, `azure`, `gcp`, `kubernetes`) shells out
+      via `shared/run-cli-json` directly from `server.ts`, without `safe-cli-arg`, and *does*
+      surface as its own bucket, `import-from:../../shared/run-cli-json.ts`.
 - [~] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
       number with its method. The method is no longer a hand count: `bun run reach
       --nimbus-root <path>` derives a spec from every real connector's `src/server.ts` and
@@ -248,6 +256,11 @@ question, asked with the same discipline the three wrong counts above forced on 
 what the code actually does, not what its name suggests — pointed at a script instead of a
 person, so the count cannot go stale from being restated by hand.
 
+The corpus-wide question is asked across all three frame styles a connector's wiring can take —
+`hand-rolled`, `rest-kit` and `read-only-kit` — not just the first one the deriver recognized.
+A connector's frame style decides which tool recognizer runs next; it says nothing on its own
+about whether that recognizer can express what the connector's tools do.
+
 ---
 
 ## Known limitations
@@ -306,6 +319,18 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+- **A read-only-kit callback that is a named function reference, not an inline arrow.**
+  `argocd`, `bigeye`, `flux`, `looker`, `mlflow`, `monte-carlo`, `powerbi`, `snowflake`,
+  `tableau` and `workday` write `runReadOnlyMcpConnector("nimbus-X", registerXTools)` — gated
+  behind `if (import.meta.main) { … }` — passing an already-declared `function
+  registerXTools(reg) { … }` by name, where the emitter always writes an inline `(reg) => { …
+  }` arrow at the call site. Reported as `frame:readonly-callback-not-inline`. Found by tracing
+  why the read-only-kit frame recognizer moved 50 connectors rather than the roughly 60
+  predicted going in — see [Measuring reach](#measuring-reach) on reading what the code does
+  rather than trusting a prediction.
+- **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
+  `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
+  Reported as `frame:no-registrar`.
 - **At most one extractor-branch search filter per connector.** The emitted `fieldsOf` function
   is always that name, so a second search tool taking the extractor branch in the same
   `src/search-filter.ts` would redeclare it — `validateSpec` rejects this at parse time rather
@@ -329,9 +354,26 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   credential is resolved by the registrar rather than an env accessor.
 - **Registrar and helper naming.** Derived by formula. A connector whose author picked a
   shorter name by hand will differ on that line.
-- **Wiring and tail idiom.** Roughly half the rest-kit corpus writes the one-line registrar
-  form and half the two-line one; likewise the transport tail. There is no majority to converge
-  on, so the emitter picks one and the other half differs.
+- **A recovered rest-kit `title` is verified against only one of its two consumers.** For
+  `style: "rest-kit"`, the deriver recovers `spec.title` by inverting the registrar name
+  `register<Title>Tool` and asserts the round trip reproduces the observed identifier
+  (`recognizeRestTitle` in `scripts/_lib/derive/index.ts`). `spec.title` has a second consumer
+  the deriver does not check — `src/emit/readme.ts` — and the sanitization is many-to-one, so a
+  recovered `title` that reproduces the registrar name can still regenerate a different
+  `README.md`. Bounded, not silent: the `all-identical` tier requires every emitted file to
+  match, so this downgrades such a connector to `server-identical` rather than passing falsely.
+- **Wiring and tail idiom.** The emitter always writes the one-line registrar form
+  (`const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));`) and a named transport
+  const. `bun run reach --verbose`'s `frame:registrar-not-inlined` and `frame:tail-inlined-transport`
+  buckets name the connectors that instead hoist the registrar's inner call to its own
+  `const registerSimpleTool = …;` one line above, or construct the transport inline in the
+  `connect()` call. Neither axis is rest-kit-only: the registrar bucket mixes hand-rolled
+  connectors (e.g. `bitbucket`, `notion`) with rest-kit ones (e.g. `discord`, `github`). A
+  connector failing both axes is reported on the registrar bucket only, because the frame
+  diagnostic checks elements in the order `recognizeFrame` does and stops at the first miss —
+  `google-meet` and `google-photos` write both near-miss shapes but surface only as
+  `frame:registrar-not-inlined`. There is no majority to converge on, so the emitter picks one
+  form per axis and the other differs.
 - **`permissions.filesystem` is always collapsed to one line**, which is what 27 of the 29
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
