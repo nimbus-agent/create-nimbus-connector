@@ -1,3 +1,4 @@
+import { capitalize } from "../../../src/spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { createClaimSet } from "./claims.ts";
@@ -16,6 +17,63 @@ export type Derivation =
 
 function blocked(kind: string, detail: string): Derivation {
   return { ok: false, blockers: [{ kind, detail, line: 0 }] };
+}
+
+/**
+ * `registrarName`'s sanitizing formula (src/spec.ts:745-746), mirrored rather than called: that
+ * function takes a full `ConnectorSpec`, and constructing one here for a single-field read
+ * would need a cast this module's accessors are built specifically to avoid (see read.ts's own
+ * header). `capitalize` (src/spec.ts:740-741) IS imported rather than mirrored, deliberately —
+ * it is not a full title-case (it upper-cases only the first character, e.g.
+ * capitalize("google-meet") -> "Google-meet", hyphen and all), a shape non-obvious enough that
+ * reimplementing it here would risk exactly the class of drift this task already found twice.
+ */
+function registrarNameFor(title: string): string {
+  return `register${title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
+}
+
+/**
+ * `register<X>Tool` -> the spec `title` that reproduces it exactly, or `undefined` (refuse) when
+ * none does.
+ *
+ * The registrar's own name is a spec-derived identifier (`registrarName`, computed from
+ * `spec.title` — not a `local` field a spec sets directly), and `deriveSpec` used to recover it
+ * and then discard it, deriving `ok: true` for any rest-kit module regardless of whether the
+ * name it actually carries is reproducible at all: a review demonstrated that renaming
+ * `zzstandalone`'s registrar to `registerZzTool` in its own emitted `server.ts` still derived
+ * successfully, and re-emitting wrote `registerZzstandaloneTool` back — a different file, from a
+ * `deriveSpec` whose contract is "a derived spec or a named blocker," never a spec for a module
+ * it provably cannot regenerate.
+ *
+ * Inverting is strictly better than refusing outright on sight of a non-default name — three
+ * corpus connectors this task newly frames (`registerCciTool`, `registerGhaTool`,
+ * `registerPdTool`) use exactly this idiom, and Task 6 makes their registrar axis live — but the
+ * inversion is VERIFIED here, not trusted from the regex capture alone: a greedy `.+` is not
+ * provably a perfect inverse for every input (an underscore or `$` inside the captured group,
+ * legal in a JS identifier, sanitizes away when `registrarNameFor` re-encodes it, so the round
+ * trip silently fails for exactly the inputs where blind trust would have been wrong). Checked
+ * in two steps, either of which can succeed:
+ *
+ *   1. The schema's own default (`capitalize(name)`) already reproduces the observed name — the
+ *      common case (`zzstandalone`, and any spec whose author never set a custom `title`) — so
+ *      `{ title: undefined }` lets the derived spec omit `title` and stay minimal. This is
+ *      checked FIRST specifically so a default-shaped registrar can never be second-guessed into
+ *      an unnecessary explicit `title`.
+ *   2. The literal recovered fragment reproduces it -> `{ title: <recovered> }`.
+ *
+ * Neither reproducing it exactly is a refusal (`undefined`), not a partial derivation.
+ */
+function recognizeRestTitle(
+  observedRegistrar: string,
+  name: string,
+): { title: string | undefined } | undefined {
+  const match = /^register(.+)Tool$/.exec(observedRegistrar);
+  if (match === null) return undefined;
+  const recovered = match[1]!;
+
+  if (registrarNameFor(capitalize(name)) === observedRegistrar) return { title: undefined };
+  if (registrarNameFor(recovered) === observedRegistrar) return { title: recovered };
+  return undefined;
 }
 
 /**
@@ -83,10 +141,35 @@ export function deriveSpec(files: SourceFiles): Derivation {
       );
     }
 
+    // The factory's `fetch:` property (registrar.fetchLocal) and the recognized fetch-helper
+    // function's own name (restFetchHelper.local) are recovered by two separate recognizers
+    // that never cross-check each other's output — a module naming a DIFFERENT function in the
+    // factory than the one actually recognized (e.g. `fetch: fetch`, the global) would
+    // otherwise derive `ok: true` for a spec whose emitted factory calls a name the derived
+    // `fetchHelper.local` does not match, same "claimed but not reproducible" defect class as
+    // the registrar name below.
+    if (registrar.fetchLocal !== restFetchHelper.local) {
+      return blocked(
+        "rest-fetch-helper-name-mismatch",
+        `the factory names fetch helper "${registrar.fetchLocal}", but the recognized fetch ` +
+          `helper function is named "${restFetchHelper.local}"`,
+      );
+    }
+
+    const titleRecovery = recognizeRestTitle(registrar.registrar, frame.name);
+    if (titleRecovery === undefined) {
+      return blocked(
+        "unrecognized-registrar-name",
+        `"${registrar.registrar}" does not correspond to any title that reproduces it — ` +
+          "registrarName() would emit a different const name than the module's own",
+      );
+    }
+
     return {
       ok: true,
       spec: {
         name: frame.name,
+        ...(titleRecovery.title === undefined ? {} : { title: titleRecovery.title }),
         displayName: manifest.displayName,
         description: manifest.description,
         serviceLabel: registrar.serviceLabel,

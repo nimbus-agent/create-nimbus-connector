@@ -56,6 +56,127 @@ const SERVER = [
   "await mcp.connect(transport);",
 ].join("\n");
 
+const MANIFEST_REST = JSON.stringify({
+  id: "zzrest",
+  displayName: "ZZ Rest",
+  version: "0.1.0",
+  description: "ZZ Rest connector.",
+  author: "Nimbus",
+  entrypoint: "dist/server.js",
+  runtime: "bun",
+  permissions: { network: ["api.zzrest.test"] },
+  hitlRequired: [],
+  syncInterval: 300,
+  minNimbusVersion: "0.2.0",
+});
+
+/** The shape src/emit/server/index.ts writes for a rest-kit connector named "zzrest" with the
+ * schema-default title ("Zzrest") — confirmed against an actually-generated zzstandalone. */
+const SERVER_REST = [
+  'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+  'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
+  'import { z } from "zod";',
+  "",
+  'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+  'import { makeRestToolRegistrar } from "../../shared/rest-tool-kit.ts";',
+  "",
+  "async function zzFetch(",
+  "  token: string,",
+  "  path: string,",
+  "  init?: RequestInit,",
+  "): Promise<{ ok: boolean; status: number; json: unknown; text: string }> {",
+  '  const url = path.startsWith("http") ? path : `https://api.zzrest.test${path}`;',
+  "  const res = await fetch(url, {",
+  "    ...init,",
+  "    headers: {",
+  "      Authorization: `Bearer ${token}`,",
+  "      ...(init?.headers as Record<string, string> | undefined),",
+  "    },",
+  "  });",
+  "  const text = await res.text();",
+  "  let json: unknown;",
+  "  try {",
+  "    json = JSON.parse(text) as unknown;",
+  "  } catch {",
+  "    json = null;",
+  "  }",
+  "  return { ok: res.ok, status: res.status, json, text };",
+  "}",
+  "",
+  'const server = new McpServer({ name: "nimbus-zzrest", version: "0.1.0" });',
+  "const reg = createZodToolRegistrar(createRegisterSimpleTool(server));",
+  "",
+  "const registerZzrestTool = makeRestToolRegistrar({",
+  "  registrar: reg,",
+  '  tokenEnv: "ZZREST_TOKEN",',
+  '  serviceLabel: "ZZ Rest",',
+  "  fetch: zzFetch,",
+  "});",
+  "",
+  'registerZzrestTool("zzrest_item_list", "List items.", z.object({}), () => "/v1/items");',
+  "",
+  "const transport = new StdioServerTransport();",
+  "await server.connect(transport);",
+].join("\n");
+
+describe("deriveSpec, rest-kit registrar/title and fetch-helper-name cross-checks", () => {
+  it("derives a whole rest-kit connector, omitting title when the registrar is the schema default", () => {
+    const result = deriveSpec({ server: SERVER_REST, manifest: MANIFEST_REST });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.spec).toMatchObject({
+      name: "zzrest",
+      style: "rest-kit",
+      serviceLabel: "ZZ Rest",
+      env: [{ vars: ["ZZREST_TOKEN"], local: "restAuthToken", auth: "bearer" }],
+      fetchHelper: { local: "zzFetch", base: "https://api.zzrest.test" },
+    });
+    // The whole point of checking the default FIRST in recognizeRestTitle: a registrar shaped
+    // exactly as the schema would emit it must not grow an unnecessary explicit "title".
+    expect("title" in result.spec).toBe(false);
+  });
+
+  it("recovers a non-default title from a registrar name the schema default does not explain, verifying the round trip", () => {
+    const server = SERVER_REST.replaceAll("registerZzrestTool", "registerCustomNameTool");
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec.title).toBe("CustomName");
+  });
+
+  it("refuses a registrar name that does not fit register<Title>Tool at all", () => {
+    const server = SERVER_REST.replaceAll("registerZzrestTool", "handleZzrestTool");
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["unrecognized-registrar-name"]);
+  });
+
+  it("refuses a registrar name no title reproduces — an underscore sanitizes away on re-encode", () => {
+    // "_custom" fits register<X>Tool's shape (a JS identifier may contain "_"), but
+    // registrarNameFor strips it on re-encode: neither the recovered fragment nor the schema
+    // default reproduces "register_customTool" byte-for-byte. This is the case blind trust in
+    // the regex capture (rather than verifying the round trip) would have gotten wrong.
+    const server = SERVER_REST.replaceAll("registerZzrestTool", "register_customTool");
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["unrecognized-registrar-name"]);
+  });
+
+  it("refuses when the factory's fetch: value disagrees with the recognized fetch helper's own name", () => {
+    // The reviewer's own repro: naming the factory's fetch after something else recognizable
+    // (here, the global `fetch`) rather than the function recognizeRestFetchHelper actually
+    // found (zzFetch) — everything is individually claimed, so only a cross-check catches it.
+    const server = SERVER_REST.replace("fetch: zzFetch,", "fetch: fetch,");
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["rest-fetch-helper-name-mismatch"]);
+  });
+});
+
 describe("deriveSpec", () => {
   it("derives a whole hand-rolled connector", () => {
     const result = deriveSpec({ server: SERVER, manifest: MANIFEST });
