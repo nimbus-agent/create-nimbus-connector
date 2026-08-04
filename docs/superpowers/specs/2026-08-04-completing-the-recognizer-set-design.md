@@ -317,6 +317,21 @@ other tail form. Seven failures, fully explained, with no unexplained residue.
 escape hatch" rule applies here exactly as it does to `zoom`. A connector on the far side of
 either axis can never reach `server-identical`, by a decision already made and written down.
 
+> **Superseded by measurement.** The diagnosis above — two connectors on the registrar axis
+> (`discord`, `github`), five on the tail axis, ten rest-kit connectors total — was written before
+> the corpus was actually measured. Task 6 measured it and found both counts and both axis
+> memberships wrong: `frame:registrar-not-inlined` is **13** connectors, not 2, and is **not
+> rest-kit-only** — `bitbucket`, `confluence`, `gitlab`, `jira`, `linear`, `notion`, `obsidian`,
+> `slack` and `teams` are hand-rolled connectors that hit the same near miss, alongside `discord`
+> and `github`, plus `google-meet` and `google-photos`, which write *both* near-miss shapes and
+> land on this axis only because `frameFailureKind` checks the registrar element before the
+> transport one. `frame:tail-inlined-transport` is **4** — `gmail`, `google-drive`, `onedrive`,
+> `outlook` — and includes `google-drive`, a connector this section never mentions at all. The
+> table and the "ten rest-kit connectors … seven failures, fully explained" accounting above are
+> left as originally written rather than edited to match — `docs/ROADMAP.md`'s *Wiring and tail
+> idiom* bullet carries the verified membership and is the one to trust. Verified via
+> `bun run reach --nimbus-root <path> --verbose`.
+
 ### `no-frame` is split into named blockers
 
 What the diagnosis *does* change is the reporting. `no-frame` is currently one opaque bucket
@@ -471,7 +486,9 @@ re-baselined because the corpus measurement moved, never edited to make a run pa
 - **Seven rest-kit connectors are permanently short of `server-identical`** (§3) — the registrar
   and transport-tail idiom variance, already recorded in *Known limitations*. Diagnosed rather
   than open, but it caps what commit 3 can deliver: those seven move from `no-frame` to a named
-  idiom blocker, not into a passing tier.
+  idiom blocker, not into a passing tier. **Superseded by measurement** (see §3's note): the
+  actual count spans both frame styles and is far larger than seven — `docs/ROADMAP.md`'s *Wiring
+  and tail idiom* bullet has the verified membership.
 - **The retrofit in commit 1 is broad** — seven modules, ~1,800 lines. It is behaviour-preserving
   by construction, and the unchanged reach histogram is the check that it was.
 - **Branch size.** Seven new modules and their tests, roughly doubling `scripts/_lib/derive/`.

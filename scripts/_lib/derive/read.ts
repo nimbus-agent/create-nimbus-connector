@@ -14,10 +14,20 @@
  * field can be read, and every accessor returns `undefined` rather than throwing, so rejecting
  * stays the cheap default.
  *
- * There is deliberately no generic `getChildren(node)`. An untyped child list hands back nodes
- * stripped of WHICH SLOT they came from, and the slot is exactly what the guards depend on — it
- * is how a computed member's key identifier gets read as a property name. Reaching a node field
- * with no accessor means adding an accessor here, never casting at the call site.
+ * There is deliberately no generic `getChildren(node)` exported from here. An untyped child list
+ * hands back nodes stripped of WHICH SLOT they came from, and the slot is exactly what the guards
+ * above depend on — it is how a computed member's key identifier gets read as a property name.
+ * Reaching a node field with no accessor means adding an accessor here, never casting at the call
+ * site.
+ *
+ * One exception exists, and it is confined on purpose rather than pretended away: `server/
+ * fetch-helper.ts`'s internal `walk`/`find` recurse via `Object.entries()` with no slot identity,
+ * to locate a `fetch()` call or a `ThrowStatement` anywhere in a function body rather than at a
+ * fixed slot. Neither function is exported; neither is reachable from a recognizer outside that
+ * one file; and this module still exposes no generic accessor, so a recognizer that wanted one
+ * has nowhere to get it. `tsc` does not enforce this confinement — `Object.entries()` on an
+ * `AstNode` typechecks and yields `unknown` — so it holds by review, the same as the rule that
+ * every new emitter path gets added to `RESERVED_IDENTIFIERS`.
  */
 import type { AstNode } from "./ast.ts";
 
@@ -109,24 +119,27 @@ export function regExpLit(node: AstNode | undefined): RegExpParts | undefined {
 }
 
 /**
- * A numeric value that may carry a sign.
+ * A numeric value that may carry a negative sign.
  *
  * Separate from `numberLit` because Babel parses `-1` as a UnaryExpression wrapping a
  * NumericLiteral, and `ArgSchema` constrains sign on NONE of `min`, `max` or `default` — so the
  * emitter can write `-1` and a strict reader would manufacture a blocker on a connector this
  * generator can actually reproduce. Use this for those three; use `numberLit` where the emitter
  * can only write a bare literal (`maxLimit`, pinned `.int().positive()` by ToolSchema).
+ *
+ * Only `-` is accepted, not `+`: the emitter has no reason to ever write a unary plus — a
+ * non-negative bound is always a bare literal (`.min(5)`, never `.min(+5)`) — so `+1` is a shape
+ * this generator cannot produce, and accepting it anyway would claim a UnaryExpression the
+ * emitter never emits, the exact class of over-claim this module's header warns against.
  */
 export function numericValue(node: AstNode | undefined): number | undefined {
   const bare = numberLit(node);
   if (bare !== undefined) return bare;
   if (node?.type !== "UnaryExpression") return undefined;
   if (raw(node)["prefix"] !== true) return undefined;
-  const operator = stringField(node, "operator");
-  if (operator !== "-" && operator !== "+") return undefined;
+  if (stringField(node, "operator") !== "-") return undefined;
   const inner = numberLit(child(node, "argument"));
-  if (inner === undefined) return undefined;
-  return operator === "-" ? -inner : inner;
+  return inner === undefined ? undefined : -inner;
 }
 
 // ---------------------------------------------------------------------------

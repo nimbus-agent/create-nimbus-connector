@@ -34,14 +34,17 @@ const FRAME_IMPORTS = new Set([
  */
 const RUN_READ_ONLY_SUFFIX = "/run-read-only-mcp-connector.ts";
 
+/**
+ * Deliberately does NOT match `RUN_READ_ONLY_SUFFIX`. Widening it to do so let
+ * `recognizeReadOnlyFrame`'s `optionalFrameImports` (below) claim a `run-read-only-mcp-connector.ts`
+ * import on the hand-rolled/rest-kit path with nothing verifying a read-only wrapper actually
+ * exists there — the emitter never co-emits that import for those two styles. The read-only-kit
+ * frame claims it explicitly instead, scoped by `s === runImport` in `recognizeReadOnlyFrame`.
+ */
 function isFrameImport(node: AstNode): boolean {
   const source = importSource(node);
   if (source === undefined) return false;
-  return (
-    FRAME_IMPORTS.has(source) ||
-    source.endsWith("/mcp-tool-kit.ts") ||
-    source.endsWith(RUN_READ_ONLY_SUFFIX)
-  );
+  return FRAME_IMPORTS.has(source) || source.endsWith("/mcp-tool-kit.ts");
 }
 
 /**
@@ -104,7 +107,10 @@ function recognizeReadOnlyFrame(
   if (wrapper === undefined || recognized === undefined) return undefined;
 
   // Claim the frame's IMPORTS only. The wrapper is deliberately absent from this list: claiming
-  // it would cover every registration inside it by containment.
+  // it would cover every registration inside it by containment. `s === runImport` is load-bearing
+  // here, not redundant with `isFrameImport`: that predicate deliberately does not match
+  // RUN_READ_ONLY_SUFFIX (see its own docstring), so this is the only place the run-read-only
+  // import gets claimed, and only once this frame is already confirmed to exist.
   const frameImports = statements.filter((s) => isFrameImport(s) || s === runImport);
   claims.claim(frameImports, "frame");
 
@@ -388,11 +394,16 @@ function withTopLevelIfBodies(statements: readonly AstNode[]): AstNode[] {
 /**
  * `const <x> = createZodToolRegistrar(<identifier>);` — the registrar near miss: the outer call
  * is right, but its argument is a bare identifier rather than the inlined
- * `createRegisterSimpleTool(<mcpVar>)` call `isRegistrarConst` requires. Eleven corpus connectors
- * write exactly this — `discord`, `github`, and (found only by reading the nine hand-rolled
- * connectors Task 6 was asked to investigate rather than assumed) `bitbucket`, `confluence`,
- * `gitlab`, `jira`, `linear`, `notion`, `obsidian`, `slack`, `teams` — hoisting
- * `createRegisterSimpleTool(mcp)` to its own `const registerSimpleTool = ...;` one line above.
+ * `createRegisterSimpleTool(<mcpVar>)` call `isRegistrarConst` requires. Thirteen corpus
+ * connectors write exactly this shape — `discord`, `github`, `bitbucket`, `confluence`,
+ * `gitlab`, `jira`, `linear`, `notion`, `obsidian`, `slack`, `teams`, and (each writing the
+ * inline-transport near miss too, per `isInlinedTransportConnect` below) `google-meet` and
+ * `google-photos` — hoisting `createRegisterSimpleTool(mcp)` to its own
+ * `const registerSimpleTool = ...;` one line above. Unlike the transport axis below, this shape
+ * count matches the `frame:registrar-not-inlined` bucket exactly: `frameFailureKind` checks the
+ * registrar element before the transport one, so a connector satisfying both near misses is never
+ * excluded from THIS bucket by precedence — precedence only costs the transport bucket the two
+ * connectors this axis claims first.
  *
  * Deliberately does not check the identifier's NAME (`registerSimpleTool` in every corpus
  * instance) — see this module's header on labels being allowed more leniency than claims: this

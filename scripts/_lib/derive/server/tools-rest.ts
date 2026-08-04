@@ -210,6 +210,11 @@ function hoistedLocal(
  * `recognizeOne` models its block form. The query branch (a block whose body contains `const u
  * = new URL(...)`) is plan 2's too: it is not a hoist, so the loop below refuses it the same
  * way it refuses any other unrecognized non-last statement, with no special case needed.
+ *
+ * Refuses an `async` path fn: `src/emit/server/tools-rest.ts` never writes `async` on this arrow,
+ * the same pin `read.ts`'s `isAsync` documents and `readOnlyWrapper` (server/index.ts) already
+ * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
+ * non-async form and was claimed for a shape the emitter cannot produce.
  */
 function recognizeOneCall(call: AstNode): ToolFields | undefined {
   const args = callArgs(call);
@@ -236,7 +241,7 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
   if (toolArgs === undefined) return undefined;
 
   const arrow = arrowFn(pathFnNode);
-  if (arrow === undefined || arrow.params.length > 1) return undefined;
+  if (arrow === undefined || arrow.params.length > 1 || arrow.isAsync) return undefined;
 
   // Forms 1/2: `() => <pathExpr>` / `(parsed) => <pathExpr>` — expression-bodied. recognizePath
   // resolves a bare `parsed.<name>` member read without checking the receiver at all (see

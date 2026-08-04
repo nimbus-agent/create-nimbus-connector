@@ -137,6 +137,13 @@ describe("recognizeRestTools", () => {
     expect(claims.claims()).toEqual([]);
   });
 
+  it("refuses an async path fn — src/emit/server/tools-rest.ts never writes async here", () => {
+    const source = REST.replace('() => "/things",', 'async () => "/things",');
+    const claims = createClaimSet();
+    expect(recognizeRestTools(parseModule(source), claims, "registerZzTool")).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
   it("refuses the query branch (a block whose body contains `const u = new URL(...)`)", () => {
     const source = REST.replace(
       '() => "/things",',

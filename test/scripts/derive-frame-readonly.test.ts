@@ -49,6 +49,14 @@ describe("recognizeFrame, read-only-kit", () => {
     // The base const is still there to be claimed or blocked — the swap is not a switch from
     // checking the module to checking the callback.
     expect(frame?.verifyStatements.some((s) => s.type === "VariableDeclaration")).toBe(true);
+    // The length check above passes whether or not the splice happened — the fixture's callback
+    // has exactly 1 statement, the same count as the single wrapper statement it replaces — so it
+    // does not by itself discriminate a swap from a no-op. Assert the swap directly: the wrapper
+    // statement (the fourth top-level statement, the `await runReadOnlyMcpConnector(...)` call
+    // itself) must be gone from verifyStatements, replaced by its callback body's statement.
+    const wrapper = statements[3];
+    expect(frame?.verifyStatements).not.toContain(wrapper);
+    expect(frame?.verifyStatements).toContain(frame?.toolStatements[0]);
   });
 
   it("NEVER claims the wrapper, so a statement inside it stays visible", () => {

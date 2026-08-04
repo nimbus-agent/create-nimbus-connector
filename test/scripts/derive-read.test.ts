@@ -211,10 +211,13 @@ describe("literals", () => {
     expect(numberLit(initOf("-1"))).toBeUndefined();
   });
 
-  it("numericValue accepts a signed literal, which ArgSchema permits for min/max/default", () => {
+  it("numericValue accepts a negative literal, which ArgSchema permits for min/max/default", () => {
     expect(numericValue(initOf("-1"))).toBe(-1);
-    expect(numericValue(initOf("+5"))).toBe(5);
     expect(numericValue(initOf("42"))).toBe(42);
+  });
+
+  it("numericValue rejects unary plus — the emitter never writes a non-negative bound signed", () => {
+    expect(numericValue(initOf("+5"))).toBeUndefined();
   });
 
   it("numericValue rejects a unary operator that is not a sign", () => {

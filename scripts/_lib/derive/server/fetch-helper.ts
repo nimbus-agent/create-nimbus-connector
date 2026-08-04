@@ -326,11 +326,19 @@ function isPlainJsonReturn(node: AstNode): boolean {
   return isJsonParseTextAsUnknown(returnArgument(node));
 }
 
-/** `return { raw: text };` — the catch arm's fallback, exactly. */
+/**
+ * `return { raw: text };` — the catch arm's fallback, exactly.
+ *
+ * A computed key (`{ [raw]: text }`) is rejected before `objectProperty` is even consulted: its
+ * `key` node for a computed property is an Identifier naming the KEY VARIABLE, not the literal
+ * "raw", the same hazard `findObjectProperty` above guards against.
+ */
 function isRawFallbackReturn(node: AstNode): boolean {
   const properties = objectExpressionProperties(returnArgument(node));
   if (properties === undefined || properties.length !== 1) return false;
-  const parts = objectProperty(properties[0]);
+  const property = properties[0];
+  if (property === undefined || isComputedProperty(property)) return false;
+  const parts = objectProperty(property);
   return parts !== undefined && isIdent(parts.key, "raw") && isIdent(parts.value, "text");
 }
 
@@ -511,7 +519,14 @@ function matchRestUrlConst(stmt: AstNode): string | undefined {
   return base;
 }
 
-/** `Authorization: \`Bearer ${token}\`` — the headers object's fixed first entry. */
+/**
+ * `Authorization: \`Bearer ${token}\`` — the headers object's fixed first entry.
+ *
+ * The caller guards `isComputedProperty` on the raw property node before this runs (same
+ * placement as `restInlineHeaderEntries` and `matchRestFetchOptions` below) — `parts.key` for a
+ * computed property (`{ [Authorization]: ... }`) is an Identifier naming the KEY VARIABLE, not
+ * the literal "Authorization", and `identName` alone cannot tell the two apart.
+ */
 function isAuthorizationHeader(parts: { key: AstNode; value: AstNode }): boolean {
   if (identName(parts.key) !== "Authorization") return false;
   const t = templateLiteral(parts.value);
@@ -567,6 +582,7 @@ function matchHeadersObject(node: AstNode): { inlineHeaders?: Record<string, str
   const first = properties[0];
   const last = properties.at(-1);
   if (first === undefined || last === undefined) return undefined;
+  if (isComputedProperty(first)) return undefined;
 
   const firstParts = objectProperty(first);
   if (firstParts === undefined || !isAuthorizationHeader(firstParts)) return undefined;
