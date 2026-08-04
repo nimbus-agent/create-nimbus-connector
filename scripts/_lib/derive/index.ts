@@ -3,9 +3,10 @@ import { type Blocker, blockerFor } from "./blockers.ts";
 import { createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeEnv } from "./server/env.ts";
-import { recognizeFetchHelper } from "./server/fetch-helper.ts";
+import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
 import { recognizeFrame } from "./server/index.ts";
 import { recognizeTools } from "./server/tools-hand.ts";
+import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
 
 export type SourceFiles = { server: string; manifest: string };
 
@@ -48,6 +49,69 @@ export function deriveSpec(files: SourceFiles): Derivation {
   const frame = recognizeFrame(statements, claims);
   if (frame === undefined) {
     return blocked("no-frame", "src/server.ts is not a recognized frame");
+  }
+
+  // rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
+  // read-only-kit's (recognizeRestRegistrar+recognizeRestTools vs recognizeTools,
+  // recognizeRestFetchHelper vs recognizeFetchHelper — see their own docstrings) and it emits
+  // no env accessors at all (emitServer gates renderEnvAccessors on isHandStyle), so the two
+  // styles are assembled in separate branches rather than threading a style check through
+  // recognizeEnv/recognizeFetchHelper/recognizeTools's shared call sites.
+  if (frame.style === "rest-kit") {
+    const registrar = recognizeRestRegistrar(frame.toolStatements, claims);
+    // recognizeRestTools needs the registrar's own name to know which calls are its
+    // registrations — nothing to search for without it, so tools stays undefined rather than
+    // scanning for a name that was never recognized.
+    const tools =
+      registrar === undefined
+        ? undefined
+        : recognizeRestTools(frame.toolStatements, claims, registrar.registrar);
+    const restFetchHelper = recognizeRestFetchHelper(frame.verifyStatements, claims);
+
+    // Same totality rule as the shared path below, checked before either recognizer's own
+    // "undefined" case: an unclaimed statement (a bespoke `reg()` call, a helper function
+    // neither recognizer models, a query-branch tool) blocks the module on its own bucket
+    // rather than falling through to the generic "unrecognized-handler" blocked() below.
+    const unclaimed = claims.unclaimed(frame.verifyStatements);
+    if (unclaimed.length > 0) {
+      return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, files.server)) };
+    }
+    if (registrar === undefined || tools === undefined || restFetchHelper === undefined) {
+      return blocked(
+        "unrecognized-handler",
+        "a rest-kit registrar, its calls, or its fetch helper were not understood",
+      );
+    }
+
+    return {
+      ok: true,
+      spec: {
+        name: frame.name,
+        displayName: manifest.displayName,
+        description: manifest.description,
+        serviceLabel: registrar.serviceLabel,
+        style: frame.style,
+        network: manifest.network,
+        ...(manifest.id === undefined ? {} : { id: manifest.id }),
+        ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
+        syncInterval: manifest.syncInterval,
+        minNimbusVersion: manifest.minNimbusVersion,
+        // The single entry ConnectorSpecSchema's rest-kit refine requires: one var, auth
+        // "bearer". `local` names nothing the emitted source calls — rest-kit's
+        // makeRestToolRegistrar resolves the credential itself via requireProcessEnv(tokenEnv)
+        // — so its value is unobservable in the emitted bytes; any valid identifier round-trips
+        // identically, and this one is chosen only to read as what it is.
+        env: [{ vars: [registrar.tokenEnv], local: "restAuthToken", auth: "bearer" }],
+        fetchHelper: {
+          local: restFetchHelper.local,
+          base: restFetchHelper.base,
+          ...(restFetchHelper.inlineHeaders === undefined
+            ? {}
+            : { inlineHeaders: restFetchHelper.inlineHeaders }),
+        },
+        tools,
+      },
+    };
   }
 
   const env = recognizeEnv(frame.verifyStatements, claims);

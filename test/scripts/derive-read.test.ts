@@ -4,6 +4,7 @@ import {
   arrayElements,
   arrowFn,
   asExpression,
+  assignment,
   awaited,
   binary,
   blockBody,
@@ -25,6 +26,7 @@ import {
   importSource,
   isAsyncFunction,
   isComputedProperty,
+  isNullLiteral,
   labelCallee,
   labelFirstInit,
   labelName,
@@ -44,11 +46,13 @@ import {
   optionalMemberObject,
   regExpLit,
   returnArgument,
+  spreadArgument,
   stringLit,
   templateLiteral,
   throwArgument,
   tryStatement,
   unary,
+  uninitializedLet,
 } from "../../scripts/_lib/derive/read.ts";
 
 /** The single top-level statement of `source`. */
@@ -481,5 +485,38 @@ describe("Task 2 accessors", () => {
     const c = catchClause(t?.handler);
     expect(c?.param).toBeUndefined();
     expect(catchClause(only("f();"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 5's accessors — added for renderRestKitFetchHelper's shape, the one place this
+ * deriver's emitter output assigns inside a try/catch rather than returning from one.
+ */
+describe("Task 5 accessors", () => {
+  it("spreadArgument reads a SpreadElement's own argument, undefined for a plain property", () => {
+    const props = objectExpressionProperties(initOf("({ ...init, a: 1 })"));
+    expect(identName(spreadArgument(props?.[0]))).toBe("init");
+    expect(spreadArgument(props?.[1])).toBeUndefined();
+  });
+
+  it("assignment reads operator and sides, distinct from binary/logical", () => {
+    const a = assignment(expressionOf(only("json = value;")));
+    expect(a?.operator).toBe("=");
+    expect(identName(a?.left)).toBe("json");
+    expect(identName(a?.right)).toBe("value");
+    expect(assignment(initOf("a === b"))).toBeUndefined();
+  });
+
+  it("isNullLiteral is true only for the literal null", () => {
+    expect(isNullLiteral(initOf("null"))).toBe(true);
+    expect(isNullLiteral(initOf("undefined"))).toBe(false);
+    expect(isNullLiteral(initOf("0"))).toBe(false);
+  });
+
+  it("uninitializedLet reads a bare `let`'s own name, rejecting const, var and an initializer", () => {
+    expect(uninitializedLet(only("let json: unknown;"))).toBe("json");
+    expect(uninitializedLet(only("const json = 1;"))).toBeUndefined();
+    expect(uninitializedLet(only("var json;"))).toBeUndefined();
+    expect(uninitializedLet(only("let json = 1;"))).toBeUndefined();
   });
 });

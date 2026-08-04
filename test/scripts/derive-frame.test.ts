@@ -200,4 +200,37 @@ describe("recognizeFrame", () => {
     expect(recognizeFrame(statements, claims)).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
+
+  // Task 5: rest-kit is the hand-rolled five elements plus an import from rest-tool-kit.ts —
+  // wiring() emits the same prologue/epilogue for both styles (only the McpServer binding's own
+  // name differs, "mcp" vs "server", and this recognizer already reads that off the node), so
+  // the discriminator is exactly this one extra import.
+  it('recognizes "rest-kit" when a rest-tool-kit.ts import is present, claiming it too', () => {
+    const source = [
+      'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+      'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
+      'import { z } from "zod";',
+      'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+      'import { makeRestToolRegistrar } from "../../shared/rest-tool-kit.ts";',
+      'const server = new McpServer({ name: "nimbus-zzstandalone", version: "0.1.0" });',
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(server));",
+      "const transport = new StdioServerTransport();",
+      "await server.connect(transport);",
+    ].join("\n");
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    const frame = recognizeFrame(statements, claims);
+    expect(frame?.name).toBe("zzstandalone");
+    expect(frame?.style).toBe("rest-kit");
+    expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it('recognizes "hand-rolled", not "rest-kit", when no rest-tool-kit.ts import is present', () => {
+    // FRAME itself has no such import — re-asserted here (rather than only inferred from the
+    // very first test above) so a future change to FRAME that accidentally added one would fail
+    // this test rather than silently making the two styles indistinguishable.
+    const frame = recognizeFrame(parseModule(FRAME), createClaimSet());
+    expect(frame?.style).toBe("hand-rolled");
+  });
 });

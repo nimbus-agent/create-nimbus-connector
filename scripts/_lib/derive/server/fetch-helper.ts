@@ -2,6 +2,7 @@ import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
   asExpression,
+  assignment,
   awaited,
   blockBody,
   callArgs,
@@ -10,6 +11,7 @@ import {
   catchClause,
   conditional,
   constDecl,
+  expressionOf,
   functionBody,
   functionName,
   functionParams,
@@ -18,16 +20,21 @@ import {
   isAsyncFunction,
   isComputedProperty,
   isIdent,
+  isNullLiteral,
   memberOn,
   methodCallTo,
   objectExpressionProperties,
   objectProperty,
   objectProps,
+  optionalMemberName,
+  optionalMemberObject,
   returnArgument,
+  spreadArgument,
   stringLit,
   templateLiteral,
   tryStatement,
   unary,
+  uninitializedLet,
 } from "../read.ts";
 
 export type FetchHelperFields = {
@@ -447,6 +454,276 @@ export function recognizeFetchHelper(
       ...(headersAccessorName !== undefined && { headers: headersAccessorName }),
       ...(normalizeLeadingSlash !== undefined && { normalizeLeadingSlash }),
       ...(jsonFallback && { jsonFallbackRaw: true as const }),
+    };
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The rest-kit fetch helper — renderRestKitFetchHelper, a different shape from the read
+// helper above. `renderReadHelper` (src/emit/server/fetch-helper.ts) does NOT gate this on
+// `isHandStyle`: rest-kit is unconditional, since makeRestToolRegistrar is handed the helper
+// directly and has no seam to skip it, even for a spec with no tools at all. The above
+// `recognizeFetchHelper` cannot see it — it requires exactly one parameter named `path`, and
+// this helper takes three (`token`, `path`, `init?`) — so it needs its own recognizer, kept in
+// this module rather than tools-rest.ts to preserve the one-recognizer-per-emitter-function
+// mapping: a future change to renderRestKitFetchHelper with no matching change here is then a
+// diff in the same file, not a silent gap in a different one.
+// ---------------------------------------------------------------------------
+
+export type RestFetchHelperFields = {
+  local: string;
+  base: string;
+  inlineHeaders?: Record<string, string>;
+};
+
+/**
+ * `const url = path.startsWith("http") ? path : \`<base>${path}\`;` — statement 1 of
+ * renderRestKitFetchHelper's body, matched exactly (same `path.startsWith("http")` guard
+ * `isPathPartConst` above checks, but naming a different const). Returns the literal base
+ * text.
+ *
+ * Only the LITERAL base form. `baseExpr` can also produce `` `${baseConst}${path}` `` — a
+ * second, distinct template shape (two expressions instead of one) — which this recognizer
+ * refuses rather than partially reads: none of the three connectors this plan's frame and
+ * tools recognizers newly reach (circleci, github-actions, pagerduty) need it to derive
+ * successfully, since each blocks earlier on its own out-of-scope tool shape (a query branch
+ * or a bespoke `reg()` call).
+ */
+function matchRestUrlConst(stmt: AstNode): string | undefined {
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.name !== "url") return undefined;
+
+  const c = conditional(decl.init);
+  if (c === undefined) return undefined;
+
+  const testArgs = methodCallTo(c.test, "path", "startsWith", 1);
+  if (testArgs === undefined || stringLit(testArgs[0]) !== "http") return undefined;
+  if (!isIdent(c.consequent, "path")) return undefined;
+
+  const alt = templateLiteral(c.alternate);
+  if (alt === undefined || alt.expressions.length !== 1 || !isIdent(alt.expressions[0], "path")) {
+    return undefined;
+  }
+
+  const base = alt.quasis[0];
+  if (base === undefined || alt.quasis[1] !== "") return undefined;
+  return base;
+}
+
+/** `Authorization: \`Bearer ${token}\`` — the headers object's fixed first entry. */
+function isAuthorizationHeader(parts: { key: AstNode; value: AstNode }): boolean {
+  if (identName(parts.key) !== "Authorization") return false;
+  const t = templateLiteral(parts.value);
+  if (t === undefined || t.expressions.length !== 1) return false;
+  return t.quasis[0] === "Bearer " && t.quasis[1] === "" && isIdent(t.expressions[0], "token");
+}
+
+/** `...(init?.headers as Record<string, string> | undefined)` — the headers object's fixed trailing spread. */
+function isInitHeadersSpread(node: AstNode): boolean {
+  const a = asExpression(spreadArgument(node));
+  if (a === undefined || a.typeAnnotationType !== "TSUnionType") return false;
+  return (
+    optionalMemberName(a.expression) === "headers" &&
+    identName(optionalMemberObject(a.expression)) === "init"
+  );
+}
+
+/**
+ * The `headers:` object's inline entries — renderRestKitFetchHelper's `extra` block, each a
+ * literal `<key>: "<value>",`. Rest-kit's `inlineHeaders` values never carry `${env.X}`: the
+ * schema's own rest-kit refine already rejects that at parse time, since rest-kit emits no
+ * accessor to call — so a plain string literal is the only value shape possible here, unlike
+ * `headerValue` above (the hand-style helper's equivalent), which also accepts an env-accessor
+ * call.
+ */
+function restInlineHeaderEntries(
+  properties: readonly AstNode[],
+): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const property of properties) {
+    if (isComputedProperty(property)) return undefined;
+    const parts = objectProperty(property);
+    if (parts === undefined) return undefined;
+    const key = identName(parts.key) ?? stringLit(parts.key);
+    const value = stringLit(parts.value);
+    if (key === undefined || value === undefined) return undefined;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * The `headers: {...}` object itself: the fixed `Authorization` entry, zero or more inline
+ * extra headers, then the fixed trailing `...init?.headers` spread — in that order, exactly.
+ * The outer (undefined | { inlineHeaders? }) distinguishes "this object does not match at
+ * all" (outer undefined) from "it matches and declares no extra headers" (inner `{}`) — the
+ * two would otherwise be indistinguishable now that middle.length === 0 is a valid match.
+ */
+function matchHeadersObject(node: AstNode): { inlineHeaders?: Record<string, string> } | undefined {
+  const properties = objectExpressionProperties(node);
+  if (properties === undefined || properties.length < 2) return undefined;
+
+  const first = properties[0];
+  const last = properties.at(-1);
+  if (first === undefined || last === undefined) return undefined;
+
+  const firstParts = objectProperty(first);
+  if (firstParts === undefined || !isAuthorizationHeader(firstParts)) return undefined;
+  if (!isInitHeadersSpread(last)) return undefined;
+
+  const middle = properties.slice(1, -1);
+  if (middle.length === 0) return {};
+
+  const inlineHeaders = restInlineHeaderEntries(middle);
+  return inlineHeaders === undefined ? undefined : { inlineHeaders };
+}
+
+/** The fetch() options object: `{ ...init, headers: {...} }` — exactly these two entries, in this order. */
+function matchRestFetchOptions(
+  node: AstNode,
+): { inlineHeaders?: Record<string, string> } | undefined {
+  const properties = objectExpressionProperties(node);
+  if (properties === undefined || properties.length !== 2) return undefined;
+
+  const initSpread = properties[0];
+  const headersEntry = properties[1];
+  if (initSpread === undefined || headersEntry === undefined) return undefined;
+  if (!isIdent(spreadArgument(initSpread), "init")) return undefined;
+
+  if (isComputedProperty(headersEntry)) return undefined;
+  const headersParts = objectProperty(headersEntry);
+  if (headersParts === undefined || identName(headersParts.key) !== "headers") return undefined;
+
+  return matchHeadersObject(headersParts.value);
+}
+
+/** `const res = await fetch(url, { ...init, headers: {...} });` — statement 2, matched exactly. */
+function matchRestFetchStatement(
+  stmt: AstNode,
+): { inlineHeaders?: Record<string, string> } | undefined {
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.name !== "res") return undefined;
+  const call = awaited(decl.init);
+  const args = callTo(call, "fetch", 2);
+  if (args === undefined || !isIdent(args[0], "url")) return undefined;
+  const options = args[1];
+  return options === undefined ? undefined : matchRestFetchOptions(options);
+}
+
+/**
+ * `json = <matches>;`, wrapped in the try/catch's fixed `json` target — `assignment` reads
+ * the AssignmentExpression itself; this is the one check both try and catch arms share, only
+ * `matches` differing (`JSON.parse(text) as unknown` vs `null`).
+ */
+function isJsonAssign(stmt: AstNode, matches: (right: AstNode | undefined) => boolean): boolean {
+  const a = assignment(expressionOf(stmt));
+  if (a === undefined || a.operator !== "=" || !isIdent(a.left, "json")) return false;
+  return matches(a.right);
+}
+
+/**
+ * `try { json = JSON.parse(text) as unknown; } catch { json = null; }` — statement 5, matched
+ * exactly: a bare `catch` (no binding), a one-statement try block, a one-statement catch
+ * block, no finally. The ASSIGNING form of `isJsonFallbackTry` above, which instead RETURNS
+ * from each arm — the one shape difference between the hand-style read helper and this one.
+ */
+function isRestJsonTryCatch(node: AstNode): boolean {
+  const t = tryStatement(node);
+  if (t === undefined || t.finalizer !== undefined) return false;
+
+  const tryBody = blockBody(t.block);
+  if (
+    tryBody === undefined ||
+    tryBody.length !== 1 ||
+    !isJsonAssign(tryBody[0]!, isJsonParseTextAsUnknown)
+  ) {
+    return false;
+  }
+
+  const c = catchClause(t.handler);
+  if (c === undefined || c.param !== undefined) return false;
+  const handlerBody = blockBody(c.body);
+  return (
+    handlerBody !== undefined &&
+    handlerBody.length === 1 &&
+    isJsonAssign(handlerBody[0]!, isNullLiteral)
+  );
+}
+
+/** `return { ok: res.ok, status: res.status, json, text };` — statement 6, matched exactly, in this order. */
+function isRestReturnStatement(node: AstNode): boolean {
+  const props = objectProps(returnArgument(node));
+  if (props === undefined || props.length !== 4) return false;
+  const ok = props[0];
+  const status = props[1];
+  const json = props[2];
+  const text = props[3];
+  if (ok === undefined || status === undefined || json === undefined || text === undefined) {
+    return false;
+  }
+  return (
+    ok.key === "ok" &&
+    memberOn(ok.value, "res") === "ok" &&
+    status.key === "status" &&
+    memberOn(status.value, "res") === "status" &&
+    json.key === "json" &&
+    isIdent(json.value, "json") &&
+    text.key === "text" &&
+    isIdent(text.value, "text")
+  );
+}
+
+/**
+ * The inverse of renderRestKitFetchHelper — a fixed six-statement body, matched positionally
+ * (the same reason `recognizeFetchHelper` above walks its own body positionally rather than
+ * `find()`/`walk()`-ing the tree: a claim covers the function's whole byte range, so an extra
+ * or reordered statement anywhere inside it must be visible here, not silently swallowed by a
+ * shape check that only samples part of the body). Refuses rather than partially reads any
+ * step it does not recognize — a wrong `base` regenerates a connector that requests the wrong
+ * host and byte-matches nothing, and the failure would look like a formatting problem rather
+ * than what it is.
+ */
+export function recognizeRestFetchHelper(
+  statements: readonly AstNode[],
+  claims: ClaimSet,
+): RestFetchHelperFields | undefined {
+  for (const s of statements) {
+    if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) continue;
+
+    const params = functionParams(s);
+    if (
+      params === undefined ||
+      params.length !== 3 ||
+      !isIdent(params[0], "token") ||
+      !isIdent(params[1], "path") ||
+      !isIdent(params[2], "init")
+    ) {
+      continue;
+    }
+
+    const body = functionBody(s);
+    if (body === undefined || body.length !== 6) continue;
+
+    const base = matchRestUrlConst(body[0]!);
+    if (base === undefined) continue;
+
+    const headers = matchRestFetchStatement(body[1]!);
+    if (headers === undefined) continue;
+
+    if (!isTextStatement(body[2]!)) continue;
+    if (uninitializedLet(body[3]!) !== "json") continue;
+    if (!isRestJsonTryCatch(body[4]!)) continue;
+    if (!isRestReturnStatement(body[5]!)) continue;
+
+    const local = functionName(s);
+    if (local === undefined || local === "") continue;
+
+    claims.claim(s, "rest-fetch-helper");
+    return {
+      local,
+      base,
+      ...(headers.inlineHeaders !== undefined ? { inlineHeaders: headers.inlineHeaders } : {}),
     };
   }
   return undefined;

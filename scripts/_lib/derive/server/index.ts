@@ -14,7 +14,7 @@ import {
   objectProps,
   stringLit,
 } from "../read.ts";
-import type { Frame } from "./frame.ts";
+import type { Frame, FrameStyle } from "./frame.ts";
 
 const FRAME_IMPORTS = new Set([
   "@modelcontextprotocol/sdk/server/mcp.js",
@@ -154,6 +154,20 @@ function hasMcpToolKitImport(node: AstNode): boolean {
 }
 
 /**
+ * The rest-kit-specific import, checked with the same path-SEGMENT rule `RUN_READ_ONLY_SUFFIX`
+ * documents above rather than a plain string match — a hypothetical "my-run-rest-tool-kit.ts"
+ * must not satisfy it. The emitter writes exactly "../../shared/rest-tool-kit.ts"
+ * (src/emit/server/index.ts's `imports`), so a slashless check would only widen what gets
+ * claimed.
+ */
+const REST_TOOL_KIT_SUFFIX = "/rest-tool-kit.ts";
+
+function hasRestToolKitImport(node: AstNode): boolean {
+  const source = importSource(node);
+  return source?.endsWith(REST_TOOL_KIT_SUFFIX) === true;
+}
+
+/**
  * `const <x> = <callee>(...)` / `new <callee>(...)` with exactly `expectedArgs` arguments.
  *
  * The argument count is checked, not just the callee name — `new StdioServerTransport()`
@@ -230,7 +244,11 @@ function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean
 }
 
 /**
- * The hand-rolled prologue and epilogue, as src/emit/server/index.ts writes them.
+ * The hand-rolled prologue and epilogue, as src/emit/server/index.ts writes them — shared with
+ * rest-kit, which wiring() emits identically (see its `v = style === "hand-rolled" ? "mcp" :
+ * "server"`): only the McpServer binding's own name differs, and this recognizer already reads
+ * that off the node rather than assuming "mcp", so no change was needed for rest-kit to match
+ * here too.
  *
  * Returns undefined and claims NOTHING when the module is not this frame — a partially claimed
  * module would leave the totality rule reporting blockers for statements a different style's
@@ -243,6 +261,13 @@ function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean
  * 3. const reg = createZodToolRegistrar(...)
  * 4. const transport = new StdioServerTransport()
  * 5. await mcp.connect(transport) — receiver must be the same variable from (2)
+ *
+ * A sixth, optional element decides which of the two styles this is: an import from
+ * /rest-tool-kit.ts. Present -> "rest-kit" (imports() in src/emit/server/index.ts emits BOTH
+ * the mcp-tool-kit.ts import, for wiring(), and this one, for the tool registrar factory).
+ * Absent -> "hand-rolled". Frame recognition says nothing about whether the TOOLS inside are
+ * understood — that is `deriveSpec`'s job, dispatching on `style` to recognizeTools or
+ * recognizeRestTools.
  */
 export function recognizeFrame(
   statements: readonly AstNode[],
@@ -282,10 +307,17 @@ export function recognizeFrame(
   const connectNode = statements.find((s) => isConnect(s, mcpVar, transportVar));
   if (!connectNode) return undefined;
 
+  // (6) The rest-kit discriminator (OPTIONAL): present -> "rest-kit", claimed alongside the
+  // other five; absent -> "hand-rolled". `isFrameImport` deliberately does not match this
+  // suffix, so it is never claimed twice through `optionalFrameImports` below.
+  const restToolKitImport = statements.find(hasRestToolKitImport);
+  const style: FrameStyle = restToolKitImport === undefined ? "hand-rolled" : "rest-kit";
+
   // Gather optional frame imports (does not affect recognition, but are claimed when present).
   const optionalFrameImports = statements.filter((s) => isFrameImport(s) && s !== toolKitImport);
 
-  // All five required elements found. Claim them and all optional frame imports.
+  // All five required elements found. Claim them, all optional frame imports, and the rest-kit
+  // discriminator when present.
   const framesToClaim = [
     toolKitImport,
     mcpServerNode,
@@ -293,11 +325,12 @@ export function recognizeFrame(
     transportNode,
     connectNode,
     ...optionalFrameImports,
+    ...(restToolKitImport === undefined ? [] : [restToolKitImport]),
   ];
   claims.claim(framesToClaim, "frame");
   return {
     name: connectorName,
-    style: "hand-rolled",
+    style,
     toolStatements: statements,
     verifyStatements: statements,
   };

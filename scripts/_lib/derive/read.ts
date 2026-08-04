@@ -88,6 +88,15 @@ export function boolLit(node: AstNode | undefined): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+/**
+ * Whether a node is the literal `null` — renderRestKitFetchHelper's catch-arm fallback
+ * (`json = null;`). Returns a bare boolean rather than a value, unlike `boolLit`: a
+ * NullLiteral node carries no `value` field to read, its TYPE alone is the fact.
+ */
+export function isNullLiteral(node: AstNode | undefined): boolean {
+  return node?.type === "NullLiteral";
+}
+
 export type RegExpParts = { readonly pattern: string; readonly flags: string };
 
 /** A regex literal's pattern and flags, e.g. `/\/$/` -> `{ pattern: "\\/$", flags: "" }`. */
@@ -219,6 +228,23 @@ export function constDecl(node: AstNode | undefined): ConstDecl | undefined {
   const name = identName(child(declarator, "id"));
   if (name === undefined) return undefined;
   return { name, init: child(declarator, "init") };
+}
+
+/**
+ * `let <name>: <anything>;` — an uninitialized `let` declarator's own name, distinct from
+ * `constDecl`: renderRestKitFetchHelper declares `let json: unknown;` ahead of the try/catch
+ * that assigns it (see `assignment`), the one place this deriver's emitter output declares a
+ * bare `let` at all. Requires no initializer — `let x = 1;` is a different statement shape and
+ * is refused, not partially read as though the initializer were absent.
+ */
+export function uninitializedLet(node: AstNode | undefined): string | undefined {
+  if (node?.type !== "VariableDeclaration") return undefined;
+  if (raw(node)["kind"] !== "let") return undefined;
+  const declarations = childList(node, "declarations");
+  if (declarations === undefined || declarations.length !== 1) return undefined;
+  const declarator = declarations[0];
+  if (child(declarator, "init") !== undefined) return undefined;
+  return identName(child(declarator, "id"));
 }
 
 export function functionName(node: AstNode | undefined): string | undefined {
@@ -411,6 +437,19 @@ export function arrayElements(node: AstNode | undefined): AstNode[] | undefined 
   return elements.some((e) => e.type === "SpreadElement") ? undefined : elements;
 }
 
+/**
+ * A SpreadElement's own argument — `{ ...init, headers: {...} }`'s `init`, or an array spread's
+ * equivalent. Needed for renderRestKitFetchHelper's fetch-options object
+ * (`{ ...init, headers: {...} }`) and its headers object's trailing
+ * `...(init?.headers as Record<string, string> | undefined)` — both spreads `objectProps`
+ * deliberately refuses to parse through (see its own docstring), since a caller reading THIS
+ * shape is discriminating the spread itself, not treating the object as a plain field list.
+ */
+export function spreadArgument(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "SpreadElement") return undefined;
+  return child(node, "argument");
+}
+
 // ---------------------------------------------------------------------------
 // Statements, functions and expressions
 // ---------------------------------------------------------------------------
@@ -569,6 +608,28 @@ export function binary(node: AstNode | undefined): BinaryParts | undefined {
 /** `a ?? b`, `a && b`, `a || b` — never a BinaryExpression. */
 export function logical(node: AstNode | undefined): BinaryParts | undefined {
   return twoSided(node, "LogicalExpression");
+}
+
+export type AssignmentParts = {
+  readonly operator: string;
+  readonly left: AstNode;
+  readonly right: AstNode;
+};
+
+/**
+ * `a = b`, `a += b`, … — an AssignmentExpression, distinct from both `binary` and `logical`
+ * above (Babel gives it its own node type, `AssignmentExpression`, not a `BinaryExpression`
+ * with `operator: "="`). Needed for renderRestKitFetchHelper's `json = JSON.parse(text) as
+ * unknown;` / `json = null;` — the one place this deriver's emitter output assigns to a
+ * pre-declared `let` inside a try/catch rather than returning from one.
+ */
+export function assignment(node: AstNode | undefined): AssignmentParts | undefined {
+  if (node?.type !== "AssignmentExpression") return undefined;
+  const operator = stringField(node, "operator");
+  const left = child(node, "left");
+  const right = child(node, "right");
+  if (operator === undefined || left === undefined || right === undefined) return undefined;
+  return { operator, left, right };
 }
 
 export type Template = {
