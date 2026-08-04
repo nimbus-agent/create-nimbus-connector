@@ -12,8 +12,7 @@ import {
   objectProps,
   stringLit,
 } from "../read.ts";
-
-export type FrameFields = { name: string };
+import type { Frame } from "./frame.ts";
 
 const FRAME_IMPORTS = new Set([
   "@modelcontextprotocol/sdk/server/mcp.js",
@@ -157,7 +156,7 @@ function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean
 export function recognizeFrame(
   statements: readonly AstNode[],
   claims: ClaimSet,
-): FrameFields | undefined {
+): Frame | undefined {
   // (1) Find mcp-tool-kit.ts import (REQUIRED).
   const toolKitImport = statements.find(hasMcpToolKitImport);
   if (!toolKitImport) return undefined;
@@ -199,5 +198,10 @@ export function recognizeFrame(
     ...optionalFrameImports,
   ];
   claims.claim(framesToClaim, "frame");
-  return { name: connectorName };
+  return {
+    name: connectorName,
+    style: "hand-rolled",
+    toolStatements: statements,
+    verifyStatements: statements,
+  };
 }

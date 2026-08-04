@@ -47,14 +47,17 @@ export function deriveSpec(files: SourceFiles): Derivation {
   const claims = createClaimSet();
   const frame = recognizeFrame(statements, claims);
   if (frame === undefined) {
-    return blocked("no-frame", "src/server.ts is not the hand-rolled frame");
+    return blocked("no-frame", "src/server.ts is not a recognized frame");
   }
 
-  const env = recognizeEnv(statements, claims);
-  const fetchHelper = recognizeFetchHelper(statements, claims);
-  const toolsResult = recognizeTools(statements, claims);
+  const env = recognizeEnv(frame.verifyStatements, claims);
+  const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
+  const toolsResult = recognizeTools(frame.toolStatements, claims);
 
-  const unclaimed = claims.unclaimed(statements);
+  // The totality rule walks frame.verifyStatements, NOT `statements`. For read-only-kit those
+  // differ by exactly one statement — the wrapper, replaced by its callback body — which is what
+  // stops the registrations inside it from inheriting coverage from a claim on the wrapper.
+  const unclaimed = claims.unclaimed(frame.verifyStatements);
   if (unclaimed.length > 0) {
     return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, files.server)) };
   }
@@ -73,7 +76,7 @@ export function deriveSpec(files: SourceFiles): Derivation {
       displayName: manifest.displayName,
       description: manifest.description,
       serviceLabel,
-      style: "hand-rolled",
+      style: frame.style,
       // handlerStyle is top-level (ConnectorSpecSchema), not per-tool — recognizeTools
       // recovers it from the SET of recognized tools; see its docstring for the rule.
       // Omitted lets the schema's `.default("concise")` apply.

@@ -19,8 +19,21 @@ describe("recognizeFrame", () => {
     const statements = parseModule(FRAME);
     const claims = createClaimSet();
 
-    expect(recognizeFrame(statements, claims)).toEqual({ name: "newrelic" });
+    const frame = recognizeFrame(statements, claims);
+    expect(frame?.name).toBe("newrelic");
+    expect(frame?.style).toBe("hand-rolled");
     expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("verifies and hands tools the top-level list for a hand-rolled module", () => {
+    const statements = parseModule(FRAME);
+    const frame = recognizeFrame(statements, createClaimSet());
+
+    // Hand-rolled nests nothing, so both lists ARE the module's own statements. Asserted
+    // rather than assumed: read-only-kit is the style where they differ, and a regression
+    // that made them differ here would silently change what the totality rule walks.
+    expect(frame?.toolStatements).toEqual(statements);
+    expect(frame?.verifyStatements).toEqual(statements);
   });
 
   it("leaves a non-frame statement unclaimed", () => {
