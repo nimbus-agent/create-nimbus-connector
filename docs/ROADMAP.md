@@ -170,8 +170,15 @@ discovered later:
       through a lookup table. Neither construct exists in the spec language.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
       than `fetch`.
-- [ ] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
-      number with its method.
+- [~] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
+      number with its method. The method is no longer a hand count: `bun run reach
+      --nimbus-root <path>` derives a spec from every real connector's `src/server.ts` and
+      `nimbus.extension.json`, runs it through the same `parseSpec` → `validateSpec` →
+      `generate()` pipeline the CLI uses, and reports a tier histogram plus the connectors
+      blocking each tier. `bun run reach:baseline` records a per-connector snapshot in
+      `fixtures/reach-baseline.json`; `bun run reach --baseline` fails when a connector
+      regresses a tier against it. What remains open is *raising* the number, not measuring
+      it.
 
 ### Stage F — authoring experience `[ ]`
 
@@ -232,6 +239,14 @@ re-implementations of `tagText`. Both silently move files to the wrong side.
 The counts this method produces are in [Stage E](#stage-e--the-corpus-tail-). They describe
 *behaviour*, not bytes — byte-matching is a stricter question, answered in
 [Known limitations](#known-limitations) and, live, by `diff:golden`.
+
+This section is about the search-extractor question specifically, hand-measured before the
+harness existed. The whole-corpus regeneration question — how many of the 94 connectors this
+generator can derive a spec for, and how far each gets — is now measured mechanically, the same
+way it is *derived* mechanically: `bun run reach --nimbus-root <path>`. It is the same kind of
+question, asked with the same discipline the three wrong counts above forced on this file — read
+what the code actually does, not what its name suggests — pointed at a script instead of a
+person, so the count cannot go stale from being restated by hand.
 
 ---
 

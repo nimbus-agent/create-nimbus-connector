@@ -73,6 +73,7 @@ worth before quoting it as evidence.
 | `bunx tsc --noEmit` | This repo typechecks | — |
 | `bunx biome check src/ test/ scripts/` | This repo lints | — |
 | `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
+| `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
 | `bun run acceptance <nimbus-root>` | A generated connector survives inside the monorepo | Nimbus checkout |
 | `bun run wiring:conformance --nimbus-root <path>` | The wiring skeleton still matches Nimbus's real sync interface | Nimbus checkout |
 | `bun run standalone-acceptance <sdk-root>` | A standalone package builds and serves MCP, against an **unreleased SDK branch** | SDK checkout, built |
@@ -93,6 +94,9 @@ worth before quoting it as evidence.
 - **`diff:golden` and `wiring:conformance` cannot run in CI** — both need the AGPL monorepo.
   They are local pre-merge gates. Do not add a CI job that skips when the root is absent; a
   silently-skipping gate is the failure mode this repo keeps removing.
+- **`reach` measures the spec language's coverage of the corpus and proves nothing about any
+  individual generated connector that `diff:golden` does not already prove.** It too needs the
+  AGPL monorepo and cannot run in CI.
 - **Coverage floors are per-file, not aggregate**, and `src/cli.ts` / `src/prompts.ts` are
   excluded from the metric because they are driven through `Bun.spawnSync` on the real binary,
   which Bun cannot instrument. Do **not** "raise coverage" by adding in-process tests that
