@@ -1603,6 +1603,36 @@ Create `scripts/_lib/derive/server/tools-rest.ts`, inverting `renderRestKitTools
   `<registrar>(name, description, schema, pathFn, initFn)` (arity 5). Arity 5 carries a non-`GET`
   method and is **out of scope for this plan** — refuse it, so those connectors block visibly on a
   named blocker rather than deriving a `GET` that the real connector never had.
+
+**The factory is claimed independently of the tool calls, and this is a deliberate exception to
+the all-or-nothing rule.** Split the module into two exports:
+
+```ts
+export function recognizeRestRegistrar(statements, claims): RestRegistrarFields | undefined
+export function recognizeRestTools(statements, claims, registrar): ToolFields[] | undefined
+```
+
+`recognizeRestRegistrar` claims the factory const the moment it is structurally recognized.
+`recognizeRestTools` stays all-or-nothing over the calls: one unrecognized call and it claims
+none of them.
+
+Two reasons, and the second is the one that decides it:
+
+- **The factory is wiring, not a registration.** `recognizeFrame` already claims its five wiring
+  elements unconditionally, regardless of whether tool recognition later succeeds — the frame/tools
+  split already treats wiring and registrations as independently claimable, and
+  `makeRestToolRegistrar({...})` is the rest-kit analogue of `createZodToolRegistrar(...)`.
+- **Otherwise the histogram reports a blocker that is not true.** `circleci`, `github-actions` and
+  `pagerduty` each carry bare `reg(...)` calls and query branches alongside their
+  `register<X>Tool(...)` calls, so they stay blocked whatever happens here. Under all-or-nothing
+  they keep reporting `const-call:makeRestToolRegistrar` — telling a future maintainer to build a
+  factory recognizer **that already exists**. A false blocker is the same class of defect as a
+  false claim, pointed the other way, and this harness exists to be read.
+
+This is safe because it changes only the label, never the outcome: the unrecognized calls stay
+unclaimed, the totality rule still blocks the connector, and no spec is produced. Making the
+independence two functions rather than a side-effect inside one is what keeps that contract
+legible.
 - `pathFn` has three in-scope forms: `() => <pathExpr>`, `(parsed) => <pathExpr>`, and
   `(parsed) => { <hoists> return <pathExpr>; }`. The query branch — a block whose body contains
   `const u = new URL(...)` — is **plan 2's**; refuse it.
