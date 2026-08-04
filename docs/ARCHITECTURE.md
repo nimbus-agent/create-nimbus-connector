@@ -133,6 +133,17 @@ ordering is by how much of the world they need.
 server and asserting on the requests they actually make — the only check that observes runtime
 behaviour rather than inferring it from text.
 
+`reach` sits alongside `diff:golden`, reading the same Nimbus checkout to answer a different
+question: not whether one fixture's bytes match, but how many of the 94 real connectors this
+generator can derive a spec for and regenerate at all. It derives a spec from each connector's
+`src/server.ts` and `nimbus.extension.json`, runs it through `parseSpec`, `validateSpec` and
+`generate()`, and buckets the result into a tier — `blocked`, `emits`, `server-identical`, or
+`all-identical` — without ever writing the derived spec to disk. `bun run reach:baseline`
+records the per-connector tiers alongside the Nimbus commit they were measured at in
+`fixtures/reach-baseline.json`; `bun run reach --baseline` refuses to compare across a moved or
+dirty checkout and otherwise fails when a connector has regressed a tier. Like `diff:golden` and
+`wiring:conformance`, it needs the AGPL monorepo and so cannot run in CI.
+
 ### 2. The golden-fixture harness, in detail
 
 ```bash
