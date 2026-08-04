@@ -22,6 +22,8 @@
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
     "diff:golden": "bun scripts/diff-golden.ts",
+    "reach": "bun scripts/reach.ts",
+    "reach:baseline": "bun scripts/reach-baseline.ts",
     "wiring:conformance": "bun scripts/wiring-conformance.ts",
     "runtime:acceptance": "bun scripts/runtime-acceptance.ts",
     "snapshot:update": "bun scripts/snapshot-update.ts",
