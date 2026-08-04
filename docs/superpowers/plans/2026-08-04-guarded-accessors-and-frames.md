@@ -1792,9 +1792,28 @@ in order and returns the name of the first that fails, with two specific near-mi
 
 - **`frame:registrar-not-inlined`** — a `const <x> = createZodToolRegistrar(<identifier>)` exists
   where the argument is a bare identifier rather than the inlined
-  `createRegisterSimpleTool(<mcpVar>)` call.
+  `createRegisterSimpleTool(<mcpVar>)` call. Corpus: `discord`, `github`.
 - **`frame:tail-inlined-transport`** — an `await <mcpVar>.connect(new StdioServerTransport())`
   exists, i.e. the transport is constructed inside the connect call rather than bound to a const.
+  Corpus: `gmail`, `google-meet`, `google-photos`, `onedrive`, `outlook`.
+- **`frame:readonly-callback-not-inline`** — a `runReadOnlyMcpConnector` call exists whose second
+  argument is a **named function reference** rather than the inline `(reg) => {…}` arrow the
+  emitter writes. **This axis was not in the original plan.** It was discovered by Task 4, whose
+  read-only-kit frame moved 50 connectors rather than the ~60 predicted; the shortfall is exactly
+  this shape, verified against the corpus. Ten connectors: `argocd`, `bigeye`, `flux`, `looker`,
+  `mlflow`, `monte-carlo`, `powerbi`, `snowflake`, `tableau`, `workday`.
+
+**Do not assume the remaining 31 are only these three axes.** After Task 5, `no-frame` still holds
+14 connectors none of the above explains — `apple`, `bitbucket`, `confluence`, `fastmail`,
+`gitlab`, `google-drive`, `imap`, `jira`, `linear`, `notion`, `obsidian`, `protonmail`, `slack`,
+`teams`. All are hand-rolled-style. Several are multi-file and may not import the tool kit from
+`src/server.ts` at all. Whatever names them must come from **measuring what element actually
+fails**, not from extending this list by guesswork — the whole point of the task is that
+`no-frame` stopped being a finding once it got large enough to hide things.
+
+**The task is complete when `no-frame` reports 0.** Every connector must land in a bucket that
+names the specific element that failed. A residual `frame:unrecognized` bucket is acceptable only
+if it is small and its members are listed in the report with what makes each one unrecognizable.
 
 Both are shapes `src/emit/server/index.ts` cannot produce, so **neither is accepted** — this only
 names them. `docs/ROADMAP.md` records both under *Wiring and tail idiom*; the corpus split is
