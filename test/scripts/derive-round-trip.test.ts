@@ -115,6 +115,13 @@ describe("deriveSpec round-trips this repository's own output", () => {
         ]),
       );
 
+      // Byte equality per file is not enough: a recognizer that caused an extra file to be
+      // emitted (or dropped one) would still pass a loop that only checks paths present in
+      // `files`. Assert the two path sets are equal in both directions first.
+      const originalPaths = [...files.keys()].sort();
+      const reEmittedPaths = [...reFiles.keys()].sort();
+      expect(reEmittedPaths).toEqual(originalPaths);
+
       for (const [path, content] of files) {
         expect(reFiles.get(path)).toBe(content);
       }

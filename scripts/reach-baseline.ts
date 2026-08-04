@@ -9,6 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeValue } from "../src/cli.ts";
 import { formatterAvailable, formatterUnavailableReason, initFormatter } from "../src/format.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { selectConnectors } from "./_lib/reach.ts";
@@ -35,8 +36,7 @@ export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--nimbus-root") {
-      nimbusRoot = argv[++i];
-      if (nimbusRoot === undefined) throw new Error("--nimbus-root requires a value");
+      nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
     } else {
       throw new Error(
         `reach:baseline accepts only --nimbus-root; got "${a}". It always measures and records ` +

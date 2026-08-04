@@ -12,6 +12,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeValue } from "../src/cli.ts";
 import {
   biomeVersion,
   formatterAvailable,
@@ -50,7 +51,7 @@ export function parseArgs(argv: readonly string[]): {
   let verbose = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--nimbus-root") nimbusRoot = argv[++i];
+    if (a === "--nimbus-root") nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
     else if (a === "--baseline") baseline = true;
     else if (a === "--verbose") verbose = true;
     else if (a?.startsWith("--")) throw new Error(`Unknown flag: ${a}`);

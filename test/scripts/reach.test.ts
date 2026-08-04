@@ -9,6 +9,7 @@ import {
   tierFor,
   walkConnector,
 } from "../../scripts/_lib/reach.ts";
+import { parseArgs } from "../../scripts/reach.ts";
 import { initFormatter } from "../../src/format.ts";
 import { tempDirs } from "../support/tmp.ts";
 
@@ -17,6 +18,52 @@ afterAll(tmp.cleanup);
 
 beforeAll(async () => {
   await initFormatter();
+});
+
+describe("reach.ts parseArgs", () => {
+  it("returns no names, no root, and both flags unset for an empty argv", () => {
+    expect(parseArgs([])).toEqual({
+      names: [],
+      nimbusRoot: undefined,
+      baseline: false,
+      verbose: false,
+    });
+  });
+
+  it("collects bare arguments as connector names, in order", () => {
+    expect(parseArgs(["newrelic", "datadog"]).names).toEqual(["newrelic", "datadog"]);
+  });
+
+  it("reads --nimbus-root's value and does not also treat it as a connector name", () => {
+    const parsed = parseArgs(["--nimbus-root", "/some/path", "newrelic"]);
+    expect(parsed).toEqual({
+      names: ["newrelic"],
+      nimbusRoot: "/some/path",
+      baseline: false,
+      verbose: false,
+    });
+  });
+
+  it("rejects --nimbus-root with nothing after it rather than silently using undefined", () => {
+    // Before this fix, a trailing --nimbus-root assigned `undefined`, and resolveNimbusRoot
+    // then fell through to $NIMBUS_ROOT or sibling probing — silently measuring a checkout the
+    // caller never named. See src/golden/resolve-root.ts's header for why a flag value must
+    // fail loudly rather than fall through.
+    expect(() => parseArgs(["--nimbus-root"])).toThrow("--nimbus-root requires a value");
+  });
+
+  it("rejects an unknown flag instead of collecting it as a connector name", () => {
+    expect(() => parseArgs(["--nimbus-rot", "x"])).toThrow("Unknown flag: --nimbus-rot");
+  });
+
+  it("sets baseline and verbose independently of the root and names", () => {
+    expect(parseArgs(["--baseline", "--verbose"])).toEqual({
+      names: [],
+      nimbusRoot: undefined,
+      baseline: true,
+      verbose: true,
+    });
+  });
 });
 
 const SPEC = { name: "x" };
