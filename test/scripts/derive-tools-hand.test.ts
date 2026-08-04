@@ -9,6 +9,9 @@ const CONCISE = [
   ");",
 ].join("\n");
 
+// Block WITH a hoist — forced into block form regardless of the connector's handlerStyle, so
+// on its own this is NOT evidence of handlerStyle: "block". See BLOCK_NO_HOIST below for the
+// shape that actually is.
 const BLOCK = [
   "reg(",
   '  "newrelic_alert_violations",',
@@ -21,46 +24,66 @@ const BLOCK = [
   ");",
 ].join("\n");
 
+// Block with NO hoist — src/emit/server/tools-hand.ts's renderTool only takes the block form
+// with zero hoists when spec.handlerStyle is explicitly "block" (a "concise" connector would
+// have rendered this same tool as the one-line form instead). This is the discriminating shape.
+const BLOCK_NO_HOIST = [
+  "reg(",
+  '  "newrelic_ping",',
+  '  "Ping the API.",',
+  "  z.object({}),",
+  "  async () => {",
+  '    return jsonResult(await nrGet("/v2/ping.json"));',
+  "  },",
+  ");",
+].join("\n");
+
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
   return {
-    tools: recognizeTools(statements, claims),
+    result: recognizeTools(statements, claims),
     unclaimed: claims.unclaimed(statements),
     claims,
   };
 }
 
 describe("recognizeTools", () => {
-  it("reads a concise-handler tool", () => {
-    const { tools, unclaimed } = run(CONCISE);
-    expect(tools).toEqual([
-      {
-        name: "newrelic_application_list",
-        description: "List APM applications.",
-        args: {},
-        path: "/v2/applications.json",
-      },
-    ]);
+  it("reads a concise-handler tool, with no per-tool handlerStyle and no connector-level one", () => {
+    const { result, unclaimed } = run(CONCISE);
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "newrelic_application_list",
+          description: "List APM applications.",
+          args: {},
+          path: "/v2/applications.json",
+        },
+      ],
+    });
     expect(unclaimed).toEqual([]);
   });
 
-  it("reads a block-handler tool, recovering the hoisted boolean through the path", () => {
-    const { tools } = run(BLOCK);
-    expect(tools).toEqual([
-      {
-        name: "newrelic_alert_violations",
-        description: "List recent alert violations.",
-        args: { only_open: { type: "boolean", optional: true } },
-        path: "/v2/alerts_violations.json?only_open=${arg.only_open|bool}",
-        handlerStyle: "block",
-      },
-    ]);
+  it("reads a block-with-hoist tool, recovering the hoisted boolean through the path, without inferring handlerStyle", () => {
+    const { result } = run(BLOCK);
+    // A block body forced by a hoist is not evidence of handlerStyle: "block" — see the BLOCK
+    // constant's comment — so the connector-level field stays omitted, and the per-tool
+    // ToolFields carries no handlerStyle at all (it is not a schema field on a tool).
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "newrelic_alert_violations",
+          description: "List recent alert violations.",
+          args: { only_open: { type: "boolean", optional: true } },
+          path: "/v2/alerts_violations.json?only_open=${arg.only_open|bool}",
+        },
+      ],
+    });
   });
 
   it("reads several tools in declaration order", () => {
-    const { tools } = run(`${CONCISE}\n${BLOCK}`);
-    expect(tools?.map((t) => t.name)).toEqual([
+    const { result } = run(`${CONCISE}\n${BLOCK}`);
+    expect(result?.tools.map((t) => t.name)).toEqual([
       "newrelic_application_list",
       "newrelic_alert_violations",
     ]);
@@ -68,13 +91,13 @@ describe("recognizeTools", () => {
 
   it("fails the whole connector when one reg call is not understood", () => {
     const source = `${CONCISE}\nreg("x", "y", z.object({}), customHandler);`;
-    const { tools, unclaimed } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, unclaimed } = run(source);
+    expect(result).toBeUndefined();
     expect(unclaimed).toHaveLength(2);
   });
 
   it("returns an empty list for a module with no reg calls", () => {
-    expect(run("const a = 1;").tools).toEqual([]);
+    expect(run("const a = 1;").result).toEqual({ tools: [] });
   });
 
   it("refuses a conditional that is not the boolean hoist, rather than claiming it wrongly", () => {
@@ -89,7 +112,7 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    expect(run(source).tools).toBeUndefined();
+    expect(run(source).result).toBeUndefined();
   });
 
   it("recognizes a hoisted default-value local (bool: false) through the path, not just the boolean form", () => {
@@ -104,16 +127,17 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    const { tools } = run(source);
-    expect(tools).toEqual([
-      {
-        name: "zzwrite_item_create",
-        description: "Create item.",
-        args: { scope: { type: "string", optional: true } },
-        path: "/v1/items?scope=${arg.scope}",
-        handlerStyle: "block",
-      },
-    ]);
+    const { result } = run(source);
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "zzwrite_item_create",
+          description: "Create item.",
+          args: { scope: { type: "string", optional: true } },
+          path: "/v1/items?scope=${arg.scope}",
+        },
+      ],
+    });
   });
 
   it("refuses a hoist whose right-hand side of === is not literal true, rather than mis-reading it as the boolean form", () => {
@@ -128,7 +152,7 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    expect(run(source).tools).toBeUndefined();
+    expect(run(source).result).toBeUndefined();
   });
 
   it("refuses a hoist using || instead of the exact ?? default form", () => {
@@ -143,21 +167,21 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    expect(run(source).tools).toBeUndefined();
+    expect(run(source).result).toBeUndefined();
   });
 
   it("refuses a reg(...) call with a fifth argument, rather than reading only the first four", () => {
     const source =
       'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")), "extra");';
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
   it("refuses a reg(...) call missing its handler argument (three arguments), rather than reading a partial call", () => {
     const source = 'reg("t", "d", z.object({}));';
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
@@ -165,8 +189,8 @@ describe("recognizeTools", () => {
     const source = ["reg(", '  "t",', '  "d",', "  z.object({}),", "  async (p) => {},", ");"].join(
       "\n",
     );
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
@@ -182,8 +206,8 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
@@ -199,8 +223,8 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
@@ -210,16 +234,60 @@ describe("recognizeTools", () => {
     // reg call at all: it is skipped rather than fed to recognizeOne, tools is the successful
     // (but empty) result, and the statement itself is left unclaimed.
     const source = 'obj.reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")));';
-    const { tools, unclaimed } = run(source);
-    expect(tools).toEqual([]);
+    const { result, unclaimed } = run(source);
+    expect(result).toEqual({ tools: [] });
     expect(unclaimed).toHaveLength(1);
   });
 
   it("refuses a handler whose jsonResult(...) call has more than one argument, rather than reading only the first", () => {
     const source =
       'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x"), "extra"));';
-    const { tools, claims } = run(source);
-    expect(tools).toBeUndefined();
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
+  });
+
+  // --- Connector-level handlerStyle recovery (see recognizeTools's docstring for the rule).
+
+  it("derives handlerStyle: block from a single block-with-no-hoists tool", () => {
+    const { result } = run(BLOCK_NO_HOIST);
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "newrelic_ping",
+          description: "Ping the API.",
+          args: {},
+          path: "/v2/ping.json",
+        },
+      ],
+      handlerStyle: "block",
+    });
+  });
+
+  it("omits handlerStyle for a mix of concise and block-with-hoists tools (the real newrelic/datadog/grafana/sentry shape)", () => {
+    const { result } = run(`${CONCISE}\n${BLOCK}`);
+    expect(result?.handlerStyle).toBeUndefined();
+  });
+
+  it("omits handlerStyle when every tool is block-with-hoists (ambiguous, but both settings regenerate identical bytes)", () => {
+    const { result } = run(BLOCK);
+    expect(result?.handlerStyle).toBeUndefined();
+  });
+
+  it("rejects a connector mixing a concise tool with a block-without-hoists tool — no single handlerStyle explains both", () => {
+    const { result, unclaimed } = run(`${CONCISE}\n${BLOCK_NO_HOIST}`);
+    expect(result).toBeUndefined();
+    // Neither reg() call is claimed once the pair is rejected — see recognizeTools: the claim
+    // happens only after the mixed-shape check passes.
+    expect(unclaimed).toHaveLength(2);
+  });
+
+  it("derives handlerStyle: block for a mix of block-with-hoists and block-without-hoists tools", () => {
+    const { result } = run(`${BLOCK}\n${BLOCK_NO_HOIST}`);
+    expect(result?.handlerStyle).toBe("block");
+    expect(result?.tools.map((t) => t.name)).toEqual([
+      "newrelic_alert_violations",
+      "newrelic_ping",
+    ]);
   });
 });

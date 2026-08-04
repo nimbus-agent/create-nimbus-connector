@@ -15,8 +15,21 @@ export type ToolFields = {
   description: string;
   args: Record<string, ArgFields>;
   path: string;
-  handlerStyle?: "block";
 };
+
+/**
+ * The connector-wide `handlerStyle` recovered from the SET of recognized tools, not from any
+ * one of them — `handlerStyle` is a top-level `ConnectorSpec` field
+ * (`z.enum(["concise","block"]).default("concise")`, src/spec.ts), not a per-tool one.
+ *
+ * The result of one tool's recognition, before that aggregation: whether its handler was a
+ * block body, and — only meaningful when it was — whether that block contained any hoisted
+ * consts.
+ */
+type ToolShape = { fields: ToolFields; isBlock: boolean; hasHoists: boolean };
+
+/** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. */
+export type ToolsResult = { tools: ToolFields[]; handlerStyle?: "block" };
 
 function isRegCall(node: AstNode): AstNode | undefined {
   if (node.type !== "ExpressionStatement") return undefined;
@@ -135,7 +148,7 @@ function pathFromJsonResult(node: AstNode | undefined, locals: ReadonlyMap<strin
   return pathNode === undefined ? undefined : recognizePath(pathNode, locals);
 }
 
-function recognizeOne(call: AstNode): ToolFields | undefined {
+function recognizeOne(call: AstNode): ToolShape | undefined {
   const args = call["arguments"] as AstNode[];
   if (args.length !== 4) return undefined;
   const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
@@ -157,7 +170,9 @@ function recognizeOne(call: AstNode): ToolFields | undefined {
   // The concise, expression-bodied form: `async (...) => jsonResult(await helper(path))`.
   if (body.type !== "BlockStatement") {
     const path = pathFromJsonResult(body, new Map());
-    return path === undefined ? undefined : { name, description, args: toolArgs, path };
+    return path === undefined
+      ? undefined
+      : { fields: { name, description, args: toolArgs, path }, isBlock: false, hasHoists: false };
   }
 
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
@@ -179,7 +194,11 @@ function recognizeOne(call: AstNode): ToolFields | undefined {
   const path = pathFromJsonResult(last["argument"] as AstNode | undefined, locals);
   return path === undefined
     ? undefined
-    : { name, description, args: toolArgs, path, handlerStyle: "block" };
+    : {
+        fields: { name, description, args: toolArgs, path },
+        isBlock: true,
+        hasHoists: locals.size > 0,
+      };
 }
 
 /**
@@ -189,25 +208,47 @@ function recognizeOne(call: AstNode): ToolFields | undefined {
  * not nine-tenths regenerable, it is blocked — deriving a spec for the nine would produce a
  * server.ts missing a tool, which then fails the byte-diff for a reason the report would
  * misattribute to formatting rather than to the real, unmodeled tenth handler.
+ *
+ * `handlerStyle` is recovered here, from the SET of recognized tools, not per-tool — see
+ * renderTool in src/emit/server/tools-hand.ts: a hoist forces a block body regardless of
+ * `spec.handlerStyle` (`used.size === 0 && spec.handlerStyle === "concise"` is the only
+ * condition that renders the one-line concise form), so a block body alone is not evidence of
+ * `handlerStyle: "block"` — a block body with ZERO hoists is, because that shape can only come
+ * from an explicit "block" setting; a "concise" connector would have rendered that same tool
+ * as the one-line form instead.
+ *
+ * Two style-carrying shapes are consistent with a single connector-wide value:
+ *   - "concise": some tools render concise (no hoists needed), the rest render block (hoists
+ *     forced it) — never a block tool with zero hoists.
+ *   - "block": every tool renders block, hoisted or not — never a concise tool.
+ * A module mixing a concise tool with a block-without-hoists tool matches neither, and is
+ * refused as an unmodeled shape rather than guessed at.
  */
 export function recognizeTools(
   statements: readonly AstNode[],
   claims: ClaimSet,
-): ToolFields[] | undefined {
+): ToolsResult | undefined {
   const regs = statements
     .map((statement) => ({ statement, call: isRegCall(statement) }))
     .filter((entry): entry is { statement: AstNode; call: AstNode } => entry.call !== undefined);
 
-  const tools: ToolFields[] = [];
+  const shapes: ToolShape[] = [];
   for (const { call } of regs) {
-    const tool = recognizeOne(call);
-    if (tool === undefined) return undefined;
-    tools.push(tool);
+    const shape = recognizeOne(call);
+    if (shape === undefined) return undefined;
+    shapes.push(shape);
   }
+
+  const hasBlockWithoutHoists = shapes.some((s) => s.isBlock && !s.hasHoists);
+  const hasConcise = shapes.some((s) => !s.isBlock);
+  if (hasBlockWithoutHoists && hasConcise) return undefined;
 
   claims.claim(
     regs.map((entry) => entry.statement),
     "tools",
   );
-  return tools;
+  return {
+    tools: shapes.map((s) => s.fields),
+    ...(hasBlockWithoutHoists ? { handlerStyle: "block" as const } : {}),
+  };
 }

@@ -52,7 +52,7 @@ export function deriveSpec(files: SourceFiles): Derivation {
 
   const env = recognizeEnv(statements, claims);
   const fetchHelper = recognizeFetchHelper(statements, claims);
-  const tools = recognizeTools(statements, claims);
+  const toolsResult = recognizeTools(statements, claims);
 
   const unclaimed = claims.unclaimed(statements);
   if (unclaimed.length > 0) {
@@ -61,7 +61,7 @@ export function deriveSpec(files: SourceFiles): Derivation {
   if (fetchHelper === undefined) {
     return blocked("no-fetch-helper", "no read helper recognized");
   }
-  if (tools === undefined) {
+  if (toolsResult === undefined) {
     return blocked("unrecognized-handler", "a reg() handler was not understood");
   }
 
@@ -74,6 +74,10 @@ export function deriveSpec(files: SourceFiles): Derivation {
       description: manifest.description,
       serviceLabel,
       style: "hand-rolled",
+      // handlerStyle is top-level (ConnectorSpecSchema), not per-tool — recognizeTools
+      // recovers it from the SET of recognized tools; see its docstring for the rule.
+      // Omitted lets the schema's `.default("concise")` apply.
+      ...(toolsResult.handlerStyle === undefined ? {} : { handlerStyle: toolsResult.handlerStyle }),
       network: manifest.network,
       ...(manifest.id === undefined ? {} : { id: manifest.id }),
       ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
@@ -81,7 +85,7 @@ export function deriveSpec(files: SourceFiles): Derivation {
       minNimbusVersion: manifest.minNimbusVersion,
       env,
       fetchHelper: helper,
-      tools,
+      tools: toolsResult.tools,
     },
   };
 }
