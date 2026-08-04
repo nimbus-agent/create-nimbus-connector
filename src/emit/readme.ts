@@ -19,6 +19,29 @@ export function emitReadme(
   return { path: ["README.md"], content };
 }
 
+/**
+ * `runReadOnlyMcpConnector` is a bootstrap-helper name inherited from Nimbus; it does not
+ * restrict a connector from declaring write tools. Nine corpus connectors use it while
+ * declaring `hitlRequired: ["write"]` — say so in the README (a file this generator authors
+ * outright) rather than as a server.ts comment, since no corpus connector carries one and
+ * emitting one would forfeit byte-matching for exactly the connectors that need the caveat.
+ *
+ * Standalone-only: the monorepo README is one of the six files byte-diffed against the
+ * Nimbus corpus, and no corpus README carries this text (confirmed by grep across all 94).
+ * Emitting it there would introduce a permanent mismatch for the next read-only-kit fixture
+ * whose README is still generator boilerplate — the standalone README is authored outright
+ * by this generator, so it costs nothing there.
+ */
+function readOnlyKitCaveat(spec: ConnectorSpec): string {
+  return spec.style === "read-only-kit"
+    ? "\n\nThis connector registers its tools through `runReadOnlyMcpConnector`. That name is a " +
+        "bootstrap convention inherited from Nimbus and **does not restrict** the connector " +
+        "from declaring write tools — nine connectors in the Nimbus corpus use it while " +
+        'declaring `hitlRequired: ["write"]`. Check `nimbus.extension.json` for the ' +
+        "capabilities this connector actually declares."
+    : "";
+}
+
 function monorepoReadme(spec: ConnectorSpec, t: string): string {
   return `# ${t} Connector
 
@@ -75,7 +98,7 @@ ${vars.map((v) => `export ${v}=...`).join("\n")}
 
 ## What this is
 
-Nimbus MCP connector for ${t}. Indexes and provides context from ${t} to the Nimbus agent.
+Nimbus MCP connector for ${t}. Indexes and provides context from ${t} to the Nimbus agent.${readOnlyKitCaveat(spec)}
 
 ## Install
 

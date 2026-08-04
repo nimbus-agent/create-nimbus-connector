@@ -253,3 +253,319 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).toThrow(/registerGoogleMeetTool/);
   });
 });
+
+describe("validateSpec, identifiers the new Stage D conventions introduce", () => {
+  it("rejects a base const that collides with an env accessor", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          fetchHelper: {
+            local: "sentryGet",
+            base: "https://sentry.io",
+            baseConst: "org",
+            headers: "org",
+          },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "org"/);
+  });
+
+  it("rejects a raw-token accessor that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["SENTRY_AUTH_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "sentryGet",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: { local: "sentryGet", base: "https://sentry.io", headers: "authHeader" },
+        }),
+      ),
+    ).toThrow(/Identifier collision: "sentryGet"/);
+  });
+
+  // Stage D added module-scope declarations that nothing claimed. Each of these is a name the
+  // emitter itself declares or binds in src/server.ts, so a spec reusing one emits two
+  // declarations of it and the collision surfaces only at the generated package's own tsc —
+  // which is precisely what this list exists to pull forward to parse time.
+  describe("Stage D reserved identifiers", () => {
+    for (const name of [
+      "runReadOnlyMcpConnector",
+      "ZodToolRegistrar",
+      "searchToolInputSchema",
+      "matchesResult",
+      "McpListResult",
+      "ZodObjectSchema",
+      "SearchMatchOptions",
+      "root",
+    ]) {
+      it(`rejects an env local named ${name}`, () => {
+        expect(() =>
+          validateSpec(
+            specWith({
+              env: [{ vars: ["SENTRY_TOKEN"], local: name, bindings: ["t"], auth: "bearer" }],
+            }),
+          ),
+        ).toThrow(new RegExp(`Identifier collision: "${name}"`));
+      });
+    }
+  });
+
+  it("accepts the mercury shape, where the two names differ", () => {
+    expect(() =>
+      validateSpec(
+        specWith({
+          env: [
+            {
+              vars: ["MERCURY_TOKEN"],
+              local: "authHeader",
+              tokenLocal: "apiToken",
+              bindings: ["t"],
+              auth: "bearer",
+            },
+          ],
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            baseConst: "BASE",
+            headers: "authHeader",
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  // The brief's spec for this pair used a bare `parseSpec(...)` and omitted
+  // fetchHelper.headers/.inlineHeaders. Neither works as written: parseSpec() alone never
+  // calls validateSpec — only generate() does (src/emit/index.ts:37) — so the collision this
+  // test exists to catch would never surface; and style "read-only-kit" is a hand-style per
+  // isHandStyle(), which requires exactly one of fetchHelper.headers/.inlineHeaders at the
+  // schema level, so the spec would fail to parse for an unrelated reason first. Fixed by
+  // wrapping in validateSpec(parseSpec(...)) — the pattern every other test in this file
+  // uses via specWith() — and adding inlineHeaders so the spec parses.
+  it("rejects a filter export that collides with the fetch helper", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: "mercuryGet", fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/mercuryGet/);
+  });
+
+  it.each([
+    "fieldsOf",
+    "stringField",
+    "nestedString",
+    "tagText",
+    "tagNamesFromObjects",
+    "asObjectish",
+    "makeQueryFilter",
+    "fieldsFromKeys",
+  ])("reserves %s against a filter export", (name) => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "mercury",
+          title: "Mercury",
+          displayName: "Mercury",
+          description: "d.",
+          serviceLabel: "Mercury",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "mercuryGet",
+            base: "https://api.mercury.com",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "s",
+              description: "S.",
+              impl: "search",
+              path: "/v1/x",
+              filter: { export: name, fields: ["id"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+
+  it.each(["u", "URL", "url"])("reserves %s against a fetch helper local", (name) => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: name,
+            base: "https://discord.com/api/v10",
+            inlineHeaders: {},
+          },
+          tools: [{ name: "t", description: "T.", path: "/x" }],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+
+  /**
+   * Task 4 fix round 2: "url" is emitted at function scope by the query branch's absolute-URL
+   * passthrough in ALL THREE fetch-helper shapes (rest-kit unconditionally, hand-rolled/
+   * read-only-kit's read and write helpers whenever a query tool exists), not only as a
+   * fetch helper's own `local`. Pins the two exact collision shapes the reviewer reproduced
+   * by hand — an env accessor and a baseConst, not the fetch helper's own name.
+   */
+  it("rejects an env accessor local named url — the same shape as fetchHelper.local, a different field", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          env: [{ vars: ["D_TOKEN"], local: "url", auth: "bearer" }],
+          fetchHelper: {
+            local: "discordGet",
+            base: "https://discord.com/api/v10",
+            headers: "url",
+          },
+          tools: [
+            {
+              name: "t",
+              description: "T.",
+              path: "/x",
+              args: { q: { type: "string" } },
+              query: [{ name: "q", arg: "q" }],
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+
+  it("rejects a baseConst named url", () => {
+    expect(() =>
+      validateSpec(
+        parseSpec({
+          name: "discord",
+          title: "Discord",
+          displayName: "Discord",
+          description: "d.",
+          serviceLabel: "Discord",
+          style: "read-only-kit",
+          fetchHelper: {
+            local: "discordGet",
+            base: "https://discord.com/api/v10",
+            baseConst: "url",
+            inlineHeaders: {},
+          },
+          tools: [
+            {
+              name: "t",
+              description: "T.",
+              path: "/x",
+              args: { q: { type: "string" } },
+              query: [{ name: "q", arg: "q" }],
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/reserved/);
+  });
+});
+
+/**
+ * Fix round 1, CRITICAL 1: extractorFilter hardcodes "function fieldsOf", and
+ * emitSearchFilter maps it over every tool taking the extractor branch — a connector with two
+ * such tools emits two `function fieldsOf(...)` declarations in one module (TS2393, and the
+ * second silently wins for both makeQueryFilter calls, since both hoist). Rejected at
+ * validateSpec rather than resolved with a spec field to name the extractor or an
+ * auto-suffix — see the ruling in src/validate.ts.
+ */
+describe("at most one extractor-branch search filter per connector", () => {
+  function specWithFilters(filters: Record<string, unknown>[]) {
+    return parseSpec({
+      name: "mercury",
+      title: "Mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+      },
+      tools: filters.map((filter, i) => ({
+        name: `s_${i}`,
+        description: "S.",
+        impl: "search",
+        path: `/v1/x${i}`,
+        filter,
+      })),
+    });
+  }
+
+  it("rejects two tools that both need the fieldsOf extractor, naming both", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["name", { tags: "objects" }] },
+    ]);
+    expect(() => validateSpec(spec)).toThrow(/"s_0"/);
+    expect(() => validateSpec(spec)).toThrow(/"s_1"/);
+    expect(() => validateSpec(spec)).toThrow(/at most one/);
+  });
+
+  it("accepts one extractor-branch tool alongside a keyed tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+      { export: "filterB", fields: ["id", "name"] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts two keyed tools — neither takes the extractor branch", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id"] },
+      { export: "filterB", fields: ["name"], tags: true },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+
+  it("accepts a single extractor-branch tool", () => {
+    const spec = specWithFilters([
+      { export: "filterA", fields: ["id", { path: ["spec", "source"] }] },
+    ]);
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+});

@@ -1,7 +1,9 @@
 import { type ConnectorSpec, registrarName } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
+import { baseExpr } from "./fetch-helper.ts";
 import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { queryArgsUsed, renderQueryLines } from "./query.ts";
 
 const PARAM = "parsed";
 
@@ -15,7 +17,7 @@ function tokenEnvVar(spec: ConnectorSpec): string {
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   const name = registrarName(spec);
-  const schema = renderZodSchema(tool.args);
+  const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
   const head = [
     `${name}(`,
     `  ${JSON.stringify(tool.name)},`,
@@ -35,8 +37,14 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const path = tool.path!;
 
   const hoisted = hoistedLocals(tool.args);
+  const query = tool.query;
   const segments = parsePathTemplate(path);
-  const pathExpr = renderPath(segments, { param: PARAM, hoisted });
+  const pathExpr = renderPath(segments, {
+    param: PARAM,
+    hoisted,
+    staticStyle: spec.fetchHelper.staticPathStyle,
+    ...(query === undefined ? {} : { prefix: baseExpr(spec) }),
+  });
 
   // Only the path can consume a hoist here: the hoists are emitted inside the path callback,
   // and the init callback below is a separate arrow with its own scope. A hoisted const no
@@ -46,8 +54,16 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   for (const s of segments) {
     if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
   }
+  // A query entry reads the same hoisted const the path would, so its args join `used` or the
+  // hoist is never emitted and the reference dangles.
+  if (query !== undefined) {
+    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
+  }
+
   const needsParam =
-    used.size > 0 || segments.some((s) => s.kind === "arg" && !hoisted.has(s.name));
+    used.size > 0 ||
+    segments.some((s) => s.kind === "arg" && !hoisted.has(s.name)) ||
+    (query ?? []).some((q) => !hoisted.has(q.arg));
   const param = needsParam ? `(${PARAM})` : "()";
 
   // Empty `hoisted`, deliberately: nothing the path callback declares is in scope inside the
@@ -65,6 +81,33 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     tool.method === "GET"
       ? undefined
       : `  ${initParam} => ({ method: ${JSON.stringify(tool.method)}${bodyPart} }),`;
+
+  if (query !== undefined) {
+    const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
+    const queryLines = renderQueryLines(query, { param: PARAM, hoisted, args: tool.args }).map(
+      (l) => `    ${l}`,
+    );
+    const lines = [
+      ...head,
+      `  ${param} => {`,
+      ...hoists,
+      `    const u = new URL(${pathExpr});`,
+      ...queryLines,
+      // The absolute URL, NOT `${u.pathname}${u.search}` — that drops only the origin and
+      // keeps `u.pathname`, which still carries the base's OWN path component (e.g.
+      // "/api/v10"), because `pathExpr` was built with the base spliced in as a `new URL(...)`
+      // prefix, not as the URL's origin alone. Returning the pathname+search reintroduces that
+      // component as a plain string, and the fetch helper then prepends the base a second time
+      // — "/api/v10/api/v10/...". `makeRestToolRegistrar`'s buildPath return type is exactly
+      // "a path OR a full URL", and every fetch helper short-circuits on `path.startsWith
+      // ("http")`, so the absolute form is the intended use of that contract, not a workaround.
+      "    return `${u}`;",
+      "  },",
+    ];
+    if (initArg !== undefined) lines.push(initArg);
+    lines.push(");");
+    return lines.join("\n");
+  }
 
   if (used.size === 0) {
     const lines = [...head, `  ${param} => ${pathExpr},`];

@@ -31,9 +31,42 @@
     "test/sandbox.test.ts",
     "tsconfig.json"
   ],
+  "mercury": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "src/server.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
+  "zendesk": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "src/server.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
+  "bitrise": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "tsconfig.json"
+  ],
+  "dependencytrack": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
   "discord": ["README.md", "test/sandbox.test.ts", "tsconfig.json"],
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
+  "netlify": ["nimbus.extension.json", "package.json", "test/sandbox.test.ts", "tsconfig.json"],
+  "zzextract": [],
   "zzscratch": [],
+  "zzsearch": [],
+  "zzsearchstub": [],
   "zzstandalone": [],
   "zzstandalonehand": [],
   "zzwrite": [],

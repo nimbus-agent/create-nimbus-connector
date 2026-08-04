@@ -1,0 +1,54 @@
+{
+  "name": "bitrise",
+  "title": "Bitrise",
+  "displayName": "Bitrise",
+  "description": "Bitrise REST connector (mobile CI builds + apps). Read-only; surfaces build status, workflow id, branch and commit so the local index can correlate mobile CI runs back to PRs and incidents.",
+  "serviceLabel": "Bitrise",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.bitrise.io"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["BITRISE_TOKEN"],
+      "local": "authHeader",
+      "bindings": ["t"],
+      "auth": "headers",
+      "headerNames": ["Authorization"]
+    }
+  ],
+  "fetchHelper": {
+    "local": "bitriseGet",
+    "base": "https://api.bitrise.io",
+    "baseConst": "BITRISE_API",
+    "headers": "authHeader",
+    "staticPathStyle": "template"
+  },
+  "tools": [
+    {
+      "name": "bitrise_list",
+      "description": "List Bitrise resources. When `appSlug` is omitted, returns the user's accessible apps via `/v0.1/me/apps`. When `appSlug` is provided, returns the app's recent builds via `/v0.1/apps/<slug>/builds` (status filter and limit optional).",
+      "impl": "stub"
+    },
+    {
+      "name": "bitrise_get",
+      "description": "Fetch a single Bitrise resource. When `buildSlug` is provided, returns the build via `/v0.1/apps/<appSlug>/builds/<buildSlug>`. When omitted, returns the app via `/v0.1/apps/<appSlug>`.",
+      "impl": "stub"
+    },
+    {
+      "name": "bitrise_search",
+      "description": "Substring search across a Bitrise app's recent builds. Matches the query against `branch`, `commit_message`, `triggered_workflow`, and `status_text` (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "args": { "appSlug": { "type": "string", "min": 1 } },
+      "path": "/v0.1/apps/${arg.appSlug|enc}/builds?limit=50",
+      "rows": "data",
+      "maxLimit": 200,
+      "filter": {
+        "export": "filterBitriseBuilds",
+        "fields": ["branch", "commit_message", "triggered_workflow", "status_text"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+name: Feature request
+description: A connector shape the spec language cannot express, or a generator capability that is missing
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most valuable requests here name a **real connector shape the generator cannot reach**.
+        The Nimbus corpus is this project's backlog, so "connector X does Y and no spec can
+        describe it" is the strongest form of request — it comes with its own acceptance test.
+
+        Check the [roadmap](https://github.com/nimbus-agent/create-nimbus-connector/blob/main/docs/ROADMAP.md)
+        first; several known gaps are already listed there with the reason they are still open.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What can't you express today?
+      description: Describe the connector or capability, not the implementation you have in mind.
+    validations:
+      required: true
+
+  - type: input
+    id: corpus
+    attributes:
+      label: Which real connector has this shape?
+      description: A Nimbus connector name, if one exists. Say "none — new service" if this is not in the corpus.
+      placeholder: "packages/mcp-connectors/elasticsearch"
+    validations:
+      required: false
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: How would you want to write it?
+      description: A sketch of the spec fields you would expect. Rough is fine — this is about the shape, not the syntax.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What are you doing instead?
+      description: Hand-editing after generation, `impl: "stub"`, or not using the generator for this connector at all?
+    validations:
+      required: false

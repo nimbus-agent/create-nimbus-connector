@@ -401,10 +401,10 @@ describe("compareFixture", () => {
 
     expect(result.failed).toBe(false);
     expect(result.problems.some((p) => p.includes("README.md"))).toBe(false);
-    // The whole line, so the counts it composes are pinned too: discord declares four tools
-    // of which exactly one has impl "stub", and one of its six generated files was planted.
+    // The whole line, so the counts it composes are pinned too: discord declares four tools,
+    // none of them a stub, and one of its six generated files was planted.
     expect(result.line).toBe(
-      `PASS  discord  1/${generated.length} files identical (expected partial, 1 stub tool(s))`,
+      `PASS  discord  1/${generated.length} files identical (expected partial)`,
     );
   });
 

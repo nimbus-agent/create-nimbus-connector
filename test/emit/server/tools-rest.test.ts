@@ -229,3 +229,136 @@ describe("rest-kit writes", () => {
     );
   });
 });
+
+describe("rest-kit query parameters", () => {
+  it("emits the URL block for a tool declaring query parameters", () => {
+    const spec = parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "rest-kit",
+      env: [{ vars: ["DISCORD_TOKEN"], local: "token", auth: "bearer" }],
+      fetchHelper: {
+        local: "discordFetch",
+        base: "https://discord.com/api/v10",
+        baseConst: "DISCORD_API",
+      },
+      tools: [
+        {
+          name: "discord_channel_messages",
+          description: "List recent messages.",
+          path: "/channels/${arg.channelId|enc}/messages",
+          args: {
+            channelId: { type: "string", min: 1 },
+            limit: { type: "number", optional: true, default: 50, local: "lim" },
+            after: { type: "string", optional: true },
+          },
+          query: [
+            { name: "limit", arg: "limit" },
+            { name: "after", arg: "after", omitWhen: "empty" },
+          ],
+        },
+      ],
+    });
+    const out = renderRestKitTools(spec);
+    expect(out).toContain("const lim = parsed.limit ?? 50;");
+    expect(out).toContain(
+      "const u = new URL(`${DISCORD_API}/channels/${encodeURIComponent(parsed.channelId)}/messages`);",
+    );
+    expect(out).toContain('u.searchParams.set("limit", String(lim));');
+    expect(out).toContain('if (parsed.after !== undefined && parsed.after !== "") {');
+    // The absolute URL — NOT `${u.pathname}${u.search}` — or the fetch helper prepends the
+    // base a second time, since `pathExpr` already had it spliced in for `new URL(...)`. See
+    // this shape's emission site (tools-rest.ts) for the doubling this avoids.
+    expect(out).toContain("return `${u}`;");
+  });
+
+  it("leaves a tool with no query on the unchanged path branch", () => {
+    const spec = parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "rest-kit",
+      env: [{ vars: ["DISCORD_TOKEN"], local: "token", auth: "bearer" }],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+      tools: [{ name: "t", description: "T.", path: "/users/@me/guilds" }],
+    });
+    const out = renderRestKitTools(spec);
+    expect(out).not.toContain("new URL(");
+    expect(out).toContain('() => "/users/@me/guilds",');
+  });
+
+  // The bug this brief exists to prevent: a POST carrying query parameters must still route
+  // through the write helper, not silently fall back to a read call because the query
+  // branch's call expression was written separately from the method ternary. `title` is a
+  // genuine body field, alongside the `query` arg that is consumed only by the query string
+  // — proving both that buildInit still carries method+body AND that the query arg is
+  // excluded from the default body (see body.ts's urlArgs exclusion).
+  it("routes a non-GET query tool through buildInit with its method, excluding the query arg from the body", () => {
+    const spec = parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "rest-kit",
+      env: [{ vars: ["DISCORD_TOKEN"], local: "token", auth: "bearer" }],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+      tools: [
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+            title: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ],
+    });
+    const out = renderRestKitTools(spec);
+    expect(out).toContain('({ method: "POST", body: JSON.stringify({ title: parsed.title }) })');
+    expect(out).toContain("const u = new URL(");
+    expect(out).not.toContain("query: parsed.query");
+  });
+
+  // Important 3's "pairs.length === 0" case: a non-GET tool whose only non-path arg is a
+  // query parameter must fall through to the existing no-body path.
+  it("a non-GET query tool with no other args sends no body at all", () => {
+    const spec = parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "rest-kit",
+      env: [{ vars: ["DISCORD_TOKEN"], local: "token", auth: "bearer" }],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+      tools: [
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ],
+    });
+    const out = renderRestKitTools(spec);
+    expect(out).toContain('({ method: "POST" })');
+    expect(out).not.toContain("body:");
+  });
+});

@@ -67,3 +67,32 @@ This project exists partly because a suite of 79 tests in the monorepo silently 
 - a test that would still pass if the code under test were deleted is worse than no test;
 - prefer asserting on real values and error paths over on "it did not throw";
 - if you add a conditional skip, say in a comment what sets the condition and where.
+
+## SonarCloud coverage
+
+SonarCloud reported **0.0% coverage on new code** on every pull request for a long time — not because the code was untested, but because **Automatic Analysis cannot ingest a coverage report** and none was ever uploaded. `.github/workflows/sonar.yml` replaces it with a CI-based analysis that runs `bun test --coverage --coverage-reporter=lcov` and uploads `coverage/lcov.info`.
+
+The two modes are mutually exclusive — SonarCloud **refuses** a CI analysis while Automatic Analysis is enabled — so switching has an order, and getting it wrong leaves the project with no analysis at all:
+
+1. Add a `SONAR_TOKEN` repository or organization secret (SonarCloud → My Account → Security → Generate Token). Without it the scanner fails with *"Not authorized or project not found"* before it ever reaches the analysis-mode question.
+2. Turn Automatic Analysis off: SonarCloud → the project → Administration → Analysis Method.
+3. Re-run the `sonar` check on the pull request. It should now pass.
+4. Merge.
+
+Both switches precede the merge deliberately. The alternative — merge first, then disable — means merging a pull request whose own checks are red, which is a habit worth not starting. The cost is a window of minutes between steps 2 and 3 where `main` has no analysis; the pull request's own run covers the code going into it.
+
+`bunfig.toml`'s per-file `coverageThreshold` still applies during that run, so the gate does not become advisory just because a reporter was added.
+
+### If you are contributing from a fork
+
+**The `sonar` check will show as skipped on your pull request, and that is expected — it is not something you did.** GitHub withholds repository secrets from pull requests opened from a fork, so `SONAR_TOKEN` is unavailable and the scanner cannot authenticate. Until this was handled the check failed outright on every external contribution, which meant a red mark nobody could act on.
+
+**Your coverage is still enforced.** `ci.yml` runs `bun test --coverage` on your pull request, and `bunfig.toml`'s per-file floors apply there. What you lose is the SonarCloud *report*, not the gate — a maintainer sees the analysis once the change is on `main`.
+
+Nothing about this makes the scan optional for the repository itself: pushes to `main` and pull requests from branches in this repository run it unguarded, so a missing or expired `SONAR_TOKEN` still turns `main` red on the next merge.
+
+## Coverage floors
+
+Coverage is enforced **per file, not in aggregate** — an average lets one well-covered file hide an uncovered one. `src/cli.ts` and `src/prompts.ts` are excluded from the metric because both are driven through `Bun.spawnSync` on the real binary, which Bun cannot instrument; spawning the real binary is the better test, since it proves the shipped entry point works.
+
+**Do not raise coverage by adding in-process tests that duplicate the subprocess ones.** That moves the number without adding assurance, which is the false-green pattern this project keeps removing. Raise the floor only when a real gap closes. `bunfig.toml` explains this at the point of enforcement.

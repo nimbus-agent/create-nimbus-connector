@@ -915,3 +915,592 @@ describe("preflightOutOfScope", () => {
     expect(() => parseSpec({ ...stageCBase, tools: "nope" })).toThrow(/Invalid connector spec/);
   });
 });
+
+describe("style: read-only-kit", () => {
+  it("is accepted and inherits the hand-rolled fetchHelper rule", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [],
+    });
+    expect(spec.style).toBe("read-only-kit");
+  });
+
+  it("rejects a read-only-kit spec declaring neither headers nor inlineHeaders", () => {
+    expect(() =>
+      parseSpec({
+        name: "mercury",
+        displayName: "Mercury",
+        description: "d.",
+        serviceLabel: "Mercury",
+        style: "read-only-kit",
+        fetchHelper: { local: "mercuryGet", base: "https://api.mercury.com" },
+        tools: [],
+      }),
+    ).toThrow(/exactly one of fetchHelper.headers or fetchHelper.inlineHeaders/);
+  });
+});
+
+describe("impl: search", () => {
+  function tool(extra: Record<string, unknown> = {}) {
+    return {
+      name: "mercury_search",
+      description: "Search accounts.",
+      impl: "search",
+      path: "/api/v1/accounts",
+      filter: { export: "filterMercuryAccounts", fields: ["id", "name"] },
+      ...extra,
+    };
+  }
+  function make(t: unknown, style = "read-only-kit") {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style,
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [t],
+    });
+  }
+
+  it("defaults maxLimit to 100 and tags to false", () => {
+    const t = make(tool()).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.filter?.tags).toBe(false);
+  });
+
+  it("accepts rows and a custom maxLimit", () => {
+    const t = make(tool({ rows: "accounts", maxLimit: 2000 })).tools[0]!;
+    expect(t.rows).toBe("accounts");
+    expect(t.maxLimit).toBe(2000);
+  });
+
+  it("requires a filter", () => {
+    expect(() => make({ ...tool(), filter: undefined })).toThrow(/"filter" is required/);
+  });
+
+  it("rejects an empty fields list", () => {
+    expect(() => make(tool({ filter: { export: "f", fields: [] } }))).toThrow(/at least one field/);
+  });
+
+  it("rejects method and body", () => {
+    expect(() => make(tool({ method: "POST" }))).toThrow(/issues a GET/);
+    expect(() => make(tool({ body: { a: "b" } }))).toThrow(/issues a GET/);
+  });
+
+  it("rejects a non-read effect", () => {
+    expect(() => make(tool({ effect: "write" }))).toThrow(/cannot mutate/);
+  });
+
+  it("rejects a non-identifier filter.export", () => {
+    expect(() => make(tool({ filter: { export: "not a name", fields: ["id"] } }))).toThrow(
+      /must be a valid JS identifier/,
+    );
+  });
+
+  it("accepts an ordinary GET tool that never mentions maxLimit", () => {
+    const t = make({
+      name: "mercury_get_account",
+      description: "Get an account.",
+      impl: "rest",
+      path: "/api/v1/accounts/:id",
+    }).tools[0]!;
+    expect(t.maxLimit).toBe(100);
+    expect(t.rows).toBeUndefined();
+  });
+
+  it("rejects rows/maxLimit on a non-search tool", () => {
+    expect(() =>
+      make({
+        name: "mercury_get_account",
+        description: "Get an account.",
+        impl: "rest",
+        path: "/api/v1/accounts/:id",
+        maxLimit: 50,
+      }),
+    ).toThrow(/"rows" and "maxLimit" are only valid on a tool with "impl": "search"/);
+  });
+});
+
+describe("search and style interaction", () => {
+  const searchTool = {
+    name: "s_search",
+    description: "Search.",
+    impl: "search",
+    path: "/items",
+    filter: { export: "filterItems", fields: ["id"] },
+  };
+
+  it("rejects a search tool on style rest-kit", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "rest-kit",
+        env: [{ vars: ["S_TOKEN"], local: "token", auth: "bearer" }],
+        fetchHelper: { local: "sGet", base: "https://api.s.com" },
+        tools: [searchTool],
+      }),
+    ).toThrow(/no seam/);
+  });
+
+  it("rejects two tools sharing one filter.export", () => {
+    expect(() =>
+      parseSpec({
+        name: "s",
+        displayName: "S",
+        description: "d.",
+        serviceLabel: "S",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "sGet",
+          base: "https://api.s.com",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [searchTool, { ...searchTool, name: "s_search_two", path: "/others" }],
+      }),
+    ).toThrow(/filterItems/);
+  });
+});
+
+describe("SearchFilterSchema field entries", () => {
+  const withFilter = (filter: unknown) =>
+    parseSpec({
+      name: "mercury",
+      title: "Mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "s", description: "S.", impl: "search", path: "/v1/x", filter }],
+    });
+
+  it("accepts a plain key, a path entry and a tag entry together", () => {
+    const spec = withFilter({
+      export: "filterX",
+      fields: ["name", { path: ["spec", "source", "repoURL"] }, { tags: "objects" }],
+    });
+    expect(spec.tools[0]!.filter!.fields).toEqual([
+      "name",
+      { path: ["spec", "source", "repoURL"] },
+      { tags: "objects" },
+    ]);
+  });
+
+  it("rejects a single-segment path and names the plain-string spelling", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ path: ["name"] }] })).toThrow(/"name"/);
+  });
+
+  it("rejects an empty path segment", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ path: ["spec", ""] }] })).toThrow();
+  });
+
+  it("accepts a whitespace-only path segment, which is a legal JSON key", () => {
+    const spec = withFilter({ export: "filterX", fields: [{ path: ["spec", " "] }] });
+    expect(spec.tools[0]!.filter!.fields).toEqual([{ path: ["spec", " "] }]);
+  });
+
+  it("rejects an unknown key inside an entry object", () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: [{ path: ["a", "b"], tag: "objects" }] }),
+    ).toThrow();
+  });
+
+  it("rejects an unknown tag format", () => {
+    expect(() => withFilter({ export: "filterX", fields: [{ tags: "nope" }] })).toThrow();
+  });
+
+  it("rejects legacy tags:true alongside a tag entry, naming both", () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: ["name", { tags: "text" }], tags: true }),
+    ).toThrow(/tags/);
+  });
+
+  it('reports a malformed entry with the three legal shapes, not "Invalid input"', () => {
+    // Verified against zod 4.4.2: an untagged union reports ONE issue, not one per branch,
+    // and its default message is the useless "Invalid input". The custom error is what makes
+    // the failure actionable.
+    expect(() => withFilter({ export: "filterX", fields: [{ pat: ["a", "b"] }] })).toThrow(
+      /a field entry must be a key string/,
+    );
+  });
+
+  it("still accepts the flat 0.4.0 shape unchanged", () => {
+    const spec = withFilter({ export: "filterX", fields: ["id", "name"], tags: true });
+    expect(spec.tools[0]!.filter!.fields).toEqual(["id", "name"]);
+    expect(spec.tools[0]!.filter!.tags).toBe(true);
+  });
+
+  /**
+   * Fix round 1, CRITICAL 2: extractorFilter reads only "fields" and never consults "tags", so
+   * legacy "tags": true silently vanishes when a filter's entries force the extractor branch —
+   * the connector compiles and passes every gate while silently failing to match on tags.
+   * Rejected here rather than appended silently, symmetric with the existing
+   * tags-alongside-a-tags-entry rejection above.
+   */
+  it('rejects legacy "tags": true on a filter forced onto the extractor branch by a path entry', () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }],
+        tags: true,
+      }),
+    ).toThrow(/"tags": true.*extractor|extractor.*"tags"/s);
+  });
+
+  it("names the replacement spelling in the rejection message", () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }],
+        tags: true,
+      }),
+    ).toThrow(/\{ "tags": "text" \}/);
+  });
+
+  it('accepts a trailing { "tags": "text" } entry with no legacy "tags": true — the converging form', () => {
+    expect(() =>
+      withFilter({
+        export: "filterX",
+        fields: ["id", { path: ["spec", "source", "repoURL"] }, { tags: "text" }],
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts legacy "tags": true on a filter that stays on the keyed branch', () => {
+    expect(() =>
+      withFilter({ export: "filterX", fields: ["id", "name"], tags: true }),
+    ).not.toThrow();
+  });
+});
+
+describe("ToolSchema query parameters", () => {
+  const withQuery = (tool: Record<string, unknown>) =>
+    parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "discordGet",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools: [{ name: "t", description: "T.", path: "/messages", ...tool }],
+    });
+
+  it("accepts an unconditional and a conditional parameter", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" }, after: { type: "string", optional: true } },
+      query: [
+        { name: "limit", arg: "limit" },
+        { name: "after", arg: "after", omitWhen: "empty" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "limit", arg: "limit" },
+      { name: "after", arg: "after", omitWhen: "empty" },
+    ]);
+  });
+
+  it("accepts a query key that is not a JS identifier", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number" } },
+      query: [{ name: "page[size]", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query![0]!.name).toBe("page[size]");
+  });
+
+  it("accepts omitWhen: absent on a string arg with no default", () => {
+    const spec = withQuery({
+      args: { after: { type: "string", optional: true } },
+      query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "after", arg: "after", omitWhen: "absent" }]);
+  });
+
+  it("accepts omitWhen: absent on a numeric arg with no default — github's page", () => {
+    const spec = withQuery({
+      args: {
+        perPage: { type: "number", optional: true, default: 30 },
+        page: { type: "number", optional: true },
+      },
+      query: [
+        { name: "per_page", arg: "perPage" },
+        { name: "page", arg: "page", omitWhen: "absent" },
+      ],
+    });
+    expect(spec.tools[0]!.query).toEqual([
+      { name: "per_page", arg: "perPage" },
+      { name: "page", arg: "page", omitWhen: "absent" },
+    ]);
+  });
+
+  it("rejects an omitWhen value that is neither absent nor empty", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after", omitWhen: "bogus" }],
+      }),
+    ).toThrow(/omitWhen/);
+  });
+
+  it('rejects omitWhen: "empty" on a non-string arg', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page", omitWhen: "empty" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("rejects omitWhen combined with an arg declaring a default", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true, default: "x" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it("rejects omitWhen on an arg that is not optional", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it("rejects omitWhen on a boolean arg — isHoisted hoists every boolean regardless of default", () => {
+    expect(() =>
+      withQuery({
+        args: { flag: { type: "boolean", optional: true } },
+        query: [{ name: "flag", arg: "flag", omitWhen: "absent" }],
+      }),
+    ).toThrow(/"flag"/);
+  });
+
+  // The mirror of the omitWhen-forbidden checks above: an arg whose value CAN be undefined
+  // (optional, no default, not boolean) and declares no omitWhen reaches searchParams.set
+  // unconditionally — TS2345 in the generated package for a string arg (set(key, value)
+  // rejects `string | undefined`), and a literal "?<name>=undefined" on the wire for a
+  // numeric one (the non-string branch wraps in String(...), and String(undefined) ===
+  // "undefined"). Both parsed clean before canOmitQueryValue's bidirectional check.
+  it("rejects an optional string query arg with no omitWhen — would fail set()'s own typecheck", () => {
+    expect(() =>
+      withQuery({
+        args: { after: { type: "string", optional: true } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"after"/);
+  });
+
+  it('rejects an optional numeric query arg with no omitWhen — would send a literal "undefined"', () => {
+    expect(() =>
+      withQuery({
+        args: { page: { type: "number", optional: true } },
+        query: [{ name: "page", arg: "page" }],
+      }),
+    ).toThrow(/"page"/);
+  });
+
+  it("still accepts a defaulted optional arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { limit: { type: "number", optional: true, default: 50 } },
+      query: [{ name: "limit", arg: "limit" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "limit", arg: "limit" }]);
+  });
+
+  it("still accepts a required arg with no omitWhen — its value is never undefined", () => {
+    const spec = withQuery({
+      args: { id: { type: "string" } },
+      query: [{ name: "id", arg: "id" }],
+    });
+    expect(spec.tools[0]!.query).toEqual([{ name: "id", arg: "id" }]);
+  });
+
+  it("rejects a query arg that is not declared", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "after", arg: "after" }] })).toThrow(
+      /"after"/,
+    );
+  });
+
+  it("rejects a query arg named after an inherited Object property", () => {
+    expect(() => withQuery({ args: {}, query: [{ name: "k", arg: "toString" }] })).toThrow(
+      /"toString"/,
+    );
+  });
+
+  it("rejects two entries writing the same query key", () => {
+    expect(() =>
+      withQuery({
+        args: { a: { type: "string" }, b: { type: "string" } },
+        query: [
+          { name: "limit", arg: "a" },
+          { name: "limit", arg: "b" },
+        ],
+      }),
+    ).toThrow(/"limit"/);
+  });
+
+  it("rejects query on a stub tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
+  // A stub has no "path" by construction (the impl/path pairing refine), so the
+  // path-must-begin-with-"/" check below evaluated an empty "path" against a stub and fired
+  // a second, spurious issue alongside the correct one above. Guarded on t.path !== undefined
+  // so only the stub rejection reports.
+  it("rejects query on a stub tool with only the stub message, not the path message", () => {
+    let message = "";
+    try {
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "stub",
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/"stub" tool issues no request, so "query" has nothing to describe/);
+    expect(message).not.toMatch(/must begin with/);
+  });
+
+  // renderSearchTool (src/emit/server/tools-hand.ts) returns early for impl === "search" and
+  // never reads t.query — accepted at parse time, silently discarded at emit time. The stub
+  // rejection above closes the same hole for stubs; this closes it for search tools.
+  it("rejects query on a search tool", () => {
+    expect(() =>
+      parseSpec({
+        name: "discord",
+        title: "Discord",
+        displayName: "Discord",
+        description: "d.",
+        serviceLabel: "Discord",
+        style: "read-only-kit",
+        fetchHelper: {
+          local: "discordGet",
+          base: "https://discord.com/api/v10",
+          inlineHeaders: { Accept: "application/json" },
+        },
+        tools: [
+          {
+            name: "t",
+            description: "T.",
+            impl: "search",
+            path: "/messages",
+            filter: { export: "filterDiscordMessages", fields: ["id"] },
+            args: { after: { type: "string" } },
+            query: [{ name: "after", arg: "after" }],
+          },
+        ],
+      }),
+    ).toThrow(/query/);
+  });
+
+  it("rejects query when the path already carries a query string", () => {
+    expect(() =>
+      withQuery({
+        path: "/messages?limit=50",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/\?/);
+  });
+
+  it("rejects an empty query array", () => {
+    expect(() => withQuery({ args: {}, query: [] })).toThrow();
+  });
+
+  // renderPath's query-branch prefix (the fetch helper's base) joins directly onto the path
+  // template with no separator and none of renderFetchHelper's leading-slash normalization —
+  // a slashless path fuses onto the base ("https://x.testitems" instead of
+  // "https://x.test/items"). Rejected here rather than left to be discovered in a request.
+  it('rejects query on a tool whose path does not begin with "/"', () => {
+    expect(() =>
+      withQuery({
+        path: "messages",
+        args: { after: { type: "string" } },
+        query: [{ name: "after", arg: "after" }],
+      }),
+    ).toThrow(/"t".*"\/"/);
+  });
+
+  it('accepts query on a tool whose path begins with "/"', () => {
+    const spec = withQuery({
+      path: "/messages",
+      args: { after: { type: "string" } },
+      query: [{ name: "after", arg: "after" }],
+    });
+    expect(spec.tools[0]!.path).toBe("/messages");
+  });
+
+  it("leaves a tool with no query untouched", () => {
+    const spec = withQuery({ args: {} });
+    expect(spec.tools[0]!.query).toBeUndefined();
+  });
+});

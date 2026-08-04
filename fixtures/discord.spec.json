@@ -9,7 +9,11 @@
   "syncInterval": 120,
   "minNimbusVersion": "0.2.0",
   "env": [{ "vars": ["DISCORD_BOT_TOKEN"], "local": "tokenHeaders", "bindings": ["t"], "auth": "bearer" }],
-  "fetchHelper": { "local": "discordFetch", "base": "https://discord.com/api/v10" },
+  "fetchHelper": {
+    "local": "discordFetch",
+    "base": "https://discord.com/api/v10",
+    "baseConst": "DISCORD_API"
+  },
   "tools": [
     {
       "name": "discord_guild_list",
@@ -25,7 +29,24 @@
     {
       "name": "discord_channel_messages",
       "description": "List recent messages in a channel (newest first). Optional `after` snowflake for incremental fetch.",
-      "impl": "stub"
+      "path": "/channels/${arg.channelId|enc}/messages",
+      "args": {
+        "channelId": { "type": "string", "min": 1 },
+        "limit": {
+          "type": "number",
+          "int": true,
+          "min": 1,
+          "max": 100,
+          "optional": true,
+          "default": 50,
+          "local": "lim"
+        },
+        "after": { "type": "string", "optional": true }
+      },
+      "query": [
+        { "name": "limit", "arg": "limit" },
+        { "name": "after", "arg": "after", "omitWhen": "empty" }
+      ]
     },
     {
       "name": "discord_thread_list",

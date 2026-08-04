@@ -159,6 +159,49 @@ describe("renderPath", () => {
     );
   });
 
+  describe("staticStyle", () => {
+    it("renders a static path as a backtick template literal when staticStyle is 'template'", () => {
+      const out = renderPath(parsePathTemplate("/api/v1/accounts"), {
+        ...noHoists,
+        staticStyle: "template",
+      });
+      expect(out).toBe("`/api/v1/accounts`");
+    });
+
+    it("still quotes a static path when staticStyle is 'quoted'", () => {
+      const out = renderPath(parsePathTemplate("/api/v1/accounts"), {
+        ...noHoists,
+        staticStyle: "quoted",
+      });
+      expect(out).toBe('"/api/v1/accounts"');
+    });
+
+    it("escapes backslashes and backticks the same way the dynamic branch does", () => {
+      const out = renderPath(parsePathTemplate("/path\\with`both"), {
+        ...noHoists,
+        staticStyle: "template",
+      });
+      expect(out).toBe("`/path\\\\with\\`both`");
+    });
+
+    it("has no effect on a dynamic path — it is already a template literal either way", () => {
+      const quoted = renderPath(parsePathTemplate("/g/${arg.slug}/c"), {
+        ...noHoists,
+        staticStyle: "quoted",
+      });
+      const templated = renderPath(parsePathTemplate("/g/${arg.slug}/c"), {
+        ...noHoists,
+        staticStyle: "template",
+      });
+      expect(quoted).toBe("`/g/${p.slug}/c`");
+      expect(templated).toBe("`/g/${p.slug}/c`");
+    });
+
+    it("defaults to the quoted form when staticStyle is omitted", () => {
+      expect(renderPath(parsePathTemplate("/api/v1/monitor"), noHoists)).toBe('"/api/v1/monitor"');
+    });
+  });
+
   it("renders incident template with square brackets and hoisted num mode", () => {
     const hoisted = new Map([["limit", "lim"]]);
     expect(

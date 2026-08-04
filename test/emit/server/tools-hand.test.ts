@@ -156,6 +156,156 @@ describe("renderHandRolledTools", () => {
     expect(out).toContain("async () =>");
     expect(out).toContain('jsonResult(await nrGet("/files/p.json")),');
   });
+
+  it("renders a static path as a template literal end-to-end when fetchHelper.staticPathStyle is 'template'", () => {
+    const spec = parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "hand-rolled",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools: [
+        {
+          name: "mercury_list",
+          description: "List accounts.",
+          path: "/api/v1/accounts",
+        },
+        {
+          name: "mercury_get",
+          description: "Get one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ],
+    });
+    const out = renderHandRolledTools(spec);
+    // Static path: template style overrides renderPath's quoted default.
+    expect(out).toContain("jsonResult(await mercuryGet(`/api/v1/accounts`))");
+    expect(out).not.toContain('mercuryGet("/api/v1/accounts")');
+    // Dynamic path: already a template literal under the default, unaffected either way.
+    expect(out).toContain(
+      "jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`))",
+    );
+  });
+});
+
+describe("hand-rolled query parameters", () => {
+  const spec = (tools: unknown[]) =>
+    parseSpec({
+      name: "discord",
+      title: "Discord",
+      displayName: "Discord",
+      description: "d.",
+      serviceLabel: "Discord",
+      style: "read-only-kit",
+      fetchHelper: {
+        local: "discordGet",
+        base: "https://discord.com/api/v10",
+        inlineHeaders: { Accept: "application/json" },
+      },
+      tools,
+    });
+
+  it("emits the URL block for a tool declaring query parameters", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages",
+          description: "List recent messages.",
+          path: "/channels/${arg.channelId|enc}/messages",
+          args: {
+            channelId: { type: "string", min: 1 },
+            limit: { type: "number", optional: true, default: 50, local: "lim" },
+            after: { type: "string", optional: true },
+          },
+          query: [
+            { name: "limit", arg: "limit" },
+            { name: "after", arg: "after", omitWhen: "empty" },
+          ],
+        },
+      ]),
+    );
+    expect(out).toContain("const lim = p.limit ?? 50;");
+    expect(out).toContain(
+      "const u = new URL(`https://discord.com/api/v10/channels/${encodeURIComponent(p.channelId)}/messages`);",
+    );
+    expect(out).toContain('u.searchParams.set("limit", String(lim));');
+    expect(out).toContain('if (p.after !== undefined && p.after !== "") {');
+    // The absolute URL — NOT `${u.pathname}${u.search}` — or the fetch helper prepends the
+    // base a second time, since `pathExpr` already had it spliced in for `new URL(...)`. See
+    // this shape's emission site (tools-hand.ts) for the doubling this avoids.
+    expect(out).toContain("const path = `${u}`;");
+    expect(out).toContain("return jsonResult(await discordGet(path));");
+  });
+
+  it("leaves a tool with no query on the unchanged path branch", () => {
+    const out = renderHandRolledTools(
+      spec([{ name: "discord_guilds", description: "List guilds.", path: "/users/@me/guilds" }]),
+    );
+    expect(out).not.toContain("new URL(");
+    expect(out).toContain('jsonResult(await discordGet("/users/@me/guilds")),');
+  });
+
+  // The bug this brief exists to prevent: "query" is legal on a non-GET tool (rejected only
+  // on a stub — see spec.ts), and this file builds its call with a GET/non-GET split. A
+  // second, hand-duplicated call expression for the query branch would be free to disagree
+  // with that split — exactly the kind of silent divergence a substring test on the GET case
+  // alone would never catch. `title` is a genuine body field, alongside the `query` arg that
+  // is consumed only by the query string — proving both that the write helper is used AND
+  // that the query arg is excluded from the default body (see body.ts's urlArgs exclusion).
+  it("routes a non-GET query tool through discordSend with its method, excluding the query arg from the body", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+            title: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ]),
+    );
+    expect(out).toContain(
+      'return jsonResult(await discordGetSend(path, "POST", JSON.stringify({ title: p.title })));',
+    );
+    expect(out).not.toContain("discordGet(path)");
+    expect(out).not.toContain("query: p.query");
+  });
+
+  // Important 3's "pairs.length === 0" case: a non-GET tool whose only non-path arg is a
+  // query parameter must fall through to the existing no-body path, exactly like a DELETE
+  // whose only arg is its path id — not manufacture an empty-but-present body.
+  it("a non-GET query tool with no other args sends no body at all", () => {
+    const out = renderHandRolledTools(
+      spec([
+        {
+          name: "discord_channel_messages_search",
+          description: "Search messages.",
+          path: "/channels/${arg.channelId|enc}/messages/search",
+          method: "POST",
+          effect: "write",
+          args: {
+            channelId: { type: "string", min: 1 },
+            query: { type: "string" },
+          },
+          query: [{ name: "q", arg: "query" }],
+        },
+      ]),
+    );
+    expect(out).toContain('return jsonResult(await discordGetSend(path, "POST", undefined));');
+  });
 });
 
 describe("hand-rolled write support", () => {
@@ -351,5 +501,57 @@ describe("hand-rolled write support", () => {
       expect(out).not.toContain("const lim =");
       expect(out).toContain('jsonResult(await zzGet("/i"))');
     });
+  });
+});
+
+describe('renderHandRolledTools, handlerStyle "block"', () => {
+  function blockSpec(tools: unknown[]) {
+    return parseSpec({
+      name: "mercury",
+      displayName: "Mercury",
+      description: "d.",
+      serviceLabel: "Mercury",
+      style: "read-only-kit",
+      handlerStyle: "block",
+      argsSchemaStyle: "expanded",
+      fetchHelper: {
+        local: "mercuryGet",
+        base: "https://api.mercury.com",
+        inlineHeaders: {},
+        staticPathStyle: "template",
+      },
+      tools,
+    });
+  }
+
+  it("gives a no-arg tool a statement body and no parameter", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        { name: "mercury_list", description: "List accounts.", path: "/api/v1/accounts" },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_list",\n  "List accounts.",\n  z.object({}),\n  async () => {\n' +
+        "    return jsonResult(await mercuryGet(`/api/v1/accounts`));\n  },\n);",
+    );
+  });
+
+  it("gives an arg tool a statement body taking p, with the schema expanded", () => {
+    const out = renderHandRolledTools(
+      blockSpec([
+        {
+          name: "mercury_get",
+          description: "Fetch one account.",
+          args: { id: { type: "string", min: 1 } },
+          path: "/api/v1/account/${arg.id|enc}",
+        },
+      ]),
+    );
+    expect(out).toBe(
+      'reg(\n  "mercury_get",\n  "Fetch one account.",\n  z.object({\n  id: z.string().min(1),\n}),\n' +
+        "  async (p) => {\n" +
+        "    return jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`));\n" +
+        "  },\n);",
+    );
   });
 });

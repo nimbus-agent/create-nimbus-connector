@@ -94,6 +94,38 @@ describe("renderEnvAccessor", () => {
     expect(out).toContain('"DD-APPLICATION-KEY": app,');
     expect(out).toContain('Accept: "application/json",');
   });
+
+  it("keeps a single-header accessor on one line, bitrise's shape", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["BITRISE_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["Authorization"],
+      }),
+    );
+    expect(out).toBe(`function authHeader(): Record<string, string> {
+  const t = process.env["BITRISE_TOKEN"]?.trim();
+  if (t === undefined || t === "") {
+    throw new Error("BITRISE_TOKEN is not set");
+  }
+  return { Authorization: t, Accept: "application/json" };
+}`);
+  });
+
+  it("quotes a single header name that is not a bare identifier", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["X_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["x-auth-token"],
+      }),
+    );
+    expect(out).toContain('return { "x-auth-token": t, Accept: "application/json" };');
+  });
 });
 
 describe("client-credentials", () => {
@@ -203,5 +235,144 @@ describe("client-credentials token expiry", () => {
     // Not every token endpoint returns expires_in. Treating its absence as "expired" would
     // re-exchange on every single call.
     expect(renderEnvAccessor(spec(), "X")).toContain("Number.POSITIVE_INFINITY");
+  });
+});
+
+describe("renderEnvAccessor, split bearer (tokenLocal)", () => {
+  const split = () =>
+    env({
+      vars: ["MERCURY_TOKEN"],
+      local: "authHeader",
+      tokenLocal: "apiToken",
+      bindings: ["t"],
+      auth: "bearer",
+    });
+
+  it("emits the raw-token accessor and the header wrapper that calls it", () => {
+    expect(renderEnvAccessor(split())).toBe(`function apiToken(): string {
+  const t = process.env["MERCURY_TOKEN"]?.trim();
+  if (t === undefined || t === "") {
+    throw new Error("MERCURY_TOKEN is not set");
+  }
+  return t;
+}
+
+function authHeader(): Record<string, string> {
+  return { Authorization: \`Bearer \${apiToken()}\`, Accept: "application/json" };
+}`);
+  });
+
+  it("leaves the fused single-function form untouched when tokenLocal is absent", () => {
+    const out = renderEnvAccessor(
+      env({ vars: ["GRAFANA_API_TOKEN"], local: "authHeaders", bindings: ["tok"], auth: "bearer" }),
+    );
+    expect(out).toBe(`function authHeaders(): Record<string, string> {
+  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();
+  if (tok === undefined || tok === "") {
+    throw new Error("GRAFANA_API_TOKEN is not set");
+  }
+  return { Authorization: \`Bearer \${tok}\`, Accept: "application/json" };
+}`);
+  });
+});
+
+describe("renderEnvAccessor, HTTP Basic", () => {
+  it("reads and guards each variable separately, naming only the missing one", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["AIRFLOW_USERNAME", "AIRFLOW_PASSWORD"],
+        local: "authHeader",
+        bindings: ["user", "password"],
+        auth: "basic",
+      }),
+    );
+    expect(out).toBe(`function authHeader(): Record<string, string> {
+  const user = process.env["AIRFLOW_USERNAME"]?.trim();
+  if (user === undefined || user === "") {
+    throw new Error("AIRFLOW_USERNAME is not set");
+  }
+  const password = process.env["AIRFLOW_PASSWORD"]?.trim();
+  if (password === undefined || password === "") {
+    throw new Error("AIRFLOW_PASSWORD is not set");
+  }
+  return {
+    Authorization: encodeBasicAuthHeader(user, password),
+    Accept: "application/json",
+  };
+}`);
+  });
+
+  it("decorates the username with a suffix, which is what zendesk's /token is", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["ZENDESK_EMAIL", "ZENDESK_API_TOKEN"],
+        local: "authHeader",
+        bindings: ["email", "token"],
+        auth: "basic",
+        suffix: "/token",
+      }),
+    );
+    expect(out).toContain("Authorization: encodeBasicAuthHeader(`${email}/token`, token),");
+  });
+
+  it("requires exactly two vars — a username and a password", () => {
+    expect(() => env({ vars: ["ONLY_ONE"], local: "authHeader", auth: "basic" })).toThrow(
+      /exactly two \\"vars\\"/,
+    );
+  });
+});
+
+describe("renderEnvAccessors, trimTrailingSlashFn", () => {
+  function spec(entries: unknown[]) {
+    return parseSpec({
+      name: "zendesk",
+      displayName: "Zendesk",
+      description: "d.",
+      serviceLabel: "Zendesk",
+      style: "read-only-kit",
+      env: entries,
+      fetchHelper: { local: "zendeskGet", base: "${env.baseUrl}", headers: "baseUrl" },
+    });
+  }
+
+  const URL_ENTRY = {
+    vars: ["ZENDESK_URL"],
+    local: "baseUrl",
+    bindings: ["v"],
+    required: true,
+    transform: "trimTrailingSlashFn",
+  };
+
+  it("emits the shared helper ahead of the accessor that calls it", () => {
+    expect(
+      renderEnvAccessors(spec([URL_ENTRY])),
+    ).toBe(`function trimTrailingSlash(s: string): string {
+  return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+function baseUrl(): string {
+  const v = process.env["ZENDESK_URL"]?.trim();
+  if (v === undefined || v === "") {
+    throw new Error("ZENDESK_URL is not set");
+  }
+  return trimTrailingSlash(v);
+}`);
+  });
+
+  it("emits the helper once however many accessors call it", () => {
+    const out = renderEnvAccessors(
+      spec([
+        URL_ENTRY,
+        { ...URL_ENTRY, vars: ["ZENDESK_ALT_URL"], local: "altUrl", bindings: ["w"] },
+      ]),
+    );
+    expect(out.split("function trimTrailingSlash(").length - 1).toBe(1);
+    expect(out).toContain("return trimTrailingSlash(w);");
+  });
+
+  it("leaves the inline .replace form — grafana's and sentry's — untouched", () => {
+    const out = renderEnvAccessors(spec([{ ...URL_ENTRY, transform: "stripTrailingSlash" }]));
+    expect(out).not.toContain("function trimTrailingSlash(");
+    expect(out).toContain(String.raw`return v.replace(/\/$/, "");`);
   });
 });

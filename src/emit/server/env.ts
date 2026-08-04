@@ -5,6 +5,21 @@ type EnvEntry = z.infer<typeof EnvSchema>;
 
 const STRIP = String.raw`replace(/\/$/, "")`;
 
+/** A header name that needs no quotes as an object key. */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * The shared trailing-slash helper, byte-identical in all 13 corpus connectors that use it
+ * (airflow, argocd, dagster, databricks, dbt, dependencytrack, looker, metabase, mlflow,
+ * prefect, superset, tableau, zendesk), hence a constant rather than a template. Emitted
+ * once per connector however many accessors call it — see renderEnvAccessors.
+ */
+export const TRIM_TRAILING_SLASH_FN = [
+  "function trimTrailingSlash(s: string): string {",
+  '  return s.endsWith("/") ? s.slice(0, -1) : s;',
+  "}",
+].join("\n");
+
 function camel(varName: string): string {
   const parts = varName.toLowerCase().split("_");
   return (
@@ -20,9 +35,11 @@ function bindingOf(e: EnvEntry, i: number): string {
   return e.bindings?.[i] ?? camel(e.vars[i]!);
 }
 
-/** `<binding>.replace(...)` when a transform is set, else the bare binding. */
+/** The transform applied to a binding, or the bare binding when none is set. */
 function transformed(e: EnvEntry, binding: string): string {
-  return e.transform === "stripTrailingSlash" ? `${binding}.${STRIP}` : binding;
+  if (e.transform === "stripTrailingSlash") return `${binding}.${STRIP}`;
+  if (e.transform === "trimTrailingSlashFn") return `trimTrailingSlash(${binding})`;
+  return binding;
 }
 
 /** Wrap in a template literal only when a prefix or suffix exists. */
@@ -63,10 +80,22 @@ function returnLines(e: EnvEntry): string[] {
     return [`  return { Authorization: \`Bearer \${${b}}\`, Accept: "application/json" };`];
   }
   if (e.auth === "headers") {
-    const entries = e.vars.map((_, i) => {
+    // A key that is a valid identifier is emitted bare, the way `Authorization` and
+    // `Accept` are written everywhere in the corpus; `"DD-API-KEY"` and `"x-auth-token"`
+    // have to stay quoted.
+    const field = (i: number) => {
       const header = e.headerNames![i]!;
-      return `    ${JSON.stringify(header)}: ${bindingOf(e, i)},`;
-    });
+      const key = IDENTIFIER_RE.test(header) ? header : JSON.stringify(header);
+      return `${key}: ${bindingOf(e, i)}`;
+    };
+    // One custom header plus Accept fits on one line, and that is what every corpus
+    // connector with a single header writes (bitrise's `{ Authorization: t, … }`,
+    // `{ "x-api-key": k, … }`, `{ "X-Api-Key": k, … }`). Two or more expand — datadog,
+    // intercom, snowflake — with no counterexample either way.
+    if (e.vars.length === 1) {
+      return [`  return { ${field(0)}, Accept: "application/json" };`];
+    }
+    const entries = e.vars.map((_, i) => `    ${field(i)},`);
     return ["  return {", ...entries, `    Accept: "application/json",`, "  };"];
   }
   return [`  return ${wrapped(e, transformed(e, bindingOf(e, 0)))};`];
@@ -160,6 +189,86 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 }
 
 /**
+ * HTTP Basic, the airflow/zendesk shape: each variable read and guarded on its own, with
+ * its own message naming just that variable, then one multi-line header object.
+ *
+ * Deliberately NOT the combined `a === "" || b === ""` guard `guardLines` builds for
+ * auth: "headers". A basic credential is two independently-supplied secrets — telling the
+ * user "ZENDESK_EMAIL and ZENDESK_API_TOKEN must be set" when only one is missing is worse
+ * diagnostics, and it is not what any of the four corpus connectors wrote.
+ */
+function renderBasic(e: EnvEntry): string {
+  const readAndGuard = e.vars.flatMap((v, i) => {
+    const b = bindingOf(e, i);
+    return [
+      `  const ${b} = process.env[${JSON.stringify(v)}]?.trim();`,
+      `  if (${b} === undefined || ${b} === "") {`,
+      `    throw new Error(${JSON.stringify(`${v} is not set`)});`,
+      "  }",
+    ];
+  });
+  // prefix/suffix decorate the username only — see EnvSchema's refine. `wrapped` returns
+  // the bare binding when neither is set, which is airflow's form.
+  const user = wrapped(e, bindingOf(e, 0));
+  return [
+    `function ${e.local}(): Record<string, string> {`,
+    ...readAndGuard,
+    "  return {",
+    `    Authorization: encodeBasicAuthHeader(${user}, ${bindingOf(e, 1)}),`,
+    '    Accept: "application/json",',
+    "  };",
+    "}",
+  ].join("\n");
+}
+
+/**
+ * The two-function form of a bearer accessor: a `(): string` reader named by `tokenLocal`
+ * that carries the read and the guard, and `local` reduced to the header wrapper that calls
+ * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
+ * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
+ *
+ * **12 corpus connectors** are byte-reproducible by `tokenLocal`: canva, figma, hubspot,
+ * mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe, vercel, zoom.
+ *
+ * The criterion is stated here rather than left to the eye, because "splits the accessor in
+ * two" is fuzzy and counting against it produced three wrong numbers in a row (once naming
+ * testflight and dbt, which have no split at all; once naming 15 with three wrong members
+ * and stripe missing). It is the text this function emits, and every clause of it is
+ * hardcoded below, so anything a connector does differently is a byte the field cannot
+ * produce:
+ *
+ *   1. a wrapper FUNCTION returning `Record<string, string>` — not an inline use of the
+ *      reader at a call site (mendeley reads `Bearer ${accessToken()}` straight into the
+ *      fetch helper's headers option, with no wrapper: OUT);
+ *   2. whose entire body is one `return` of a ONE-LINE object literal;
+ *   3. with exactly two keys, `Authorization` then `Accept: "application/json"` — a third
+ *      header cannot be emitted (intercom adds `"Intercom-Version": "2.11"`: OUT);
+ *   4. whose Authorization value is exactly `` `Bearer ${reader()}` `` — the literal
+ *      `Bearer ` prefix (readwise writes `` `Token ${apiToken()}` ``: OUT) and a CALL to
+ *      the reader, in a header (dagster passes `apiToken()` to a custom
+ *      `"Dagster-Cloud-Api-Token"` header and pipedrive splices it into a query string:
+ *      both OUT);
+ *   5. plus a reader of that name matching `readLines` + `guardLines` for one required var.
+ *
+ * Counted mechanically over all 95 connector directories, not by eye; the script and its
+ * output are in the task-10 report's fix-round-2 section.
+ */
+function renderSplitBearer(e: EnvEntry): string {
+  const binding = bindingOf(e, 0);
+  return [
+    `function ${e.tokenLocal}(): string {`,
+    ...readLines(e),
+    ...guardLines(e),
+    `  return ${binding};`,
+    "}",
+    "",
+    `function ${e.local}(): Record<string, string> {`,
+    `  return { Authorization: \`Bearer \${${e.tokenLocal}()}\`, Accept: "application/json" };`,
+    "}",
+  ].join("\n");
+}
+
+/**
  * `serviceLabel` is only read for the `auth: "client-credentials"` branch, where it names
  * the token-exchange error messages the same way `renderFetchHelper`'s error messages are
  * named. It defaults so every other call site — including every existing test — is
@@ -168,6 +277,13 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): string {
   if (e.auth === "client-credentials") {
     return renderClientCredentials(e, serviceLabel);
+  }
+  if (e.auth === "basic") {
+    return renderBasic(e);
+  }
+  // EnvSchema guarantees tokenLocal implies auth === "bearer".
+  if (e.tokenLocal !== undefined) {
+    return renderSplitBearer(e);
   }
   const returnType = e.auth === undefined ? "string" : "Record<string, string>";
   return [
@@ -179,7 +295,14 @@ export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): stri
   ].join("\n");
 }
 
-/** Renders every env accessor for a spec, in declaration order. */
+/**
+ * Renders every env accessor for a spec, in declaration order, preceded by the shared
+ * trailing-slash helper when any of them calls it. Emitted once however many accessors do
+ * — two declarations of `trimTrailingSlash` in one module is a redeclaration error, and no
+ * corpus connector emits it twice.
+ */
 export function renderEnvAccessors(spec: ConnectorSpec): string {
-  return spec.env.map((e) => renderEnvAccessor(e, spec.serviceLabel)).join("\n\n");
+  const accessors = spec.env.map((e) => renderEnvAccessor(e, spec.serviceLabel));
+  const needsTrim = spec.env.some((e) => e.transform === "trimTrailingSlashFn");
+  return (needsTrim ? [TRIM_TRAILING_SLASH_FN, ...accessors] : accessors).join("\n\n");
 }
