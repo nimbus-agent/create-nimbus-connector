@@ -1,7 +1,7 @@
 # Corpus reach measurement — design
 
 **Date:** 2026-08-03
-**Status:** approved, not implemented
+**Status:** implemented — see scripts/reach.ts, scripts/reach-baseline.ts and scripts/_lib/reach*.ts
 **Roadmap item:** Stage E's final task — *"Raise the measured regeneration coverage of the
 94-connector corpus, and publish the number with its method"* — and the measurement half of
 Stage F's `--from-connector`.

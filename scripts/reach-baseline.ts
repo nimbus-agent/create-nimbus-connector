@@ -45,12 +45,16 @@ async function main(argv: readonly string[]): Promise<void> {
     process.exit(2);
   }
 
+  // Keyed on the tree object of packages/mcp-connectors, not on HEAD — see reach-baseline.ts's
+  // assertComparable docstring.
+  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
   const results = selectConnectors([], connectorDirs(root)).map((name) => measure(name, root));
-  const baseline = buildBaseline(head.value, results);
+  const baseline = buildBaseline(connectorsTree.value, results);
   writeFileSync(BASELINE_PATH, `${JSON.stringify(baseline, undefined, 2)}\n`);
 
   console.log(`Wrote ${BASELINE_PATH}`);
-  console.log(`  measured at Nimbus ${head.value}`);
+  console.log(`  measured at Nimbus HEAD ${head.value}`);
+  console.log(`  connectorsTree ${connectorsTree.value}`);
   console.log(`  ${results.length} connectors recorded`);
 }
 

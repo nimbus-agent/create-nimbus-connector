@@ -1,17 +1,23 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   histogram,
+  measure,
   selectConnectors,
   summaryLines,
   tierFor,
   walkConnector,
 } from "../../scripts/_lib/reach.ts";
+import { initFormatter } from "../../src/format.ts";
 import { tempDirs } from "../support/tmp.ts";
 
 const tmp = tempDirs();
 afterAll(tmp.cleanup);
+
+beforeAll(async () => {
+  await initFormatter();
+});
 
 const SPEC = { name: "x" };
 const OK = { ok: true as const, spec: SPEC };
@@ -170,5 +176,123 @@ describe("walkConnector", () => {
     const files = walkConnector(dir);
 
     expect(files.get("README.md")).toBe("line one\nline two\n");
+  });
+});
+
+describe("measure", () => {
+  // A minimal but genuine hand-rolled connector this repository's own recognizers derive
+  // successfully — every field deriveManifest and deriveSpec require, and nothing more.
+  const MANIFEST = JSON.stringify({
+    displayName: "X Connector",
+    description: "A test connector.",
+    permissions: { network: ["api.example.com"] },
+    syncInterval: 3600,
+    minNimbusVersion: "1.0.0",
+  });
+
+  function validServer(fetchHelperLocal: string): string {
+    return [
+      'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+      'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
+      'import { z } from "zod";',
+      'import { createRegisterSimpleTool, createZodToolRegistrar, mcpJsonResult as jsonResult } from "../../shared/mcp-tool-kit.ts";',
+      'const mcp = new McpServer({ name: "nimbus-x", version: "0.1.0" });',
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      `async function ${fetchHelperLocal}(path: string): Promise<unknown> {`,
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": "abc123", Accept: "application/json" },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`X ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+      `reg("x_list", "List things.", z.object({}), async () => jsonResult(await ${fetchHelperLocal}("/things")));`,
+      "const transport = new StdioServerTransport();",
+      "await mcp.connect(transport);",
+    ].join("\n");
+  }
+
+  it("blocks with no-server/no-manifest when a required file is missing", () => {
+    const result = measure("x", new Map([["src/server.ts", validServer("xGet")]]));
+    expect(result.tier).toBe("blocked");
+    expect(result.blockers).toEqual([{ kind: "no-manifest", detail: "x", line: 0 }]);
+  });
+
+  it("blocks with kind rejected-by-validate when the derived spec fails parseSpec/validateSpec", () => {
+    // "fetch" is a RESERVED_IDENTIFIERS entry (it is the global the emitted helper itself
+    // calls) — a fetch helper genuinely named "fetch" derives structurally fine, then trips
+    // validateSpec's identifier-collision claim.
+    const files = new Map([
+      ["src/server.ts", validServer("fetch")],
+      ["nimbus.extension.json", MANIFEST],
+    ]);
+
+    const result = measure("x", files);
+
+    expect(result.tier).toBe("blocked");
+    expect(result.blockers).toHaveLength(1);
+    expect(result.blockers[0]?.kind).toBe("rejected-by-validate");
+    expect(result.blockers[0]?.detail).toMatch(/reserved emitter identifier/);
+  });
+
+  it("reports the expected tier for a clean derive", () => {
+    const files = new Map([
+      ["src/server.ts", validServer("xGet")],
+      ["nimbus.extension.json", MANIFEST],
+    ]);
+
+    const result = measure("x", files);
+
+    // `files` above is hand-written, not the emitter's own byte-exact output, and it carries
+    // none of the OTHER generated files (README.md, package.json, …), so "all-identical" is
+    // unreachable here regardless — the point of this test is that a normal derive+emit
+    // succeeds end to end with no blockers, exercising the path Task 12's contract is about and
+    // that no test previously imported. Not pinned to one exact tier: whether the hand-written
+    // src/server.ts happens to come out byte-identical to Biome's formatted regeneration is an
+    // accident of formatting, not something this test should assert either way.
+    expect(result.tier).not.toBe("blocked");
+    expect(result.tier).not.toBe("all-identical");
+    expect(result.blockers).toEqual([]);
+  });
+
+  it("blocks with kind emitter-error when generate()/formatAll() throws, without crashing the sweep", () => {
+    // The seam is Biome itself: mock.module replaces "@biomejs/js-api/nodejs" with a fake
+    // whose formatContent() always reports a fatal diagnostic, which is exactly how a genuine
+    // emitter defect (syntactically invalid emitted TypeScript) surfaces in production. Run in
+    // a subprocess, same rationale as test/format.test.ts's own mock.module tests: a fresh
+    // module registry, and mock.module's effect is process-global.
+    const server = JSON.stringify(validServer("xGet"));
+    const manifest = JSON.stringify(MANIFEST);
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/js-api/nodejs", () => ({' +
+      "  Biome: class {" +
+      "    openProject() { return { projectKey: 1 }; }" +
+      "    applyConfiguration() {}" +
+      "    formatContent() {" +
+      '      return { content: "", diagnostics: [{ severity: "error", description: "boom: injected formatter bug" }] };' +
+      "    }" +
+      "  }," +
+      "}));" +
+      'const { initFormatter } = await import("./src/format.ts");' +
+      "await initFormatter();" +
+      'const { measure } = await import("./scripts/_lib/reach.ts");' +
+      `const files = new Map([["src/server.ts", ${server}], ["nimbus.extension.json", ${manifest}]]);` +
+      'const result = measure("x", files);' +
+      'if (result.tier !== "blocked") throw new Error("tier=" + result.tier);' +
+      'if (result.blockers.length !== 1 || result.blockers[0].kind !== "emitter-error") {' +
+      '  throw new Error("blockers=" + JSON.stringify(result.blockers));' +
+      "}" +
+      'console.log("ok");';
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: `${import.meta.dir}/../..`,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.stderr.toString()).toBe("");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toMatch(/ok/);
   });
 });

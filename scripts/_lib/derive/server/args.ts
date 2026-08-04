@@ -47,6 +47,10 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
   const out: Record<string, ArgFields> = {};
   for (const property of properties) {
     if (property.type !== "ObjectProperty") return undefined;
+    // A computed key (`{ [KEY]: z.string() }`) has no literal name — reading `key["name"]`
+    // unguarded would derive an arg literally named "KEY" (the identifier's own name), which
+    // regenerates a schema the real connector never had. Reject rather than misname.
+    if (property["computed"] === true) return undefined;
     const key = property["key"] as AstNode;
     const name = typeof key["value"] === "string" ? key["value"] : String(key["name"] ?? "");
     const parsed = recognizeOne(property["value"] as AstNode);

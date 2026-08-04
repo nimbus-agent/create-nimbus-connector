@@ -1,5 +1,5 @@
 {
-  "nimbusCommit": "8d663237a4ff3615e12cd6c8f106aa3c51b4f34e",
+  "connectorsTree": "e3751a3af7c47c5b9cc885e8fedb29bd595d4c96",
   "tiers": {
     "airflow": "blocked",
     "apple": "blocked",

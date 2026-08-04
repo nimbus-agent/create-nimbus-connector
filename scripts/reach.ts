@@ -13,25 +13,20 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generate } from "../src/emit/index.ts";
 import {
   biomeVersion,
-  formatAll,
   formatterAvailable,
   formatterUnavailableReason,
   initFormatter,
 } from "../src/format.ts";
 import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
-import { parseSpec } from "../src/spec.ts";
-import { validateSpec } from "../src/validate.ts";
-import { deriveSpec } from "./_lib/derive/index.ts";
 import {
   type ConnectorResult,
   histogram,
+  measure as measureFiles,
   selectConnectors,
   summaryLines,
-  tierFor,
   walkConnector,
 } from "./_lib/reach.ts";
 import { assertComparable, compareBaseline } from "./_lib/reach-baseline.ts";
@@ -87,65 +82,32 @@ export function git(root: string, args: string[]): { value: string; error: strin
   }
 }
 
-/** Exported for scripts/reach-baseline.ts. One measurement loop, two commands. */
+/**
+ * Exported for scripts/reach-baseline.ts. One measurement loop, two commands — the same reason
+ * the module-level comment on that file's import gives: two copies would let the baseline and
+ * the check that reads it disagree.
+ *
+ * The read (walkConnector) is wrapped here, not left to throw: the design states "One malformed
+ * connector must never abort a 94-connector run," and an unwrapped call took the whole sweep
+ * down on a single dangling symlink or permissions error before this wrap existed. Everything
+ * after a successful read is decidable from (name, files) alone and lives in _lib/reach.ts's
+ * measure(), which is what makes it unit-testable without a Nimbus checkout.
+ */
 export function measure(name: string, root: string): ConnectorResult {
   const dir = join(root, "packages", "mcp-connectors", name);
-  const real = walkConnector(dir);
-  const server = real.get("src/server.ts");
-  const manifest = real.get("nimbus.extension.json");
-  if (server === undefined || manifest === undefined) {
-    return {
-      name,
-      tier: "blocked",
-      blockers: [
-        { kind: server === undefined ? "no-server" : "no-manifest", detail: dir, line: 0 },
-      ],
-    };
-  }
-
-  const derivation = deriveSpec({ server, manifest });
-  if (!derivation.ok) return { name, tier: "blocked", blockers: derivation.blockers };
-
-  // parseSpec and validateSpec ARE the `emits` tier boundary: a derived spec that trips
-  // RESERVED_IDENTIFIERS is genuinely not generatable today, and counting it is the point. This
-  // try is deliberately narrow — it must NOT also wrap generate()/formatAll() below, or an
-  // emitter bug becomes indistinguishable in the histogram from a genuine spec rejection.
-  let spec: ReturnType<typeof parseSpec>;
+  let files: ReadonlyMap<string, string>;
   try {
-    spec = parseSpec(derivation.spec);
-    validateSpec(spec);
+    files = walkConnector(dir);
   } catch (err) {
     return {
       name,
       tier: "blocked",
       blockers: [
-        {
-          kind: "rejected-by-validate",
-          detail: err instanceof Error ? err.message : String(err),
-          line: 0,
-        },
+        { kind: "read-error", detail: err instanceof Error ? err.message : String(err), line: 0 },
       ],
     };
   }
-
-  // A separate try/catch and a separate blocker kind: this is an emitter defect, not a spec
-  // rejection, and a connector landing here must not take down the other 93 in the sweep.
-  try {
-    const generated = formatAll(generate(spec));
-    return { name, tier: tierFor({ derivation, generated, real }), blockers: [] };
-  } catch (err) {
-    return {
-      name,
-      tier: "blocked",
-      blockers: [
-        {
-          kind: "emitter-error",
-          detail: err instanceof Error ? err.message : String(err),
-          line: 0,
-        },
-      ],
-    };
-  }
+  return measureFiles(name, files);
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -198,10 +160,14 @@ async function main(argv: readonly string[]): Promise<void> {
     process.exit(2);
   }
 
+  // Keyed on the tree object of packages/mcp-connectors — the only path this harness reads —
+  // not on HEAD: see reach-baseline.ts's assertComparable docstring for why a commit SHA is the
+  // wrong key.
+  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
   const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
     typeof compareBaseline
   >[0];
-  const { refusal: mismatch, regressions } = compareBaseline(stored, results, head.value);
+  const { refusal: mismatch, regressions } = compareBaseline(stored, results, connectorsTree.value);
   if (mismatch !== undefined) {
     console.log(`\n${mismatch}`);
     process.exit(2);

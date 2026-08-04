@@ -189,61 +189,148 @@ function countFetchCalls(fn: AstNode): number {
 }
 
 /**
- * Detect the normalizeLeadingSlash pattern:
- * const pathPart = path.startsWith("/") ? path : `/${path}`;
- * Validates the full shape, not just the variable name.
+ * The normalizeLeadingSlash statement, exactly:
+ * `const pathPart = path.startsWith("/") ? path : \`/${path}\`;`
+ *
+ * Matched positionally against ONE statement (the candidate first statement of the body) rather
+ * than scanned for anywhere in the function — see recognizeFetchHelper's own comment on why the
+ * whole body is now walked positionally instead of independently probed for each shape.
  */
-function hasNormalizeLeadingSlash(fn: AstNode): boolean {
-  const statements = ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
-  for (const stmt of statements) {
-    if (stmt.type !== "VariableDeclaration") continue;
-    const decl = (stmt["declarations"] as AstNode[])?.[0];
-    if (!decl) continue;
-    const id = decl["id"] as AstNode;
-    if ((id["name"] as string) !== "pathPart") continue;
+function isPathPartConst(stmt: AstNode): boolean {
+  if (stmt.type !== "VariableDeclaration") return false;
+  const decls = (stmt["declarations"] as AstNode[]) ?? [];
+  if (decls.length !== 1) return false;
+  const decl = decls[0]!;
+  const id = decl["id"] as AstNode;
+  if ((id["name"] as string) !== "pathPart") return false;
 
-    // Validate the init expression is a ConditionalExpression with the required shape
-    const init = decl["init"] as AstNode | undefined;
-    if (init?.type !== "ConditionalExpression") return false;
+  // Validate the init expression is a ConditionalExpression with the required shape
+  const init = decl["init"] as AstNode | undefined;
+  if (init?.type !== "ConditionalExpression") return false;
 
-    // Test: path.startsWith("/")
-    const test = init["test"] as AstNode | undefined;
-    if (test?.type !== "CallExpression") return false;
-    const testCallee = test["callee"] as AstNode | undefined;
-    if (testCallee?.type !== "MemberExpression") return false;
-    const testObject = testCallee["object"] as AstNode | undefined;
-    if (testObject?.type !== "Identifier" || testObject["name"] !== "path") return false;
-    const testProperty = testCallee["property"] as AstNode | undefined;
-    if (testProperty?.type !== "Identifier" || testProperty["name"] !== "startsWith") return false;
-    const testArgs = (test["arguments"] as AstNode[]) ?? [];
-    if (testArgs.length !== 1) return false;
-    const testArg = testArgs[0];
-    if (!testArg || typeof testArg["value"] !== "string" || testArg["value"] !== "/") return false;
+  // Test: path.startsWith("/")
+  const test = init["test"] as AstNode | undefined;
+  if (test?.type !== "CallExpression") return false;
+  const testCallee = test["callee"] as AstNode | undefined;
+  if (testCallee?.type !== "MemberExpression") return false;
+  const testObject = testCallee["object"] as AstNode | undefined;
+  if (testObject?.type !== "Identifier" || testObject["name"] !== "path") return false;
+  const testProperty = testCallee["property"] as AstNode | undefined;
+  if (testProperty?.type !== "Identifier" || testProperty["name"] !== "startsWith") return false;
+  const testArgs = (test["arguments"] as AstNode[]) ?? [];
+  if (testArgs.length !== 1) return false;
+  const testArg = testArgs[0];
+  if (!testArg || typeof testArg["value"] !== "string" || testArg["value"] !== "/") return false;
 
-    // Consequent: path (Identifier)
-    const consequent = init["consequent"] as AstNode | undefined;
-    if (consequent?.type !== "Identifier" || consequent["name"] !== "path") return false;
+  // Consequent: path (Identifier)
+  const consequent = init["consequent"] as AstNode | undefined;
+  if (consequent?.type !== "Identifier" || consequent["name"] !== "path") return false;
 
-    // Alternate: `/${path}` (TemplateLiteral)
-    const alternate = init["alternate"] as AstNode | undefined;
-    if (alternate?.type !== "TemplateLiteral") return false;
-    const altQuasis = (alternate["quasis"] as AstNode[]) ?? [];
-    const altExpressions = (alternate["expressions"] as AstNode[]) ?? [];
-    if (altQuasis.length !== 2 || altExpressions.length !== 1) return false;
-    const firstQuasi = altQuasis[0];
-    const firstCooked = (firstQuasi?.["value"] as { cooked?: string } | undefined)?.cooked;
-    if (firstCooked !== "/") return false;
-    const pathExpr = altExpressions[0];
-    if (pathExpr?.type !== "Identifier" || pathExpr["name"] !== "path") return false;
-
-    // All checks passed
-    return true;
-  }
-  return false;
+  // Alternate: `/${path}` (TemplateLiteral)
+  const alternate = init["alternate"] as AstNode | undefined;
+  if (alternate?.type !== "TemplateLiteral") return false;
+  const altQuasis = (alternate["quasis"] as AstNode[]) ?? [];
+  const altExpressions = (alternate["expressions"] as AstNode[]) ?? [];
+  if (altQuasis.length !== 2 || altExpressions.length !== 1) return false;
+  const firstQuasi = altQuasis[0];
+  const firstCooked = (firstQuasi?.["value"] as { cooked?: string } | undefined)?.cooked;
+  if (firstCooked !== "/") return false;
+  const pathExpr = altExpressions[0];
+  return pathExpr?.type === "Identifier" && pathExpr["name"] === "path";
 }
 
 function bodyStatements(fn: AstNode): AstNode[] {
   return ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
+}
+
+/**
+ * `const res = await fetch(<url>, <options>);` — the fetch call statement itself, matched
+ * positionally. Returns the CallExpression so the caller can read its url/options arguments.
+ */
+function matchFetchStatement(stmt: AstNode): AstNode | undefined {
+  if (stmt.type !== "VariableDeclaration") return undefined;
+  const decls = (stmt["declarations"] as AstNode[]) ?? [];
+  if (decls.length !== 1) return undefined;
+  const decl = decls[0]!;
+  const id = decl["id"] as AstNode;
+  if (id.type !== "Identifier" || id["name"] !== "res") return undefined;
+  const init = decl["init"] as AstNode | undefined;
+  if (init?.type !== "AwaitExpression") return undefined;
+  const call = init["argument"] as AstNode | undefined;
+  if (call?.type !== "CallExpression") return undefined;
+  const callee = call["callee"] as AstNode;
+  if (callee.type !== "Identifier" || callee["name"] !== "fetch") return undefined;
+  const args = (call["arguments"] as AstNode[]) ?? [];
+  return args.length === 2 ? call : undefined;
+}
+
+/**
+ * `const text = await res.text();` — matched positionally, exactly.
+ */
+function isTextStatement(stmt: AstNode): boolean {
+  if (stmt.type !== "VariableDeclaration") return false;
+  const decls = (stmt["declarations"] as AstNode[]) ?? [];
+  if (decls.length !== 1) return false;
+  const decl = decls[0]!;
+  const id = decl["id"] as AstNode;
+  if (id.type !== "Identifier" || id["name"] !== "text") return false;
+  const init = decl["init"] as AstNode | undefined;
+  if (init?.type !== "AwaitExpression") return false;
+  const call = init["argument"] as AstNode | undefined;
+  if (call?.type !== "CallExpression") return false;
+  const callee = call["callee"] as AstNode;
+  if (callee.type !== "MemberExpression") return false;
+  const object = callee["object"] as AstNode;
+  const property = callee["property"] as AstNode;
+  if (object.type !== "Identifier" || object["name"] !== "res") return false;
+  if (property.type !== "Identifier" || property["name"] !== "text") return false;
+  return ((call["arguments"] as AstNode[]) ?? []).length === 0;
+}
+
+/**
+ * `if (!res.ok) { throw new Error(...); }` — matched positionally. The throw's message
+ * (serviceLabel) is read separately, by serviceLabelFrom against the whole function: with the
+ * body now fully accounted for statement by statement, this is the only throw left in it.
+ */
+function isThrowGuard(stmt: AstNode): boolean {
+  if (stmt.type !== "IfStatement") return false;
+  if (stmt["alternate"] != null) return false;
+  const test = stmt["test"] as AstNode;
+  if (test.type !== "UnaryExpression" || test["operator"] !== "!") return false;
+  const arg = test["argument"] as AstNode;
+  if (arg.type !== "MemberExpression") return false;
+  const object = arg["object"] as AstNode;
+  const property = arg["property"] as AstNode;
+  if (object.type !== "Identifier" || object["name"] !== "res") return false;
+  if (property.type !== "Identifier" || property["name"] !== "ok") return false;
+  const consequent = stmt["consequent"] as AstNode | undefined;
+  const body =
+    consequent?.type === "BlockStatement"
+      ? (consequent["body"] as AstNode[] | undefined)
+      : undefined;
+  return body !== undefined && body.length === 1 && body[0]!.type === "ThrowStatement";
+}
+
+/**
+ * Every ObjectProperty in the fetch options object other than `headers` — `signal: …`, `cache:
+ * …`, or any other literal property a mutation might add. A SpreadElement is deliberately
+ * tolerated here, unchanged from before this rewrite: it carries no readable properties, so it
+ * cannot smuggle in a header a real corpus fetch call this recognizer already accepts (a spread
+ * options object is a shape this recognizer already lived with, not a new gap this rewrite
+ * opens).
+ */
+function hasUnexpectedFetchOption(properties: readonly AstNode[]): boolean {
+  return properties.some((p) => {
+    if (p.type !== "ObjectProperty") return false;
+    const key = p["key"] as AstNode;
+    const name =
+      key.type === "Identifier"
+        ? key["name"]
+        : key.type === "StringLiteral"
+          ? key["value"]
+          : undefined;
+    return name !== "headers";
+  });
 }
 
 /** `JSON.parse(text) as unknown` — the argument both of renderFetchHelper's return forms share. */
@@ -323,12 +410,9 @@ function isJsonFallbackTry(node: AstNode): boolean {
  * `renderFetchHelper` can end with: `true` for the jsonFallbackRaw try/catch, `false` for the
  * plain return, `undefined` for anything else (reject the whole helper — Gap C).
  */
-function classifyJsonFallback(fn: AstNode): boolean | undefined {
-  const statements = bodyStatements(fn);
-  const last = statements.at(-1);
-  if (last === undefined) return undefined;
-  if (isPlainJsonReturn(last)) return false;
-  if (isJsonFallbackTry(last)) return true;
+function classifyLastStatement(node: AstNode): boolean | undefined {
+  if (isPlainJsonReturn(node)) return false;
+  if (isJsonFallbackTry(node)) return true;
   return undefined;
 }
 
@@ -336,6 +420,15 @@ function classifyJsonFallback(fn: AstNode): boolean | undefined {
  * The read helper, as src/emit/server/fetch-helper.ts writes it. Recognized by shape rather
  * than by name: the local is derived from the spec by formula, so matching on a name would
  * only recognize the connectors whose author happened to agree with the formula.
+ *
+ * Final fix wave: this used to `find()`/`walk()` the whole function tree for the fetch call and
+ * classify only the LAST statement, leaving everything between the top of the body and that
+ * last statement unverified — claims.claim(s, "fetch-helper") below claims the function's whole
+ * byte range at the top level, so an extra statement inserted anywhere in the middle (a stray
+ * `const retries = 3;`, an `if (res.status === 429) { … }` retry branch) was silently accepted
+ * along with it. The body is now walked positionally instead: an optional pathPart const, the
+ * fetch call, the text() read, the !res.ok guard, then exactly one closing statement (the plain
+ * return or the jsonFallbackRaw try/catch) — nothing more, nothing reordered.
  */
 export function recognizeFetchHelper(
   statements: readonly AstNode[],
@@ -344,14 +437,44 @@ export function recognizeFetchHelper(
   for (const s of statements) {
     if (s.type !== "FunctionDeclaration" || s["async"] !== true) continue;
 
+    // The read helper always takes a single `path` parameter — the write helper (`<local>Send`)
+    // takes three, so this alone keeps the two from being confused before the body shapes
+    // (which already disambiguate them, via the catch's fallback value) are even considered.
+    const params = (s["params"] as AstNode[]) ?? [];
+    if (params.length !== 1) continue;
+    const param = params[0]!;
+    if (param.type !== "Identifier" || param["name"] !== "path") continue;
+
     // Fix for correlation defect: count fetch() calls. If != 1, reject.
     if (countFetchCalls(s) !== 1) continue;
 
-    const fetchCall = find(
-      s,
-      (n) => n.type === "CallExpression" && (n["callee"] as AstNode)["name"] === "fetch",
-    );
+    const body = bodyStatements(s);
+    let idx = 0;
+
+    const normalizeLeadingSlash =
+      idx < body.length && isPathPartConst(body[idx]!) ? true : undefined;
+    if (normalizeLeadingSlash !== undefined) idx++;
+
+    const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
     if (fetchCall === undefined) continue;
+    idx++;
+
+    if (idx >= body.length || !isTextStatement(body[idx]!)) continue;
+    idx++;
+
+    if (idx >= body.length || !isThrowGuard(body[idx]!)) continue;
+    idx++;
+
+    // Exactly one statement left — the plain return or the jsonFallbackRaw try/catch. Not zero
+    // (a helper cannot end at the guard), not two-or-more (an extra statement here is exactly
+    // the class of mutation this rewrite closes).
+    if (body.length - idx !== 1) continue;
+    const jsonFallback = classifyLastStatement(body[idx]!);
+    if (jsonFallback === undefined) continue;
+
+    const options = (fetchCall["arguments"] as AstNode[])[1];
+    if (options?.type !== "ObjectExpression") continue;
+    if (hasUnexpectedFetchOption((options["properties"] as AstNode[]) ?? [])) continue;
 
     const url = (fetchCall["arguments"] as AstNode[])[0];
     const base = url === undefined ? undefined : reconstructBase(url);
@@ -369,11 +492,6 @@ export function recognizeFetchHelper(
     ) {
       continue;
     }
-
-    const normalizeLeadingSlash = hasNormalizeLeadingSlash(s) ? true : undefined;
-
-    const jsonFallback = classifyJsonFallback(s);
-    if (jsonFallback === undefined) continue;
 
     claims.claim(s, "fetch-helper");
     return {

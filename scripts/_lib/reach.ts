@@ -1,8 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { generate } from "../../src/emit/index.ts";
+import { formatAll } from "../../src/format.ts";
+import { parseSpec } from "../../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../../src/types.ts";
+import { validateSpec } from "../../src/validate.ts";
 import type { Blocker } from "./derive/blockers.ts";
-import type { Derivation } from "./derive/index.ts";
+import { type Derivation, deriveSpec } from "./derive/index.ts";
 
 export type Tier = "blocked" | "emits" | "server-identical" | "all-identical";
 
@@ -40,6 +44,71 @@ export function walkConnector(dir: string): Map<string, string> {
   };
   walk("");
   return out;
+}
+
+/**
+ * One measurement, decidable entirely from its arguments — no filesystem, no git. The read side
+ * (walkConnector against a real connector's directory) lives in the two shells (scripts/reach.ts
+ * and scripts/reach-baseline.ts) so a connector this harness cannot even read — a dangling
+ * symlink, a permissions error — becomes a `read-error` blocker there rather than aborting the
+ * whole sweep; this function only ever sees bytes that were read successfully.
+ */
+export function measure(name: string, files: ReadonlyMap<string, string>): ConnectorResult {
+  const server = files.get(SERVER);
+  const manifest = files.get("nimbus.extension.json");
+  if (server === undefined || manifest === undefined) {
+    return {
+      name,
+      tier: "blocked",
+      blockers: [
+        { kind: server === undefined ? "no-server" : "no-manifest", detail: name, line: 0 },
+      ],
+    };
+  }
+
+  const derivation = deriveSpec({ server, manifest });
+  if (!derivation.ok) return { name, tier: "blocked", blockers: derivation.blockers };
+
+  // parseSpec and validateSpec ARE the `emits` tier boundary: a derived spec that trips
+  // RESERVED_IDENTIFIERS is genuinely not generatable today, and counting it is the point. This
+  // try is deliberately narrow — it must NOT also wrap generate()/formatAll() below, or an
+  // emitter bug becomes indistinguishable in the histogram from a genuine spec rejection.
+  let spec: ReturnType<typeof parseSpec>;
+  try {
+    spec = parseSpec(derivation.spec);
+    validateSpec(spec);
+  } catch (err) {
+    return {
+      name,
+      tier: "blocked",
+      blockers: [
+        {
+          kind: "rejected-by-validate",
+          detail: err instanceof Error ? err.message : String(err),
+          line: 0,
+        },
+      ],
+    };
+  }
+
+  // A separate try/catch and a separate blocker kind: this is an emitter defect, not a spec
+  // rejection, and a connector landing here must not take down the other 93 in the sweep.
+  try {
+    const generated = formatAll(generate(spec));
+    return { name, tier: tierFor({ derivation, generated, real: files }), blockers: [] };
+  } catch (err) {
+    return {
+      name,
+      tier: "blocked",
+      blockers: [
+        {
+          kind: "emitter-error",
+          detail: err instanceof Error ? err.message : String(err),
+          line: 0,
+        },
+      ],
+    };
+  }
 }
 
 /**

@@ -36,4 +36,11 @@ describe("recognizeArgs", () => {
   it("returns undefined for anything that is not a z.object call", () => {
     expect(argsOf("searchToolInputSchema")).toBeUndefined();
   });
+
+  it('returns undefined for a computed key, rather than deriving an arg literally named "KEY"', () => {
+    // `{ [KEY]: z.string() }` has no literal key — reading property["name"] unguarded would
+    // read the identifier's own name ("KEY") as the arg's name, deriving a spec that
+    // regenerates a schema the real connector never had.
+    expect(argsOf("z.object({ [KEY]: z.string() })")).toBeUndefined();
+  });
 });

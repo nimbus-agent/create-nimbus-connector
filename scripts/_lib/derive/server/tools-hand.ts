@@ -292,6 +292,12 @@ export function recognizeTools(
     .map((statement) => ({ statement, call: isRegCall(statement) }))
     .filter((entry): entry is { statement: AstNode; call: AstNode } => entry.call !== undefined);
 
+  // A frame with zero reg() calls is not a hand-rolled connector with no tools — it is this
+  // recognizer failing to find any reg() calls at all (e.g. a module this plan's recognizers
+  // do not model). Deriving `{ tools: [] }` for it is accepted by parseSpec/validateSpec and
+  // regenerates a connector that never existed, a false `emits`. Refuse instead.
+  if (regs.length === 0) return undefined;
+
   const shapes: ToolShape[] = [];
   for (const { call } of regs) {
     const shape = recognizeOne(call);

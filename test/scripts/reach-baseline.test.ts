@@ -11,9 +11,9 @@ const results = [
 ];
 
 describe("buildBaseline", () => {
-  it("records the commit and every connector's tier", () => {
+  it("records the connectors tree and every connector's tier", () => {
     expect(buildBaseline("f4e9d93d", results)).toEqual({
-      nimbusCommit: "f4e9d93d",
+      connectorsTree: "f4e9d93d",
       tiers: { newrelic: "all-identical", netlify: "emits" },
     });
   });
@@ -42,7 +42,7 @@ describe("assertComparable", () => {
 describe("compareBaseline", () => {
   const baseline = buildBaseline("f4e9d93d", results);
 
-  it("refuses to compare across revisions rather than producing a verdict", () => {
+  it("refuses to compare across connector trees rather than producing a verdict", () => {
     const out = compareBaseline(baseline, results, "0000000");
     expect(out.refusal).toMatch(/f4e9d93d/);
     expect(out.regressions).toEqual([]);

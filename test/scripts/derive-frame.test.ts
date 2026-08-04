@@ -53,6 +53,34 @@ describe("recognizeFrame", () => {
     expect(claims.claims()).toEqual([]);
   });
 
+  // Final fix wave, Fix 2: claims.claim(s, "frame") claims each of these statements' whole byte
+  // range at the top level, so a mutation to what is INSIDE one of them was previously invisible
+  // to the totality rule — the statement was still claimed, mutation and all. isConstFrom and
+  // getMcpServerInfo now verify the interior instead of only the callee/key names.
+  it("rejects createZodToolRegistrar called with an extra argument", () => {
+    const source = FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp), { strict: true });",
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it('rejects a McpServer literal whose version does not match the emitted "0.1.0"', () => {
+    const source = FRAME.replace(
+      'const mcp = new McpServer({ name: "nimbus-newrelic", version: "0.1.0" });',
+      'const mcp = new McpServer({ name: "nimbus-newrelic", version: "2.4.1" });',
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
   it("rejects frame where connect receiver is not the mcp variable", () => {
     const source = [
       'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',

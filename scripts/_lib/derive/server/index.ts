@@ -20,7 +20,15 @@ function isFrameImport(node: AstNode): boolean {
   return FRAME_IMPORTS.has(source) || source.endsWith("/mcp-tool-kit.ts");
 }
 
-/** `new McpServer({ name: "nimbus-<name>", … })` -> `{ varName, connectorName }`. */
+/**
+ * `new McpServer({ name: "nimbus-<name>", version: "0.1.0" })` -> `{ varName, connectorName }`.
+ *
+ * Pinned to exactly the two properties `wiring()` in src/emit/server/index.ts writes, in that
+ * order, with `version` checked against the literal "0.1.0" it always emits — not merely
+ * "some `name` property is present, ignore the rest". A wholesale `version: "2.4.1"` swap or an
+ * added third property (a `capabilities` block, say) is a shape this emitter never writes, and
+ * must be rejected rather than accepted on the strength of the `name` property alone.
+ */
 function getMcpServerInfo(node: AstNode): { varName: string; connectorName: string } | undefined {
   if (node.type !== "VariableDeclaration") return undefined;
   const varName = ((node["declarations"] as AstNode[])[0]?.["id"] as AstNode)?.["name"];
@@ -30,18 +38,25 @@ function getMcpServerInfo(node: AstNode): { varName: string; connectorName: stri
   if (init?.type !== "NewExpression") return undefined;
   const callee = init["callee"] as AstNode;
   if (callee.type !== "Identifier" || callee["name"] !== "McpServer") return undefined;
-  const arg = (init["arguments"] as AstNode[])[0];
-  const properties = (arg?.["properties"] as AstNode[] | undefined) ?? [];
-  for (const p of properties) {
-    const key = p["key"] as AstNode | undefined;
-    const value = p["value"] as AstNode | undefined;
-    if (key?.["name"] === "name" && typeof value?.["value"] === "string") {
-      const full = value["value"];
-      const connectorName = full.startsWith("nimbus-") ? full.slice("nimbus-".length) : full;
-      return { varName, connectorName };
-    }
-  }
-  return undefined;
+  const args = (init["arguments"] as AstNode[]) ?? [];
+  if (args.length !== 1) return undefined;
+  const arg = args[0] as AstNode;
+  if (arg.type !== "ObjectExpression") return undefined;
+  const properties = (arg["properties"] as AstNode[] | undefined) ?? [];
+  if (properties.length !== 2) return undefined;
+  if (properties.some((p) => p.type !== "ObjectProperty")) return undefined;
+
+  const [nameProp, versionProp] = properties as [AstNode, AstNode];
+  const nameKey = nameProp["key"] as AstNode;
+  const nameValue = nameProp["value"] as AstNode;
+  if (nameKey["name"] !== "name" || typeof nameValue["value"] !== "string") return undefined;
+  const versionKey = versionProp["key"] as AstNode;
+  const versionValue = versionProp["value"] as AstNode;
+  if (versionKey["name"] !== "version" || versionValue["value"] !== "0.1.0") return undefined;
+
+  const full = nameValue["value"] as string;
+  const connectorName = full.startsWith("nimbus-") ? full.slice("nimbus-".length) : full;
+  return { varName, connectorName };
 }
 
 function hasMcpToolKitImport(node: AstNode): boolean {
@@ -49,16 +64,23 @@ function hasMcpToolKitImport(node: AstNode): boolean {
   return source?.endsWith("/mcp-tool-kit.ts") === true;
 }
 
-function isConstFrom(node: AstNode, callee: string): boolean {
+/**
+ * `const <x> = <callee>(...)` / `new <callee>(...)` with exactly `expectedArgs` arguments.
+ *
+ * The argument count is checked, not just the callee name: `createZodToolRegistrar(
+ * createRegisterSimpleTool(mcp))` always takes exactly one argument and `new
+ * StdioServerTransport()` always takes zero, per src/emit/server/index.ts's `wiring()`. An
+ * extra argument — `createZodToolRegistrar(createRegisterSimpleTool(mcp), { strict: true })`,
+ * say — is a call this emitter never writes, and accepting it on the callee name alone would
+ * claim a statement whose actual behaviour this recognizer never verified.
+ */
+function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boolean {
   if (node.type !== "VariableDeclaration") return false;
   const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
-  if (init?.type === "CallExpression") {
-    return (init["callee"] as AstNode)["name"] === callee;
-  }
-  if (init?.type === "NewExpression") {
-    return (init["callee"] as AstNode)["name"] === callee;
-  }
-  return false;
+  if (init?.type !== "CallExpression" && init?.type !== "NewExpression") return false;
+  const args = (init["arguments"] as AstNode[]) ?? [];
+  if (args.length !== expectedArgs) return false;
+  return (init["callee"] as AstNode)["name"] === callee;
 }
 
 /** `await <mcpVar>.connect(transport);` where mcpVar matches the McpServer const's variable name. */
@@ -108,12 +130,13 @@ export function recognizeFrame(
   if (!mcpInfo) return undefined;
   const { varName: mcpVar, connectorName } = mcpInfo;
 
-  // (3) Find registrar const (REQUIRED).
-  const registrarNode = statements.find((s) => isConstFrom(s, "createZodToolRegistrar"));
+  // (3) Find registrar const (REQUIRED). createZodToolRegistrar(createRegisterSimpleTool(mcp))
+  // always takes exactly one argument.
+  const registrarNode = statements.find((s) => isConstFrom(s, "createZodToolRegistrar", 1));
   if (!registrarNode) return undefined;
 
-  // (4) Find transport const (REQUIRED).
-  const transportNode = statements.find((s) => isConstFrom(s, "StdioServerTransport"));
+  // (4) Find transport const (REQUIRED). new StdioServerTransport() always takes zero.
+  const transportNode = statements.find((s) => isConstFrom(s, "StdioServerTransport", 0));
   if (!transportNode) return undefined;
 
   // (5) Find connect call with the correct mcp variable (REQUIRED).

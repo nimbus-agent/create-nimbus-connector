@@ -98,8 +98,11 @@ describe("recognizeTools", () => {
     expect(unclaimed).toHaveLength(2);
   });
 
-  it("returns an empty list for a module with no reg calls", () => {
-    expect(run("const a = 1;").result).toEqual({ tools: [] });
+  it("refuses a module with no reg calls, rather than falsely deriving a zero-tool connector", () => {
+    // A hand-rolled frame with no reg() calls is not evidence of a real zero-tool connector —
+    // it is this recognizer failing to find any, and `{ tools: [] }` is accepted by both
+    // parseSpec and validateSpec, which would regenerate a connector that never existed.
+    expect(run("const a = 1;").result).toBeUndefined();
   });
 
   it("refuses a conditional that is not the boolean hoist, rather than claiming it wrongly", () => {
@@ -381,12 +384,14 @@ describe("recognizeTools", () => {
 
   it("does not recognize a reg(...) call reached through a member expression, e.g. obj.reg(...)", () => {
     // isRegCall requires an Identifier callee named "reg" — a member-expression callee is a
-    // different shape (and not one renderTool ever emits), so the statement is simply not a
-    // reg call at all: it is skipped rather than fed to recognizeOne, tools is the successful
-    // (but empty) result, and the statement itself is left unclaimed.
+    // different shape (and not one renderTool ever emits), so the statement is simply not a reg
+    // call at all: it is skipped rather than fed to recognizeOne. With zero reg() calls found,
+    // this is now the same refusal as a module with none at all (see the zero-regs test above) —
+    // `{ tools: [] }` would falsely derive a zero-tool connector — and the statement itself is
+    // left unclaimed.
     const source = 'obj.reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")));';
     const { result, unclaimed } = run(source);
-    expect(result).toEqual({ tools: [] });
+    expect(result).toBeUndefined();
     expect(unclaimed).toHaveLength(1);
   });
 
