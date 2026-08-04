@@ -12,7 +12,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { takeValue } from "../src/cli.ts";
 import {
   biomeVersion,
   formatterAvailable,
@@ -25,6 +24,7 @@ import {
   type ConnectorResult,
   histogram,
   measure as measureFiles,
+  parseArgs,
   selectConnectors,
   summaryLines,
   walkConnector,
@@ -38,27 +38,6 @@ import {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const BASELINE_PATH = join(scriptDir, "..", "fixtures", "reach-baseline.json");
-
-export function parseArgs(argv: readonly string[]): {
-  names: string[];
-  nimbusRoot?: string;
-  baseline: boolean;
-  verbose: boolean;
-} {
-  const names: string[] = [];
-  let nimbusRoot: string | undefined;
-  let baseline = false;
-  let verbose = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--nimbus-root") nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
-    else if (a === "--baseline") baseline = true;
-    else if (a === "--verbose") verbose = true;
-    else if (a?.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
-    else if (a !== undefined) names.push(a);
-  }
-  return { names, nimbusRoot, baseline, verbose };
-}
 
 /**
  * Deliberately NOT `localeCompare`, which is what SonarCloud's S2871 message suggests.

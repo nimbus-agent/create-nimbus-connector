@@ -73,7 +73,7 @@ imports it, so everything a test touches must be decidable from its arguments.
 This is the plan-of-record, not as-built — see the *Status* line above and the executed plan's
 own post-execution note. What actually shipped:
 
-```
+```text
 scripts/reach.ts               thin shell: args, resolve root, enumerate, print; import.meta.main guarded
 scripts/reach-baseline.ts      rewrites the baseline; its own strict arg parsing (--nimbus-root
                                 only — no scoped-baseline flag exists to honor), shares the

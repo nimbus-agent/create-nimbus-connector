@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { parseArgs } from "../../scripts/reach-baseline.ts";
+import { parseArgs } from "../../scripts/_lib/reach-baseline.ts";
 
 describe("reach-baseline.ts parseArgs", () => {
   it("returns no root for an empty argv", () => {

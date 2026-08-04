@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { takeValue } from "../../src/cli.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -7,6 +8,34 @@ import { displayPath, type GeneratedFile } from "../../src/types.ts";
 import { validateSpec } from "../../src/validate.ts";
 import type { Blocker } from "./derive/blockers.ts";
 import { type Derivation, deriveSpec } from "./derive/index.ts";
+
+/**
+ * `bun run reach`'s own argument parsing, lifted out of scripts/reach.ts on the
+ * scripts/_lib/golden-diff.ts precedent: `bunfig.toml` enforces `coverageThreshold` PER FILE,
+ * and Bun puts a file in the coverage report the moment a test imports it. scripts/reach.ts's
+ * `main()` needs a Nimbus checkout and cannot clear the floor, so anything a test reaches for
+ * must live somewhere that does not drag `main()` in with it.
+ */
+export function parseArgs(argv: readonly string[]): {
+  names: string[];
+  nimbusRoot?: string;
+  baseline: boolean;
+  verbose: boolean;
+} {
+  const names: string[] = [];
+  let nimbusRoot: string | undefined;
+  let baseline = false;
+  let verbose = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--nimbus-root") nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
+    else if (a === "--baseline") baseline = true;
+    else if (a === "--verbose") verbose = true;
+    else if (a?.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
+    else if (a !== undefined) names.push(a);
+  }
+  return { names, nimbusRoot, baseline, verbose };
+}
 
 export type Tier = "blocked" | "emits" | "server-identical" | "all-identical";
 

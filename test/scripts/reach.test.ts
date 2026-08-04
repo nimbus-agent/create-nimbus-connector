@@ -4,12 +4,12 @@ import { join } from "node:path";
 import {
   histogram,
   measure,
+  parseArgs,
   selectConnectors,
   summaryLines,
   tierFor,
   walkConnector,
 } from "../../scripts/_lib/reach.ts";
-import { parseArgs } from "../../scripts/reach.ts";
 import { initFormatter } from "../../src/format.ts";
 import { tempDirs } from "../support/tmp.ts";
 

@@ -35,6 +35,11 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
   if (node.type !== "CallExpression") return undefined;
   const callee = node["callee"] as AstNode;
   if (callee.type !== "MemberExpression") return undefined;
+  // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
+  // variable's name, not a property name. Unguarded, this would accept `z[object](...)` as
+  // `z.object(...)` whenever the index variable happened to be named "object". Same hazard as
+  // the object-key guard three lines below and server/index.ts's isConnect.
+  if (callee["computed"] === true) return undefined;
   if ((callee["object"] as AstNode)["name"] !== "z") return undefined;
   if ((callee["property"] as AstNode)["name"] !== "object") return undefined;
 
@@ -67,6 +72,9 @@ function recognizeOne(node: AstNode): ArgFields | undefined {
   while (current.type === "CallExpression") {
     const callee = current["callee"] as AstNode;
     if (callee.type !== "MemberExpression") return undefined;
+    // Same computed-member hazard as recognizeArgs above: `z.number()[int]()` would otherwise
+    // be read as the `.int()` modifier whenever the index variable was named "int".
+    if (callee["computed"] === true) return undefined;
     const property = (callee["property"] as AstNode)["name"];
     modifiers.push({ name: String(property), args: current["arguments"] as AstNode[] });
     current = callee["object"] as AstNode;

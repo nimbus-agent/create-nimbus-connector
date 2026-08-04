@@ -50,6 +50,13 @@ function isRegCall(node: AstNode): AstNode | undefined {
  */
 function memberArgName(node: AstNode): string | undefined {
   if (node.type !== "MemberExpression") return undefined;
+  // A computed member (`p[key]`) has an Identifier `property` too — it's the KEY variable's
+  // name, not a property name. Reading it unguarded would name an arg after whatever local
+  // happens to be used as the index (`p[key]` -> arg "key"), an arg the connector never
+  // declared. path-template.ts's argNameFromExpr guards this identical hazard on the read side
+  // (citing args.ts:53); this function had the same shape and the same gap, just unnoticed
+  // until the computed-member sweep that added server/index.ts's isConnect guard.
+  if (node["computed"] === true) return undefined;
   const object = node["object"] as AstNode;
   const property = node["property"] as AstNode;
   if (object.type !== "Identifier" || property.type !== "Identifier") return undefined;

@@ -21,11 +21,19 @@ function envVarRead(init: AstNode | undefined): string | undefined {
   if (callee.type !== "OptionalMemberExpression" && callee.type !== "MemberExpression") {
     return undefined;
   }
+  // A computed member (`x[trim]()`) can have an Identifier `property` too — the KEY variable's
+  // name, not a property name. Unguarded, this accepts `x[trim]()` as `x.trim()` whenever the
+  // index variable happened to be named "trim". Same hazard as server/index.ts's isConnect.
+  if (callee["computed"] === true) return undefined;
   if ((callee["property"] as AstNode)["name"] !== "trim") return undefined;
   const member = callee["object"] as AstNode;
   if (member.type !== "MemberExpression") return undefined;
+  // `member` (`process.env["VAR"]`) is intentionally computed — its bracketed key is read as
+  // `key["value"]` below, guarded there by a `typeof` check. `object` (`process.env`) is not:
+  // it must be the literal, non-computed `.env` access, so a `process[env]["VAR"]` written with
+  // an identifier named "env" must not be accepted as though it were.
   const object = member["object"] as AstNode;
-  if (object.type !== "MemberExpression") return undefined;
+  if (object.type !== "MemberExpression" || object["computed"] === true) return undefined;
   if ((object["object"] as AstNode)["name"] !== "process") return undefined;
   if ((object["property"] as AstNode)["name"] !== "env") return undefined;
   const key = member["property"] as AstNode;
@@ -146,7 +154,10 @@ function matchTransformExpr(
     return undefined;
   }
 
-  if (callee.type === "MemberExpression") {
+  // `callee["computed"] !== true` guards the same hazard server/index.ts's isConnect does:
+  // `binding[replace](...)` has an Identifier `property` too (the KEY variable's name), which
+  // would otherwise be read as `.replace` whenever that variable was named "replace".
+  if (callee.type === "MemberExpression" && callee["computed"] !== true) {
     const object = callee["object"] as AstNode;
     const property = callee["property"] as AstNode;
     if (

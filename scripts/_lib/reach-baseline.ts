@@ -1,6 +1,36 @@
+import { takeValue } from "../../src/cli.ts";
 import type { ConnectorResult, Tier } from "./reach.ts";
 
 export type Baseline = { connectorsTree: string; tiers: Record<string, Tier> };
+
+/**
+ * `bun run reach:baseline`'s own argument parsing, lifted out of scripts/reach-baseline.ts on
+ * the same scripts/_lib/golden-diff.ts precedent scripts/_lib/reach.ts's `parseArgs` cites:
+ * `main()` there needs a Nimbus checkout and cannot clear the per-file coverage floor, so a
+ * test reaching for `parseArgs` alone must not drag it in.
+ *
+ * This command always measures and records the FULL corpus — that is its entire point, and
+ * `--baseline`/connector names on `bun run reach` exist precisely to compare a run against what
+ * this one wrote. There is no scoped-baseline format this command could honor, so an
+ * unsupported flag or a positional name is refused rather than ignored.
+ */
+export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
+  let nimbusRoot: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--nimbus-root") {
+      nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
+    } else {
+      throw new Error(
+        `reach:baseline accepts only --nimbus-root; got "${a}". It always measures and records ` +
+          "the full corpus — there is no flag to scope it to a subset of connectors. " +
+          "`bun run reach --baseline` compares the full corpus against the recorded baseline; " +
+          "use `bun run reach <connector>` to measure a subset instead.",
+      );
+    }
+  }
+  return { nimbusRoot };
+}
 
 const RANK: Tier[] = ["blocked", "emits", "server-identical", "all-identical"];
 

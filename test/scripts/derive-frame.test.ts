@@ -128,4 +128,33 @@ describe("recognizeFrame", () => {
     expect(recognizeFrame(statements, claims)).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
+
+  // Fix 2: `let`/`var` both produce a VariableDeclaration node, same as `const` — only
+  // node["kind"] tells them apart. Before this fix, isRegistrarConst never read `kind`, so a
+  // `let reg = ...` registrar passed every other check and was claimed as the documented
+  // `const` frame.
+  it("rejects a `let` registrar instead of claiming it as the documented `const` frame", () => {
+    const source = FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      "let reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+    );
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  // Fix 3: a computed MemberExpression (`mcp[connect](transport)`) can have an Identifier
+  // `property` too — the KEY variable's name, not a property name. Before this fix, isConnect
+  // never checked `computed`, so this was accepted as `mcp.connect(transport)` whenever the
+  // index variable happened to be named "connect".
+  it("rejects a computed mcp[connect](transport) instead of establishing mcp.connect", () => {
+    const source = FRAME.replace("await mcp.connect(transport);", "await mcp[connect](transport);");
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+
+    expect(recognizeFrame(statements, claims)).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

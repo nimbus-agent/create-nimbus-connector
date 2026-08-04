@@ -95,7 +95,12 @@ function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boole
  * anything else here.
  */
 function isRegistrarConst(node: AstNode, mcpVar: string): boolean {
-  if (node.type !== "VariableDeclaration") return false;
+  // `let`/`var` both produce a VariableDeclaration node too — `node["kind"]` is what actually
+  // distinguishes them from `const`. Without this check, `let reg = createZodToolRegistrar(...)`
+  // passed every check below and was claimed as the documented `const` frame (see
+  // recognizeFrame's docstring, element 3), which is a shape src/emit/server/index.ts's
+  // `wiring()` never emits.
+  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return false;
   const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
   if (init?.type !== "CallExpression") return false;
   const outerCallee = init["callee"] as AstNode;
@@ -144,6 +149,12 @@ function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean
   if (call.type !== "CallExpression") return false;
   const callee = call["callee"] as AstNode;
   if (callee.type !== "MemberExpression") return false;
+  // A computed member (`mcp[connect](transport)`) can have an Identifier `property` too — it's
+  // the KEY variable's name, not a property name. Reading it unguarded would accept
+  // `await mcp[connect](transport)` as `await mcp.connect(transport)` whenever the index
+  // variable happened to be named "connect". args.ts:53 and path-template.ts's
+  // argNameFromExpr guard this exact hazard already; this is the same guard here.
+  if (callee["computed"] === true) return false;
   const receiver = callee["object"] as AstNode;
   if (receiver.type !== "Identifier" || receiver["name"] !== mcpVar) return false;
   if ((callee["property"] as AstNode)["name"] !== "connect") return false;

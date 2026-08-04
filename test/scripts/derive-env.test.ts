@@ -318,4 +318,48 @@ describe("recognizeEnv", () => {
     expect(entries).toEqual([]);
     expect(unclaimed).toHaveLength(1);
   });
+
+  // --- Computed-member sweep: same hazard as server/index.ts's isConnect, elsewhere in this
+  // file's read chain. A computed member has an Identifier `property` too — the KEY variable's
+  // name, not a property name — so each of these must be rejected rather than read as the
+  // literal `.trim`/`.env`/`.replace` access.
+
+  it("rejects a computed x[trim]() instead of establishing x.trim()", () => {
+    const source = [
+      "function region(): string {",
+      '  const r = process.env["REGION"]?.[trim]();',
+      "  return r;",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it('rejects a computed process[env]["VAR"] instead of establishing process.env', () => {
+    const source = [
+      "function region(): string {",
+      '  const r = process[env]["REGION"]?.trim();',
+      "  return r;",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("rejects a computed u[replace](...) instead of establishing u.replace(...)", () => {
+    const source = [
+      "function baseUrl(): string {",
+      '  const u = process.env["GRAFANA_URL"]?.trim();',
+      '  if (u === undefined || u === "") {',
+      '    throw new Error("GRAFANA_URL is not set");',
+      "  }",
+      '  return u[replace](/\\/$/, "");',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
 });

@@ -436,4 +436,81 @@ describe("recognizeFetchHelper", () => {
     expect(fields).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
+
+  // --- Computed-member sweep: same hazard as server/index.ts's isConnect. A computed member
+  // (`x[name]`) has an Identifier `property` too — the KEY variable's name, not a property
+  // name — so each of these must be rejected rather than read as the literal member access.
+
+  it('rejects a computed path[startsWith]("/") instead of establishing path.startsWith', () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      '  const pathPart = path[startsWith]("/") ? path : `/${path}`;',
+      "  const res = await fetch(`https://api.example.com${pathPart}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a computed res[text]() instead of establishing res.text()", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res[text]();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a computed !res[ok] instead of establishing !res.ok", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res[ok]) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("rejects a computed JSON[parse](text) instead of establishing JSON.parse(text)", () => {
+    const src = [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON[parse](text) as unknown;",
+      "}",
+    ].join("\n");
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

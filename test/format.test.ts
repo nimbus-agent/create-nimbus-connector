@@ -47,7 +47,7 @@ describe("initFormatter", () => {
       'if (!formatterAvailable()) throw new Error("formatterAvailable() was false");' +
       'console.log("ok");';
     const r = Bun.spawnSync(["bun", "-e", script], {
-      cwd: import.meta.dir + "/..",
+      cwd: `${import.meta.dir}/..`,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -76,7 +76,7 @@ describe("initFormatter surfaces configuration bugs", () => {
       'const { initFormatter } = await import("./src/format.ts");' +
       "await initFormatter();";
     const r = Bun.spawnSync(["bun", "-e", script], {
-      cwd: import.meta.dir + "/..",
+      cwd: `${import.meta.dir}/..`,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -164,7 +164,7 @@ describe("formatAll before init", () => {
         'const { formatAll } = await import("./src/format.ts");' +
           'formatAll([{ path: ["a.ts"], content: "const x=1\\n" }]);',
       ],
-      { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" },
+      { cwd: `${import.meta.dir}/..`, stdout: "pipe", stderr: "pipe" },
     );
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toMatch(/initFormatter/);

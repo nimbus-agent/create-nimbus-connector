@@ -43,4 +43,14 @@ describe("recognizeArgs", () => {
     // regenerates a schema the real connector never had.
     expect(argsOf("z.object({ [KEY]: z.string() })")).toBeUndefined();
   });
+
+  it("returns undefined for a computed z[object](...) call instead of establishing z.object(...)", () => {
+    // `z[object](...)` has an Identifier `property` too (the KEY variable's name "object"),
+    // which unguarded would be read the same as the literal `.object` access.
+    expect(argsOf("z[object]({ q: z.string() })")).toBeUndefined();
+  });
+
+  it("returns undefined for a computed modifier (z.number()[int]()) instead of establishing .int()", () => {
+    expect(argsOf("z.object({ limit: z.number()[int]() })")).toBeUndefined();
+  });
 });

@@ -446,4 +446,25 @@ describe("recognizeTools", () => {
       "newrelic_ping",
     ]);
   });
+
+  // Computed-member sweep: memberArgName reads `p.<name>` off a hoist's test/init — same hazard
+  // as path-template.ts's argNameFromExpr (which cites args.ts:53 for it) and server/index.ts's
+  // isConnect. A computed member (`p[only_open]`) has an Identifier `property` too — the KEY
+  // variable's name, not a property name — and must not be read as naming the arg "only_open".
+  it("refuses a computed p[only_open] hoist test instead of establishing p.only_open", () => {
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ only_open: z.boolean().optional() }),",
+      "  async (p) => {",
+      '    const only = p[only_open] === true ? "true" : "false";',
+      "    return jsonResult(await nrGet(`/x?o=${only}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
 });

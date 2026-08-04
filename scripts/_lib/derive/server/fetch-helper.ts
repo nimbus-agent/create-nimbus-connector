@@ -224,6 +224,9 @@ function isPathPartConst(stmt: AstNode): boolean {
   if (test?.type !== "CallExpression") return false;
   const testCallee = test["callee"] as AstNode | undefined;
   if (testCallee?.type !== "MemberExpression") return false;
+  // A computed member (`path[startsWith]("/")`) can have an Identifier `property` too — the KEY
+  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
+  if (testCallee["computed"] === true) return false;
   const testObject = testCallee["object"] as AstNode | undefined;
   if (testObject?.type !== "Identifier" || testObject["name"] !== "path") return false;
   const testProperty = testCallee["property"] as AstNode | undefined;
@@ -290,7 +293,9 @@ function isTextStatement(stmt: AstNode): boolean {
   const call = init["argument"] as AstNode | undefined;
   if (call?.type !== "CallExpression") return false;
   const callee = call["callee"] as AstNode;
-  if (callee.type !== "MemberExpression") return false;
+  // A computed member (`res[text]()`) can have an Identifier `property` too — the KEY
+  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
+  if (callee.type !== "MemberExpression" || callee["computed"] === true) return false;
   const object = callee["object"] as AstNode;
   const property = callee["property"] as AstNode;
   if (object.type !== "Identifier" || object["name"] !== "res") return false;
@@ -309,7 +314,9 @@ function isThrowGuard(stmt: AstNode): boolean {
   const test = stmt["test"] as AstNode;
   if (test.type !== "UnaryExpression" || test["operator"] !== "!") return false;
   const arg = test["argument"] as AstNode;
-  if (arg.type !== "MemberExpression") return false;
+  // A computed member (`res[ok]`) can have an Identifier `property` too — the KEY variable's
+  // name, not a property name. Same hazard as server/index.ts's isConnect.
+  if (arg.type !== "MemberExpression" || arg["computed"] === true) return false;
   const object = arg["object"] as AstNode;
   const property = arg["property"] as AstNode;
   if (object.type !== "Identifier" || object["name"] !== "res") return false;
@@ -352,7 +359,9 @@ function isJsonParseTextAsUnknown(node: AstNode | undefined): boolean {
   const expr = node["expression"] as AstNode | undefined;
   if (expr?.type !== "CallExpression") return false;
   const callee = expr["callee"] as AstNode | undefined;
-  if (callee?.type !== "MemberExpression") return false;
+  // A computed member (`JSON[parse](text)`) can have an Identifier `property` too — the KEY
+  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
+  if (callee?.type !== "MemberExpression" || callee["computed"] === true) return false;
   const object = callee["object"] as AstNode | undefined;
   const property = callee["property"] as AstNode | undefined;
   if (object?.type !== "Identifier" || object["name"] !== "JSON") return false;
