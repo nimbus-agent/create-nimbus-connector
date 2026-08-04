@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { displayPath, type GeneratedFile } from "../../src/types.ts";
 import type { Blocker } from "./derive/blockers.ts";
 import type { Derivation } from "./derive/index.ts";
@@ -7,6 +9,38 @@ export type Tier = "blocked" | "emits" | "server-identical" | "all-identical";
 export type ConnectorResult = { name: string; tier: Tier; blockers: Blocker[] };
 
 const SERVER = "src/server.ts";
+
+/**
+ * Reads a real connector's tracked files, keyed by forward-slash relative path, normalising
+ * line endings on THAT side only — the same asymmetry scripts/_lib/golden-diff.ts's
+ * diffAgainstReal uses, and for the same reason: normalise what this repository does not
+ * control, compare verbatim what it produces. Normalising the generated side too would mask a
+ * CRLF leak from the emitter rather than surface it.
+ *
+ * Safe because .gitattributes pins `* text=auto eol=lf`, so the working tree is LF even under
+ * core.autocrlf=true. Verified on Windows: all six emitted files are LF-only, including
+ * README.md, which formatAll does not touch.
+ *
+ * Every one of the 94 connectors carries a `node_modules/` from `bun install`, not from git —
+ * it is not part of the connector's authored source, and it is where this walk must not go:
+ * on Windows the workspace-package entries under it are junctions, and Bun's `Dirent.isDirectory()`
+ * reports the link itself rather than its target, so treating one as a file and reading it
+ * throws EISDIR. Skipped by name rather than by resolving link targets, since no real connector
+ * has ever had reason to name a source directory `node_modules`.
+ */
+export function walkConnector(dir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (sub: string): void => {
+    for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const rel = sub === "" ? entry.name : `${sub}/${entry.name}`;
+      if (entry.isDirectory()) walk(rel);
+      else out.set(rel, readFileSync(join(dir, rel), "utf8").replaceAll("\r\n", "\n"));
+    }
+  };
+  walk("");
+  return out;
+}
 
 /**
  * Tiers are cumulative: all-identical implies server-identical implies emits.

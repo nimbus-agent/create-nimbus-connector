@@ -32,6 +32,7 @@ import {
   selectConnectors,
   summaryLines,
   tierFor,
+  walkConnector,
 } from "./_lib/reach.ts";
 import { assertComparable, compareBaseline } from "./_lib/reach-baseline.ts";
 
@@ -69,37 +70,6 @@ export function connectorDirs(root: string): string[] {
 }
 
 /**
- * Reads the real connector, normalising line endings on THAT side only — the same asymmetry
- * scripts/_lib/golden-diff.ts's diffAgainstReal uses, and for the same reason: normalise what
- * this repository does not control, compare verbatim what it produces. Normalising the
- * generated side too would mask a CRLF leak from the emitter rather than surface it.
- *
- * Safe because .gitattributes pins `* text=auto eol=lf`, so the working tree is LF even under
- * core.autocrlf=true. Verified on Windows: all six emitted files are LF-only, including
- * README.md, which formatAll does not touch.
- *
- * Every one of the 94 connectors carries a `node_modules/` from `bun install`, not from git —
- * it is not part of the connector's authored source, and it is where this walk must not go:
- * on Windows the workspace-package entries under it are junctions, and Bun's `Dirent.isDirectory()`
- * reports the link itself rather than its target, so treating one as a file and reading it
- * throws EISDIR. Skipped by name rather than by resolving link targets, since no real connector
- * has ever had reason to name a source directory `node_modules`.
- */
-function readReal(dir: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const walk = (sub: string): void => {
-    for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
-      if (entry.name === "node_modules") continue;
-      const rel = sub === "" ? entry.name : `${sub}/${entry.name}`;
-      if (entry.isDirectory()) walk(rel);
-      else out.set(rel, readFileSync(join(dir, rel), "utf8").replaceAll("\r\n", "\n"));
-    }
-  };
-  walk("");
-  return out;
-}
-
-/**
  * Runs git, reporting *why* it produced nothing.
  *
  * `error` is what separates "git is not installed" from "this directory is not a checkout".
@@ -120,7 +90,7 @@ export function git(root: string, args: string[]): { value: string; error: strin
 /** Exported for scripts/reach-baseline.ts. One measurement loop, two commands. */
 export function measure(name: string, root: string): ConnectorResult {
   const dir = join(root, "packages", "mcp-connectors", name);
-  const real = readReal(dir);
+  const real = walkConnector(dir);
   const server = real.get("src/server.ts");
   const manifest = real.get("nimbus.extension.json");
   if (server === undefined || manifest === undefined) {
@@ -137,10 +107,30 @@ export function measure(name: string, root: string): ConnectorResult {
   if (!derivation.ok) return { name, tier: "blocked", blockers: derivation.blockers };
 
   // parseSpec and validateSpec ARE the `emits` tier boundary: a derived spec that trips
-  // RESERVED_IDENTIFIERS is genuinely not generatable today, and counting it is the point.
+  // RESERVED_IDENTIFIERS is genuinely not generatable today, and counting it is the point. This
+  // try is deliberately narrow — it must NOT also wrap generate()/formatAll() below, or an
+  // emitter bug becomes indistinguishable in the histogram from a genuine spec rejection.
+  let spec: ReturnType<typeof parseSpec>;
   try {
-    const spec = parseSpec(derivation.spec);
+    spec = parseSpec(derivation.spec);
     validateSpec(spec);
+  } catch (err) {
+    return {
+      name,
+      tier: "blocked",
+      blockers: [
+        {
+          kind: "rejected-by-validate",
+          detail: err instanceof Error ? err.message : String(err),
+          line: 0,
+        },
+      ],
+    };
+  }
+
+  // A separate try/catch and a separate blocker kind: this is an emitter defect, not a spec
+  // rejection, and a connector landing here must not take down the other 93 in the sweep.
+  try {
     const generated = formatAll(generate(spec));
     return { name, tier: tierFor({ derivation, generated, real }), blockers: [] };
   } catch (err) {
@@ -149,7 +139,7 @@ export function measure(name: string, root: string): ConnectorResult {
       tier: "blocked",
       blockers: [
         {
-          kind: "rejected-by-validate",
+          kind: "emitter-error",
           detail: err instanceof Error ? err.message : String(err),
           line: 0,
         },

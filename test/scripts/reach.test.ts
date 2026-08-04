@@ -1,5 +1,17 @@
-import { describe, expect, it } from "bun:test";
-import { histogram, selectConnectors, summaryLines, tierFor } from "../../scripts/_lib/reach.ts";
+import { afterAll, describe, expect, it } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  histogram,
+  selectConnectors,
+  summaryLines,
+  tierFor,
+  walkConnector,
+} from "../../scripts/_lib/reach.ts";
+import { tempDirs } from "../support/tmp.ts";
+
+const tmp = tempDirs();
+afterAll(tmp.cleanup);
 
 const SPEC = { name: "x" };
 const OK = { ok: true as const, spec: SPEC };
@@ -111,5 +123,52 @@ describe("summaryLines", () => {
       { name: "d", tier: "blocked" as const, blockers: [] },
     ];
     expect(summaryLines(results).join("\n")).toContain("REACH  2/4");
+  });
+});
+
+describe("walkConnector", () => {
+  it("walks nested real directories and keys their contents by forward-slash relative path", () => {
+    const dir = tmp.make("cnc-reach-walk-");
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, "test"), { recursive: true });
+    writeFileSync(join(dir, "README.md"), "hello\n", "utf8");
+    writeFileSync(join(dir, "src", "server.ts"), "export {};\n", "utf8");
+    writeFileSync(join(dir, "test", "sandbox.test.ts"), "// t\n", "utf8");
+
+    const files = walkConnector(dir);
+
+    expect(files.get("README.md")).toBe("hello\n");
+    expect(files.get("src/server.ts")).toBe("export {};\n");
+    expect(files.get("test/sandbox.test.ts")).toBe("// t\n");
+    expect(files.size).toBe(3);
+  });
+
+  it("skips a node_modules directory entirely, including its contents", () => {
+    // Every one of the 94 real connectors carries a bun-install node_modules that is not part
+    // of its authored source; on Windows the workspace-package entries under it are junctions
+    // that crash a naive recursive read (EISDIR), which is exactly what this skip guards
+    // against. Asserted here rather than only observed live, per the reviewer's finding.
+    const dir = tmp.make("cnc-reach-walk-nm-");
+    mkdirSync(join(dir, "node_modules", "@nimbus-dev", "sdk"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "@nimbus-dev", "sdk", "package.json"), "{}\n", "utf8");
+    writeFileSync(join(dir, "README.md"), "hello\n", "utf8");
+
+    const files = walkConnector(dir);
+
+    expect(files.has("README.md")).toBe(true);
+    expect([...files.keys()].some((k) => k.startsWith("node_modules"))).toBe(false);
+    expect(files.size).toBe(1);
+  });
+
+  it("normalises CRLF to LF on the read side only", () => {
+    // The emitter always writes LF; a Nimbus checkout on Windows with core.autocrlf=true has
+    // CRLF on disk. Without this normalisation every real file would look different from the
+    // generated one regardless of content, making the harness useless on half its platforms.
+    const dir = tmp.make("cnc-reach-walk-crlf-");
+    writeFileSync(join(dir, "README.md"), "line one\r\nline two\r\n", "utf8");
+
+    const files = walkConnector(dir);
+
+    expect(files.get("README.md")).toBe("line one\nline two\n");
   });
 });
