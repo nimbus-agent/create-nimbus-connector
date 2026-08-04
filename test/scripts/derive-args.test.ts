@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { parseModule } from "../../scripts/_lib/derive/ast.ts";
+import { constDecl } from "../../scripts/_lib/derive/read.ts";
 import { recognizeArgs } from "../../scripts/_lib/derive/server/args.ts";
 
 function argsOf(expression: string) {
   const statement = parseModule(`const x = ${expression};`)[0]!;
-  const init = (statement["declarations"] as { init: unknown }[])[0]!.init;
-  return recognizeArgs(init as never);
+  const init = constDecl(statement)!.init!;
+  return recognizeArgs(init);
 }
 
 describe("recognizeArgs", () => {
@@ -26,6 +27,17 @@ describe("recognizeArgs", () => {
   it("reads the int/min/max chain the emitter writes for a bounded number", () => {
     expect(argsOf("z.object({ limit: z.number().int().min(1).max(100).optional() })")).toEqual({
       limit: { type: "number", int: true, min: 1, max: 100, optional: true },
+    });
+  });
+
+  it("recognizes a negative min/max bound, via numericValue rather than a bare NumericLiteral read", () => {
+    // Babel parses `-5` as a UnaryExpression wrapping a NumericLiteral, not a NumericLiteral
+    // itself. ArgSchema constrains sign on neither `min` nor `max`, so `.min(-5)` is a shape
+    // renderZodSchema can legitimately write — this is one of this retrofit's two sanctioned
+    // widenings (tools-hand.ts's `?? -1` default is the other), and no corpus connector reaches
+    // this recognizer with a negative literal today, so it does not move the reach histogram.
+    expect(argsOf("z.object({ delta: z.number().min(-5).max(-1) })")).toEqual({
+      delta: { type: "number", min: -5, max: -1 },
     });
   });
 

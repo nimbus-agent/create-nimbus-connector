@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseModule } from "../../scripts/_lib/derive/ast.ts";
+import { constDecl } from "../../scripts/_lib/derive/read.ts";
 import { type PathLocal, recognizePath } from "../../scripts/_lib/derive/server/path-template.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
@@ -7,8 +8,8 @@ import { parseSpec } from "../../src/spec.ts";
 
 function pathOf(expression: string, locals: Map<string, PathLocal> = new Map()) {
   const statement = parseModule(`const x = ${expression};`)[0]!;
-  const init = (statement["declarations"] as { init: unknown }[])[0]!.init;
-  return recognizePath(init as never, locals);
+  const init = constDecl(statement)!.init!;
+  return recognizePath(init, locals);
 }
 
 /**

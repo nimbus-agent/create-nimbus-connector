@@ -1,5 +1,33 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
+import {
+  asExpression,
+  awaited,
+  blockBody,
+  callArgs,
+  calleeOf,
+  callTo,
+  catchClause,
+  conditional,
+  constDecl,
+  functionBody,
+  functionName,
+  functionParams,
+  identName,
+  ifStatement,
+  isAsyncFunction,
+  isIdent,
+  memberOn,
+  methodCallTo,
+  objectExpressionProperties,
+  objectProperty,
+  objectProps,
+  returnArgument,
+  stringLit,
+  templateLiteral,
+  tryStatement,
+  unary,
+} from "../read.ts";
 
 export type FetchHelperFields = {
   local: string;
@@ -33,30 +61,20 @@ function find(root: AstNode, predicate: (n: AstNode) => boolean): AstNode | unde
   return found;
 }
 
-/** The literal head of `` `<base>${path}` ``. */
-function templateHead(node: AstNode): string | undefined {
-  if (node.type !== "TemplateLiteral") return undefined;
-  const first = (node["quasis"] as AstNode[])[0];
-  const cooked = (first?.["value"] as { cooked?: string } | undefined)?.cooked;
-  return cooked;
-}
-
 /**
  * Reconstruct the full base URL from the template literal, handling env variable references.
  * For `` `https://${siteHost()}${path}` ``, extracts "https://${env.siteHost}".
  * The last expression is the path variable and is excluded from the base.
  */
 function reconstructBase(template: AstNode): string | undefined {
-  if (template.type !== "TemplateLiteral") return undefined;
-  const quasis = (template["quasis"] as AstNode[]) ?? [];
-  const expressions = (template["expressions"] as AstNode[]) ?? [];
+  const t = templateLiteral(template);
+  if (t === undefined) return undefined;
+  const { quasis, expressions } = t;
 
   // The last expression should be the path variable (Identifier: path or pathPart).
   // Drop it and the trailing quasi.
   if (expressions.length === 0 || quasis.length === 0) return undefined;
-
-  const lastExpr = expressions[expressions.length - 1];
-  if (lastExpr?.type !== "Identifier") return undefined;
+  if (identName(expressions.at(-1)) === undefined) return undefined;
 
   // Reconstruct: concatenate quasis[0..n-2] and expressions[0..n-2],
   // then the first n-1 quasis' cooked values.
@@ -64,23 +82,16 @@ function reconstructBase(template: AstNode): string | undefined {
   const numToUse = expressions.length - 1;
 
   for (let i = 0; i <= numToUse; i++) {
-    const quasi = quasis[i];
-    const cooked = (quasi?.["value"] as { cooked?: string } | undefined)?.cooked;
+    const cooked = quasis[i];
     if (cooked === undefined) return undefined;
     parts.push(cooked);
 
     if (i < numToUse) {
-      const expr = expressions[i];
-      if (expr?.type === "CallExpression") {
-        const callee = expr["callee"] as AstNode;
-        if (callee.type !== "Identifier") return undefined;
-        const args = (expr["arguments"] as AstNode[]) ?? [];
-        if (args.length !== 0) return undefined;
-        const name = String(callee["name"] ?? "");
-        parts.push(`\${env.${name}}`);
-      } else {
-        return undefined;
-      }
+      const args = callArgs(expressions[i]);
+      if (args === undefined || args.length !== 0) return undefined;
+      const name = identName(calleeOf(expressions[i]));
+      if (name === undefined) return undefined;
+      parts.push(`\${env.${name}}`);
     }
   }
 
@@ -91,21 +102,18 @@ function reconstructBase(template: AstNode): string | undefined {
   // `` `https://api.example.com${path}.json` `` has ".json", and dropping that unchecked
   // derives base "https://api.example.com" while silently losing the ".json" suffix — a wrong
   // claim, not a rejection. Reject instead.
-  const trailing = quasis[numToUse + 1];
-  const trailingCooked = (trailing?.["value"] as { cooked?: string } | undefined)?.cooked;
-  if (trailingCooked !== "") return undefined;
+  if (quasis[numToUse + 1] !== "") return undefined;
 
   return parts.join("");
 }
 
 function headerValue(value: AstNode): string | undefined {
-  if (typeof value["value"] === "string") return value["value"];
-  if (value.type === "CallExpression") {
-    const callee = value["callee"] as AstNode;
-    if (callee.type === "Identifier") {
-      const args = (value["arguments"] as AstNode[]) ?? [];
-      if (args.length === 0) return `\${env.${String(callee["name"])}}`;
-    }
+  const lit = stringLit(value);
+  if (lit !== undefined) return lit;
+  const args = callArgs(value);
+  if (args !== undefined && args.length === 0) {
+    const name = identName(calleeOf(value));
+    if (name !== undefined) return `\${env.${name}}`;
   }
   return undefined;
 }
@@ -113,44 +121,40 @@ function headerValue(value: AstNode): string | undefined {
 /**
  * Find a plain `key: value` property by its key name. A `SpreadElement` (`{ ...opts, headers:
  * {...} }`) has no `key` — indexing into it unguarded is what crashed this recognizer on
- * discord, google-meet and four zz* fixtures. Skipping non-`ObjectProperty` entries here means
- * a spread anywhere in the options object simply does not match, rather than crashing.
+ * discord, google-meet and four zz* fixtures. `objectProperty` returns undefined for a
+ * SpreadElement rather than a key, so a spread anywhere in the options object simply does not
+ * match, rather than crashing.
  */
 function findObjectProperty(properties: readonly AstNode[], name: string): AstNode | undefined {
   return properties.find((p) => {
-    if (p.type !== "ObjectProperty") return false;
-    const key = p["key"] as AstNode;
-    return key.type === "Identifier" && key["name"] === name;
+    const parts = objectProperty(p);
+    return parts !== undefined && isIdent(parts.key, name);
   });
 }
 
 /**
  * Extract inline headers from an ObjectExpression headers object.
  * Returns the headers object or undefined if not inline form.
+ *
+ * The inner entries are parsed wholesale via `objectProps` (any entry it cannot resolve —
+ * a spread, a computed key, e.g. `{ ...common, "X-Api-Key": k }` as the headers object itself —
+ * rejects the whole object rather than being skipped): unlike `findObjectProperty`'s search
+ * over the outer fetch-options list, every entry here is meant to become a header.
  */
 function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undefined {
-  const options = (fetchCall["arguments"] as AstNode[])[1];
-  const properties = (options?.["properties"] as AstNode[] | undefined) ?? [];
+  const options = callArgs(fetchCall)?.[1];
+  const properties = objectExpressionProperties(options) ?? [];
   const headers = findObjectProperty(properties, "headers");
-  const headersValue = headers?.["value"] as AstNode | undefined;
+  const headersValue = objectProperty(headers)?.value;
 
-  // Must be an ObjectExpression for inline headers
-  if (headersValue?.type !== "ObjectExpression") return undefined;
-
-  const entries = (headersValue["properties"] as AstNode[]) ?? [];
-  if (entries.length === 0) return undefined;
+  const entries = objectProps(headersValue);
+  if (entries === undefined || entries.length === 0) return undefined;
 
   const out: Record<string, string> = {};
   for (const entry of entries) {
-    // Same SpreadElement hazard as findObjectProperty, one level down: `{ ...common,
-    // "X-Api-Key": k }` as the headers object itself. Not a plain key/value headers object, so
-    // reject the whole helper rather than reading past what this shape models.
-    if (entry.type !== "ObjectProperty") return undefined;
-    const key = entry["key"] as AstNode;
-    const name = typeof key["value"] === "string" ? key["value"] : String(key["name"] ?? "");
-    const value = headerValue(entry["value"] as AstNode);
-    if (name === "" || value === undefined) return undefined;
-    out[name] = value;
+    const value = headerValue(entry.value);
+    if (value === undefined) return undefined;
+    out[entry.key] = value;
   }
   return out;
 }
@@ -160,20 +164,14 @@ function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undef
  * For `{ headers: headers() }` or `{ headers: authHeaders() }`, returns "headers" or "authHeaders".
  */
 function headersAccessor(fetchCall: AstNode): string | undefined {
-  const options = (fetchCall["arguments"] as AstNode[])[1];
-  const properties = (options?.["properties"] as AstNode[] | undefined) ?? [];
+  const options = callArgs(fetchCall)?.[1];
+  const properties = objectExpressionProperties(options) ?? [];
   const headers = findObjectProperty(properties, "headers");
-  const headersValue = headers?.["value"] as AstNode | undefined;
+  const headersValue = objectProperty(headers)?.value;
 
-  // Must be a zero-argument CallExpression with Identifier callee
-  if (headersValue?.type !== "CallExpression") return undefined;
-  const args = (headersValue["arguments"] as AstNode[]) ?? [];
-  if (args.length !== 0) return undefined;
-
-  const callee = headersValue["callee"] as AstNode;
-  if (callee.type !== "Identifier") return undefined;
-
-  return String(callee["name"] ?? "");
+  const args = callArgs(headersValue);
+  if (args === undefined || args.length !== 0) return undefined;
+  return identName(calleeOf(headersValue));
 }
 
 /** The `<serviceLabel>` in `` throw new Error(`<serviceLabel> ${String(res.status)}: …`) ``. */
@@ -181,7 +179,7 @@ function serviceLabelFrom(fn: AstNode): string | undefined {
   const thrown = find(fn, (n) => n.type === "ThrowStatement");
   if (thrown === undefined) return undefined;
   const template = find(thrown, (n) => n.type === "TemplateLiteral");
-  const head = template === undefined ? undefined : templateHead(template);
+  const head = template === undefined ? undefined : templateLiteral(template)?.quasis[0];
   return head === undefined ? undefined : head.replace(/ $/, "");
 }
 
@@ -192,9 +190,7 @@ function serviceLabelFrom(fn: AstNode): string | undefined {
 function countFetchCalls(fn: AstNode): number {
   let count = 0;
   walk(fn, (n) => {
-    if (n.type === "CallExpression" && (n["callee"] as AstNode)["name"] === "fetch") {
-      count++;
-    }
+    if (isIdent(calleeOf(n), "fetch")) count++;
   });
   return count;
 }
@@ -207,112 +203,57 @@ function countFetchCalls(fn: AstNode): number {
  * than scanned for anywhere in the function — see recognizeFetchHelper's own comment on why the
  * whole body is now walked positionally instead of independently probed for each shape.
  *
- * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
- * — without it, `let pathPart = ...` passed every check below and was claimed as the documented
- * `const` line, same gap as server/index.ts's isRegistrarConst.
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
+ * `let pathPart = ...` passed every check below and was claimed as the documented `const` line,
+ * same gap as server/index.ts's isRegistrarConst.
  */
 function isPathPartConst(stmt: AstNode): boolean {
-  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return false;
-  const decls = (stmt["declarations"] as AstNode[]) ?? [];
-  if (decls.length !== 1) return false;
-  const decl = decls[0]!;
-  const id = decl["id"] as AstNode;
-  if ((id["name"] as string) !== "pathPart") return false;
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.name !== "pathPart") return false;
 
-  // Validate the init expression is a ConditionalExpression with the required shape
-  const init = decl["init"] as AstNode | undefined;
-  if (init?.type !== "ConditionalExpression") return false;
+  const c = conditional(decl.init);
+  if (c === undefined) return false;
 
   // Test: path.startsWith("/")
-  const test = init["test"] as AstNode | undefined;
-  if (test?.type !== "CallExpression") return false;
-  const testCallee = test["callee"] as AstNode | undefined;
-  if (testCallee?.type !== "MemberExpression") return false;
-  // A computed member (`path[startsWith]("/")`) can have an Identifier `property` too — the KEY
-  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
-  if (testCallee["computed"] === true) return false;
-  const testObject = testCallee["object"] as AstNode | undefined;
-  if (testObject?.type !== "Identifier" || testObject["name"] !== "path") return false;
-  const testProperty = testCallee["property"] as AstNode | undefined;
-  if (testProperty?.type !== "Identifier" || testProperty["name"] !== "startsWith") return false;
-  const testArgs = (test["arguments"] as AstNode[]) ?? [];
-  if (testArgs.length !== 1) return false;
-  const testArg = testArgs[0];
-  if (!testArg || typeof testArg["value"] !== "string" || testArg["value"] !== "/") return false;
+  const testArgs = methodCallTo(c.test, "path", "startsWith", 1);
+  if (testArgs === undefined || stringLit(testArgs[0]) !== "/") return false;
 
   // Consequent: path (Identifier)
-  const consequent = init["consequent"] as AstNode | undefined;
-  if (consequent?.type !== "Identifier" || consequent["name"] !== "path") return false;
+  if (!isIdent(c.consequent, "path")) return false;
 
   // Alternate: `/${path}` (TemplateLiteral)
-  const alternate = init["alternate"] as AstNode | undefined;
-  if (alternate?.type !== "TemplateLiteral") return false;
-  const altQuasis = (alternate["quasis"] as AstNode[]) ?? [];
-  const altExpressions = (alternate["expressions"] as AstNode[]) ?? [];
-  if (altQuasis.length !== 2 || altExpressions.length !== 1) return false;
-  const firstQuasi = altQuasis[0];
-  const firstCooked = (firstQuasi?.["value"] as { cooked?: string } | undefined)?.cooked;
-  if (firstCooked !== "/") return false;
-  const pathExpr = altExpressions[0];
-  return pathExpr?.type === "Identifier" && pathExpr["name"] === "path";
-}
-
-function bodyStatements(fn: AstNode): AstNode[] {
-  return ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
+  const alt = templateLiteral(c.alternate);
+  if (alt === undefined || alt.expressions.length !== 1 || alt.quasis[0] !== "/") return false;
+  return isIdent(alt.expressions[0], "path");
 }
 
 /**
  * `const res = await fetch(<url>, <options>);` — the fetch call statement itself, matched
  * positionally. Returns the CallExpression so the caller can read its url/options arguments.
  *
- * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
- * — without it, `let res = await fetch(...)` passed every check below and was claimed as the
- * documented `const` line, same gap as server/index.ts's isRegistrarConst.
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
+ * `let res = await fetch(...)` passed every check below and was claimed as the documented
+ * `const` line, same gap as server/index.ts's isRegistrarConst.
  */
 function matchFetchStatement(stmt: AstNode): AstNode | undefined {
-  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return undefined;
-  const decls = (stmt["declarations"] as AstNode[]) ?? [];
-  if (decls.length !== 1) return undefined;
-  const decl = decls[0]!;
-  const id = decl["id"] as AstNode;
-  if (id.type !== "Identifier" || id["name"] !== "res") return undefined;
-  const init = decl["init"] as AstNode | undefined;
-  if (init?.type !== "AwaitExpression") return undefined;
-  const call = init["argument"] as AstNode | undefined;
-  if (call?.type !== "CallExpression") return undefined;
-  const callee = call["callee"] as AstNode;
-  if (callee.type !== "Identifier" || callee["name"] !== "fetch") return undefined;
-  const args = (call["arguments"] as AstNode[]) ?? [];
-  return args.length === 2 ? call : undefined;
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.name !== "res") return undefined;
+  const call = awaited(decl.init);
+  return callTo(call, "fetch", 2) === undefined ? undefined : call;
 }
 
 /**
  * `const text = await res.text();` — matched positionally, exactly.
  *
- * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
- * — without it, `let text = await res.text();` passed every check below and was claimed as the
- * documented `const` line, same gap as server/index.ts's isRegistrarConst.
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
+ * `let text = await res.text();` passed every check below and was claimed as the documented
+ * `const` line, same gap as server/index.ts's isRegistrarConst.
  */
 function isTextStatement(stmt: AstNode): boolean {
-  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return false;
-  const decls = (stmt["declarations"] as AstNode[]) ?? [];
-  if (decls.length !== 1) return false;
-  const decl = decls[0]!;
-  const id = decl["id"] as AstNode;
-  if (id.type !== "Identifier" || id["name"] !== "text") return false;
-  const init = decl["init"] as AstNode | undefined;
-  if (init?.type !== "AwaitExpression") return false;
-  const call = init["argument"] as AstNode | undefined;
-  if (call?.type !== "CallExpression") return false;
-  const callee = call["callee"] as AstNode;
-  // A computed member (`res[text]()`) can have an Identifier `property` too — the KEY
-  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
-  if (callee.type !== "MemberExpression" || callee["computed"] === true) return false;
-  const object = callee["object"] as AstNode;
-  const property = callee["property"] as AstNode;
-  if (object.type !== "Identifier" || object["name"] !== "res") return false;
-  if (property.type !== "Identifier" || property["name"] !== "text") return false;
-  return ((call["arguments"] as AstNode[]) ?? []).length === 0;
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.name !== "text") return false;
+  const call = awaited(decl.init);
+  return methodCallTo(call, "res", "text", 0) !== undefined;
 }
 
 /**
@@ -321,24 +262,15 @@ function isTextStatement(stmt: AstNode): boolean {
  * body now fully accounted for statement by statement, this is the only throw left in it.
  */
 function isThrowGuard(stmt: AstNode): boolean {
-  if (stmt.type !== "IfStatement") return false;
-  if (stmt["alternate"] != null) return false;
-  const test = stmt["test"] as AstNode;
-  if (test.type !== "UnaryExpression" || test["operator"] !== "!") return false;
-  const arg = test["argument"] as AstNode;
-  // A computed member (`res[ok]`) can have an Identifier `property` too — the KEY variable's
-  // name, not a property name. Same hazard as server/index.ts's isConnect.
-  if (arg.type !== "MemberExpression" || arg["computed"] === true) return false;
-  const object = arg["object"] as AstNode;
-  const property = arg["property"] as AstNode;
-  if (object.type !== "Identifier" || object["name"] !== "res") return false;
-  if (property.type !== "Identifier" || property["name"] !== "ok") return false;
-  const consequent = stmt["consequent"] as AstNode | undefined;
-  const body =
-    consequent?.type === "BlockStatement"
-      ? (consequent["body"] as AstNode[] | undefined)
-      : undefined;
-  return body !== undefined && body.length === 1 && body[0]!.type === "ThrowStatement";
+  const s = ifStatement(stmt);
+  if (s === undefined || s.alternate !== undefined) return false;
+
+  const u = unary(s.test);
+  if (u === undefined || u.operator !== "!") return false;
+  if (memberOn(u.argument, "res") !== "ok") return false;
+
+  const body = blockBody(s.consequent);
+  return body !== undefined && body.length === 1 && body[0]?.type === "ThrowStatement";
 }
 
 /**
@@ -347,66 +279,37 @@ function isThrowGuard(stmt: AstNode): boolean {
  * tolerated here, unchanged from before this rewrite: it carries no readable properties, so it
  * cannot smuggle in a header a real corpus fetch call this recognizer already accepts (a spread
  * options object is a shape this recognizer already lived with, not a new gap this rewrite
- * opens).
+ * opens). `objectProperty` returns undefined for a SpreadElement, which this treats the same as
+ * `p.type !== "ObjectProperty"` did before: tolerated, not "headers", skipped.
  */
 function hasUnexpectedFetchOption(properties: readonly AstNode[]): boolean {
   return properties.some((p) => {
-    if (p.type !== "ObjectProperty") return false;
-    const key = p["key"] as AstNode;
-    const name =
-      key.type === "Identifier"
-        ? key["name"]
-        : key.type === "StringLiteral"
-          ? key["value"]
-          : undefined;
+    const parts = objectProperty(p);
+    if (parts === undefined) return false;
+    const name = identName(parts.key) ?? stringLit(parts.key);
     return name !== "headers";
   });
 }
 
 /** `JSON.parse(text) as unknown` — the argument both of renderFetchHelper's return forms share. */
 function isJsonParseTextAsUnknown(node: AstNode | undefined): boolean {
-  if (node?.type !== "TSAsExpression") return false;
-  const typeAnnotation = node["typeAnnotation"] as AstNode | undefined;
-  if (typeAnnotation?.type !== "TSUnknownKeyword") return false;
-  const expr = node["expression"] as AstNode | undefined;
-  if (expr?.type !== "CallExpression") return false;
-  const callee = expr["callee"] as AstNode | undefined;
-  // A computed member (`JSON[parse](text)`) can have an Identifier `property` too — the KEY
-  // variable's name, not a property name. Same hazard as server/index.ts's isConnect.
-  if (callee?.type !== "MemberExpression" || callee["computed"] === true) return false;
-  const object = callee["object"] as AstNode | undefined;
-  const property = callee["property"] as AstNode | undefined;
-  if (object?.type !== "Identifier" || object["name"] !== "JSON") return false;
-  if (property?.type !== "Identifier" || property["name"] !== "parse") return false;
-  const args = (expr["arguments"] as AstNode[] | undefined) ?? [];
-  return args.length === 1 && args[0]?.type === "Identifier" && args[0]["name"] === "text";
+  const a = asExpression(node);
+  if (a === undefined || a.typeAnnotationType !== "TSUnknownKeyword") return false;
+  const args = methodCallTo(a.expression, "JSON", "parse", 1);
+  return args !== undefined && isIdent(args[0], "text");
 }
 
 /** `return JSON.parse(text) as unknown;` — the plain (jsonFallbackRaw: false) return form. */
 function isPlainJsonReturn(node: AstNode): boolean {
-  return (
-    node.type === "ReturnStatement" &&
-    isJsonParseTextAsUnknown(node["argument"] as AstNode | undefined)
-  );
+  return isJsonParseTextAsUnknown(returnArgument(node));
 }
 
 /** `return { raw: text };` — the catch arm's fallback, exactly. */
 function isRawFallbackReturn(node: AstNode): boolean {
-  if (node.type !== "ReturnStatement") return false;
-  const arg = node["argument"] as AstNode | undefined;
-  if (arg?.type !== "ObjectExpression") return false;
-  const properties = (arg["properties"] as AstNode[] | undefined) ?? [];
-  if (properties.length !== 1) return false;
-  const prop = properties[0]!;
-  if (prop.type !== "ObjectProperty") return false;
-  const key = prop["key"] as AstNode;
-  const value = prop["value"] as AstNode;
-  return (
-    key.type === "Identifier" &&
-    key["name"] === "raw" &&
-    value.type === "Identifier" &&
-    value["name"] === "text"
-  );
+  const properties = objectExpressionProperties(returnArgument(node));
+  if (properties === undefined || properties.length !== 1) return false;
+  const parts = objectProperty(properties[0]);
+  return parts !== undefined && isIdent(parts.key, "raw") && isIdent(parts.value, "text");
 }
 
 /**
@@ -417,21 +320,17 @@ function isRawFallbackReturn(node: AstNode): boolean {
  * shape and is refused rather than approximated.
  */
 function isJsonFallbackTry(node: AstNode): boolean {
-  if (node.type !== "TryStatement") return false;
-  if (node["finalizer"] != null) return false;
-  const block = node["block"] as AstNode | undefined;
-  const blockBody =
-    block?.type === "BlockStatement" ? (block["body"] as AstNode[] | undefined) : undefined;
-  if (blockBody === undefined || blockBody.length !== 1 || !isPlainJsonReturn(blockBody[0]!)) {
+  const t = tryStatement(node);
+  if (t === undefined || t.finalizer !== undefined) return false;
+
+  const tryBody = blockBody(t.block);
+  if (tryBody === undefined || tryBody.length !== 1 || !isPlainJsonReturn(tryBody[0]!)) {
     return false;
   }
-  const handler = node["handler"] as AstNode | undefined;
-  if (handler?.type !== "CatchClause" || handler["param"] != null) return false;
-  const handlerBlock = handler["body"] as AstNode | undefined;
-  const handlerBody =
-    handlerBlock?.type === "BlockStatement"
-      ? (handlerBlock["body"] as AstNode[] | undefined)
-      : undefined;
+
+  const c = catchClause(t.handler);
+  if (c === undefined || c.param !== undefined) return false;
+  const handlerBody = blockBody(c.body);
   return (
     handlerBody !== undefined && handlerBody.length === 1 && isRawFallbackReturn(handlerBody[0]!)
   );
@@ -467,20 +366,18 @@ export function recognizeFetchHelper(
   claims: ClaimSet,
 ): FetchHelperFields | undefined {
   for (const s of statements) {
-    if (s.type !== "FunctionDeclaration" || s["async"] !== true) continue;
+    if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) continue;
 
     // The read helper always takes a single `path` parameter — the write helper (`<local>Send`)
     // takes three, so this alone keeps the two from being confused before the body shapes
     // (which already disambiguate them, via the catch's fallback value) are even considered.
-    const params = (s["params"] as AstNode[]) ?? [];
-    if (params.length !== 1) continue;
-    const param = params[0]!;
-    if (param.type !== "Identifier" || param["name"] !== "path") continue;
+    const params = functionParams(s);
+    if (params === undefined || params.length !== 1 || !isIdent(params[0], "path")) continue;
 
     // Fix for correlation defect: count fetch() calls. If != 1, reject.
     if (countFetchCalls(s) !== 1) continue;
 
-    const body = bodyStatements(s);
+    const body = functionBody(s) ?? [];
     let idx = 0;
 
     const normalizeLeadingSlash =
@@ -504,16 +401,17 @@ export function recognizeFetchHelper(
     const jsonFallback = classifyLastStatement(body[idx]!);
     if (jsonFallback === undefined) continue;
 
-    const options = (fetchCall["arguments"] as AstNode[])[1];
-    if (options?.type !== "ObjectExpression") continue;
-    if (hasUnexpectedFetchOption((options["properties"] as AstNode[]) ?? [])) continue;
+    const options = callArgs(fetchCall)?.[1];
+    const optionProps = objectExpressionProperties(options);
+    if (optionProps === undefined) continue;
+    if (hasUnexpectedFetchOption(optionProps)) continue;
 
-    const url = (fetchCall["arguments"] as AstNode[])[0];
+    const url = callArgs(fetchCall)?.[0];
     const base = url === undefined ? undefined : reconstructBase(url);
     const inlineHeadersObj = inlineHeadersObject(fetchCall);
     const headersAccessorName = headersAccessor(fetchCall);
     const serviceLabel = serviceLabelFrom(s);
-    const local = String((s["id"] as AstNode | undefined)?.["name"] ?? "");
+    const local = functionName(s) ?? "";
 
     if (base === undefined || serviceLabel === undefined || local === "") continue;
 

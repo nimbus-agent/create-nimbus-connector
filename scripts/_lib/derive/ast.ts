@@ -5,12 +5,21 @@
  */
 import { parse } from "@babel/parser";
 
+/**
+ * A parsed node, carrying ONLY what the infrastructure needs: `claims.ts` compares byte ranges,
+ * `blockers.ts` reads the type and line. Every other field is reached through `read.ts`.
+ *
+ * The absence of an index signature is the enforcement mechanism, not an oversight. With
+ * `[key: string]: unknown`, `node["computed"]` and `node["kind"]` typecheck for any key and yield
+ * `undefined` for absent ones — and whether that `undefined` rejects or matches depends on which
+ * side of a comparison it lands on. Eight defects across five files came from exactly that.
+ * Removing it makes an unguarded read a `tsc --noEmit` error.
+ */
 export type AstNode = {
-  type: string;
-  start: number | null;
-  end: number | null;
-  loc?: { start: { line: number } };
-  [key: string]: unknown;
+  readonly type: string;
+  readonly start: number | null;
+  readonly end: number | null;
+  readonly loc?: { start: { line: number } };
 };
 
 /**

@@ -1,42 +1,38 @@
 import type { AstNode } from "./ast.ts";
+import {
+  expressionOf,
+  functionName,
+  importSource,
+  labelCallee,
+  labelFirstInit,
+  labelName,
+} from "./read.ts";
 
 export type Blocker = { kind: string; detail: string; line: number };
 
 const MAX_DETAIL = 100;
 
-function calleeKind(callee: AstNode, prefix: string): string | undefined {
-  if (callee.type === "Identifier") return `${prefix}:${String(callee["name"])}`;
-  if (callee.type === "MemberExpression") {
-    const property = callee["property"] as AstNode | undefined;
-    if (property?.type === "Identifier") return `method-call:.${String(property["name"])}`;
-  }
-  return undefined;
+function calleeKind(callee: AstNode | undefined, prefix: string): string | undefined {
+  if (callee === undefined) return undefined;
+  const name = labelName(callee);
+  if (name === undefined) return undefined;
+  return callee.type === "Identifier" ? `${prefix}:${name}` : `method-call:.${name}`;
 }
 
 function kindOf(node: AstNode): string {
   if (node.type === "ImportDeclaration") {
-    const source = node["source"] as AstNode | undefined;
-    return `import-from:${String(source?.["value"] ?? "?")}`;
+    return `import-from:${importSource(node) ?? "?"}`;
   }
   if (node.type === "ExpressionStatement") {
-    const expression = node["expression"] as AstNode | undefined;
-    if (expression?.type === "CallExpression") {
-      const kind = calleeKind(expression["callee"] as AstNode, "call");
-      if (kind !== undefined) return kind;
-    }
+    const kind = calleeKind(labelCallee(expressionOf(node)), "call");
+    if (kind !== undefined) return kind;
   }
   if (node.type === "VariableDeclaration") {
-    const declarations = node["declarations"] as AstNode[] | undefined;
-    const init = declarations?.[0]?.["init"] as AstNode | undefined;
-    if (init?.type === "CallExpression") {
-      const kind = calleeKind(init["callee"] as AstNode, "const-call");
-      if (kind !== undefined) return kind;
-    }
+    const kind = calleeKind(labelCallee(labelFirstInit(node)), "const-call");
+    if (kind !== undefined) return kind;
   }
-  if (node.type === "FunctionDeclaration") {
-    const id = node["id"] as AstNode | undefined;
-    if (id?.type === "Identifier") return `function:${String(id["name"])}`;
-  }
+  const fn = functionName(node);
+  if (fn !== undefined) return `function:${fn}`;
   return `statement:${node.type}`;
 }
 

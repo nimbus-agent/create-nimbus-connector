@@ -1,4 +1,13 @@
 import type { AstNode } from "../ast.ts";
+import {
+  callArgs,
+  calleeOf,
+  isIdent,
+  memberName,
+  memberObject,
+  numericValue,
+  objectProps,
+} from "../read.ts";
 
 export type ArgFields = {
   type: "string" | "number" | "boolean";
@@ -32,56 +41,47 @@ const BASE_TYPES = new Set(["string", "number", "boolean"]);
  * report the byte mismatch as a mystery, instead of naming the modifier as the blocker.
  */
 export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefined {
-  if (node.type !== "CallExpression") return undefined;
-  const callee = node["callee"] as AstNode;
-  if (callee.type !== "MemberExpression") return undefined;
+  const args = callArgs(node);
+  if (args === undefined || args.length !== 1) return undefined;
   // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
   // variable's name, not a property name. Unguarded, this would accept `z[object](...)` as
   // `z.object(...)` whenever the index variable happened to be named "object". Same hazard as
-  // the object-key guard three lines below and server/index.ts's isConnect.
-  if (callee["computed"] === true) return undefined;
-  if ((callee["object"] as AstNode)["name"] !== "z") return undefined;
-  if ((callee["property"] as AstNode)["name"] !== "object") return undefined;
+  // the object-key guard below and server/index.ts's isConnect. `memberName`/`memberObject`
+  // carry this guard already.
+  const callee = calleeOf(node);
+  if (memberName(callee) !== "object") return undefined;
+  if (!isIdent(memberObject(callee), "z")) return undefined;
 
-  const args = node["arguments"] as AstNode[];
-  if (args.length !== 1) return undefined;
-  const arg = args[0] as AstNode;
-  if (arg.type !== "ObjectExpression") return undefined;
-  const properties = (arg["properties"] as AstNode[]) ?? [];
+  const props = objectProps(args[0]);
+  if (props === undefined) return undefined;
 
   const out: Record<string, ArgFields> = {};
-  for (const property of properties) {
-    if (property.type !== "ObjectProperty") return undefined;
-    // A computed key (`{ [KEY]: z.string() }`) has no literal name — reading `key["name"]`
-    // unguarded would derive an arg literally named "KEY" (the identifier's own name), which
-    // regenerates a schema the real connector never had. Reject rather than misname.
-    if (property["computed"] === true) return undefined;
-    const key = property["key"] as AstNode;
-    const name = typeof key["value"] === "string" ? key["value"] : String(key["name"] ?? "");
-    const parsed = recognizeOne(property["value"] as AstNode);
-    if (name === "" || parsed === undefined) return undefined;
-    out[name] = parsed;
+  for (const property of props) {
+    const parsed = recognizeOne(property.value);
+    if (parsed === undefined) return undefined;
+    out[property.key] = parsed;
   }
   return out;
 }
 
 function recognizeOne(node: AstNode): ArgFields | undefined {
   const modifiers: { name: string; args: AstNode[] }[] = [];
-  let current = node;
+  let current: AstNode | undefined = node;
 
-  while (current.type === "CallExpression") {
-    const callee = current["callee"] as AstNode;
-    if (callee.type !== "MemberExpression") return undefined;
+  while (current?.type === "CallExpression") {
     // Same computed-member hazard as recognizeArgs above: `z.number()[int]()` would otherwise
     // be read as the `.int()` modifier whenever the index variable was named "int".
-    if (callee["computed"] === true) return undefined;
-    const property = (callee["property"] as AstNode)["name"];
-    modifiers.push({ name: String(property), args: current["arguments"] as AstNode[] });
-    current = callee["object"] as AstNode;
+    const callee = calleeOf(current);
+    const property = memberName(callee);
+    if (property === undefined) return undefined;
+    const callArgList = callArgs(current);
+    if (callArgList === undefined) return undefined;
+    modifiers.push({ name: property, args: callArgList });
+    current = memberObject(callee);
   }
 
   // The innermost receiver must be `z`, and the innermost call its base type.
-  if (current.type !== "Identifier" || current["name"] !== "z") return undefined;
+  if (!isIdent(current, "z")) return undefined;
   const base = modifiers.pop();
   if (base === undefined || !BASE_TYPES.has(base.name)) return undefined;
   // `z.string` takes no arguments; a base call with args is not the plain-base shape this
@@ -98,13 +98,15 @@ function recognizeOne(node: AstNode): ArgFields | undefined {
       out.int = true;
     } else if (modifier.name === "min") {
       if (modifier.args.length !== 1) return undefined;
-      const value = modifier.args[0]?.["value"];
-      if (typeof value !== "number") return undefined;
+      // `numericValue`, not `numberLit`: ArgSchema permits a negative bound, so `.min(-5)` must
+      // recognize rather than block on a sign this schema never rejects.
+      const value = numericValue(modifier.args[0]);
+      if (value === undefined) return undefined;
       out.min = value;
     } else if (modifier.name === "max") {
       if (modifier.args.length !== 1) return undefined;
-      const value = modifier.args[0]?.["value"];
-      if (typeof value !== "number") return undefined;
+      const value = numericValue(modifier.args[0]);
+      if (value === undefined) return undefined;
       out.max = value;
     } else {
       return undefined;

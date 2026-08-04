@@ -3,6 +3,7 @@ import { parseModule } from "../../scripts/_lib/derive/ast.ts";
 import {
   arrayElements,
   arrowFn,
+  asExpression,
   awaited,
   binary,
   blockBody,
@@ -10,13 +11,19 @@ import {
   calleeOf,
   callTo,
   callToAny,
+  catchClause,
+  computedMember,
   conditional,
   constDecl,
   expressionOf,
+  functionBody,
   functionName,
+  functionParams,
   identName,
+  ifStatement,
   importNames,
   importSource,
+  isAsyncFunction,
   labelCallee,
   labelFirstInit,
   labelName,
@@ -28,10 +35,19 @@ import {
   newOf,
   numberLit,
   numericValue,
+  objectExpressionProperties,
+  objectProperty,
   objectProps,
+  optionalCallCallee,
+  optionalMemberName,
+  optionalMemberObject,
+  regExpLit,
   returnArgument,
   stringLit,
   templateLiteral,
+  throwArgument,
+  tryStatement,
+  unary,
 } from "../../scripts/_lib/derive/read.ts";
 
 /** The single top-level statement of `source`. */
@@ -308,5 +324,132 @@ describe("accessors not yet reached by a recognizer", () => {
   it("labelFirstInit reads the first declarator's init on let, not just const", () => {
     expect(numberLit(labelFirstInit(only("let a = 1, b = 2;")))).toBe(1);
     expect(labelFirstInit(only("f();"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 2's accessors — added when `tsc --noEmit` (after `AstNode` lost its index signature)
+ * surfaced a shape none of Task 1's accessors covered. Each pairs a guarded reader with the
+ * node shape it exists for, the same way the accessors above do.
+ */
+describe("Task 2 accessors", () => {
+  it("regExpLit reads a regex literal's pattern and flags", () => {
+    expect(regExpLit(initOf("/\\/$/"))).toEqual({ pattern: "\\/$", flags: "" });
+    expect(regExpLit(initOf('"not a regex"'))).toBeUndefined();
+  });
+
+  it("optionalCallCallee/optionalMemberName/optionalMemberObject read x?.trim()'s ?. step", () => {
+    // `x?.trim()` is an OptionalCallExpression whose callee is an OptionalMemberExpression — a
+    // distinct pair of node types from the plain CallExpression/MemberExpression the rest of
+    // this module reads, needed for env.ts's `process.env[...]?.trim()`.
+    const callee = optionalCallCallee(initOf("x?.trim()"));
+    expect(optionalMemberName(callee)).toBe("trim");
+    expect(identName(optionalMemberObject(callee))).toBe("x");
+  });
+
+  it("optionalMemberName/optionalMemberObject reject a computed member and a plain one", () => {
+    expect(optionalCallCallee(initOf("x.trim()"))).toBeUndefined();
+    const computedCallee = optionalCallCallee(initOf("x?.[trim]()"));
+    expect(optionalMemberName(computedCallee)).toBeUndefined();
+    // A plain (non-optional) MemberExpression is not an OptionalMemberExpression either.
+    expect(optionalMemberName(memberObjectHelperCallee())).toBeUndefined();
+
+    function memberObjectHelperCallee() {
+      return calleeOf(initOf("x.trim()"));
+    }
+  });
+
+  it("computedMember reads a deliberately computed member's object and key, unlike memberName", () => {
+    const m = computedMember(initOf('process.env["VAR"]'));
+    expect(identName(m?.object)).toBeUndefined(); // process.env is itself a MemberExpression
+    expect(stringLit(m?.key)).toBe("VAR");
+    // memberName/memberObject reject the same node — computedMember is their deliberate inverse.
+    expect(memberName(initOf('process.env["VAR"]'))).toBeUndefined();
+  });
+
+  it("computedMember rejects a non-computed member", () => {
+    expect(computedMember(initOf("p.limit"))).toBeUndefined();
+  });
+
+  it("functionParams/functionBody/isAsyncFunction read a FunctionDeclaration's shape", () => {
+    const fn = only("async function f(a, b) { return 1; }");
+    expect(functionParams(fn)?.map((p) => identName(p))).toEqual(["a", "b"]);
+    expect(functionBody(fn)).toHaveLength(1);
+    expect(isAsyncFunction(fn)).toBe(true);
+  });
+
+  it("isAsyncFunction is false for a non-async declaration, functionParams/Body undefined for a non-declaration", () => {
+    expect(isAsyncFunction(only("function f() {}"))).toBe(false);
+    expect(functionParams(only("const f = () => {};"))).toBeUndefined();
+    expect(functionBody(only("const f = () => {};"))).toBeUndefined();
+  });
+
+  it("objectExpressionProperties/objectProperty read a properties list unfiltered, unlike objectProps", () => {
+    const props = objectExpressionProperties(initOf("({ a: 1, ...rest, [k]: 2 })"));
+    expect(props).toHaveLength(3);
+    // objectProps rejects the whole object over the spread and the computed key.
+    expect(objectProps(initOf("({ a: 1, ...rest, [k]: 2 })"))).toBeUndefined();
+
+    const first = objectProperty(props?.[0]);
+    expect(identName(first?.key)).toBe("a");
+    expect(numberLit(first?.value)).toBe(1);
+    // A SpreadElement has no key/value pair — objectProperty returns undefined, not a crash.
+    expect(objectProperty(props?.[1])).toBeUndefined();
+    // Unlike objectProps, objectProperty does NOT reject a computed key — it hands back the
+    // key node as written, for a caller (fetch-helper.ts's findObjectProperty) that resolves
+    // it itself.
+    const computed = objectProperty(props?.[2]);
+    expect(computed).toBeDefined();
+  });
+
+  it("objectExpressionProperties rejects a non-ObjectExpression", () => {
+    expect(objectExpressionProperties(initOf("1"))).toBeUndefined();
+  });
+
+  it("ifStatement reads test/consequent/alternate, alternate undefined when absent", () => {
+    const withElse = ifStatement(only("if (a) { b; } else { c; }"));
+    expect(identName(withElse?.test)).toBe("a");
+    expect(blockBody(withElse?.consequent)).toHaveLength(1);
+    expect(blockBody(withElse?.alternate)).toHaveLength(1);
+
+    const withoutElse = ifStatement(only("if (a) { b; }"));
+    expect(withoutElse?.alternate).toBeUndefined();
+  });
+
+  it("throwArgument reads a throw statement's argument", () => {
+    const args = newOf(throwArgument(only('throw new Error("x");')), "Error", 1);
+    expect(stringLit(args?.[0])).toBe("x");
+    expect(throwArgument(only("f();"))).toBeUndefined();
+  });
+
+  it("unary reads operator and argument, e.g. the !res.ok guard", () => {
+    const u = unary(initOf("!res.ok"));
+    expect(u?.operator).toBe("!");
+    expect(memberOn(u?.argument, "res")).toBe("ok");
+    expect(unary(initOf("1"))).toBeUndefined();
+  });
+
+  it("asExpression reads the expression and the type annotation's own type", () => {
+    const a = asExpression(initOf("value as unknown"));
+    expect(identName(a?.expression)).toBe("value");
+    expect(a?.typeAnnotationType).toBe("TSUnknownKeyword");
+    expect(asExpression(initOf("value"))).toBeUndefined();
+  });
+
+  it("tryStatement/catchClause read a try/catch's parts, finalizer undefined when absent", () => {
+    const t = tryStatement(only("try { a; } catch (e) { b; }"));
+    expect(blockBody(t?.block)).toHaveLength(1);
+    expect(t?.finalizer).toBeUndefined();
+    const c = catchClause(t?.handler);
+    expect(identName(c?.param)).toBe("e");
+    expect(blockBody(c?.body)).toHaveLength(1);
+  });
+
+  it("catchClause reads a bare catch (no param) and tryStatement reads a finalizer", () => {
+    const t = tryStatement(only("try { a; } catch { b; } finally { c; }"));
+    expect(t?.finalizer).toBeDefined();
+    const c = catchClause(t?.handler);
+    expect(c?.param).toBeUndefined();
+    expect(catchClause(only("f();"))).toBeUndefined();
   });
 });

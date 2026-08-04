@@ -88,6 +88,17 @@ export function boolLit(node: AstNode | undefined): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+export type RegExpParts = { readonly pattern: string; readonly flags: string };
+
+/** A regex literal's pattern and flags, e.g. `/\/$/` -> `{ pattern: "\\/$", flags: "" }`. */
+export function regExpLit(node: AstNode | undefined): RegExpParts | undefined {
+  if (node?.type !== "RegExpLiteral") return undefined;
+  const pattern = stringField(node, "pattern");
+  const flags = stringField(node, "flags");
+  if (pattern === undefined || flags === undefined) return undefined;
+  return { pattern, flags };
+}
+
 /**
  * A numeric value that may carry a sign.
  *
@@ -139,6 +150,47 @@ export function memberOn(node: AstNode | undefined, receiver: string): string | 
   return memberName(node);
 }
 
+/**
+ * `<anything>?.<name>`, rejecting computed — the optional-chain analogue of `memberName`.
+ *
+ * `x?.trim()` parses its `?.trim` step as an OptionalMemberExpression, a node type distinct from
+ * the plain MemberExpression `memberName` reads; `env.ts`'s `process.env[...]?.trim()` is the one
+ * shape in the corpus that needs it. Callers compose this with `memberName` (the two node types
+ * are mutually exclusive) rather than widening `memberName` itself onto every other call site.
+ */
+export function optionalMemberName(node: AstNode | undefined): string | undefined {
+  if (node?.type !== "OptionalMemberExpression") return undefined;
+  if (raw(node)["computed"] === true) return undefined;
+  return identName(child(node, "property"));
+}
+
+/** The receiver of a non-computed OptionalMemberExpression — see `optionalMemberName`. */
+export function optionalMemberObject(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "OptionalMemberExpression") return undefined;
+  if (raw(node)["computed"] === true) return undefined;
+  return child(node, "object");
+}
+
+/**
+ * `<receiver>[<literal>]` -> its receiver and its literal key node, when the member IS computed.
+ *
+ * The inverse case from `memberName`/`memberObject`: those two exist to reject a computed member
+ * because an unguarded read of its `property` would name things after the KEY VARIABLE rather
+ * than a property. Here the key is exactly what is wanted — `process.env["VAR"]` is written
+ * computed on purpose — so the hazard does not apply and the key node is handed back for the
+ * caller to resolve with `stringLit` (never `identName`, which would reintroduce it).
+ */
+export function computedMember(
+  node: AstNode | undefined,
+): { object: AstNode; key: AstNode } | undefined {
+  if (node?.type !== "MemberExpression") return undefined;
+  if (raw(node)["computed"] !== true) return undefined;
+  const object = child(node, "object");
+  const key = child(node, "property");
+  if (object === undefined || key === undefined) return undefined;
+  return { object, key };
+}
+
 // ---------------------------------------------------------------------------
 // Declarations
 // ---------------------------------------------------------------------------
@@ -168,6 +220,24 @@ export function functionName(node: AstNode | undefined): string | undefined {
   return identName(child(node, "id"));
 }
 
+/** A FunctionDeclaration's parameter list. */
+export function functionParams(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "FunctionDeclaration") return undefined;
+  return childList(node, "params");
+}
+
+/** A FunctionDeclaration's body statements — never an expression body, unlike an arrow. */
+export function functionBody(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "FunctionDeclaration") return undefined;
+  return blockBody(child(node, "body"));
+}
+
+/** Whether a FunctionDeclaration is `async`. */
+export function isAsyncFunction(node: AstNode | undefined): boolean {
+  if (node?.type !== "FunctionDeclaration") return false;
+  return raw(node)["async"] === true;
+}
+
 // ---------------------------------------------------------------------------
 // Calls
 // ---------------------------------------------------------------------------
@@ -190,6 +260,17 @@ export function callArgs(node: AstNode | undefined): AstNode[] | undefined {
  */
 export function calleeOf(node: AstNode | undefined): AstNode | undefined {
   if (node?.type !== "CallExpression") return undefined;
+  return child(node, "callee");
+}
+
+/**
+ * The callee of an OptionalCallExpression — the `?.()` step of a chain like `x?.trim()`.
+ *
+ * `?.` on a call produces this distinct node type rather than a plain CallExpression, the same
+ * split `optionalMemberName` documents for member access.
+ */
+export function optionalCallCallee(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "OptionalCallExpression") return undefined;
   return child(node, "callee");
 }
 
@@ -242,6 +323,40 @@ export function newOf(
 // ---------------------------------------------------------------------------
 
 export type Prop = { readonly key: string; readonly value: AstNode };
+
+/**
+ * Every property of an ObjectExpression, unfiltered — a SpreadElement, a computed key or any
+ * other shape included as-is rather than disqualifying the whole list.
+ *
+ * `objectProps` is a PARSE: any property it cannot resolve rejects the entire object, which is
+ * right for a fixed-shape literal read wholesale. Some callers instead SEARCH a properties list
+ * for one named entry, tolerating and skipping whatever they are not looking for (a `signal:`
+ * option alongside `headers:`, a spread that carries no readable key at all) — `objectProps`
+ * would refuse the whole options object over an unrelated property it does not understand. This
+ * pairs with `objectProperty` for that search.
+ */
+export function objectExpressionProperties(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "ObjectExpression") return undefined;
+  return childList(node, "properties");
+}
+
+/**
+ * One ObjectProperty's key and value nodes, exactly as written.
+ *
+ * Unlike `objectProps`, this does not require the key to resolve to a name and does not reject a
+ * computed key — a caller using this (rather than `objectProps`) is discriminating the key node's
+ * own shape itself, e.g. requiring specifically an Identifier and refusing a same-named
+ * StringLiteral, a distinction `objectProps`'s `identName ?? stringLit` merging cannot preserve.
+ */
+export function objectProperty(
+  node: AstNode | undefined,
+): { key: AstNode; value: AstNode } | undefined {
+  if (node?.type !== "ObjectProperty") return undefined;
+  const key = child(node, "key");
+  const value = child(node, "value");
+  if (key === undefined || value === undefined) return undefined;
+  return { key, value };
+}
 
 /**
  * Every property of an ObjectExpression, or undefined if ANY is not a plain non-computed
@@ -298,6 +413,73 @@ export function returnArgument(node: AstNode | undefined): AstNode | undefined {
 export function blockBody(node: AstNode | undefined): AstNode[] | undefined {
   if (node?.type !== "BlockStatement") return undefined;
   return childList(node, "body");
+}
+
+export type IfParts = {
+  readonly test: AstNode;
+  readonly consequent: AstNode;
+  readonly alternate: AstNode | undefined;
+};
+
+/** An `if` statement's test, consequent and (possibly absent) alternate. */
+export function ifStatement(node: AstNode | undefined): IfParts | undefined {
+  if (node?.type !== "IfStatement") return undefined;
+  const test = child(node, "test");
+  const consequent = child(node, "consequent");
+  if (test === undefined || consequent === undefined) return undefined;
+  return { test, consequent, alternate: child(node, "alternate") };
+}
+
+/** A `throw <argument>;` statement's argument. */
+export function throwArgument(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "ThrowStatement") return undefined;
+  return child(node, "argument");
+}
+
+export type UnaryParts = { readonly operator: string; readonly argument: AstNode };
+
+/** `!x`, `-x`, `+x`, … — operator and operand. See `numericValue` for the signed-literal case. */
+export function unary(node: AstNode | undefined): UnaryParts | undefined {
+  if (node?.type !== "UnaryExpression") return undefined;
+  const operator = stringField(node, "operator");
+  const argument = child(node, "argument");
+  if (operator === undefined || argument === undefined) return undefined;
+  return { operator, argument };
+}
+
+/** `<expression> as <type>` -> the expression and the type annotation node's own `type`. */
+export function asExpression(
+  node: AstNode | undefined,
+): { expression: AstNode; typeAnnotationType: string } | undefined {
+  if (node?.type !== "TSAsExpression") return undefined;
+  const expression = child(node, "expression");
+  const typeAnnotation = child(node, "typeAnnotation");
+  if (expression === undefined || typeAnnotation === undefined) return undefined;
+  return { expression, typeAnnotationType: typeAnnotation.type };
+}
+
+export type TryParts = {
+  readonly block: AstNode;
+  readonly handler: AstNode | undefined;
+  readonly finalizer: AstNode | undefined;
+};
+
+/** `try { <block> } catch (<handler.param>) { <handler.body> } finally { <finalizer> }`. */
+export function tryStatement(node: AstNode | undefined): TryParts | undefined {
+  if (node?.type !== "TryStatement") return undefined;
+  const block = child(node, "block");
+  if (block === undefined) return undefined;
+  return { block, handler: child(node, "handler"), finalizer: child(node, "finalizer") };
+}
+
+export type CatchParts = { readonly param: AstNode | undefined; readonly body: AstNode };
+
+/** A `catch` clause's optional binding and its body. */
+export function catchClause(node: AstNode | undefined): CatchParts | undefined {
+  if (node?.type !== "CatchClause") return undefined;
+  const body = child(node, "body");
+  if (body === undefined) return undefined;
+  return { param: child(node, "param"), body };
 }
 
 export type Arrow = {

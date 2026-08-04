@@ -1,5 +1,31 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
+import {
+  binary,
+  blockBody,
+  callArgs,
+  calleeOf,
+  computedMember,
+  constDecl,
+  functionBody,
+  functionName,
+  ifStatement,
+  isIdent,
+  logical,
+  memberName,
+  memberObject,
+  memberOn,
+  newOf,
+  objectProps,
+  optionalCallCallee,
+  optionalMemberName,
+  optionalMemberObject,
+  regExpLit,
+  returnArgument,
+  stringLit,
+  templateLiteral,
+  throwArgument,
+} from "../read.ts";
 
 export type EnvEntry = {
   vars: string[];
@@ -14,34 +40,26 @@ export type EnvEntry = {
   headerNames?: string[];
 };
 
-/** `process.env["VAR"]?.trim()` -> `VAR`. */
+/**
+ * `process.env["VAR"]?.trim()` -> `VAR`.
+ *
+ * The `?.trim` step is a genuinely optional-chain node (OptionalCallExpression whose callee is
+ * an OptionalMemberExpression), a distinct shape from the plain calls the rest of the deriver
+ * reads — `optionalCallCallee`/`optionalMemberName`/`optionalMemberObject` are its guarded
+ * analogues of `calleeOf`/`memberName`/`memberObject`. `process.env["VAR"]` itself is a plain,
+ * deliberately COMPUTED member — the bracketed "VAR" is the point, not a hazard — so it is read
+ * with `computedMember` rather than rejected the way `memberName` would reject any computed
+ * member.
+ */
 function envVarRead(init: AstNode | undefined): string | undefined {
-  if (init?.type !== "OptionalCallExpression") return undefined;
-  const callee = init["callee"] as AstNode;
-  if (callee.type !== "OptionalMemberExpression" && callee.type !== "MemberExpression") {
-    return undefined;
-  }
-  // A computed member (`x[trim]()`) can have an Identifier `property` too — the KEY variable's
-  // name, not a property name. Unguarded, this accepts `x[trim]()` as `x.trim()` whenever the
-  // index variable happened to be named "trim". Same hazard as server/index.ts's isConnect.
-  if (callee["computed"] === true) return undefined;
-  if ((callee["property"] as AstNode)["name"] !== "trim") return undefined;
-  const member = callee["object"] as AstNode;
-  if (member.type !== "MemberExpression") return undefined;
-  // `member` (`process.env["VAR"]`) is intentionally computed — its bracketed key is read as
-  // `key["value"]` below, guarded there by a `typeof` check. `object` (`process.env`) is not:
-  // it must be the literal, non-computed `.env` access, so a `process[env]["VAR"]` written with
-  // an identifier named "env" must not be accepted as though it were.
-  const object = member["object"] as AstNode;
-  if (object.type !== "MemberExpression" || object["computed"] === true) return undefined;
-  if ((object["object"] as AstNode)["name"] !== "process") return undefined;
-  if ((object["property"] as AstNode)["name"] !== "env") return undefined;
-  const key = member["property"] as AstNode;
-  return typeof key["value"] === "string" ? key["value"] : undefined;
-}
-
-function bodyStatements(fn: AstNode): AstNode[] {
-  return ((fn["body"] as AstNode | undefined)?.["body"] as AstNode[] | undefined) ?? [];
+  const callee = optionalCallCallee(init);
+  const name = optionalMemberName(callee) ?? memberName(callee);
+  if (name !== "trim") return undefined;
+  const member = optionalMemberObject(callee) ?? memberObject(callee);
+  const computed = computedMember(member);
+  if (computed === undefined) return undefined;
+  if (memberOn(computed.object, "process") !== "env") return undefined;
+  return stringLit(computed.key);
 }
 
 type ReadLine = { var: string; binding: string; default?: string };
@@ -50,48 +68,42 @@ type ReadLine = { var: string; binding: string; default?: string };
  * One `const <binding> = process.env["<VAR>"]?.trim();` line, or its defaulted form
  * `... || "<default>"` — the two shapes `readLines` in src/emit/server/env.ts writes.
  *
- * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
- * — without it, `let <binding> = process.env[...]?.trim();` passed every check below and was
- * claimed as the documented `const` read line, same gap as server/index.ts's isRegistrarConst.
+ * `constDecl` carries the `kind === "const"` guard this line used to check by hand — without it,
+ * `let <binding> = process.env[...]?.trim();` passed every check below and was claimed as the
+ * documented `const` read line, same gap as server/index.ts's isRegistrarConst.
  */
 function parseReadLine(stmt: AstNode): ReadLine | undefined {
-  if (stmt.type !== "VariableDeclaration" || stmt["kind"] !== "const") return undefined;
-  const declarations = stmt["declarations"] as AstNode[] | undefined;
-  if (declarations === undefined || declarations.length !== 1) return undefined;
-  const declarator = declarations[0]!;
-  const binding = (declarator["id"] as AstNode | undefined)?.["name"];
-  if (typeof binding !== "string") return undefined;
-  const init = declarator["init"] as AstNode | undefined;
-  if (init === undefined) return undefined;
+  const decl = constDecl(stmt);
+  if (decl === undefined || decl.init === undefined) return undefined;
+  const binding = decl.name;
+  const init = decl.init;
 
-  if (init.type === "LogicalExpression" && init["operator"] === "||") {
-    const variable = envVarRead(init["left"] as AstNode);
-    const right = init["right"] as AstNode;
-    if (variable === undefined || right.type !== "StringLiteral") return undefined;
-    return { var: variable, binding, default: right["value"] as string };
+  const or = logical(init);
+  if (or !== undefined && or.operator === "||") {
+    const variable = envVarRead(or.left);
+    const right = stringLit(or.right);
+    if (variable === undefined || right === undefined) return undefined;
+    return { var: variable, binding, default: right };
   }
 
   const variable = envVarRead(init);
-  if (variable === undefined) return undefined;
-  return { var: variable, binding };
+  return variable === undefined ? undefined : { var: variable, binding };
 }
 
 /** Flatten a left-associative chain of `||` into its leaves, in source order. */
 function flattenOr(node: AstNode): AstNode[] {
-  if (node.type === "LogicalExpression" && node["operator"] === "||") {
-    return [...flattenOr(node["left"] as AstNode), ...flattenOr(node["right"] as AstNode)];
+  const or = logical(node);
+  if (or !== undefined && or.operator === "||") {
+    return [...flattenOr(or.left), ...flattenOr(or.right)];
   }
   return [node];
 }
 
 /** `<binding> === undefined` or `<binding> === ""`, one leaf of the guard's `||` chain. */
 function isBindingCompare(node: AstNode, binding: string, rhs: "undefined" | ""): boolean {
-  if (node.type !== "BinaryExpression" || node["operator"] !== "===") return false;
-  const left = node["left"] as AstNode;
-  if (left.type !== "Identifier" || left["name"] !== binding) return false;
-  const right = node["right"] as AstNode;
-  if (rhs === "undefined") return right.type === "Identifier" && right["name"] === "undefined";
-  return right.type === "StringLiteral" && right["value"] === "";
+  const b = binary(node);
+  if (b === undefined || b.operator !== "===" || !isIdent(b.left, binding)) return false;
+  return rhs === "undefined" ? isIdent(b.right, "undefined") : stringLit(b.right) === "";
 }
 
 /**
@@ -102,8 +114,9 @@ function isBindingCompare(node: AstNode, binding: string, rhs: "undefined" | "")
  * is not this shape and must not be treated as though it were.
  */
 function verifyGuard(ifStmt: AstNode, reads: readonly ReadLine[]): boolean {
-  if (ifStmt.type !== "IfStatement") return false;
-  const leaves = flattenOr(ifStmt["test"] as AstNode);
+  const s = ifStatement(ifStmt);
+  if (s === undefined) return false;
+  const leaves = flattenOr(s.test);
   if (leaves.length !== reads.length * 2) return false;
   for (let i = 0; i < reads.length; i++) {
     const binding = reads[i]!.binding;
@@ -111,28 +124,18 @@ function verifyGuard(ifStmt: AstNode, reads: readonly ReadLine[]): boolean {
     if (!isBindingCompare(leaves[2 * i + 1]!, binding, "")) return false;
   }
 
-  const consequent = ifStmt["consequent"] as AstNode | undefined;
-  const body =
-    consequent?.type === "BlockStatement"
-      ? (consequent["body"] as AstNode[] | undefined)
-      : undefined;
+  const body = blockBody(s.consequent);
   if (body === undefined || body.length !== 1) return false;
-  const throwStmt = body[0]!;
-  if (throwStmt.type !== "ThrowStatement") return false;
-  const errExpr = throwStmt["argument"] as AstNode | undefined;
-  if (errExpr?.type !== "NewExpression") return false;
-  const callee = errExpr["callee"] as AstNode | undefined;
-  if (callee?.type !== "Identifier" || callee["name"] !== "Error") return false;
-  const args = (errExpr["arguments"] as AstNode[] | undefined) ?? [];
-  if (args.length !== 1) return false;
-  const msg = args[0]!;
-  if (msg.type !== "StringLiteral") return false;
+  const args = newOf(throwArgument(body[0]!), "Error", 1);
+  if (args === undefined) return false;
+  const msg = stringLit(args[0]);
+  if (msg === undefined) return false;
 
   const expected =
     reads.length === 1
       ? `${reads[0]!.var} is not set`
       : `${reads.map((r) => r.var).join(" and ")} must be set`;
-  return msg["value"] === expected;
+  return msg === expected;
 }
 
 /**
@@ -145,36 +148,30 @@ function matchTransformExpr(
   node: AstNode,
   binding: string,
 ): { transform?: "stripTrailingSlash" | "trimTrailingSlashFn" } | undefined {
-  if (node.type === "Identifier" && node["name"] === binding) return {};
-  if (node.type !== "CallExpression") return undefined;
+  if (isIdent(node, binding)) return {};
 
-  const callee = node["callee"] as AstNode;
-  const args = (node["arguments"] as AstNode[] | undefined) ?? [];
+  const args = callArgs(node);
+  if (args === undefined) return undefined;
+  const callee = calleeOf(node);
 
-  if (callee.type === "Identifier" && callee["name"] === "trimTrailingSlash") {
-    if (args.length === 1 && args[0]?.type === "Identifier" && args[0]["name"] === binding) {
+  if (isIdent(callee, "trimTrailingSlash")) {
+    if (args.length === 1 && isIdent(args[0], binding)) {
       return { transform: "trimTrailingSlashFn" };
     }
     return undefined;
   }
 
-  // `callee["computed"] !== true` guards the same hazard server/index.ts's isConnect does:
-  // `binding[replace](...)` has an Identifier `property` too (the KEY variable's name), which
-  // would otherwise be read as `.replace` whenever that variable was named "replace".
-  if (callee.type === "MemberExpression" && callee["computed"] !== true) {
-    const object = callee["object"] as AstNode;
-    const property = callee["property"] as AstNode;
+  // `memberName`/`memberObject` carry the same computed-member guard `server/index.ts`'s
+  // `isConnect` does: `binding[replace](...)` has an Identifier `property` too (the KEY
+  // variable's name), which would otherwise be read as `.replace` whenever that variable was
+  // named "replace".
+  if (memberName(callee) === "replace" && isIdent(memberObject(callee), binding)) {
+    const re = regExpLit(args[0]);
     if (
-      object.type === "Identifier" &&
-      object["name"] === binding &&
-      property.type === "Identifier" &&
-      property["name"] === "replace" &&
       args.length === 2 &&
-      args[0]?.type === "RegExpLiteral" &&
-      args[0]["pattern"] === "\\/$" &&
-      args[0]["flags"] === "" &&
-      args[1]?.type === "StringLiteral" &&
-      args[1]["value"] === ""
+      re?.pattern === "\\/$" &&
+      re.flags === "" &&
+      stringLit(args[1]) === ""
     ) {
       return { transform: "stripTrailingSlash" };
     }
@@ -196,26 +193,17 @@ function classifyPlainReturn(
   const direct = matchTransformExpr(arg, binding);
   if (direct !== undefined) return direct;
 
-  if (arg.type !== "TemplateLiteral") return undefined;
-  const quasis = (arg["quasis"] as AstNode[] | undefined) ?? [];
-  const expressions = (arg["expressions"] as AstNode[] | undefined) ?? [];
-  if (quasis.length !== 2 || expressions.length !== 1) return undefined;
+  const t = templateLiteral(arg);
+  if (t === undefined || t.expressions.length !== 1) return undefined;
 
-  const inner = matchTransformExpr(expressions[0]!, binding);
+  const inner = matchTransformExpr(t.expressions[0]!, binding);
   if (inner === undefined) return undefined;
 
-  const prefix = (quasis[0]!["value"] as { cooked?: string } | undefined)?.cooked;
-  const suffix = (quasis[1]!["value"] as { cooked?: string } | undefined)?.cooked;
-  if (typeof prefix !== "string" || typeof suffix !== "string") return undefined;
+  const prefix = t.quasis[0];
+  const suffix = t.quasis[1];
+  if (prefix === undefined || suffix === undefined) return undefined;
 
   return { ...inner, prefix, suffix };
-}
-
-/** An object-literal property key as `field()` in src/emit/server/env.ts would print it. */
-function plainKeyName(key: AstNode): string | undefined {
-  if (key.type === "Identifier") return key["name"] as string;
-  if (key.type === "StringLiteral") return key["value"] as string;
-  return undefined;
 }
 
 type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] };
@@ -229,45 +217,26 @@ type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] }
  * is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
-  if (arg.type !== "ObjectExpression") return undefined;
-  const properties = (arg["properties"] as AstNode[] | undefined) ?? [];
-  if (properties.length !== reads.length + 1) return undefined;
-  if (properties.some((p) => p.type !== "ObjectProperty")) return undefined;
+  const properties = objectProps(arg);
+  if (properties === undefined || properties.length !== reads.length + 1) return undefined;
 
   const last = properties.at(-1)!;
-  const lastKey = last["key"] as AstNode;
-  const lastValue = last["value"] as AstNode;
-  if (lastKey.type !== "Identifier" || lastKey["name"] !== "Accept") return undefined;
-  if (lastValue.type !== "StringLiteral" || lastValue["value"] !== "application/json") {
-    return undefined;
-  }
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
 
   const rest = properties.slice(0, -1);
 
   if (rest.length === 1 && reads.length === 1) {
     const prop = rest[0]!;
-    const key = prop["key"] as AstNode;
-    const value = prop["value"] as AstNode;
+    const t = templateLiteral(prop.value);
     if (
-      key.type === "Identifier" &&
-      key["name"] === "Authorization" &&
-      value.type === "TemplateLiteral"
+      prop.key === "Authorization" &&
+      t !== undefined &&
+      t.expressions.length === 1 &&
+      t.quasis[0] === "Bearer " &&
+      t.quasis[1] === "" &&
+      isIdent(t.expressions[0], reads[0]!.binding)
     ) {
-      const quasis = (value["quasis"] as AstNode[] | undefined) ?? [];
-      const expressions = (value["expressions"] as AstNode[] | undefined) ?? [];
-      const head = (quasis[0]?.["value"] as { cooked?: string } | undefined)?.cooked;
-      const tail = (quasis[1]?.["value"] as { cooked?: string } | undefined)?.cooked;
-      const expr = expressions[0];
-      if (
-        quasis.length === 2 &&
-        expressions.length === 1 &&
-        head === "Bearer " &&
-        tail === "" &&
-        expr?.type === "Identifier" &&
-        expr["name"] === reads[0]!.binding
-      ) {
-        return { auth: "bearer" };
-      }
+      return { auth: "bearer" };
     }
   }
 
@@ -275,12 +244,8 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
     const headerNames: string[] = [];
     for (let i = 0; i < rest.length; i++) {
       const prop = rest[i]!;
-      const key = plainKeyName(prop["key"] as AstNode);
-      const value = prop["value"] as AstNode;
-      if (key === undefined || value.type !== "Identifier" || value["name"] !== reads[i]!.binding) {
-        return undefined;
-      }
-      headerNames.push(key);
+      if (!isIdent(prop.value, reads[i]!.binding)) return undefined;
+      headerNames.push(prop.key);
     }
     return { auth: "headers", headerNames };
   }
@@ -306,9 +271,9 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
  * is the defect this rewrite exists to close.
  */
 function recognizeOne(fn: AstNode): EnvEntry | undefined {
-  if (fn.type !== "FunctionDeclaration") return undefined;
-  const statements = bodyStatements(fn);
-  if (statements.length === 0 || statements.at(-1)?.type !== "ReturnStatement") return undefined;
+  const statements = functionBody(fn);
+  if (statements === undefined || statements.length === 0) return undefined;
+  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
 
   const reads: ReadLine[] = [];
   let i = 0;
@@ -343,11 +308,11 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   if (defaultValue !== undefined && guardNode !== undefined) return undefined;
   if (guardNode !== undefined && !verifyGuard(guardNode, reads)) return undefined;
 
-  const arg = returnStmt["argument"] as AstNode | undefined;
+  const arg = returnArgument(returnStmt);
   if (arg === undefined) return undefined;
 
-  const local = String(fn["id"] ? (fn["id"] as AstNode)["name"] : "");
-  if (local === "") return undefined;
+  const local = functionName(fn);
+  if (local === undefined) return undefined;
 
   const vars = reads.map((r) => r.var);
   const bindings = reads.map((r) => r.binding);

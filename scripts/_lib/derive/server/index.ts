@@ -1,5 +1,17 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
+import {
+  awaited,
+  callTo,
+  constDecl,
+  expressionOf,
+  importSource,
+  isIdent,
+  methodCallTo,
+  newOf,
+  objectProps,
+  stringLit,
+} from "../read.ts";
 
 export type FrameFields = { name: string };
 
@@ -8,11 +20,6 @@ const FRAME_IMPORTS = new Set([
   "@modelcontextprotocol/sdk/server/stdio.js",
   "zod",
 ]);
-
-function importSource(node: AstNode): string | undefined {
-  if (node.type !== "ImportDeclaration") return undefined;
-  return String((node["source"] as AstNode | undefined)?.["value"] ?? "");
-}
 
 function isFrameImport(node: AstNode): boolean {
   const source = importSource(node);
@@ -29,39 +36,26 @@ function isFrameImport(node: AstNode): boolean {
  * added third property (a `capabilities` block, say) is a shape this emitter never writes, and
  * must be rejected rather than accepted on the strength of the `name` property alone.
  *
- * `let`/`var` both produce a VariableDeclaration node too — `node["kind"]` is what actually
- * distinguishes them from `const`. Without this check, `let mcp = new McpServer(...)` passed
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand — `let`/`var` both
+ * produce a VariableDeclaration node too, and without it `let mcp = new McpServer(...)` passed
  * every check below and was claimed as the documented `const` frame, the same gap
  * `isRegistrarConst` closed for the registrar const (see its comment below).
  */
 function getMcpServerInfo(node: AstNode): { varName: string; connectorName: string } | undefined {
-  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return undefined;
-  const varName = ((node["declarations"] as AstNode[])[0]?.["id"] as AstNode)?.["name"];
-  if (typeof varName !== "string") return undefined;
+  const decl = constDecl(node);
+  if (decl === undefined) return undefined;
+  const args = newOf(decl.init, "McpServer", 1);
+  if (args === undefined) return undefined;
+  const props = objectProps(args[0]);
+  if (props === undefined || props.length !== 2) return undefined;
 
-  const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
-  if (init?.type !== "NewExpression") return undefined;
-  const callee = init["callee"] as AstNode;
-  if (callee.type !== "Identifier" || callee["name"] !== "McpServer") return undefined;
-  const args = (init["arguments"] as AstNode[]) ?? [];
-  if (args.length !== 1) return undefined;
-  const arg = args[0] as AstNode;
-  if (arg.type !== "ObjectExpression") return undefined;
-  const properties = (arg["properties"] as AstNode[] | undefined) ?? [];
-  if (properties.length !== 2) return undefined;
-  if (properties.some((p) => p.type !== "ObjectProperty")) return undefined;
+  const [nameProp, versionProp] = props;
+  const full = nameProp === undefined ? undefined : stringLit(nameProp.value);
+  if (nameProp?.key !== "name" || full === undefined) return undefined;
+  if (versionProp?.key !== "version" || stringLit(versionProp.value) !== "0.1.0") return undefined;
 
-  const [nameProp, versionProp] = properties as [AstNode, AstNode];
-  const nameKey = nameProp["key"] as AstNode;
-  const nameValue = nameProp["value"] as AstNode;
-  if (nameKey["name"] !== "name" || typeof nameValue["value"] !== "string") return undefined;
-  const versionKey = versionProp["key"] as AstNode;
-  const versionValue = versionProp["value"] as AstNode;
-  if (versionKey["name"] !== "version" || versionValue["value"] !== "0.1.0") return undefined;
-
-  const full = nameValue["value"] as string;
   const connectorName = full.startsWith("nimbus-") ? full.slice("nimbus-".length) : full;
-  return { varName, connectorName };
+  return { varName: decl.name, connectorName };
 }
 
 function hasMcpToolKitImport(node: AstNode): boolean {
@@ -79,18 +73,17 @@ function hasMcpToolKitImport(node: AstNode): boolean {
  * it closes over — this function never looked at, so `createZodToolRegistrar(unrelated)`
  * passed it on argument COUNT alone. See `isRegistrarConst` below.
  *
- * Also checks `node["kind"] === "const"` — the same `let`/`var` gap `isRegistrarConst` and
- * `getMcpServerInfo` close, here for the transport const: without it, `let transport = new
- * StdioServerTransport()` passed every check below and was claimed as the documented `const`
- * frame.
+ * `constDecl` also carries the same `let`/`var` gap `isRegistrarConst` closes, here for the
+ * transport const: without it, `let transport = new StdioServerTransport()` passed every check
+ * below and was claimed as the documented `const` frame.
  */
 function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boolean {
-  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return false;
-  const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
-  if (init?.type !== "CallExpression" && init?.type !== "NewExpression") return false;
-  const args = (init["arguments"] as AstNode[]) ?? [];
-  if (args.length !== expectedArgs) return false;
-  return (init["callee"] as AstNode)["name"] === callee;
+  const decl = constDecl(node);
+  if (decl === undefined) return false;
+  return (
+    callTo(decl.init, callee, expectedArgs) !== undefined ||
+    newOf(decl.init, callee, expectedArgs) !== undefined
+  );
 }
 
 /**
@@ -103,33 +96,19 @@ function isConstFrom(node: AstNode, callee: string, expectedArgs: number): boole
  * to itself be a zero-ambiguity call to `createRegisterSimpleTool` whose own sole argument is
  * the exact `mcp` binding introduced by the `McpServer` const — the emitter never writes
  * anything else here.
+ *
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand: without it,
+ * `let reg = createZodToolRegistrar(...)` passed every check below and was claimed as the
+ * documented `const` frame (see `recognizeFrame`'s docstring, element 3), which is a shape
+ * src/emit/server/index.ts's `wiring()` never emits.
  */
 function isRegistrarConst(node: AstNode, mcpVar: string): boolean {
-  // `let`/`var` both produce a VariableDeclaration node too — `node["kind"]` is what actually
-  // distinguishes them from `const`. Without this check, `let reg = createZodToolRegistrar(...)`
-  // passed every check below and was claimed as the documented `const` frame (see
-  // recognizeFrame's docstring, element 3), which is a shape src/emit/server/index.ts's
-  // `wiring()` never emits.
-  if (node.type !== "VariableDeclaration" || node["kind"] !== "const") return false;
-  const init = (node["declarations"] as AstNode[])[0]?.["init"] as AstNode | undefined;
-  if (init?.type !== "CallExpression") return false;
-  const outerCallee = init["callee"] as AstNode;
-  if (outerCallee.type !== "Identifier" || outerCallee["name"] !== "createZodToolRegistrar") {
-    return false;
-  }
-  const outerArgs = (init["arguments"] as AstNode[]) ?? [];
-  if (outerArgs.length !== 1) return false;
-
-  const inner = outerArgs[0] as AstNode;
-  if (inner.type !== "CallExpression") return false;
-  const innerCallee = inner["callee"] as AstNode;
-  if (innerCallee.type !== "Identifier" || innerCallee["name"] !== "createRegisterSimpleTool") {
-    return false;
-  }
-  const innerArgs = (inner["arguments"] as AstNode[]) ?? [];
-  if (innerArgs.length !== 1) return false;
-  const innerArg = innerArgs[0] as AstNode;
-  return innerArg.type === "Identifier" && innerArg["name"] === mcpVar;
+  const decl = constDecl(node);
+  const outerArgs = callTo(decl?.init, "createZodToolRegistrar", 1);
+  if (outerArgs === undefined) return false;
+  const innerArgs = callTo(outerArgs[0], "createRegisterSimpleTool", 1);
+  if (innerArgs === undefined) return false;
+  return isIdent(innerArgs[0], mcpVar);
 }
 
 /**
@@ -139,8 +118,7 @@ function isRegistrarConst(node: AstNode, mcpVar: string): boolean {
  */
 function transportVarName(node: AstNode): string | undefined {
   if (!isConstFrom(node, "StdioServerTransport", 0)) return undefined;
-  const id = (node["declarations"] as AstNode[])[0]?.["id"] as AstNode | undefined;
-  return id?.type === "Identifier" ? String(id["name"]) : undefined;
+  return constDecl(node)?.name;
 }
 
 /**
@@ -150,28 +128,15 @@ function transportVarName(node: AstNode): string | undefined {
  * was `connect`, never looking at the call's argument at all — `await mcp.connect(other)`
  * claimed the statement just as readily as the real one. `connect()` always takes exactly the
  * transport const introduced two statements earlier, per src/emit/server/index.ts's `wiring()`.
+ * `methodCallTo` carries the same computed-member guard this used to check by hand: a computed
+ * member (`mcp[connect](transport)`) has an Identifier `property` too — it's the KEY variable's
+ * name, not a property name — so an unguarded read would accept `await mcp[connect](transport)`
+ * as `await mcp.connect(transport)` whenever the index variable happened to be named "connect".
  */
 function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean {
-  if (node.type !== "ExpressionStatement") return false;
-  const await_ = node["expression"] as AstNode;
-  if (await_.type !== "AwaitExpression") return false;
-  const call = await_["argument"] as AstNode;
-  if (call.type !== "CallExpression") return false;
-  const callee = call["callee"] as AstNode;
-  if (callee.type !== "MemberExpression") return false;
-  // A computed member (`mcp[connect](transport)`) can have an Identifier `property` too — it's
-  // the KEY variable's name, not a property name. Reading it unguarded would accept
-  // `await mcp[connect](transport)` as `await mcp.connect(transport)` whenever the index
-  // variable happened to be named "connect". args.ts:53 and path-template.ts's
-  // argNameFromExpr guard this exact hazard already; this is the same guard here.
-  if (callee["computed"] === true) return false;
-  const receiver = callee["object"] as AstNode;
-  if (receiver.type !== "Identifier" || receiver["name"] !== mcpVar) return false;
-  if ((callee["property"] as AstNode)["name"] !== "connect") return false;
-  const args = (call["arguments"] as AstNode[]) ?? [];
-  if (args.length !== 1) return false;
-  const arg = args[0] as AstNode;
-  return arg.type === "Identifier" && arg["name"] === transportVar;
+  const call = awaited(expressionOf(node));
+  const args = methodCallTo(call, mcpVar, "connect", 1);
+  return args !== undefined && isIdent(args[0], transportVar);
 }
 
 /**
