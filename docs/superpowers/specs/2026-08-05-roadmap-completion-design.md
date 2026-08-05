@@ -473,6 +473,14 @@ src/ test/ scripts/` exit 0, `bun test --coverage` exit 0 with 1139 passing acro
 per-file coverage at or near 100% on nearly every module. The repo is in strong condition; this is
 a punch list, not a rescue.
 
+**Every measurement in this document was re-taken under Biome 2.5.7.** The first pass ran against
+a `node_modules` still holding 2.5.6 while the lockfile pinned 2.5.7, and `reach` printed its own
+warning — *"a diff measured under a different formatter version is not trustworthy evidence either
+way"* — which was read and not acted on. After `bun install`: `bun test` 1139/0, `reach` 4/94 with
+an unchanged histogram, the four style-strip counts identical at 21/21/34/38, and `diff:golden`
+reporting `newrelic`, `datadog`, `grafana` and `sentry` at **6/6** with `mercury` and `zendesk` at
+6/7. The numbers held; the discipline of re-taking them did not depend on that.
+
 Known items: 30+ stale local branches; `CLAUDE.md` quotes `bunx tsc --noEmit` and `bunx biome
 check …` while `package.json` also defines `typecheck` and `lint` scripts, so one gate has two
 spellings.
@@ -489,7 +497,19 @@ belong in this section.** Phase 4 does not start until it has been run and folde
 an open gap rather than silently omitted, because a punch list that looks complete and is not is
 the same failure this repo keeps removing.
 
-**Three are defects in `src/`, not documentation.**
+**Four are defects in `src/`, not documentation.**
+
+- **`BIOME_VERSION` has drifted behind the repo's own Biome pin, and both tests guarding it are
+  tautologies.** `src/emit/biome-json.ts:9` holds `"2.5.6"` while `package.json` pins
+  `@biomejs/biome` and `@biomejs/wasm-nodejs` at `^2.5.7`; `biome.json:2`'s own `$schema` URL is
+  still `2.5.6` too. The constant's docstring says it exists so the emitted `$schema` URL and the
+  emitted devDependency range "cannot drift apart" — they still agree with each other and both now
+  disagree with the formatter that produced the bytes. `test/emit/static.test.ts:93` asserts the
+  emitted range equals `^${BIOME_VERSION}` and `:161` asserts the `$schema` contains
+  `${BIOME_VERSION}`: both hold for *any* value the constant takes, so the guard is exactly the
+  passes-while-asserting-nothing shape this repo exists to remove. The fix is a test that compares
+  `BIOME_VERSION` against `package.json`'s pinned range, which is the only comparison that can
+  fail.
 
 - **`rows` is emitted as an identifier but is neither identifier-checked nor collision-checked.**
   `src/spec.ts:364` types it `z.string().min(1).optional()`, `src/validate.ts` never claims it, and
@@ -535,6 +555,19 @@ appears in no prose document at all.
 - **`fixtures/snapshots/` and `bun run snapshot:update` are documented nowhere**, and
   `cnc-add-fixture.md` omits both that step and the `derive-round-trip.test.ts` step — so following
   the fixture guide end-to-end leaves `bun test` red.
+
+**One coverage gap in the fixture corpus.** No real-connector fixture declares a write tool, so
+`diff:golden` — the acceptance test for the template — has **zero purchase on the Stage C emitter
+paths**. `method`, `effect`, `body` and the `<local>Send` helper are exercised only by synthetic
+`zz*` fixtures, which byte-match nothing. That is worth stating in *Known limitations* even if no
+suitable corpus connector exists to fix it, because "the write path is byte-verified" is currently
+implied by the fixture list and is not true.
+
+**Three more doc-vs-code contradictions**, each verified: `client-credentials` is documented as
+hand-rolled-only in `README.md:236` and `cnc-spec-authoring.md:181`, but `src/spec.ts:711` permits
+`read-only-kit` too; `renderTokenFunction`'s JSDoc at `src/emit/server/env.ts:104-112` contradicts
+the code directly beneath it; and `test/release-workflow-guard.test.ts:230-233` describes
+`bootstrap-publish.yml` as a file that currently exists.
 
 **And a dangling citation.** `design decision D4` is cited in `.github/workflows/acceptance.yml:14`,
 `.github/workflows/ci.yml:66` and `CONTRIBUTING.md:37`, and resolves to a document retired in
