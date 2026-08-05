@@ -21,6 +21,7 @@ bunx create-nimbus-connector acme --standalone
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
+| [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) · [GOVERNANCE.md](./docs/GOVERNANCE.md) · [RELEASING.md](./docs/RELEASING.md) · [SECURITY.md](./SECURITY.md) | Working on it |
 | [GLOSSARY.md](./docs/GLOSSARY.md) | Terms as this repo uses them |
 | [CLAUDE.md](./CLAUDE.md) | Context for Claude Code |

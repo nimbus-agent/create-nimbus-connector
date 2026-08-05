@@ -39,6 +39,11 @@ exception to the rule above. It is bounded strictly to these description strings
 not extend to connector code, `shared/` source, or filter-file bodies, all of which stay
 hand-written.
 
+**`--from-connector` reads a connector directory and prints the spec that would regenerate
+it — an authoring aid, not a vendoring path.** [`docs/LICENSING.md`](./docs/LICENSING.md) is
+the full answer: why deriving a spec locally is not vendoring, and the one thing that stays
+forbidden — a spec derived from a real Nimbus connector may never be committed to `fixtures/`.
+
 This shapes the whole test strategy and explains things that otherwise look like
 over-engineering:
 
