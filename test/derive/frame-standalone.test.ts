@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { functionName, typeAliasName } from "../../src/derive/read.ts";
-import { recognizeFrame } from "../../src/derive/server/index.ts";
+import { frameFailureKind, recognizeFrame } from "../../src/derive/server/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -53,5 +53,72 @@ describe("recognizeFrame reads this generator's standalone output", () => {
 
   it("still rejects a module with no kit import at all", () => {
     expect(recognizeFrame(parseModule("const a = 1;\n"), createClaimSet())).toBeUndefined();
+  });
+});
+
+/**
+ * I1 (final whole-branch review): `frameFailureKind` used to check only the monorepo signals
+ * (`hasMcpToolKitImport`, `RUN_READ_ONLY_SUFFIX`) even though `recognizeFrame` and
+ * `recognizeReadOnlyFrame` had already been widened to the standalone ones
+ * (`isStandaloneKitImport`, `isInlinedRunReadOnlyHelper`). A standalone module whose frame import
+ * is fine but fails on a LATER element was mislabeled "frame:no-kit-import" — telling the user to
+ * add an import already on line 1. Both cases below are built from THIS repo's own standalone
+ * output (never hand-written connector-shaped source) with exactly one later element broken, and
+ * pin the label the correctly-widened discriminator produces instead of the misleading one.
+ */
+describe("frameFailureKind reads this generator's standalone output", () => {
+  it("names the real break (no-connect), not no-kit-import, for a rest-kit standalone module", () => {
+    // Element 1 (the "@nimbus-dev/sdk/connector-kit" import) is untouched and present; only
+    // element 5 (the connect call's own argument) is broken. The old unwidened check found no
+    // "/mcp-tool-kit.ts" import (standalone never has one) and reported "no-kit-import" before
+    // ever looking at the connect call at all.
+    const source = standaloneServer("zzstandalone").replace(
+      "await server.connect(transport);",
+      "await server.connect(other);",
+    );
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-connect");
+  });
+
+  it("names readonly-callback-not-inline, not no-kit-import, for a read-only-kit standalone module", () => {
+    // The standalone read-only-kit frame has no import to find at all — its discriminator is the
+    // INLINED `runReadOnlyMcpConnector` function declaration (isInlinedRunReadOnlyHelper). The old
+    // code checked only RUN_READ_ONLY_SUFFIX (an import path), which a standalone module never
+    // has, so it fell straight through the readonly-callback branch and reported "no-kit-import"
+    // even though this near miss (a named callback instead of an inline arrow) is the real cause.
+    const wrapperCall = [
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", (reg) => {',
+      '  reg("zzreadonly_widget_list", "List widgets.", z.object({}), async () =>',
+      '    jsonResult(await zzGet("/v1/widgets")),',
+      "  );",
+      "",
+      "  reg(",
+      '    "zzreadonly_widget_get",',
+      '    "Get one widget by id.",',
+      "    z.object({ widgetId: z.string().min(1) }),",
+      "    async (p) => jsonResult(await zzGet(`/v1/widgets/${encodeURIComponent(p.widgetId)}`)),",
+      "  );",
+      "});",
+    ].join("\n");
+    const namedCallbackForm = [
+      "function registerZzreadonlyTools(reg) {",
+      '  reg("zzreadonly_widget_list", "List widgets.", z.object({}), async () =>',
+      '    jsonResult(await zzGet("/v1/widgets")),',
+      "  );",
+      "",
+      "  reg(",
+      '    "zzreadonly_widget_get",',
+      '    "Get one widget by id.",',
+      "    z.object({ widgetId: z.string().min(1) }),",
+      "    async (p) => jsonResult(await zzGet(`/v1/widgets/${encodeURIComponent(p.widgetId)}`)),",
+      "  );",
+      "}",
+      "",
+      'await runReadOnlyMcpConnector("nimbus-zzreadonly", registerZzreadonlyTools);',
+    ].join("\n");
+
+    const emitted = standaloneServer("zzreadonly");
+    expect(emitted).toContain(wrapperCall); // Fails loudly if the emitter's own shape ever drifts.
+    const source = emitted.replace(wrapperCall, namedCallbackForm);
+    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
   });
 });

@@ -514,16 +514,29 @@ function isInlinedTransportConnect(node: AstNode, mcpVar: string): boolean {
  * through a single hand-authored `registerXTools(server, ...)` call instead, a shape this
  * function does not try to name more specifically because doing so would require modeling that
  * call, which is `deriveSpec`'s job downstream of frame recognition, not frame recognition's.
+ *
+ * Both discriminators below are widened to the SAME two signals `recognizeFrame` and
+ * `recognizeReadOnlyFrame` accept, not just the monorepo one: this function used to check only
+ * `RUN_READ_ONLY_SUFFIX` and `hasMcpToolKitImport`, so a standalone module (whose frame element 1
+ * is `isInlinedRunReadOnlyHelper` or `isStandaloneKitImport`, never the monorepo import) that
+ * failed on a LATER element was told "no kit import" / evaluated against the wrong read-only
+ * discriminator — a label that sends the user to add an import already on line 1. No corpus
+ * connector is standalone (see `isStandaloneKitImport`'s own docstring), so `reach`'s histogram
+ * could not have caught this; it only surfaces once a standalone module is actually derived.
  */
 export function frameFailureKind(statements: readonly AstNode[]): string {
   const runImport = statements.find(
     (s) => importSource(s)?.endsWith(RUN_READ_ONLY_SUFFIX) === true,
   );
-  if (runImport !== undefined && withTopLevelIfBodies(statements).some(isNamedReadOnlyCallback)) {
+  const inlinedHelper = statements.find(isInlinedRunReadOnlyHelper);
+  if (
+    (runImport !== undefined || inlinedHelper !== undefined) &&
+    withTopLevelIfBodies(statements).some(isNamedReadOnlyCallback)
+  ) {
     return "frame:readonly-callback-not-inline";
   }
 
-  const toolKitImport = statements.find(hasMcpToolKitImport);
+  const toolKitImport = statements.find((s) => hasMcpToolKitImport(s) || isStandaloneKitImport(s));
   if (toolKitImport === undefined) return "frame:no-kit-import";
 
   const mcpInfo = statements.map(getMcpServerInfo).find((info) => info !== undefined);
