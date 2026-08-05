@@ -23,7 +23,7 @@ connectors could be regenerated from a spec"* — implies the remaining work mov
 long way.
 
 Measured on 2026-08-05 against `C:/gitrep/Nimbus` at `packages/mcp-connectors` tree
-`e3751a3a`, `bun run reach` reports:
+**`ec2b4e01`**, `bun run reach` reports:
 
 ```
 REACH  4/94  (server.ts byte-identical)
@@ -35,6 +35,15 @@ REACH  4/94  (server.ts byte-identical)
 All three sub-tiers are 4. Nothing in the corpus is currently derived-but-different, so the
 distinction between *functional* and *byte* reproduction — which the four tiers exist to draw —
 has never actually been visible in a run.
+
+> **A correction, recorded because it is the exact error this document catalogues.** An earlier
+> revision of the paragraph above cited tree `e3751a3a`. That SHA was copied from
+> `fixtures/reach-baseline.json` and the predecessor design document rather than measured — and
+> the checkout had moved on. `git rev-parse HEAD:packages/mcp-connectors` reports `ec2b4e01`. The
+> numbers themselves were taken today against the real checkout and are unaffected; only the
+> attribution was wrong. **Consequence: `bun run reach --baseline` currently exits 2** — the
+> recorded tree no longer matches, which is the gate working exactly as designed. Re-baselining is
+> phase 2's item 14, and it must not be done earlier to silence the refusal.
 
 The largest histogram buckets are `call:reg` (47), `import-from:./search-filter.ts` (39),
 `statement:VariableDeclaration` (37), `import-from:../../shared/mcp-search-tool.ts` (36),
