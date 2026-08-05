@@ -51,4 +51,17 @@ describe("attributeEffects", () => {
   it("refuses when a declared delete has no DELETE-method tool to attribute it to", () => {
     expect(attributeEffects([{ name: "a", method: "POST" }], ["delete"])).toBeUndefined();
   });
+
+  it("refuses when a tool already carries an effect outside the wanted set", () => {
+    // "delete" on tool "a" is never assigned by this call (nothing here maps to it), so the
+    // membership loop below — "every wanted effect appears in counts" — is satisfied on its
+    // own by tool "b"'s "write". Only the size check catches the extra, undeclared "delete":
+    // counts = {delete, write}, wanted = {write}, sizes disagree. Pins the superset direction
+    // of the bidirectional equality claim in the comment above, which nothing else here does.
+    const tools = [
+      { name: "a", effect: "delete" },
+      { name: "b", method: "POST" },
+    ];
+    expect(attributeEffects(tools, ["write"])).toBeUndefined();
+  });
 });
