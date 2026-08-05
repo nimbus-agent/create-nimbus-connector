@@ -419,10 +419,15 @@ outlives the roadmap's open items, and it needs room for a precondition nobody h
 - **`npm create` is release infrastructure**, complicated by the SDK's own design document having
   rejected the unscoped name this repo holds, and by `npm create` running under Node in a
   Bun-only project.
-- **A fourth precondition, on nobody's list:** the SDK's published manifest schema declares
-  `permissions` an **array**, while all 94 corpus manifests and the gateway use an **object**. The
-  two tools emit type-incompatible manifests on a required field, and no generator work resolves
-  it. It is owned by neither repository, which is why it needs recording.
+- **A fourth precondition, on nobody's list — with resolution already in flight.** `nimbus-sdk`
+  `main`'s v1 conformance suite declares `permissions` an **array**, while all 94 corpus manifests
+  and the gateway use an **object**, so the two tools emit type-incompatible manifests on a
+  required field. But the unmerged **RFC-0010** worktree's `sandbox/case.schema.json` calls the
+  array *"the legacy array form"* that its harness must tolerate alongside an object — so the SDK
+  is moving toward the shape this generator already emits. Recorded as a precondition owned by
+  neither repository, with RFC-0010 named as the thing to watch. **This generator will not add a
+  translation layer** (§10, R5): it blocks the handshake target specifically, and only if still
+  unresolved when that target ships.
 
 Plus the free interim item: the cross-link is one-directional. This README points at
 `@nimbus-dev/create-connector`; the SDK repo has no reciprocal link.
@@ -710,7 +715,115 @@ its code.
 
 ---
 
-## 10. Verification
+## 10. Review responses
+
+[`2026-08-05-roadmap-completion-review.md`](./2026-08-05-roadmap-completion-review.md) raised five
+items. Three are accepted with a corrected method, one is accepted as stated, and one is declined
+with the finding it rests on corrected.
+
+### R1 — a keep-alive workflow for the 60-day cron disablement · **declined, narrower fix accepted**
+
+The proposed scheduled keep-alive **is itself a scheduled workflow**, and GitHub's rule disables
+*scheduled workflows* in an inactive public repository — so it is in the class it is meant to
+rescue. It survives only by never missing a run: it works if it fires at day 50, pushes, and
+resets the window, and it lapses permanently the first time an outage or an expired credential
+makes it miss, with no red X. A mechanism that silently stops protecting the thing it protects is
+worse than a documented manual step, because it converts a known risk into an assumed guarantee.
+The alternative suggestion — a `preflight` check warning that a cron has not fired recently — has
+the same defect from the other end: if a human is running `preflight`, the repository is active
+and the window has already reset.
+
+What is accepted instead, because it is a real standing mitigation rather than an incidental one:
+**Dependabot is a platform service, not a scheduled workflow, and is not subject to the 60-day
+rule.** It runs weekly across two ecosystems here, and its branch pushes are repository activity.
+So the residual exposure is narrower than the audit implied — it is 60 consecutive days with *zero*
+dependency updates across both `bun` and `github-actions`. That is worth stating precisely in
+`docs/GOVERNANCE.md`, alongside the actionable instruction the audit identified: GitHub emails the
+owner before disabling, so the control is *re-enable them; do not assume green means running.*
+Separately, moving CodeQL to GitHub's default setup removes it from this class entirely, which is
+the one structural fix available.
+
+### R2 — mechanical `RESERVED_IDENTIFIERS` verification · **goal accepted, method replaced**
+
+The goal is already in §7.5. The proposed method — regex or AST over `src/emit/`'s *source* for
+"all hardcoded variable names" — cannot work, and would fail in this repo's signature way. It
+cannot distinguish a name the emitter **declares in its output** (which must be reserved) from a
+name the emitter uses in **its own implementation** (which must not be) from a name inside a
+description string. Tuning it to that distinction produces a hand-curated pattern list, which is
+the manual burden moved to a different file — with the added hazard that an over-clever pattern
+passes while missing the one new name, which is the exact shape of the two waves `CLAUDE.md` says
+were already missed.
+
+**Check the output, not the source.** `generate()` is pure and the fixtures already exercise every
+emitter path. Parse each emitted `src/server.ts` and `src/search-filter.ts` with the Babel boundary
+that phase 1 moves to `src/derive/ast.ts`, collect every binding the emitter declared at module
+scope *and* inside handler scope, subtract the ones traceable to a spec field, and assert the
+remainder is a subset of `RESERVED_IDENTIFIERS`. That tests the actual invariant — *a name the
+emitter declares must be reserved* — against the actual artifact, and it cannot pass while
+asserting nothing, because the binding list is derived from real output rather than from a pattern
+someone wrote.
+
+It also catches the `rows` defect by construction: `rows` is a handler-scope binding the emitter
+declares and does not reserve. Sequenced after phase 1, since it depends on the AST layer being in
+`src/`.
+
+### R3 — compile hand-rolled and rest-kit emitted output · **accepted, two corrections**
+
+Accepted; the hole is real and `emitted-typecheck.test.ts`'s docstring hides it.
+
+**It stays in `bun test`, not `preflight`.** Moving the strongest in-CI check out of CI to make it
+cheaper is the failure mode this repo keeps removing — and this check needs no Nimbus checkout, so
+it is one of the few strong gates CI *can* run.
+
+**And performance is not the obstacle.** The reason only a subset compiles is that the monorepo
+target imports `../../shared/*`, which does not exist in this repository and cannot be vendored.
+The fix is to extend the locally-written stand-ins the wiring test already uses, and compile every
+fixture's emitted output in **one** `ts.createProgram` over N `SourceFile`s — separate modules, so
+no scope collision, and one program invocation rather than N. The caveat goes in the docstring:
+a local stand-in proves internal consistency and nothing about whether the shape still matches
+Nimbus. `acceptance` is what proves that, and `wiring-conformance.ts` exists because that
+distinction was learned the hard way.
+
+### R4 — `@babel/parser` degradation · **accepted; use the repo's own pattern, and one asymmetry**
+
+Accepted, and the repo already solves this more carefully than a bare `try`/`catch`.
+`src/format.ts`'s `isMissingModule` distinguishes *the optional dependency is genuinely absent*
+from *it is present but its backend failed to load*, so a corrupt install is not misreported as a
+missing one. `src/derive/` reuses that helper rather than re-inventing a looser version.
+
+Two corrections to the suggestion. The remedy text `npm install -g @babel/parser` is a Node/npm
+instruction in a Bun-only project — the message must say `bun add @babel/parser`. And the two
+optional dependencies are **not** symmetric: a missing formatter degrades to unformatted output,
+which is why `format.ts` tolerates it, whereas a missing parser cannot degrade at all — there is
+no partial derivation without an AST. So `--from-connector` **fails** with a named message rather
+than degrading, and that asymmetry is written into the module docstring so the next reader does
+not "fix" it into a silent fallback.
+
+### R5 — a `permissions` translation layer · **declined, and the finding corrected**
+
+First the correction, because it changes the question. §6.2's claim came from the SDK's conformance
+suite, and re-checking it against both trees: on `nimbus-sdk` **`main`** the v1 suite does use
+`"permissions": ["read"]`, an array. But the unmerged **RFC-0010** worktree's
+`sandbox/case.schema.json` describes that array as *"the **legacy** array form"* which the harness
+must tolerate alongside an object. So the SDK is not sitting on a rival contract — **it is already
+moving toward the object**, the shape this generator and all 94 corpus manifests emit. The fork is
+real today and has in-flight resolution running in this generator's favour. §6.2 is corrected to
+say that rather than presenting two settled and incompatible contracts.
+
+Given which, a translation layer is the wrong thing to build. It would make this generator emit two
+manifest shapes, one of which **no consumer in the corpus accepts**, gated on a flag — and it would
+let this repository paper over a contract fork between two others, which makes the fork permanent
+and invisible rather than resolved. That is the false-green pattern at organisational scale, and
+the roadmap's own rule against absorbing other repositories' decisions applies.
+
+The review's direct question deserves a direct answer: **it blocks the handshake target
+specifically, and nothing else in Stage G.** Python and `npm create` are untouched by it. And it
+only blocks the handshake target *if still unresolved when that target ships* — which, given
+RFC-0010, it may well not be. `docs/CONSOLIDATION.md` records it as a precondition owned by
+neither repository, with RFC-0010 named as the thing to watch, and states that this generator will
+not add an adapter.
+
+## 11. Verification
 
 Per commit, exit codes rather than printed output:
 
