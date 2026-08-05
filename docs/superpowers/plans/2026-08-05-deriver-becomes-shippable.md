@@ -30,8 +30,16 @@ Biome 2.5.7 via `@biomejs/js-api` in-process, zod 4 for the spec schema.
   repo's own emitter.
 - **Byte safety.** `newrelic`, `datadog`, `grafana`, `sentry` must report **6/6** under
   `bun run diff:golden` after every task.
-- **Reach must not regress.** `bun run reach --nimbus-root <path>` reports **4/94** with an
-  unchanged blocker histogram after every task in this phase. Phase 1 adds no recognizer.
+- **Reach must not regress.** `bun run reach --nimbus-root <path>` reports **4/94** after every
+  task in this phase, and no connector drops a tier. Phase 1 adds no recognizer that reads the
+  **corpus** — Task 8's standalone recognizer reads a shape no corpus connector has — so a tier
+  change is a defect.
+
+  The blocker **histogram** is unchanged too, with exactly one sanctioned exception: **Task 4**'s
+  callee cross-check may move a connector between buckets, because a fetch call that was
+  previously mis-claimed now fails for a named reason. That is a reporting improvement, not a
+  regression. Task 4 Step 7 requires the shift to be recorded in its commit message; any histogram
+  movement in any **other** task is a defect. See Phase Exit Criteria.
 - **Never commit on `main`.** Work on `feat/deriver-shippable`.
 - **Conventional Commits.** `feat:` bumps minor, `fix:` patch, `refactor:`/`docs:`/`test:` neither.
 - **Bun only.** No Node, npm or pnpm path in this project or its output. Remedy text in error
