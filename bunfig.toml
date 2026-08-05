@@ -41,7 +41,7 @@ coverageSkipTestFiles = true
 # tests either of these in-process, delete its entry rather than raising the floor around it.
 coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 
-# The measured floor with those two excluded: scripts/_lib/derive/manifest.ts at 88.89% lines,
+# The measured floor with those two excluded: src/derive/manifest.ts at 88.89% lines,
 # and src/emit/server/tools-hand.ts at 90.00% functions. Aggregate is 99.09% / 99.56%.
 #
 # This was 0.78 / 0.81, set by src/format.ts at 78.16% / 81.82%. That gap has now genuinely

@@ -362,7 +362,7 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **A recovered rest-kit `title` is verified against only one of its two consumers.** For
   `style: "rest-kit"`, the deriver recovers `spec.title` by inverting the registrar name
   `register<Title>Tool` and asserts the round trip reproduces the observed identifier
-  (`recognizeRestTitle` in `scripts/_lib/derive/index.ts`). `spec.title` has a second consumer
+  (`recognizeRestTitle` in `src/derive/index.ts`). `spec.title` has a second consumer
   the deriver does not check — `src/emit/readme.ts` — and the sanitization is many-to-one, so a
   recovered `title` that reproduces the registrar name can still regenerate a different
   `README.md`. Bounded, not silent: the `all-identical` tier requires every emitted file to
