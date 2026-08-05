@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { isMissingModule } from "./optional-dep.ts";
 import type { GeneratedFile } from "./types.ts";
 
 type BiomeLike = {
@@ -43,24 +44,6 @@ let unavailableReason: string | undefined;
 const JS_API = "@biomejs/js-api/nodejs";
 /** The wasm backend @biomejs/js-api imports; a separate optionalDependency of this repo. */
 const WASM_BACKEND = "@biomejs/wasm-nodejs";
-
-/**
- * True only when `err` is a module-resolution failure for `specifier` itself.
- *
- * Under Bun a failed dynamic import rejects with a ResolveMessage carrying `code`
- * ERR_MODULE_NOT_FOUND / MODULE_NOT_FOUND and a `specifier` field naming the module that
- * could not be found — which is the *inner* specifier when a package resolves but one of
- * its own imports does not. That difference is exactly what separates "@biomejs/js-api is
- * not installed" from "@biomejs/js-api is installed but its wasm backend is missing".
- */
-function isMissingModule(err: unknown, specifier: string): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: unknown; specifier?: unknown; message?: unknown };
-  if (e.code !== "ERR_MODULE_NOT_FOUND" && e.code !== "MODULE_NOT_FOUND") return false;
-  // Prefer the structured field; fall back to the message only if a runtime omits it.
-  if (typeof e.specifier === "string") return e.specifier === specifier;
-  return typeof e.message === "string" && e.message.includes(specifier);
-}
 
 /**
  * Diagnose why the formatter could not load, from the error the dynamic import rejected with.
