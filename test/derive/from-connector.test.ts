@@ -76,6 +76,13 @@ describe("deriveFromDirectory", () => {
     // spec is missing every other required field too, so on its own this only proves SOME
     // issue rejects it — test/spec.test.ts pins the marker key itself as sufficient cause.)
     expect(() => parseSpec(result.spec)).toThrow();
+    // src/cli.ts prints every entry in `notes` to the user — this is the ONLY on-screen
+    // signal that what was just printed is a draft rather than a real spec. A `notes: []`
+    // here would pass every assertion above while silently dropping that warning, so the
+    // count and the wording are both pinned rather than just checking non-empty.
+    expect(result.notes).toHaveLength(1);
+    expect(result.notes[0]).toMatch(/partial/i);
+    expect(result.notes[0]).toMatch(/marker/i);
   });
 });
 
