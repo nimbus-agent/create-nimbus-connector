@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser } from "../../src/derive/ast.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
+import { parseSpec } from "../../src/spec.ts";
 
 beforeAll(async () => {
   await initParser();
@@ -180,6 +181,19 @@ describe("deriveSpec, rest-kit registrar/title and fetch-helper-name cross-check
     if (result.ok) return;
     expect(result.blockers.map((b) => b.kind)).toEqual(["rest-fetch-helper-name-mismatch"]);
   });
+
+  it("refuses a rest-kit connector when hitlRequired demands an effect no recognized tool can carry", () => {
+    // Every tool SERVER_REST declares is GET, so no attribution reproduces a declared "write" —
+    // the rest-kit path's own call into attributeEffects, exercised past every earlier check.
+    const unattributable = JSON.stringify({
+      ...JSON.parse(MANIFEST_REST),
+      hitlRequired: ["write"],
+    });
+    const result = deriveSpec({ server: SERVER_REST, manifest: unattributable });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["manifest:unattributable-hitl"]);
+  });
 });
 
 describe("deriveSpec", () => {
@@ -251,5 +265,30 @@ describe("deriveSpec", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.blockers.map((b) => b.kind)).toEqual(["no-fetch-helper"]);
+  });
+
+  it("refuses a hand-rolled connector when hitlRequired demands an effect no recognized tool can carry", () => {
+    // SERVER's only tool is a GET, so no attribution reproduces a declared "write" — the
+    // shared-style path's own call into attributeEffects, exercised past every earlier check.
+    const unattributable = JSON.stringify({ ...JSON.parse(MANIFEST), hitlRequired: ["write"] });
+    const result = deriveSpec({ server: SERVER, manifest: unattributable });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["manifest:unattributable-hitl"]);
+  });
+
+  // A genuinely non-trivial attribution (a real write tool, or two tools competing for the
+  // same declared effect) is not reachable through deriveSpec() yet: no recognizer in this
+  // plan claims a write-effect fetch helper (hand-rolled/read-only-kit) or a non-GET rest-kit
+  // registration (round-trip.test.ts's BLOCKED["zzwriteonly"/"zzwriterest"], "write body") — a
+  // later phase's territory. attributeEffects' own success and ambiguity behaviour is exercised
+  // directly, and exhaustively, in test/derive/effect.test.ts instead.
+  it("attaches no $effectAmbiguity when attribution is a no-op, and the spec re-parses", () => {
+    const result = deriveSpec({ server: SERVER, manifest: MANIFEST });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect("$effectAmbiguity" in result).toBe(false);
+    expect("$effectAmbiguity" in result.spec).toBe(false);
+    expect(() => parseSpec(result.spec)).not.toThrow();
   });
 });

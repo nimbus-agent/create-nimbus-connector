@@ -13,11 +13,64 @@ import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.
 export type SourceFiles = { server: string; manifest: string };
 
 export type Derivation =
-  | { ok: true; spec: Record<string, unknown> }
+  | { ok: true; spec: Record<string, unknown>; $effectAmbiguity?: string[] }
   | { ok: false; blockers: Blocker[] };
 
 function blocked(kind: string, detail: string): Derivation {
   return { ok: false, blockers: [{ kind, detail, line: 0 }] };
+}
+
+/**
+ * `effect` is NOT uniquely recoverable, and this function does not pretend otherwise.
+ *
+ * src/emit/manifest.ts computes hitlRequired as the deduplicated SET of non-read effects, and
+ * src/server.ts does not depend on `effect` at all — so every attribution producing the observed
+ * set emits identical bytes, and the byte-compare cannot tell a right one from a wrong one. The
+ * corpus proves the ambiguity is real rather than theoretical: `dagster` POSTs GraphQL queries
+ * and `ramp` POSTs to exchange an OAuth token, neither of which is a write.
+ *
+ * So: attribute the effect the method suggests, ONLY to tools that can carry it, and refuse when
+ * the observed set cannot be reproduced. --from-connector reports the attribution as unverified,
+ * because for its purposes — a spec a human will edit — semantically wrong is a real cost even
+ * when byte-identical.
+ */
+export type EffectAttribution = {
+  tools: Record<string, unknown>[];
+  /**
+   * Effects assigned to MORE THAN ONE tool, and therefore not forced by the evidence. With a
+   * single candidate the attribution is the only one reproducing the observed set, so it is
+   * correct; with several, at least one carries the effect and this function cannot say which.
+   */
+  ambiguous: string[];
+};
+
+export function attributeEffects(
+  tools: readonly Record<string, unknown>[],
+  hitlRequired: readonly string[],
+): EffectAttribution | undefined {
+  const wanted = new Set(hitlRequired);
+  const out = tools.map((t) => {
+    const method = t.method;
+    if (method === "DELETE" && wanted.has("delete")) return { ...t, effect: "delete" };
+    if (typeof method === "string" && method !== "GET" && wanted.has("write")) {
+      return { ...t, effect: "write" };
+    }
+    return { ...t };
+  });
+  // The set the emitter would now compute must equal the one observed, in both directions.
+  const counts = new Map<string, number>();
+  for (const t of out) {
+    const e = t.effect;
+    if (typeof e === "string") counts.set(e, (counts.get(e) ?? 0) + 1);
+  }
+  if (counts.size !== wanted.size) return undefined;
+  for (const e of wanted) {
+    if (!counts.has(e)) return undefined;
+  }
+  return {
+    tools: out,
+    ambiguous: [...counts].filter(([, n]) => n > 1).map(([e]) => e),
+  };
 }
 
 /**
@@ -143,6 +196,18 @@ function deriveRestKitSpec(
     );
   }
 
+  // Last, because it is a different kind of refusal from everything above — every earlier
+  // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
+  // attribution of it reproduces what the manifest declares".
+  const attribution = attributeEffects(tools, manifest.hitlRequired);
+  if (attribution === undefined) {
+    return blocked(
+      "manifest:unattributable-hitl",
+      `hitlRequired ${JSON.stringify(manifest.hitlRequired)} is not reproduced by any ` +
+        "attribution of this connector's tool methods",
+    );
+  }
+
   return {
     ok: true,
     spec: {
@@ -170,8 +235,9 @@ function deriveRestKitSpec(
           ? {}
           : { inlineHeaders: restFetchHelper.inlineHeaders }),
       },
-      tools,
+      tools: attribution.tools,
     },
+    ...(attribution.ambiguous.length > 0 ? { $effectAmbiguity: attribution.ambiguous } : {}),
   };
 }
 
@@ -210,6 +276,18 @@ function deriveSharedStyleSpec(
     return blocked("unrecognized-handler", "a reg() handler was not understood");
   }
 
+  // Last, because it is a different kind of refusal from everything above — every earlier
+  // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
+  // attribution of it reproduces what the manifest declares".
+  const attribution = attributeEffects(toolsResult.tools, manifest.hitlRequired);
+  if (attribution === undefined) {
+    return blocked(
+      "manifest:unattributable-hitl",
+      `hitlRequired ${JSON.stringify(manifest.hitlRequired)} is not reproduced by any ` +
+        "attribution of this connector's tool methods",
+    );
+  }
+
   const { serviceLabel, ...helper } = fetchHelper;
   return {
     ok: true,
@@ -230,8 +308,9 @@ function deriveSharedStyleSpec(
       minNimbusVersion: manifest.minNimbusVersion,
       env,
       fetchHelper: helper,
-      tools: toolsResult.tools,
+      tools: attribution.tools,
     },
+    ...(attribution.ambiguous.length > 0 ? { $effectAmbiguity: attribution.ambiguous } : {}),
   };
 }
 

@@ -235,6 +235,7 @@ describe("measure", () => {
     displayName: "X Connector",
     description: "A test connector.",
     permissions: { network: ["api.example.com"] },
+    hitlRequired: [],
     syncInterval: 3600,
     minNimbusVersion: "1.0.0",
   });

@@ -22,9 +22,15 @@ describe("deriveManifest", () => {
       displayName: "New Relic",
       description: "Query New Relic.",
       network: ["api.newrelic.com"],
+      hitlRequired: [],
       syncInterval: 300,
       minNimbusVersion: "0.2.0",
     });
+  });
+
+  it("recovers hitlRequired as the observed set, unattributed to any tool", () => {
+    const withHitl = JSON.stringify({ ...JSON.parse(MANIFEST), hitlRequired: ["write", "delete"] });
+    expect(deriveManifest(withHitl).hitlRequired).toEqual(["write", "delete"]);
   });
 
   it("recovers filesystem when present, since its absence is meaningful", () => {

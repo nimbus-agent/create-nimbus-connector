@@ -4,6 +4,12 @@ export type ManifestFields = {
   description: string;
   network: string[];
   filesystem?: { read: string[]; write: string[] };
+  /**
+   * The manifest's observed capability set, exactly as written — not attributed to any tool
+   * here. `src/derive/index.ts`'s `attributeEffects` does that, against the recognized tools'
+   * methods, and refuses rather than guess when no attribution reproduces this set.
+   */
+  hitlRequired: string[];
   syncInterval: number;
   minNimbusVersion: string;
 };
@@ -38,10 +44,10 @@ function reqString(value: unknown, key: string): string {
 /**
  * The inverse of src/emit/manifest.ts, key for key.
  *
- * `hitlRequired` is deliberately not recovered: the emitter computes it from tool effects
- * rather than reading it, so a derived spec that carried it would be carrying a field the
- * emitter ignores. `version`, `author`, `entrypoint` and `runtime` are emitter constants for
- * the same reason.
+ * `hitlRequired` is surfaced as the observed SET the manifest declares, unattributed — see
+ * `attributeEffects` in `src/derive/index.ts` for why matching it back to individual tools is a
+ * separate, fallible step this function does not perform. `version`, `author`, `entrypoint` and
+ * `runtime` remain emitter constants, unrecovered because the emitter never reads them back.
  */
 export function deriveManifest(json: string): ManifestFields {
   const m = JSON.parse(json) as Record<string, unknown>;
@@ -55,6 +61,7 @@ export function deriveManifest(json: string): ManifestFields {
     description,
     network: req(permissions.network as string[] | undefined, "permissions.network"),
     ...(filesystem === undefined ? {} : { filesystem }),
+    hitlRequired: req(m.hitlRequired as string[] | undefined, "hitlRequired"),
     syncInterval: req(m.syncInterval as number | undefined, "syncInterval"),
     minNimbusVersion: req(m.minNimbusVersion as string | undefined, "minNimbusVersion"),
   };
