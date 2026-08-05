@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { initParser } from "../../src/derive/ast.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
@@ -126,6 +127,7 @@ function emittedFiles(name: string): Map<string, string> {
 
 beforeAll(async () => {
   await initFormatter();
+  await initParser();
 });
 
 describe("deriveSpec round-trips this repository's own output", () => {

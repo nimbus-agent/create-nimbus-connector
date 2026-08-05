@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { recognizeTools } from "../../src/derive/server/tools-hand.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 const CONCISE = [
   'reg("newrelic_application_list", "List APM applications.", z.object({}), async () =>',

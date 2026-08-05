@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import {
   arrayElements,
   arrowFn,
@@ -54,6 +54,10 @@ import {
   unary,
   uninitializedLet,
 } from "../../src/derive/read.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 /** The single top-level statement of `source`. */
 function only(source: string) {

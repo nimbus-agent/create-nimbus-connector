@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { recognizeFrame } from "../../src/derive/server/index.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 /** A read-only-kit module: no McpServer, no transport, tools inside the wrapper callback. */
 const READ_ONLY = [

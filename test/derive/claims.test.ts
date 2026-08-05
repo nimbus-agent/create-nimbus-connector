@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { functionBody } from "../../src/derive/read.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 const SOURCE = [
   'import { z } from "zod";',

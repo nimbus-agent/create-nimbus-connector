@@ -12,6 +12,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { initParser, parserAvailable, parserUnavailableReason } from "../src/derive/ast.ts";
 import {
   biomeVersion,
   formatterAvailable,
@@ -174,6 +175,14 @@ async function main(argv: readonly string[]): Promise<void> {
     throw new Error(
       "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
         `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
+    );
+  }
+  // Without this, every connector would derive as blocked:parse-error and the run would report
+  // a false 0/94 that reads as a real (if bad) measurement rather than a broken toolchain.
+  await initParser();
+  if (!parserAvailable()) {
+    throw new Error(
+      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
     );
   }
 

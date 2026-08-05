@@ -1,5 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser } from "../../src/derive/ast.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 const MANIFEST = JSON.stringify({
   id: "newrelic",

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { blockerFor } from "../../src/derive/blockers.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 function first(source: string) {
   return blockerFor(parseModule(source)[0]!, source);

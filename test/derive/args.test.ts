@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../src/derive/ast.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { constDecl } from "../../src/derive/read.ts";
 import { recognizeArgs } from "../../src/derive/server/args.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 function argsOf(expression: string) {
   const statement = parseModule(`const x = ${expression};`)[0]!;

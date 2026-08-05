@@ -10,6 +10,7 @@ import {
   tierFor,
   walkConnector,
 } from "../../scripts/_lib/reach.ts";
+import { initParser } from "../../src/derive/ast.ts";
 import { initFormatter } from "../../src/format.ts";
 import { tempDirs } from "../support/tmp.ts";
 
@@ -18,6 +19,7 @@ afterAll(tmp.cleanup);
 
 beforeAll(async () => {
   await initFormatter();
+  await initParser();
 });
 
 describe("reach.ts parseArgs", () => {
@@ -325,6 +327,8 @@ describe("measure", () => {
       "}));" +
       'const { initFormatter } = await import("./src/format.ts");' +
       "await initFormatter();" +
+      'const { initParser } = await import("./src/derive/ast.ts");' +
+      "await initParser();" +
       'const { measure } = await import("./scripts/_lib/reach.ts");' +
       `const files = new Map([["src/server.ts", ${server}], ["nimbus.extension.json", ${manifest}]]);` +
       'const result = measure("x", files);' +
