@@ -1,4 +1,4 @@
-import { capitalize } from "../../../src/spec.ts";
+import { capitalize } from "../spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";

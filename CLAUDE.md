@@ -138,6 +138,7 @@ list in the same change. Two waves have been missed already, and both were found
 src/spec.ts        zod schema + parseSpec — the spec language
 src/validate.ts    identifier collision rules, RESERVED_IDENTIFIERS
 src/emit/          one module per emitted file; emit/server/ splits by concern
+src/derive/        the spec deriver — the inverse of src/emit/
 src/format.ts      the Biome integration
 src/golden/        fixture resolution, expectations, snapshots
 src/cli.ts         arg parsing, prompts, writeFiles

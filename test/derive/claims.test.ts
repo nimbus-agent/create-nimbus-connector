@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import { functionBody } from "../../scripts/_lib/derive/read.ts";
+import { parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
+import { functionBody } from "../../src/derive/read.ts";
 
 const SOURCE = [
   'import { z } from "zod";',

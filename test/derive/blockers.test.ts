@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { blockerFor } from "../../scripts/_lib/derive/blockers.ts";
+import { parseModule } from "../../src/derive/ast.ts";
+import { blockerFor } from "../../src/derive/blockers.ts";
 
 function first(source: string) {
   return blockerFor(parseModule(source)[0]!, source);

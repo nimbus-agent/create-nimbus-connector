@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { deriveSpec } from "../../scripts/_lib/derive/index.ts";
+import { deriveSpec } from "../../src/derive/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -40,7 +40,7 @@ const ROUND_TRIP = [
  * by actually running `deriveSpec` against the fixture's emitted output, not inferred from the
  * spec or the emitter — an earlier version of this docstring claimed rest-kit's frame never
  * matched (`"rest-kit frame"`), which stopped being true the moment
- * scripts/_lib/derive/server/index.ts grew its rest-kit branch, and a later version claimed the
+ * src/derive/server/index.ts grew its rest-kit branch, and a later version claimed the
  * factory const stayed unclaimed alongside a fixture's failing calls, which stopped being true
  * the moment tools-rest.ts split into `recognizeRestRegistrar` (claims the factory
  * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
@@ -61,7 +61,7 @@ const ROUND_TRIP = [
  *
  * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
  * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
- * scripts/_lib/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
+ * src/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
  * hands off to does not exist yet, so these still block, just past the frame rather than at it.
  * The label names the blocker landing the search recognizer would newly reach, not necessarily
  * the ONLY one currently reported: `zzextract`, `zzsearch` and `zzsearchstub` block on search

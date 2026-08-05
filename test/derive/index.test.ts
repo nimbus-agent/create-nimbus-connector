@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { deriveSpec } from "../../scripts/_lib/derive/index.ts";
+import { deriveSpec } from "../../src/derive/index.ts";
 
 const MANIFEST = JSON.stringify({
   id: "newrelic",

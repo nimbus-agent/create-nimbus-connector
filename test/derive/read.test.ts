@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
+import { parseModule } from "../../src/derive/ast.ts";
 import {
   arrayElements,
   arrowFn,
@@ -53,7 +53,7 @@ import {
   tryStatement,
   unary,
   uninitializedLet,
-} from "../../scripts/_lib/derive/read.ts";
+} from "../../src/derive/read.ts";
 
 /** The single top-level statement of `source`. */
 function only(source: string) {
