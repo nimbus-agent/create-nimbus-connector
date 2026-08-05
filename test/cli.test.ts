@@ -148,6 +148,47 @@ describe("parseCliArgs", () => {
       expect(() => parseCliArgs(["acme", "--force"])).toThrow(/--gateway-wiring/);
     });
   });
+
+  describe("--from-connector", () => {
+    it("is undefined by default", () => {
+      expect(parseCliArgs(["acme"]).fromConnector).toBeUndefined();
+    });
+
+    it("is set by the flag", () => {
+      expect(parseCliArgs(["--from-connector", "/tmp/some-connector"]).fromConnector).toBe(
+        "/tmp/some-connector",
+      );
+    });
+
+    it("rejects --from-connector with no following value", () => {
+      expect(() => parseCliArgs(["--from-connector"])).toThrow(/--from-connector/);
+    });
+
+    it("still accepts --from-connector on its own", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x"])).not.toThrow();
+    });
+
+    it("rejects --from-connector combined with --spec, naming both flags", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--spec", "x.json"])).toThrow(
+        /--from-connector/,
+      );
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--spec", "x.json"])).toThrow(
+        /--spec/,
+      );
+    });
+
+    it("rejects --from-connector combined with a positional name", () => {
+      expect(() => parseCliArgs(["acme", "--from-connector", "/tmp/x"])).toThrow(
+        /--from-connector/,
+      );
+    });
+
+    it("rejects --from-connector combined with --gateway-wiring", () => {
+      expect(() =>
+        parseCliArgs(["--from-connector", "/tmp/x", "--gateway-wiring", "C:/gitrep/Nimbus"]),
+      ).toThrow(/--gateway-wiring/);
+    });
+  });
 });
 
 describe("renderTree", () => {

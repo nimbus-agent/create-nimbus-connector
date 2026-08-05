@@ -30,12 +30,15 @@ export type CliOptions = {
    * (a hand-authored real connector, or Gateway wiring already filled in) unless this is set.
    */
   force: boolean;
+  /** --from-connector <dir>: read an existing connector directory and print its derived spec. */
+  fromConnector?: string;
 };
 
 /** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
 const KNOWN_FLAGS = [
   "--dry-run",
   "--force",
+  "--from-connector",
   "--gateway-wiring",
   "--help",
   "--license",
@@ -95,6 +98,8 @@ function parseFlags(argv: readonly string[]): CliOptions {
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
     else if (a === "--gateway-wiring") {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
+    } else if (a === "--from-connector") {
+      opts.fromConnector = takeValue(argv, ++i, "--from-connector");
     } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
     else opts.name = a;
   }
@@ -135,6 +140,24 @@ function assertFlagCombination(opts: CliOptions): void {
         "<name>-sync.ts and <name>-mapping.ts into the Nimbus Gateway, which a --standalone " +
         "connector does not live in and is not registered with. Drop --standalone, or drop " +
         "--gateway-wiring.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.specPath !== undefined) {
+    throw new Error(
+      "--from-connector derives a spec from an existing connector and --spec reads one from a " +
+        "file; passing both means one would be discarded. Keep one.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.name !== undefined) {
+    throw new Error(
+      "--from-connector takes the connector name from the directory it reads; a positional " +
+        "name is redundant and was probably a mistake — remove one.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.gatewayWiring !== undefined) {
+    throw new Error(
+      "--from-connector prints a spec and writes nothing, so --gateway-wiring has nothing to " +
+        "attach to. Derive the spec first, then generate from it with --spec.",
     );
   }
 }
@@ -230,6 +253,7 @@ Flags:
   --license <id>           SPDX licence for --standalone output (default: UNLICENSED)
   --gateway-wiring <root>  also emit Nimbus Gateway sync/mapping skeletons (monorepo only)
   --force                  allow --gateway-wiring to overwrite existing target files
+  --from-connector <dir>   read an existing connector directory and print its spec
   --dry-run                print what would be written, write nothing
   --version                print the version
   --help                   show this message
@@ -308,6 +332,35 @@ export async function main(argv: readonly string[]): Promise<void> {
   if (await handleInfoFlags(argv)) return;
 
   const opts = parseCliArgs(argv);
+
+  if (opts.fromConnector !== undefined) {
+    // Lazy: a static import would pull @babel/parser into the module graph for every command,
+    // so a consumer without the optionalDependency could not even run --dry-run. Task 3's
+    // step 6 is the check that this stays true.
+    const { initParser, parserAvailable, parserUnavailableReason } = await import(
+      "./derive/ast.ts"
+    );
+    const { deriveFromDirectory, renderBlockers } = await import("./derive/from-connector.ts");
+    await initParser();
+    if (!parserAvailable())
+      throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
+
+    const result = await deriveFromDirectory(opts.fromConnector);
+    if (!result.ok) {
+      // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
+      // Error as one prefixed line, which would mangle a multi-line report and repeat the
+      // program name. The throw below is only how this process exits non-zero.
+      console.error(renderBlockers(opts.fromConnector, result.blockers));
+      throw new Error(`--from-connector: ${opts.fromConnector} could not be read into a spec.`);
+    }
+    console.log(JSON.stringify(result.spec, null, 2));
+    for (const note of result.notes) console.error(`note: ${note}`);
+    if (result.target === "standalone") {
+      console.error("note: read from a standalone package — generate with --standalone.");
+    }
+    return;
+  }
+
   const spec =
     opts.specPath !== undefined
       ? parseSpec(await readSpecFile(opts.specPath))

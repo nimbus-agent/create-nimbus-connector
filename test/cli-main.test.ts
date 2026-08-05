@@ -43,6 +43,24 @@ function runCli(args: readonly string[], cwd: string): { exitCode: number; outpu
   };
 }
 
+/**
+ * runCli always passes --spec, which --from-connector refuses to combine with — so this is a
+ * bare sibling rather than an extension. Kept as two separate streams (not merged the way
+ * runCli's `output` is) because --from-connector's stdout is a JSON spec meant to be parsed on
+ * its own; interleaving stderr notes into it would make every caller re-split them back apart.
+ */
+function runCliBare(
+  args: readonly string[],
+  cwd: string,
+): { exitCode: number; stdout: string; stderr: string } {
+  const r = Bun.spawnSync([process.execPath, cliPath, ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { exitCode: r.exitCode, stdout: r.stdout.toString().trim(), stderr: r.stderr.toString() };
+}
+
 function withTempDir<T>(fn: (dir: string) => T): T {
   const dir = tmp.make("cnc-cli-");
   try {
@@ -345,6 +363,50 @@ describe("CLI surface", () => {
       expect(exitCode).toBe(1);
       expect(output).toContain("does not look like a Nimbus checkout");
       expect(existsSync(join(notNimbus, "packages"))).toBe(false);
+    });
+  });
+});
+
+describe("--from-connector", () => {
+  it("prints the spec derived from a connector this CLI just generated (monorepo target)", () => {
+    withTempDir((dir) => {
+      expect(runCli([], dir).exitCode).toBe(0);
+      const connectorDir = join(dir, "packages", "mcp-connectors", CONNECTOR);
+
+      const { exitCode, stdout, stderr } = runCliBare(["--from-connector", connectorDir], dir);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const spec = JSON.parse(stdout);
+      expect(spec.name).toBe(CONNECTOR);
+    });
+  });
+
+  it("prints a blocker report and exits 1 for a directory with no connector in it", () => {
+    withTempDir((dir) => {
+      const empty = join(dir, "not-a-connector");
+      mkdirSync(empty, { recursive: true });
+
+      const { exitCode, stdout, stderr } = runCliBare(["--from-connector", empty], dir);
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("cannot read");
+      expect(stderr).toContain("src/server.ts");
+      // Not mangled by the top-level single-line catcher: the multi-line report is printed by
+      // main() itself, and only a short summary is thrown to carry the exit code.
+      expect(stderr).not.toMatch(/create-nimbus-connector:.*\n.*missing-file/s);
+    });
+  });
+
+  it("rejects --from-connector combined with --spec before touching the filesystem", () => {
+    withTempDir((dir) => {
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-connector", dir, "--spec", specPath],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("--from-connector");
+      expect(stderr).toContain("--spec");
     });
   });
 });
