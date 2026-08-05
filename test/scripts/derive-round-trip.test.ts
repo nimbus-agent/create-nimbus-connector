@@ -15,43 +15,93 @@ import { displayPath } from "../../src/types.ts";
  * below re-confirms it on every run rather than trusting a count recorded here that would go
  * stale silently as fixtures are added. newrelic/datadog/grafana/sentry are the byte-locked
  * corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are synthetic
- * "hand-rolled" fixtures that exercise the same frame from the opposite direction.
+ * "hand-rolled" fixtures that exercise the same frame from the opposite direction; zzreadonly is
+ * a synthetic "read-only-kit" fixture with no search tool, proving that frame end-to-end.
+ * zzstandalone is the "rest-kit" analogue: two GET tools, a literal (non-baseConst) fetch-helper
+ * base, and no inline headers — recognizeRestTools and recognizeRestFetchHelper's simplest
+ * in-scope shape, proving the rest-kit frame end-to-end the same way zzreadonly does for
+ * read-only-kit.
  */
-const ROUND_TRIP = ["newrelic", "datadog", "grafana", "sentry", "zzscratch", "zzstandalonehand"];
+const ROUND_TRIP = [
+  "newrelic",
+  "datadog",
+  "grafana",
+  "sentry",
+  "zzreadonly",
+  "zzscratch",
+  "zzstandalone",
+  "zzstandalonehand",
+];
 
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it. Listed so the
  * gap is on screen on every run rather than implied by absence — the same reason
- * fixtures/expectations.json omits a file instead of hiding it.
+ * fixtures/expectations.json omits a file instead of hiding it. Every reason below was checked
+ * by actually running `deriveSpec` against the fixture's emitted output, not inferred from the
+ * spec or the emitter — an earlier version of this docstring claimed rest-kit's frame never
+ * matched (`"rest-kit frame"`), which stopped being true the moment
+ * scripts/_lib/derive/server/index.ts grew its rest-kit branch, and a later version claimed the
+ * factory const stayed unclaimed alongside a fixture's failing calls, which stopped being true
+ * the moment tools-rest.ts split into `recognizeRestRegistrar` (claims the factory
+ * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
+ * over the calls only).
  *
- * "read-only-kit frame" and "rest-kit frame" are `style: "read-only-kit"` / `style: "rest-kit"`
- * fixtures: recognizeFrame's hand-rolled shape either does not match at all (read-only-kit,
- * reported as the `no-frame` blocker) or matches only the frame while leaving every
- * kit-specific statement (the shared-kit import, the kit-factory const-call, each per-tool
- * registrar call) unclaimed (rest-kit). Both are a different emitted shape this plan's
- * recognizers do not model, not a bug in a single recognizer.
+ * "query parameters" (`discord`, `google-meet`) is TWO independent gaps, both plan 2's
+ * territory, not one: each tool's pathFn is the query branch — a block whose body contains
+ * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) refuses outright; and
+ * both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their fetch-helper
+ * function's URL template is `` `${baseConst}${path}` ``, a second, distinct shape
+ * `recognizeRestFetchHelper` (server/fetch-helper.ts) does not model either — it only recognizes
+ * the literal-base form. Measured at HEAD, both fixtures report five to six unclaimed
+ * statements each — the `baseConst` literal, the fetch-helper function, and every
+ * `register<X>Tool(...)` call (`recognizeRestTools` claims none of them once even one fails) —
+ * but never the factory (`recognizeRestRegistrar` claims it independently), never a bare
+ * `no-frame` (the frame itself matches fine, as `rest-kit`), and never
+ * `import-from:.../rest-tool-kit.ts` (claimed by the frame too).
  *
- * "client-credentials auth" (zzwrite) and "write body" (zzwriteonly) are documented exclusions
- * inside the recognizers themselves: server/env.ts's `recognizeOne` docstring says the
- * `auth: "client-credentials"` function shape "is left unclaimed", and no recognizer in this
- * plan claims a write-effect fetch helper (zzwriteonly's `zzGetSend`) — write bodies are plan
- * 2's territory.
+ * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
+ * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
+ * scripts/_lib/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
+ * hands off to does not exist yet, so these still block, just past the frame rather than at it.
+ * The label names the blocker landing the search recognizer would newly reach, not necessarily
+ * the ONLY one currently reported: `zzextract`, `zzsearch` and `zzsearchstub` block on search
+ * alone, but `mercury` (also `statement:VariableDeclaration`, `function:authHeader`,
+ * `function:mercuryGet`), `bitrise` (`statement:VariableDeclaration`, `function:bitriseGet`),
+ * `netlify` (`function:authHeader`, `function:netlifyGet`), `zendesk`
+ * (`function:trimTrailingSlash`, `function:authHeader`) and `dependencytrack`
+ * (`function:trimTrailingSlash`) additionally block on a fetch-helper shape this plan's
+ * recognizers do not model either — landing the search recognizer will not unblock those five.
+ * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
+ * without a search tool in the way.
+ *
+ * "client-credentials auth" (zzwrite) is a documented exclusion inside the recognizer itself:
+ * server/env.ts's `recognizeOne` docstring says the `auth: "client-credentials"` function shape
+ * "is left unclaimed".
+ *
+ * "write body" names two DIFFERENT underlying gaps that share one description, not one gap in
+ * two fixtures. `zzwriteonly` (hand-rolled/read-only-kit) has a write-effect fetch helper
+ * (`zzGetSend`) no recognizer in this plan claims. `zzwriterest` (rest-kit) has an arity-5
+ * `<registrar>(...)` call — a non-`GET` `initFn` argument `recognizeOneCall` refuses outright,
+ * plan 2's territory the same way the query branch is. Its factory IS claimed (by
+ * `recognizeRestRegistrar`, independently of the calls) and its fetch helper (a literal,
+ * non-`baseConst` base) matches `recognizeRestFetchHelper` on its own; measured at HEAD, this
+ * fixture reports exactly its two `call:registerZzwriterestTool` statements unclaimed — nothing
+ * else — unlike `discord`/`google-meet` above, whose blockers span three different recognizers.
  */
 const BLOCKED: Record<string, string> = {
-  bitrise: "read-only-kit frame",
-  dependencytrack: "read-only-kit frame",
-  discord: "rest-kit frame",
-  "google-meet": "rest-kit frame",
-  mercury: "read-only-kit frame",
-  netlify: "read-only-kit frame",
-  zendesk: "read-only-kit frame",
-  zzextract: "read-only-kit frame",
-  zzsearch: "read-only-kit frame",
-  zzsearchstub: "read-only-kit frame",
-  zzstandalone: "rest-kit frame",
+  bitrise: "search tool",
+  dependencytrack: "search tool",
+  discord: "query parameters",
+  "google-meet": "query parameters",
+  mercury: "search tool",
+  netlify: "search tool",
+  zendesk: "search tool",
+  zzextract: "search tool",
+  zzsearch: "search tool",
+  zzsearchstub: "search tool",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
-  zzwriterest: "rest-kit frame",
+  zzwriterest: "write body",
 };
 
 function emitted(name: string): { server: string; manifest: string } {

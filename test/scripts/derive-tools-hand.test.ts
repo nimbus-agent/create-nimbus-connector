@@ -183,6 +183,36 @@ describe("recognizeTools", () => {
     });
   });
 
+  it("recognizes a negative numeric default (?? -1), via numericValue rather than a bare NumericLiteral read", () => {
+    // Babel parses `-1` as a UnaryExpression wrapping a NumericLiteral, not a NumericLiteral
+    // itself. ArgSchema constrains sign on neither `min`, `max` nor `default`, so `?? -1` is a
+    // shape renderHoists can legitimately write — this is one of this retrofit's two sanctioned
+    // widenings (args.ts's `.min(-5)`/`.max(-5)` is the other), and no corpus connector reaches
+    // this recognizer with a negative literal today, so it does not move the reach histogram.
+    const source = [
+      "reg(",
+      '  "t",',
+      '  "d",',
+      "  z.object({ offset: z.number().optional() }),",
+      "  async (p) => {",
+      "    const offset = p.offset ?? -1;",
+      "    return jsonResult(await nrGet(`/x?o=${String(offset)}`));",
+      "  },",
+      ");",
+    ].join("\n");
+    const { result } = run(source);
+    expect(result).toEqual({
+      tools: [
+        {
+          name: "t",
+          description: "d",
+          args: { offset: { type: "number", optional: true, default: -1 } },
+          path: "/x?o=${arg.offset|num}",
+        },
+      ],
+    });
+  });
+
   it("refuses a ?? hoist whose right-hand side is not a string/number/boolean literal, rather than guessing a default", () => {
     const source = [
       "reg(",
@@ -200,15 +230,10 @@ describe("recognizeTools", () => {
     expect(claims.claims()).toEqual([]);
   });
 
-  // Four more non-literal RHS shapes for the same `?? <default>` guard, each pinned to its own
+  // Three more non-literal RHS shapes for the same `?? <default>` guard, each pinned to its own
   // node type so a future change to hoistDefaultLiteral can't silently start accepting one.
-  // `-1` matters most: Babel parses a negative number literal as a UnaryExpression wrapping a
-  // NumericLiteral, not a NumericLiteral itself — a "helpful" unwrap of UnaryExpression would
-  // start recovering `default: -1` for a shape the emitter never actually writes (ArgSchema's
-  // `min`/`max` are the only place a negative number appears in this corpus, and JSON.stringify
-  // of a negative JS number is a plain NumericLiteral token, not a unary minus — this shape
-  // isn't reachable from any valid spec, but the recognizer's job is refusing what it reads,
-  // not what a schema currently allows).
+  // A negative number (`?? -1`) is NOT among these — see the numericValue test above — because
+  // `-1` unwraps to a real signed NumericLiteral, not one of these genuinely different shapes.
   it("refuses a ?? hoist whose right-hand side is null", () => {
     const source = [
       "reg(",
@@ -252,23 +277,6 @@ describe("recognizeTools", () => {
       "  async (p) => {",
       "    const scope = p.scope ?? ({ a: 1 });",
       "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a ?? hoist whose right-hand side is a negative number (UnaryExpression, not NumericLiteral)", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.number().optional() }),",
-      "  async (p) => {",
-      "    const scope = p.scope ?? -1;",
-      "    return jsonResult(await nrGet(`/x?s=${String(scope)}`));",
       "  },",
       ");",
     ].join("\n");

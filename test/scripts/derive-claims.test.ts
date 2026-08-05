@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseModule } from "../../scripts/_lib/derive/ast.ts";
 import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
+import { functionBody } from "../../scripts/_lib/derive/read.ts";
 
 const SOURCE = [
   'import { z } from "zod";',
@@ -51,7 +52,7 @@ describe("createClaimSet", () => {
   it("covers a node nested inside a claimed range without a separate claim", () => {
     const statements = parseModule(SOURCE);
     const fn = statements[1]!;
-    const body = (fn["body"] as { body: AstNodeLike[] }).body;
+    const body = functionBody(fn)!;
     const claims = createClaimSet();
     claims.claim(fn, "env");
 
@@ -65,5 +66,3 @@ describe("createClaimSet", () => {
     );
   });
 });
-
-type AstNodeLike = { type: string; start: number | null; end: number | null };

@@ -1,0 +1,28 @@
+{
+  "name": "zzreadonly",
+  "title": "Zzreadonly",
+  "displayName": "ZZ Readonly",
+  "description": "Throwaway read-only-kit acceptance connector with no search tool, so the frame is proven end-to-end without a search recognizer.",
+  "serviceLabel": "ZZ Readonly",
+  "style": "read-only-kit",
+  "network": ["api.zzreadonly.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZREADONLY_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }
+  ],
+  "fetchHelper": {
+    "local": "zzGet",
+    "base": "https://api.zzreadonly.test",
+    "headers": "headers"
+  },
+  "tools": [
+    { "name": "zzreadonly_widget_list", "description": "List widgets.", "path": "/v1/widgets" },
+    {
+      "name": "zzreadonly_widget_get",
+      "description": "Get one widget by id.",
+      "args": { "widgetId": { "type": "string", "min": 1 } },
+      "path": "/v1/widgets/${arg.widgetId|enc}"
+    }
+  ]
+}

@@ -1,5 +1,26 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
+import {
+  arrowFn,
+  awaited,
+  binary,
+  blockBody,
+  boolLit,
+  callArgs,
+  calleeOf,
+  callTo,
+  conditional,
+  constDecl,
+  expressionOf,
+  identName,
+  isIdent,
+  logical,
+  memberName,
+  memberObject,
+  numericValue,
+  returnArgument,
+  stringLit,
+} from "../read.ts";
 import { type ArgFields, recognizeArgs } from "./args.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
 
@@ -32,11 +53,8 @@ type ToolShape = { fields: ToolFields; isBlock: boolean; hasHoists: boolean };
 export type ToolsResult = { tools: ToolFields[]; handlerStyle?: "block" };
 
 function isRegCall(node: AstNode): AstNode | undefined {
-  if (node.type !== "ExpressionStatement") return undefined;
-  const call = node["expression"] as AstNode;
-  if (call.type !== "CallExpression") return undefined;
-  const callee = call["callee"] as AstNode;
-  return callee.type === "Identifier" && callee["name"] === "reg" ? call : undefined;
+  const call = expressionOf(node);
+  return isIdent(calleeOf(call), "reg") ? call : undefined;
 }
 
 /**
@@ -47,21 +65,18 @@ function isRegCall(node: AstNode): AstNode | undefined {
  * `argNameFromExpr` already resolves a bare `p.name` member read the same lax way, so pinning a
  * check here that the use site doesn't make would only create a second, inconsistent notion of
  * "the param".
+ *
+ * `memberName`/`memberObject` carry the same computed-member guard this used to check by hand: a
+ * computed member (`p[key]`) has an Identifier `property` too — it's the KEY variable's name,
+ * not a property name. Reading it unguarded would name an arg after whatever local happens to be
+ * used as the index (`p[key]` -> arg "key"), an arg the connector never declared.
+ * path-template.ts's `argNameFromExpr` guards this identical hazard on the read side (citing
+ * args.ts:53); this function had the same shape and the same gap, just unnoticed until the
+ * computed-member sweep that added server/index.ts's isConnect guard.
  */
 function memberArgName(node: AstNode): string | undefined {
-  if (node.type !== "MemberExpression") return undefined;
-  // A computed member (`p[key]`) has an Identifier `property` too — it's the KEY variable's
-  // name, not a property name. Reading it unguarded would name an arg after whatever local
-  // happens to be used as the index (`p[key]` -> arg "key"), an arg the connector never
-  // declared. path-template.ts's argNameFromExpr guards this identical hazard on the read side
-  // (citing args.ts:53); this function had the same shape and the same gap, just unnoticed
-  // until the computed-member sweep that added server/index.ts's isConnect guard.
-  if (node["computed"] === true) return undefined;
-  const object = node["object"] as AstNode;
-  const property = node["property"] as AstNode;
-  if (object.type !== "Identifier" || property.type !== "Identifier") return undefined;
-  const name = property["name"];
-  return typeof name === "string" ? name : undefined;
+  if (identName(memberObject(node)) === undefined) return undefined;
+  return memberName(node);
 }
 
 /**
@@ -74,15 +89,15 @@ function memberArgName(node: AstNode): string | undefined {
  * module-level warning about over-claiming that this whole file exists to avoid.
  */
 function booleanHoistArg(init: AstNode): string | undefined {
-  if (init.type !== "ConditionalExpression") return undefined;
-  if ((init["consequent"] as AstNode)["value"] !== "true") return undefined;
-  if ((init["alternate"] as AstNode)["value"] !== "false") return undefined;
+  const c = conditional(init);
+  if (c === undefined) return undefined;
+  if (stringLit(c.consequent) !== "true" || stringLit(c.alternate) !== "false") return undefined;
 
-  const test = init["test"] as AstNode;
-  if (test.type !== "BinaryExpression" || test["operator"] !== "===") return undefined;
-  if ((test["right"] as AstNode)["value"] !== true) return undefined;
-
-  return memberArgName(test["left"] as AstNode);
+  const test = binary(c.test);
+  if (test === undefined || test.operator !== "===" || boolLit(test.right) !== true) {
+    return undefined;
+  }
+  return memberArgName(test.left);
 }
 
 /**
@@ -93,12 +108,18 @@ function booleanHoistArg(init: AstNode): string | undefined {
  * and the boundary this recognizer draws is the AST shape, not which combinations the schema
  * happens to allow today). Anything else — an identifier, a template literal, `null` — is not
  * one of these three node types and is refused.
+ *
+ * The numeric branch reads through `numericValue`, not `numberLit`: a numeric default may be
+ * negative (ArgSchema constrains sign on none of `min`, `max` or `default`), and `?? -1` is a
+ * shape `renderHoists` can legitimately write. This is one of this retrofit's two sanctioned
+ * widenings — `.min(-5)`/`.max(-5)` in args.ts is the other.
  */
 function hoistDefaultLiteral(node: AstNode): string | number | boolean | undefined {
-  if (node.type === "StringLiteral" && typeof node["value"] === "string") return node["value"];
-  if (node.type === "NumericLiteral" && typeof node["value"] === "number") return node["value"];
-  if (node.type === "BooleanLiteral" && typeof node["value"] === "boolean") return node["value"];
-  return undefined;
+  const s = stringLit(node);
+  if (s !== undefined) return s;
+  const n = numericValue(node);
+  if (n !== undefined) return n;
+  return boolLit(node);
 }
 
 /**
@@ -108,15 +129,16 @@ function hoistDefaultLiteral(node: AstNode): string | number | boolean | undefin
  * so a matcher accepting `||` too would recover the same placeholder for a shape the emitter
  * could not actually have produced — a wrong match dressed as a success. The default's VALUE is
  * recovered here too (Gap B): it is only ever visible at this statement — `renderZodSchema`
- * never encodes `a.default` in the schema text, so an arg's default is otherwise unrecoverable.
+ * never encodes `a.default` in the schema text — so an arg's default is otherwise unrecoverable.
  */
 function defaultHoistArg(
   init: AstNode,
 ): { arg: string; default: string | number | boolean } | undefined {
-  if (init.type !== "LogicalExpression" || init["operator"] !== "??") return undefined;
-  const arg = memberArgName(init["left"] as AstNode);
+  const l = logical(init);
+  if (l === undefined || l.operator !== "??") return undefined;
+  const arg = memberArgName(l.left);
   if (arg === undefined) return undefined;
-  const value = hoistDefaultLiteral(init["right"] as AstNode);
+  const value = hoistDefaultLiteral(l.right);
   if (value === undefined) return undefined;
   return { arg, default: value };
 }
@@ -136,26 +158,21 @@ function defaultHoistArg(
  * whenever it differs from the arg's own key, and this statement is the only place that name
  * appears in the emitted module.
  *
- * `node["kind"]` is checked because `let`/`var` produce the identical VariableDeclaration shape
- * — without it, `let <local> = p.<name> ?? <default>;` passed every check below and was claimed
- * as the documented `const` hoist, same gap as server/index.ts's isRegistrarConst.
+ * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
+ * `let <local> = p.<name> ?? <default>;` passed every check below and was claimed as the
+ * documented `const` hoist, same gap as server/index.ts's isRegistrarConst.
  */
 function hoistedLocal(
   statement: AstNode,
 ): { local: string; pathLocal: PathLocal; default?: string | number | boolean } | undefined {
-  if (statement.type !== "VariableDeclaration" || statement["kind"] !== "const") return undefined;
-  const declarations = statement["declarations"] as AstNode[];
-  if (declarations.length !== 1) return undefined;
-  const id = declarations[0]?.["id"] as AstNode | undefined;
-  const init = declarations[0]?.["init"] as AstNode | undefined;
-  if (id?.type !== "Identifier" || init === undefined) return undefined;
-  const local = id["name"];
-  if (typeof local !== "string") return undefined;
+  const decl = constDecl(statement);
+  if (decl === undefined || decl.init === undefined) return undefined;
+  const local = decl.name;
 
-  const boolArg = booleanHoistArg(init);
+  const boolArg = booleanHoistArg(decl.init);
   if (boolArg !== undefined) return { local, pathLocal: { arg: boolArg, bool: true } };
 
-  const defaultHoist = defaultHoistArg(init);
+  const defaultHoist = defaultHoistArg(decl.init);
   if (defaultHoist !== undefined) {
     return {
       local,
@@ -169,24 +186,18 @@ function hoistedLocal(
 
 /** The path argument of `<helper>(<path>, ...)` / `<helper>Send(<path>, ...)`. */
 function fetchPathArgument(call: AstNode): AstNode | undefined {
-  const args = call["arguments"] as AstNode[];
-  return args[0];
+  return callArgs(call)?.[0];
 }
 
 function awaitedCall(node: AstNode | undefined): AstNode | undefined {
-  if (node?.type !== "AwaitExpression") return undefined;
-  const call = node["argument"] as AstNode;
-  return call.type === "CallExpression" ? call : undefined;
+  const call = awaited(node);
+  return call?.type === "CallExpression" ? call : undefined;
 }
 
 /** `jsonResult(await helper(path, ...))` -> the awaited call. */
 function jsonResultCall(node: AstNode | undefined): AstNode | undefined {
-  if (node?.type !== "CallExpression") return undefined;
-  const callee = node["callee"] as AstNode;
-  if (callee.type !== "Identifier" || callee["name"] !== "jsonResult") return undefined;
-  const args = node["arguments"] as AstNode[];
-  if (args.length !== 1) return undefined;
-  return awaitedCall(args[0]);
+  const args = callTo(node, "jsonResult", 1);
+  return args === undefined ? undefined : awaitedCall(args[0]);
 }
 
 /** The declared path recovered from `jsonResult(await helper(path, ...))`, or undefined. */
@@ -197,27 +208,27 @@ function pathFromJsonResult(node: AstNode | undefined, locals: ReadonlyMap<strin
 }
 
 function recognizeOne(call: AstNode): ToolShape | undefined {
-  const args = call["arguments"] as AstNode[];
-  if (args.length !== 4) return undefined;
+  const args = callArgs(call);
+  if (args === undefined || args.length !== 4) return undefined;
   const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
     AstNode,
     AstNode,
     AstNode,
     AstNode,
   ];
-  const name = nameNode["value"];
-  const description = descriptionNode["value"];
-  if (typeof name !== "string" || typeof description !== "string") return undefined;
-  if (handlerNode.type !== "ArrowFunctionExpression") return undefined;
+  const name = stringLit(nameNode);
+  const description = stringLit(descriptionNode);
+  if (name === undefined || description === undefined) return undefined;
+
+  const arrow = arrowFn(handlerNode);
+  if (arrow === undefined) return undefined;
 
   const toolArgs = recognizeArgs(schemaNode);
   if (toolArgs === undefined) return undefined;
 
-  const body = handlerNode["body"] as AstNode;
-
   // The concise, expression-bodied form: `async (...) => jsonResult(await helper(path))`.
-  if (body.type !== "BlockStatement") {
-    const path = pathFromJsonResult(body, new Map());
+  if (!arrow.isBlock) {
+    const path = pathFromJsonResult(arrow.body, new Map());
     return path === undefined
       ? undefined
       : { fields: { name, description, args: toolArgs, path }, isBlock: false, hasHoists: false };
@@ -227,8 +238,8 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
   // A tool whose block contains anything else (e.g. the query branch's `new URL(...)` trio, or
   // a stub's `throw`) is a shape this recognizer does not model, and is refused rather than
   // partially read.
-  const statements = (body["body"] as AstNode[]) ?? [];
-  if (statements.length === 0) return undefined;
+  const statements = blockBody(arrow.body);
+  if (statements === undefined || statements.length === 0) return undefined;
 
   const locals = new Map<string, PathLocal>();
   // Keyed by arg name (pathLocal.arg), not by the const's own identifier — that is what
@@ -241,9 +252,9 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
     hoistMeta.set(hoist.pathLocal.arg, { local: hoist.local, default: hoist.default });
   }
 
-  const last = statements.at(-1) as AstNode;
+  const last = statements.at(-1)!;
   if (last.type !== "ReturnStatement") return undefined;
-  const path = pathFromJsonResult(last["argument"] as AstNode | undefined, locals);
+  const path = pathFromJsonResult(returnArgument(last), locals);
   if (path === undefined) return undefined;
 
   // Gap A / Gap B: renderZodSchema never encodes `local` or `default` in the schema text
