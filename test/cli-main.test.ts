@@ -381,6 +381,28 @@ describe("--from-connector", () => {
     });
   });
 
+  // I3 (final whole-branch review): src/derive/from-connector.ts recovers `target` and
+  // src/cli.ts prints a stderr note when it is "standalone" — but nothing end-to-end reached
+  // either the field or the branch that reads it. A prior fix-wave verification hardcoded
+  // `target = "monorepo"` AND deleted this note branch entirely, and the full suite (525 tests)
+  // still passed. This is the test that closes that gap: it drives the real binary through both
+  // halves of the round trip (generate --standalone, then --from-connector on the result) and
+  // pins the on-screen signal a user relies on to know which --target to regenerate with.
+  it("notes the standalone target on stderr for a connector this CLI generated with --standalone", () => {
+    withTempDir((dir) => {
+      expect(runCli(["--standalone"], dir).exitCode).toBe(0);
+      const connectorDir = join(dir, CONNECTOR);
+
+      const { exitCode, stdout, stderr } = runCliBare(["--from-connector", connectorDir], dir);
+      expect(exitCode).toBe(0);
+      const spec = JSON.parse(stdout);
+      expect(spec.name).toBe(CONNECTOR);
+      expect(stderr).toContain(
+        "note: read from a standalone package — generate with --standalone.",
+      );
+    });
+  });
+
   it("prints a blocker report and exits 1 for a directory with no connector in it", () => {
     withTempDir((dir) => {
       const empty = join(dir, "not-a-connector");
