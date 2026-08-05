@@ -335,7 +335,17 @@ them to the existing `optionalDependencies` block beside the Biome entries:
 
 Copy the version ranges from the current `devDependencies` rather than typing them from here.
 
+**They must be *removed* from `devDependencies`, not merely added below.** A package declared in
+both blocks resolves by rules that differ between package managers, so the one thing that must not
+be left ambiguous is which range applies. Assert it:
+
 ```bash
+bun -e 'const p=require("./package.json");
+for (const n of ["@babel/parser","@babel/types"]) {
+  if (p.devDependencies?.[n]) throw new Error(`${n} still in devDependencies`);
+  if (!p.optionalDependencies?.[n]) throw new Error(`${n} missing from optionalDependencies`);
+}
+console.log("dependency blocks are exclusive");'
 bun install
 ```
 
@@ -895,20 +905,33 @@ import { attributeEffects } from "../../src/derive/index.ts";
 describe("attributeEffects", () => {
   it("leaves every tool read when hitlRequired is empty", () => {
     const tools = [{ name: "a" }, { name: "b" }];
-    expect(attributeEffects(tools, [])).toEqual([{ name: "a" }, { name: "b" }]);
+    expect(attributeEffects(tools, [])).toEqual({
+      tools: [{ name: "a" }, { name: "b" }],
+      ambiguous: [],
+    });
   });
 
-  it("marks the only non-GET tool write when hitlRequired is [write]", () => {
+  it("marks the only non-GET tool write, and reports it as unambiguous", () => {
+    // One candidate: ToolSchema forbids a GET carrying a write effect, so this attribution is
+    // the ONLY one reproducing the observed set. Forced, therefore correct.
     const tools = [{ name: "a" }, { name: "b", method: "POST" }];
-    expect(attributeEffects(tools, ["write"])).toEqual([
-      { name: "a" },
-      { name: "b", method: "POST", effect: "write" },
-    ]);
+    expect(attributeEffects(tools, ["write"])).toEqual({
+      tools: [{ name: "a" }, { name: "b", method: "POST", effect: "write" }],
+      ambiguous: [],
+    });
+  });
+
+  it("reports ambiguity when two tools could carry the same effect", () => {
+    // Both get `write` and the emitted manifest is right either way, but at most one may
+    // actually BE a write — dagster POSTs GraphQL queries, ramp POSTs to exchange a token.
+    const tools = [{ name: "a", method: "POST" }, { name: "b", method: "PUT" }];
+    const result = attributeEffects(tools, ["write"]);
+    expect(result?.ambiguous).toEqual(["write"]);
   });
 
   it("marks a DELETE-method tool delete when hitlRequired carries delete", () => {
     const tools = [{ name: "a", method: "POST" }, { name: "b", method: "DELETE" }];
-    expect(attributeEffects(tools, ["write", "delete"])).toEqual([
+    expect(attributeEffects(tools, ["write", "delete"])?.tools).toEqual([
       { name: "a", method: "POST", effect: "write" },
       { name: "b", method: "DELETE", effect: "delete" },
     ]);
@@ -953,10 +976,20 @@ Add to `src/derive/index.ts`:
  * because for its purposes — a spec a human will edit — semantically wrong is a real cost even
  * when byte-identical.
  */
+export type EffectAttribution = {
+  tools: Record<string, unknown>[];
+  /**
+   * Effects assigned to MORE THAN ONE tool, and therefore not forced by the evidence. With a
+   * single candidate the attribution is the only one reproducing the observed set, so it is
+   * correct; with several, at least one carries the effect and this function cannot say which.
+   */
+  ambiguous: string[];
+};
+
 export function attributeEffects(
   tools: readonly Record<string, unknown>[],
   hitlRequired: readonly string[],
-): Record<string, unknown>[] | undefined {
+): EffectAttribution | undefined {
   const wanted = new Set(hitlRequired);
   const out = tools.map((t) => {
     const method = t["method"];
@@ -967,10 +1000,17 @@ export function attributeEffects(
     return { ...t };
   });
   // The set the emitter would now compute must equal the one observed, in both directions.
-  const produced = new Set(out.map((t) => t["effect"]).filter((e): e is string => e !== undefined));
-  if (produced.size !== wanted.size) return undefined;
-  for (const e of wanted) if (!produced.has(e)) return undefined;
-  return out;
+  const counts = new Map<string, number>();
+  for (const t of out) {
+    const e = t["effect"];
+    if (typeof e === "string") counts.set(e, (counts.get(e) ?? 0) + 1);
+  }
+  if (counts.size !== wanted.size) return undefined;
+  for (const e of wanted) if (!counts.has(e)) return undefined;
+  return {
+    tools: out,
+    ambiguous: [...counts].filter(([, n]) => n > 1).map(([e]) => e),
+  };
 }
 ```
 
@@ -980,6 +1020,15 @@ export function attributeEffects(
 manifest fields; its docstring at :41 saying it is "deliberately not recovered" is replaced with a
 pointer to `attributeEffects`). In `deriveSpec`, apply it after the tools are recognized, and
 return `{ ok: false, blockers: [...] }` with kind `manifest:unattributable-hitl` when it refuses.
+
+**Carry the ambiguity out.** `deriveSpec` attaches `attributeEffects`' `ambiguous` array to the
+returned object under `$effectAmbiguity`. It is **reporting metadata, not a spec field**:
+`reach`'s tiering ignores it, `from-connector.ts` strips it before printing (Task 6), and no
+emitter reads it. Do not add it to `ConnectorSpecSchema` — a spec key that only exists to carry a
+warning is a spec field the emitter must then be told to ignore, which is how accepted-then-
+discarded fields get introduced.
+
+Update `test/derive/round-trip.test.ts` if it asserts on the exact key set of a derived spec.
 
 - [ ] **Step 5: Run the gates**
 
@@ -1028,7 +1077,13 @@ Attribute what the method suggests, refuse when the set cannot be reproduced, an
 - Produces:
   ```ts
   export type FromConnectorResult =
-    | { ok: true; spec: Record<string, unknown>; target: "monorepo" | "standalone" }
+    | {
+        ok: true;
+        spec: Record<string, unknown>;
+        target: "monorepo" | "standalone";
+        /** Things the user must verify by hand — e.g. an ambiguous `effect` attribution. */
+        notes: readonly string[];
+      }
     | { ok: false; blockers: readonly Blocker[] };
   export async function deriveFromDirectory(dir: string): Promise<FromConnectorResult>;
   export function renderBlockers(dir: string, blockers: readonly Blocker[]): string;
@@ -1119,7 +1174,12 @@ import type { Blocker } from "./blockers.ts";
 import { deriveSpec } from "./index.ts";
 
 export type FromConnectorResult =
-  | { ok: true; spec: Record<string, unknown>; target: "monorepo" | "standalone" }
+  | {
+      ok: true;
+      spec: Record<string, unknown>;
+      target: "monorepo" | "standalone";
+      notes: readonly string[];
+    }
   | { ok: false; blockers: readonly Blocker[] };
 
 /** A missing input is a blocker like any other, so one report shape covers every failure. */
@@ -1143,7 +1203,20 @@ export async function deriveFromDirectory(dir: string): Promise<FromConnectorRes
 
   const derivation = deriveSpec({ server, manifest });
   if (!derivation.ok) return { ok: false, blockers: derivation.blockers };
-  return { ok: true, spec: derivation.spec, target };
+  // deriveSpec attaches the ambiguity from attributeEffects (Task 5) under this key; it is
+  // reporting metadata, not a spec field, so it is stripped before the spec is printed.
+  const ambiguous = (derivation.spec["$effectAmbiguity"] as string[] | undefined) ?? [];
+  const { $effectAmbiguity: _dropped, ...spec } = derivation.spec;
+  return {
+    ok: true,
+    spec,
+    target,
+    notes: ambiguous.map(
+      (e) =>
+        `more than one tool was assigned effect "${e}". The emitted manifest is correct either ` +
+        "way, but at most one of them may actually be one — confirm each before generating.",
+    ),
+  };
 }
 
 /**
@@ -1154,13 +1227,19 @@ export async function deriveFromDirectory(dir: string): Promise<FromConnectorRes
 export function renderBlockers(dir: string, blockers: readonly Blocker[]): string {
   const lines = blockers.map((b) => `  ${b.kind}${b.line > 0 ? `  (line ${b.line})` : ""}`);
   return (
-    `create-nimbus-connector cannot read ${dir} into a spec. What stopped it:\n\n` +
+    `cannot read ${dir} into a spec. What stopped it:\n\n` +
     `${lines.join("\n")}\n\n` +
     "Each label names a construct this generator's spec language does not model. See\n" +
     "docs/ROADMAP.md's Known limitations for the ones that are permanent."
   );
 }
 ```
+
+**No program-name prefix on the first line.** `src/cli.ts:370-377` catches whatever `main` throws
+and prints `create-nimbus-connector: ${err.message}` — so a report that named the program itself
+would render it twice. Step 5 prints this report directly rather than throwing it, for the same
+reason the design gives: `blocked` is a result, not an error, and squeezing a multi-line report
+through a single-line error formatter is not how a result gets reported.
 
 - [ ] **Step 4: Add the flag to `src/cli.ts`**
 
@@ -1225,8 +1304,15 @@ test:
     if (!parserAvailable()) throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
 
     const result = await deriveFromDirectory(opts.fromConnector);
-    if (!result.ok) throw new Error(renderBlockers(opts.fromConnector, result.blockers));
+    if (!result.ok) {
+      // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
+      // Error as one prefixed line, which would mangle a multi-line report and repeat the
+      // program name. The throw below is only how this process exits non-zero.
+      console.error(renderBlockers(opts.fromConnector, result.blockers));
+      throw new Error(`--from-connector: ${opts.fromConnector} could not be read into a spec.`);
+    }
     console.log(JSON.stringify(result.spec, null, 2));
+    for (const note of result.notes) console.error(`note: ${note}`);
     if (result.target === "standalone") {
       console.error("note: read from a standalone package — generate with --standalone.");
     }
@@ -1352,6 +1438,7 @@ export async function deriveFromDirectory(
     return {
       ok: true,
       target,
+      notes: ["this spec is PARTIAL and will not validate until the marker key is resolved."],
       spec: {
         [PARTIAL_MARKER]: {
           note: "Derived partially. Resolve each blocker, then delete this key.",
@@ -1360,7 +1447,7 @@ export async function deriveFromDirectory(
       },
     };
   }
-  return { ok: true, spec: derivation.spec, target };
+  // ...unchanged: the success path from Task 6, including its `notes`.
 }
 ```
 
@@ -1636,6 +1723,50 @@ bun run wiring:conformance --nimbus-root C:/gitrep/Nimbus;  echo "wiring_exit=$?
 - `npm pack --dry-run` includes `src/derive/`.
 
 ---
+
+## Review Responses
+
+[`2026-08-05-deriver-becomes-shippable-review.md`](./2026-08-05-deriver-becomes-shippable-review.md)
+raised four items. Two were already handled, one is accepted, and one pointed at a real defect
+that was not the one it described.
+
+**R1 — delete the Babel packages from `devDependencies`, don't just add them below.** Already
+stated ("remove … and add …"), but the underlying hazard is real: a package declared in both
+blocks resolves by rules that differ between package managers. Task 2 Step 5 now **asserts** the
+blocks are exclusive rather than relying on the instruction being followed.
+
+**R2 — will a thrown error print a raw stack trace?** No: `src/cli.ts:370-377` already catches
+whatever `main` throws and prints one line, `create-nimbus-connector: ${err.message}`, then exits
+1. Verified by running `bun src/cli.ts --spec` with no value.
+
+But the question surfaced a defect the plan *did* have. That catcher prefixes the program name to
+**line 1 only**, and the original `renderBlockers` began `create-nimbus-connector cannot read …` —
+so a blocker report would have printed the program name twice and squeezed a multi-line report
+through a single-line formatter. Worse, it contradicted the design's own rule that **`blocked` is
+a result, not an error.** Fixed in both places: the report drops its self-naming prefix, and
+Task 6 Step 5 **prints** it to stderr and throws only a one-line summary, which is all the exit
+code needs.
+
+**R3 — warn when an `effect` attribution is ambiguous.** Accepted, with the condition sharpened.
+The review's "multiple candidate tools" is exactly right and the plan now uses it: with **one**
+non-GET tool and `hitlRequired: ["write"]` the attribution is *forced* — `ToolSchema` forbids a GET
+carrying a write effect, so no other assignment reproduces the observed set — and warning there
+would train the user to ignore the warning. With two or more, at least one is a write and this
+function cannot say which. `attributeEffects` now returns `{ tools, ambiguous }`,
+`FromConnectorResult` carries `notes`, and the CLI prints them to stderr. The design promised this
+("`--from-connector` reports the attribution as unverified") and the first draft of the plan only
+put it in a docstring.
+
+**R4 — what if `--from-connector` is the last argument with no value?** Already handled.
+`takeValue` (`src/cli.ts:77-83`) throws `"--from-connector requires a value"`, which the top-level
+catcher renders as one clean line — verified by running `bun src/cli.ts --spec`.
+
+**Deferred, and worth naming since the review was in the neighbourhood:** `takeValue` does not
+check that the next token is not itself a flag, so `--from-connector --dry-run` consumes
+`--dry-run` as the directory. That is true of **every** value-taking flag in this CLI today
+(`--spec`, `--out-dir`, `--license`, `--gateway-wiring`) and is not introduced by this phase.
+Fixing it belongs in one change across all five, with its own tests, not smuggled into a task
+about the deriver.
 
 ## Self-Review
 
