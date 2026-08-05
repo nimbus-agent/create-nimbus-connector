@@ -19,9 +19,16 @@ coverage/
 # repo actually owns: an accidental `./slack/` stays untracked, and adding a genuine new
 # top-level directory requires an explicit line here rather than happening by omission.
 /*/
+!/.claude/
 !/.github/
 !/docs/
 !/fixtures/
 !/scripts/
 !/src/
 !/test/
+
+# `.claude/` is re-admitted above so the repo's skills reach other contributors and agents;
+# without the line the catch-all rule above ignored them and they existed only in whoever's
+# working copy wrote them. Local, per-machine Claude Code state stays out.
+/.claude/settings.local.json
+/.claude/worktrees/

@@ -340,11 +340,16 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   [Measuring reach](#measuring-reach) — so this rule is the sole reason it is not generatable
   today, not a second, independent gap stacked on top of one.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
-  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
-  define a local helper function or need logic no declarative field list expresses — a join, an
-  array flatten, a coercion — and one (`zoom`) does not use `makeQueryFilter` at all. A local
-  *variable* binding that just projects a sub-object before reading flat keys off it is not in
-  this group — that shape is exactly what a `path` entry expresses.
+  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, **14**
+  need logic no declarative field list expresses — a join over a non-`tags` array, a numeric
+  coercion, an alternate tag shape, a conditional array search, a per-item concatenation — and
+  `zoom`, which does not use `makeQueryFilter` at all, is one of those 14, not an extra on top
+  of them. The other 26 are expressible; [Stage E](#stage-e--the-corpus-tail-) names the cause
+  for each of the 14 and [Measuring reach](#measuring-reach) gives the method. **Defining a
+  local helper function is not on its own disqualifying** — an earlier count of 30 asked that
+  structural question instead of a semantic one, and understated reach by more than half. A
+  local *variable* binding that just projects a sub-object before reading flat keys off it is
+  not in this group either — that shape is exactly what a `path` entry expresses.
 
 **Shape variance the emitter models one way.**
 

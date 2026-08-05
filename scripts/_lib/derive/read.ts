@@ -236,7 +236,7 @@ export function constDecl(node: AstNode | undefined): ConstDecl | undefined {
   if (node?.type !== "VariableDeclaration") return undefined;
   if (raw(node)["kind"] !== "const") return undefined;
   const declarations = childList(node, "declarations");
-  if (declarations === undefined || declarations.length !== 1) return undefined;
+  if (declarations?.length !== 1) return undefined;
   const declarator = declarations[0];
   const name = identName(child(declarator, "id"));
   if (name === undefined) return undefined;
@@ -254,7 +254,7 @@ export function uninitializedLet(node: AstNode | undefined): string | undefined 
   if (node?.type !== "VariableDeclaration") return undefined;
   if (raw(node)["kind"] !== "let") return undefined;
   const declarations = childList(node, "declarations");
-  if (declarations === undefined || declarations.length !== 1) return undefined;
+  if (declarations?.length !== 1) return undefined;
   const declarator = declarations[0];
   if (child(declarator, "init") !== undefined) return undefined;
   return identName(child(declarator, "id"));
@@ -326,7 +326,7 @@ export function callTo(
   argc: number,
 ): AstNode[] | undefined {
   const args = callArgs(node);
-  if (args === undefined || args.length !== argc) return undefined;
+  if (args?.length !== argc) return undefined;
   return isIdent(child(node, "callee"), callee) ? args : undefined;
 }
 
@@ -345,7 +345,7 @@ export function methodCallTo(
   argc: number,
 ): AstNode[] | undefined {
   const args = callArgs(node);
-  if (args === undefined || args.length !== argc) return undefined;
+  if (args?.length !== argc) return undefined;
   const callee = child(node, "callee");
   if (memberName(callee) !== property) return undefined;
   return isIdent(memberObject(callee), receiver) ? args : undefined;
@@ -359,7 +359,7 @@ export function newOf(
 ): AstNode[] | undefined {
   if (node?.type !== "NewExpression") return undefined;
   const args = childList(node, "arguments");
-  if (args === undefined || args.length !== argc) return undefined;
+  if (args?.length !== argc) return undefined;
   return isIdent(child(node, "callee"), ctor) ? args : undefined;
 }
 

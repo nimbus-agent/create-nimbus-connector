@@ -228,6 +228,106 @@ export const QueryParamSchema = z.strictObject({
 
 export type QueryParam = z.infer<typeof QueryParamSchema>;
 
+/**
+ * A `"custom"` issue as the query checks below raise it: where it points, and what it says.
+ * Those checks are module-level functions rather than blocks inside the superRefine, so they
+ * take a sink instead of zod's refinement context — the `code: "custom"` is supplied by the
+ * single call site that owns the context, and nothing else here names a zod issue type.
+ */
+type QueryIssue = { path: (string | number)[]; message: string };
+type AddQueryIssue = (issue: QueryIssue) => void;
+
+/**
+ * renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
+ * (the fetch helper's base) straight into the template with no separator — it never
+ * applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
+ * applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
+ * cleanly; a path that does not silently fuses onto the base with nothing between them
+ * (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
+ * only visible once the connector makes a request. Rejecting here, rather than teaching
+ * renderPath the same normalization, keeps that guard in the one place
+ * (fetch-helper.ts) that owns it.
+ *
+ * Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
+ * impl/path pairing refine above), and this check evaluated `""` as that stub's path
+ * would fire alongside the "stub" + "query" rejection a few refines up — two issues for
+ * one mistake, with the correct one buried under noise. The stub case is already
+ * rejected there; this check has nothing to add for it.
+ */
+function checkQueryPathPrefix(name: string, path: string | undefined, add: AddQueryIssue): void {
+  if (path !== undefined && !path.startsWith("/")) {
+    add({
+      path: ["path"],
+      message:
+        `tool ${JSON.stringify(name)} declares "query", so "path" must begin with "/" ` +
+        `— got ${JSON.stringify(path)}`,
+    });
+  }
+}
+
+/** Which of canOmitQueryValue's three clauses an arg fails, phrased for the message below. */
+function omitWhenViolations(arg: z.infer<typeof ArgSchema>): string[] {
+  const violations: string[] = [];
+  if (!arg.optional) violations.push('is not declared "optional": true');
+  if (arg.default !== undefined) violations.push('declares a "default"');
+  if (arg.type === "boolean") violations.push('is type "boolean"');
+  return violations;
+}
+
+/** The two rules that read one query entry against the arg it names. */
+function checkQueryEntryArg(
+  q: QueryParam,
+  arg: z.infer<typeof ArgSchema>,
+  i: number,
+  add: AddQueryIssue,
+): void {
+  // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
+  // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
+  if (q.omitWhen === "empty" && arg.type !== "string") {
+    add({
+      path: ["query", i, "omitWhen"],
+      message:
+        `"query" entry ${JSON.stringify(q.name)} sets omitWhen: "empty", but arg ` +
+        `${JSON.stringify(q.arg)} declares type ${JSON.stringify(arg.type)} — comparing ` +
+        `a ${arg.type} to "" does not typecheck`,
+    });
+  }
+
+  // omitWhen's guard only omits anything if the value it tests can genuinely be
+  // undefined — canOmitQueryValue's exact predicate. Both directions of that question
+  // are checked here, off the one predicate, so they cannot drift apart: no corpus
+  // connector combines omitWhen with a dead guard (github writes
+  // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
+  // with no default and type number).
+  if (q.omitWhen === undefined) {
+    // A value that CAN be undefined and has no guard reaches searchParams.set
+    // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
+    // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
+    // since the non-string branch wraps in String(...) and String(undefined) ===
+    // "undefined". Neither is visible to a spec author until the generated package is
+    // built or the request is inspected — this rejection is what makes it visible here.
+    if (canOmitQueryValue(arg)) {
+      add({
+        path: ["query", i, "omitWhen"],
+        message:
+          `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
+          'which can be undefined ("optional": true, no "default", not type "boolean") ' +
+          'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
+          'parameter is sent as an unconditional (and possibly literal-"undefined") value',
+      });
+    }
+  } else if (!canOmitQueryValue(arg)) {
+    const violations = omitWhenViolations(arg).join(" and ");
+    add({
+      path: ["query", i, "omitWhen"],
+      message:
+        `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
+        `${JSON.stringify(q.arg)} ${violations} — its value can never be ` +
+        "undefined, so the guard can never omit the parameter",
+    });
+  }
+}
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -328,31 +428,10 @@ export const ToolSchema = z
   })
   .superRefine((t, ctx) => {
     if (t.query === undefined) return;
+    const add: AddQueryIssue = ({ path, message }) =>
+      ctx.addIssue({ code: "custom", path, message });
 
-    // renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
-    // (the fetch helper's base) straight into the template with no separator — it never
-    // applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
-    // applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
-    // cleanly; a path that does not silently fuses onto the base with nothing between them
-    // (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
-    // only visible once the connector makes a request. Rejecting here, rather than teaching
-    // renderPath the same normalization, keeps that guard in the one place
-    // (fetch-helper.ts) that owns it.
-    //
-    // Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
-    // impl/path pairing refine above), and this check evaluated `""` as that stub's path
-    // would fire alongside the "stub" + "query" rejection a few refines up — two issues for
-    // one mistake, with the correct one buried under noise. The stub case is already
-    // rejected there; this check has nothing to add for it.
-    if (t.path !== undefined && !t.path.startsWith("/")) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["path"],
-        message:
-          `tool ${JSON.stringify(t.name)} declares "query", so "path" must begin with "/" ` +
-          `— got ${JSON.stringify(t.path)}`,
-      });
-    }
+    checkQueryPathPrefix(t.name, t.path, add);
 
     const seen = new Set<string>();
     for (const [i, q] of t.query.entries()) {
@@ -361,78 +440,24 @@ export const ToolSchema = z
       // method instead of failing loudly. `Object.hasOwn` checks only t.args's own keys.
       const declared = Object.hasOwn(t.args, q.arg);
       if (!declared) {
-        ctx.addIssue({
-          code: "custom",
+        add({
           path: ["query", i, "arg"],
           message: `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, which the tool does not declare`,
         });
       }
       if (seen.has(q.name)) {
-        ctx.addIssue({
-          code: "custom",
+        add({
           path: ["query", i, "name"],
           message: `"query" declares ${JSON.stringify(q.name)} twice — the second would silently win`,
         });
       }
       seen.add(q.name);
 
-      // Both checks below are skipped when the arg itself is undeclared — the "does not
-      // declare" issue above already covers that case, and `arg.type`/`arg.default` would
-      // have nothing real to report on.
+      // The checks in checkQueryEntryArg are skipped when the arg itself is undeclared — the
+      // "does not declare" issue above already covers that case, and `arg.type`/`arg.default`
+      // would have nothing real to report on.
       if (!declared) continue;
-      const arg = t.args[q.arg]!;
-
-      // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
-      // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
-      if (q.omitWhen === "empty" && arg.type !== "string") {
-        ctx.addIssue({
-          code: "custom",
-          path: ["query", i, "omitWhen"],
-          message:
-            `"query" entry ${JSON.stringify(q.name)} sets omitWhen: "empty", but arg ` +
-            `${JSON.stringify(q.arg)} declares type ${JSON.stringify(arg.type)} — comparing ` +
-            `a ${arg.type} to "" does not typecheck`,
-        });
-      }
-
-      // omitWhen's guard only omits anything if the value it tests can genuinely be
-      // undefined — canOmitQueryValue's exact predicate. Both directions of that question
-      // are checked here, off the one predicate, so they cannot drift apart: no corpus
-      // connector combines omitWhen with a dead guard (github writes
-      // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
-      // with no default and type number).
-      if (q.omitWhen === undefined) {
-        // A value that CAN be undefined and has no guard reaches searchParams.set
-        // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
-        // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
-        // since the non-string branch wraps in String(...) and String(undefined) ===
-        // "undefined". Neither is visible to a spec author until the generated package is
-        // built or the request is inspected — this rejection is what makes it visible here.
-        if (canOmitQueryValue(arg)) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["query", i, "omitWhen"],
-            message:
-              `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
-              'which can be undefined ("optional": true, no "default", not type "boolean") ' +
-              'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
-              'parameter is sent as an unconditional (and possibly literal-"undefined") value',
-          });
-        }
-      } else if (!canOmitQueryValue(arg)) {
-        const violations: string[] = [];
-        if (!arg.optional) violations.push('is not declared "optional": true');
-        if (arg.default !== undefined) violations.push('declares a "default"');
-        if (arg.type === "boolean") violations.push('is type "boolean"');
-        ctx.addIssue({
-          code: "custom",
-          path: ["query", i, "omitWhen"],
-          message:
-            `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
-            `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
-            "undefined, so the guard can never omit the parameter",
-        });
-      }
+      checkQueryEntryArg(q, t.args[q.arg]!, i, add);
     }
   });
 

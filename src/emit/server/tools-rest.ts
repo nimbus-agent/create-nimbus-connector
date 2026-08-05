@@ -1,8 +1,8 @@
-import { type ConnectorSpec, registrarName } from "../../spec.ts";
+import { type ConnectorSpec, type QueryParam, registrarName } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
-import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { type PathSegment, parsePathTemplate, renderPath } from "./path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "./query.ts";
 
 const PARAM = "parsed";
@@ -13,6 +13,40 @@ function tokenEnvVar(spec: ConnectorSpec): string {
     throw new Error('style "rest-kit" requires one env entry with an "auth" field.');
   }
   return authEntry.vars[0]!;
+}
+
+/**
+ * The hoisted consts this tool's emitted callback actually reads: the ones the path names,
+ * plus the ones a query entry reads.
+ *
+ * Only the path can consume a hoist here — the hoists are emitted inside the path callback,
+ * and the init callback is a separate arrow with its own scope. A hoisted const no path
+ * segment names would be a TS6133 in the generated package, reachable from a rest-kit POST
+ * with one boolean arg and a fully static path. A query entry reads the same hoisted const
+ * the path would, so its args must join the set or the hoist is never emitted and the
+ * reference dangles.
+ */
+function usedHoists(
+  segments: readonly PathSegment[],
+  hoisted: ReadonlyMap<string, string>,
+  query: readonly QueryParam[] | undefined,
+): Set<string> {
+  const used = new Set<string>();
+  for (const s of segments) {
+    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
+  }
+  if (query !== undefined) {
+    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
+  }
+  return used;
+}
+
+/**
+ * The registrar call's closing lines: the optional init-callback argument, then `);`. All
+ * three body shapes below (query block, expression body, hoist block) end the same way.
+ */
+function closeCall(lines: readonly string[], initArg: string | undefined): string {
+  return [...lines, ...(initArg === undefined ? [] : [initArg]), ");"].join("\n");
 }
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
@@ -46,19 +80,9 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     ...(query === undefined ? {} : { prefix: baseExpr(spec) }),
   });
 
-  // Only the path can consume a hoist here: the hoists are emitted inside the path callback,
-  // and the init callback below is a separate arrow with its own scope. A hoisted const no
-  // path segment names would be a TS6133 in the generated package — reachable from a
-  // rest-kit POST with one boolean arg and a fully static path.
-  const used = new Set<string>();
-  for (const s of segments) {
-    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
-  }
-  // A query entry reads the same hoisted const the path would, so its args join `used` or the
-  // hoist is never emitted and the reference dangles.
-  if (query !== undefined) {
-    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
-  }
+  // The path's hoists plus the query's — see usedHoists for why each contributes, and why
+  // the init callback below contributes nothing.
+  const used = usedHoists(segments, hoisted, query);
 
   const needsParam =
     used.size > 0 ||
@@ -104,23 +128,16 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       "    return `${u}`;",
       "  },",
     ];
-    if (initArg !== undefined) lines.push(initArg);
-    lines.push(");");
-    return lines.join("\n");
+    return closeCall(lines, initArg);
   }
 
   if (used.size === 0) {
-    const lines = [...head, `  ${param} => ${pathExpr},`];
-    if (initArg !== undefined) lines.push(initArg);
-    lines.push(");");
-    return lines.join("\n");
+    return closeCall([...head, `  ${param} => ${pathExpr},`], initArg);
   }
 
   const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
   const lines = [...head, `  ${param} => {`, ...hoists, `    return ${pathExpr};`, "  },"];
-  if (initArg !== undefined) lines.push(initArg);
-  lines.push(");");
-  return lines.join("\n");
+  return closeCall(lines, initArg);
 }
 
 export function renderRestKitTools(spec: ConnectorSpec): string {

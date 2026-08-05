@@ -16,6 +16,26 @@ function req<T>(value: T | undefined, key: string): T {
 }
 
 /**
+ * A present key's value as a string, refusing anything else — used for `id`, the one field read
+ * off the parsed JSON rather than cast.
+ *
+ * `String(value)` on the raw `unknown` turns a JSON object into the literal text
+ * "[object Object]" and an array into its comma-joined elements — junk that would then be carried
+ * into the derived spec as though it were the connector's id, an invented value of exactly the
+ * kind `req` above refuses to produce for a missing key. The emitter only ever writes a string
+ * here, so requiring one is lossless for every manifest this generator can produce, and a
+ * manifest carrying anything else is named as the defect it is rather than derived from.
+ */
+function reqString(value: unknown, key: string): string {
+  if (typeof value !== "string") {
+    throw new Error(
+      `nimbus.extension.json's "${key}" is not a string — it is not a connector manifest.`,
+    );
+  }
+  return value;
+}
+
+/**
  * The inverse of src/emit/manifest.ts, key for key.
  *
  * `hitlRequired` is deliberately not recovered: the emitter computes it from tool effects
@@ -30,7 +50,7 @@ export function deriveManifest(json: string): ManifestFields {
   const permissions = req(m.permissions as Record<string, unknown> | undefined, "permissions");
   const filesystem = permissions.filesystem as ManifestFields["filesystem"];
   return {
-    ...(m.id === undefined ? {} : { id: String(m.id) }),
+    ...(m.id === undefined ? {} : { id: reqString(m.id, "id") }),
     displayName,
     description,
     network: req(permissions.network as string[] | undefined, "permissions.network"),

@@ -73,12 +73,12 @@ type ReadLine = { var: string; binding: string; default?: string };
  */
 function parseReadLine(stmt: AstNode): ReadLine | undefined {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.init === undefined) return undefined;
+  if (decl?.init === undefined) return undefined;
   const binding = decl.name;
   const init = decl.init;
 
   const or = logical(init);
-  if (or !== undefined && or.operator === "||") {
+  if (or?.operator === "||") {
     const variable = envVarRead(or.left);
     const right = stringLit(or.right);
     if (variable === undefined || right === undefined) return undefined;
@@ -92,7 +92,7 @@ function parseReadLine(stmt: AstNode): ReadLine | undefined {
 /** Flatten a left-associative chain of `||` into its leaves, in source order. */
 function flattenOr(node: AstNode): AstNode[] {
   const or = logical(node);
-  if (or !== undefined && or.operator === "||") {
+  if (or?.operator === "||") {
     return [...flattenOr(or.left), ...flattenOr(or.right)];
   }
   return [node];
@@ -101,7 +101,7 @@ function flattenOr(node: AstNode): AstNode[] {
 /** `<binding> === undefined` or `<binding> === ""`, one leaf of the guard's `||` chain. */
 function isBindingCompare(node: AstNode, binding: string, rhs: "undefined" | ""): boolean {
   const b = binary(node);
-  if (b === undefined || b.operator !== "===" || !isIdent(b.left, binding)) return false;
+  if (b?.operator !== "===" || !isIdent(b.left, binding)) return false;
   return rhs === "undefined" ? isIdent(b.right, "undefined") : stringLit(b.right) === "";
 }
 
@@ -124,7 +124,7 @@ function verifyGuard(ifStmt: AstNode, reads: readonly ReadLine[]): boolean {
   }
 
   const body = blockBody(s.consequent);
-  if (body === undefined || body.length !== 1) return false;
+  if (body?.length !== 1) return false;
   const args = newOf(throwArgument(body[0]!), "Error", 1);
   if (args === undefined) return false;
   const msg = stringLit(args[0]);
@@ -168,7 +168,7 @@ function matchTransformExpr(
     const re = regExpLit(args[0]);
     if (
       args.length === 2 &&
-      re?.pattern === "\\/$" &&
+      re?.pattern === String.raw`\/$` &&
       re.flags === "" &&
       stringLit(args[1]) === ""
     ) {
@@ -193,7 +193,7 @@ function classifyPlainReturn(
   if (direct !== undefined) return direct;
 
   const t = templateLiteral(arg);
-  if (t === undefined || t.expressions.length !== 1) return undefined;
+  if (t?.expressions.length !== 1) return undefined;
 
   const inner = matchTransformExpr(t.expressions[0]!, binding);
   if (inner === undefined) return undefined;
@@ -227,7 +227,7 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
   // emitter never writes regenerates non-identical bytes, not a wrong `EnvEntry`) rather than a
   // silent behavioural success, so it is accepted rather than special-cased back out.
   const properties = objectProps(arg);
-  if (properties === undefined || properties.length !== reads.length + 1) return undefined;
+  if (properties?.length !== reads.length + 1) return undefined;
 
   const last = properties.at(-1)!;
   if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
@@ -239,8 +239,7 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
     const t = templateLiteral(prop.value);
     if (
       prop.key === "Authorization" &&
-      t !== undefined &&
-      t.expressions.length === 1 &&
+      t?.expressions.length === 1 &&
       t.quasis[0] === "Bearer " &&
       t.quasis[1] === "" &&
       isIdent(t.expressions[0], reads[0]!.binding)
@@ -260,6 +259,105 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
   }
 
   return undefined;
+}
+
+type ReadSection = { readonly reads: ReadLine[]; readonly rest: AstNode[] };
+
+/**
+ * The leading run of `readLines` reads, and whatever statements follow it.
+ *
+ * The run stops at the FIRST statement `parseReadLine` refuses rather than scanning past it: a
+ * non-read statement between two reads is not a shape `readLines` writes, and skipping it would
+ * splice two halves of a different function into one entry. The refused statement stays in
+ * `rest`, which accepts it only as the guard or the `return` — `splitBodyTail` judges it on the
+ * count, `verifyGuard` on the guard's exact shape.
+ */
+function collectReadLines(statements: readonly AstNode[]): ReadSection | undefined {
+  const reads: ReadLine[] = [];
+  let i = 0;
+  while (i < statements.length) {
+    const parsed = parseReadLine(statements[i]!);
+    if (parsed === undefined) break;
+    reads.push(parsed);
+    i++;
+  }
+  if (reads.length === 0) return undefined;
+
+  // A default is a per-entry property in the spec — readLines applies it to every var alike —
+  // so a mix of defaulted and bare reads is not a shape this entry's spec field can produce.
+  const defaults = new Set(reads.map((r) => r.default));
+  if (defaults.size !== 1) return undefined;
+
+  return { reads, rest: statements.slice(i) };
+}
+
+type BodyTail = { readonly guardNode?: AstNode; readonly returnStmt: AstNode };
+
+/**
+ * What follows the reads: exactly `[guard,] return` — a lone `return`, or one guard statement
+ * then the `return`. Any other count is refused rather than having the extra statements ignored;
+ * an accessor carrying a statement this recognizer does not model is not the documented shape,
+ * and claiming it would drop whatever that statement does.
+ */
+function splitBodyTail(rest: readonly AstNode[]): BodyTail | undefined {
+  const returnStmt = rest.at(-1);
+  if (returnStmt?.type !== "ReturnStatement") return undefined;
+  if (rest.length === 1) return { returnStmt };
+  if (rest.length === 2) return { guardNode: rest[0]!, returnStmt };
+  return undefined;
+}
+
+/** Everything recovered from the accessor before its `return` is classified. */
+type EntryContext = {
+  readonly reads: readonly ReadLine[];
+  readonly vars: string[];
+  readonly bindings: string[];
+  readonly local: string;
+  /** Whether a verified guard statement was present — the emitter's `needsGuard`. */
+  readonly guarded: boolean;
+  readonly defaultValue: string | undefined;
+};
+
+/** The `arg.type === "ObjectExpression"` branch of `recognizeOne` — see its docstring. */
+function buildAuthEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined {
+  // needsGuard = required || auth !== undefined, so a guard is mandatory here unless a
+  // default suppressed it — an auth-shaped return with neither is not producible and must
+  // not be accepted as though it were.
+  if (!ctx.guarded && ctx.defaultValue === undefined) return undefined;
+  const authShape = classifyAuthReturn(arg, ctx.reads);
+  if (authShape === undefined) return undefined;
+  // `required` cannot be recovered here: needsGuard is true for any auth entry regardless of
+  // the spec's `required`, so both values regenerate identical bytes. `false` is the schema
+  // default and keeps the derived spec minimal.
+  return {
+    vars: ctx.vars,
+    local: ctx.local,
+    bindings: ctx.bindings,
+    required: false,
+    auth: authShape.auth,
+    ...(authShape.auth === "headers" ? { headerNames: authShape.headerNames } : {}),
+    ...(ctx.defaultValue !== undefined ? { default: ctx.defaultValue } : {}),
+  };
+}
+
+/** The non-auth branch of `recognizeOne` — see its docstring. */
+function buildPlainEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined {
+  // Every non-auth return uses only bindings[0] (transformed/wrapped) — a multi-var entry
+  // without auth is not a shape the schema (or the emitter) can produce.
+  if (ctx.reads.length !== 1) return undefined;
+  const plainShape = classifyPlainReturn(arg, ctx.reads[0]!.binding);
+  if (plainShape === undefined) return undefined;
+
+  return {
+    vars: ctx.vars,
+    local: ctx.local,
+    bindings: ctx.bindings,
+    required: ctx.guarded,
+    ...(ctx.defaultValue !== undefined ? { default: ctx.defaultValue } : {}),
+    ...(plainShape.transform !== undefined ? { transform: plainShape.transform } : {}),
+    ...(plainShape.prefix !== undefined ? { prefix: plainShape.prefix } : {}),
+    ...(plainShape.suffix !== undefined ? { suffix: plainShape.suffix } : {}),
+  };
 }
 
 /**
@@ -284,85 +382,34 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   if (statements === undefined || statements.length === 0) return undefined;
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
 
-  const reads: ReadLine[] = [];
-  let i = 0;
-  while (i < statements.length) {
-    const parsed = parseReadLine(statements[i]!);
-    if (parsed === undefined) break;
-    reads.push(parsed);
-    i++;
-  }
-  if (reads.length === 0) return undefined;
-
-  // A default is a per-entry property in the spec — readLines applies it to every var alike —
-  // so a mix of defaulted and bare reads is not a shape this entry's spec field can produce.
-  const defaults = new Set(reads.map((r) => r.default));
-  if (defaults.size !== 1) return undefined;
+  const section = collectReadLines(statements);
+  if (section === undefined) return undefined;
+  const { reads, rest } = section;
   const defaultValue = reads[0]!.default;
 
-  const rest = statements.slice(i);
-  let guardNode: AstNode | undefined;
-  let returnStmt: AstNode;
-  if (rest.length === 2) {
-    guardNode = rest[0]!;
-    returnStmt = rest[1]!;
-  } else if (rest.length === 1) {
-    returnStmt = rest[0]!;
-  } else {
-    return undefined;
-  }
-  if (returnStmt.type !== "ReturnStatement") return undefined;
+  const tail = splitBodyTail(rest);
+  if (tail === undefined) return undefined;
+  const guardNode = tail.guardNode;
 
   // guardLines never emits a guard once a default is present, regardless of required/auth.
   if (defaultValue !== undefined && guardNode !== undefined) return undefined;
   if (guardNode !== undefined && !verifyGuard(guardNode, reads)) return undefined;
 
-  const arg = returnArgument(returnStmt);
+  const arg = returnArgument(tail.returnStmt);
   if (arg === undefined) return undefined;
 
   const local = functionName(fn);
   if (local === undefined) return undefined;
 
-  const vars = reads.map((r) => r.var);
-  const bindings = reads.map((r) => r.binding);
-
-  if (arg.type === "ObjectExpression") {
-    // needsGuard = required || auth !== undefined, so a guard is mandatory here unless a
-    // default suppressed it — an auth-shaped return with neither is not producible and must
-    // not be accepted as though it were.
-    if (guardNode === undefined && defaultValue === undefined) return undefined;
-    const authShape = classifyAuthReturn(arg, reads);
-    if (authShape === undefined) return undefined;
-    // `required` cannot be recovered here: needsGuard is true for any auth entry regardless of
-    // the spec's `required`, so both values regenerate identical bytes. `false` is the schema
-    // default and keeps the derived spec minimal.
-    return {
-      vars,
-      local,
-      bindings,
-      required: false,
-      auth: authShape.auth,
-      ...(authShape.auth === "headers" ? { headerNames: authShape.headerNames } : {}),
-      ...(defaultValue !== undefined ? { default: defaultValue } : {}),
-    };
-  }
-
-  // Every non-auth return uses only bindings[0] (transformed/wrapped) — a multi-var entry
-  // without auth is not a shape the schema (or the emitter) can produce.
-  if (reads.length !== 1) return undefined;
-  const plainShape = classifyPlainReturn(arg, reads[0]!.binding);
-  if (plainShape === undefined) return undefined;
-
-  return {
-    vars,
+  const ctx: EntryContext = {
+    reads,
+    vars: reads.map((r) => r.var),
+    bindings: reads.map((r) => r.binding),
     local,
-    bindings,
-    required: guardNode !== undefined,
-    ...(defaultValue !== undefined ? { default: defaultValue } : {}),
-    ...(plainShape.transform !== undefined ? { transform: plainShape.transform } : {}),
-    ...(plainShape.prefix !== undefined ? { prefix: plainShape.prefix } : {}),
-    ...(plainShape.suffix !== undefined ? { suffix: plainShape.suffix } : {}),
+    guarded: guardNode !== undefined,
+    defaultValue,
   };
+  return arg.type === "ObjectExpression" ? buildAuthEntry(arg, ctx) : buildPlainEntry(arg, ctx);
 }
 
 export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): EnvEntry[] {

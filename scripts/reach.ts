@@ -114,6 +114,60 @@ export function measure(name: string, root: string): ConnectorResult {
   return measureFiles(name, files);
 }
 
+/**
+ * The `--baseline` half of the run, lifted out of `main()` whole.
+ *
+ * Reached only after the plain report has already printed, and only when `--baseline` was
+ * passed — the caller keeps that `if`, because "no baseline requested" is not a comparison
+ * outcome. Every refusal below still ends the process here rather than returning a value: the
+ * two failure exits mean different things and must stay distinguishable — 2 for "this checkout
+ * cannot be compared at all", 1 for "it compared, and a connector lost a tier" — and returning
+ * a status for `main()` to re-dispatch on would be a second place to get that mapping wrong.
+ */
+function compareAgainstBaseline(root: string, results: readonly ConnectorResult[]): void {
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
+  // A failed `git status` must not be read as "clean": status.value === "" either way, so
+  // status.error (not just head.error) has to reach assertComparable or a non-zero exit here
+  // makes the dirty gate silently disappear.
+  const refusal = assertComparable({
+    commit: head.value,
+    dirty: status.value !== "",
+    gitError: head.error !== "" ? head.error : status.error,
+  });
+  if (refusal !== undefined) {
+    console.log(`\n${refusal}`);
+    process.exit(2);
+  }
+
+  // Keyed on the tree object of packages/mcp-connectors — the only path this harness reads —
+  // not on HEAD: see reach-baseline.ts's assertComparable docstring for why a commit SHA is the
+  // wrong key.
+  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
+  const treeRefusal = connectorsTreeRefusal(connectorsTree.error);
+  if (treeRefusal !== undefined) {
+    console.log(`\n${treeRefusal}`);
+    process.exit(2);
+  }
+  const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
+    typeof compareBaseline
+  >[0];
+  const { refusal: mismatch, regressions } = compareBaseline(stored, results, connectorsTree.value);
+  if (mismatch !== undefined) {
+    console.log(`\n${mismatch}`);
+    process.exit(2);
+  }
+  for (const r of regressions) console.log(`\nREGRESSED  ${r.name}   ${r.from} -> ${r.to}`);
+  if (regressions.length > 0) {
+    console.log(
+      `\n${regressions.length} connector(s) lost a tier. If the corpus moved, re-baseline; ` +
+        "do not edit fixtures/reach-baseline.json to make this pass.",
+    );
+    process.exit(1);
+  }
+  console.log("\nNo connector lost a tier.");
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   await initFormatter();
   if (!formatterAvailable()) {
@@ -158,48 +212,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   if (!baseline) return;
-
-  const head = git(root, ["rev-parse", "HEAD"]);
-  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
-  // A failed `git status` must not be read as "clean": status.value === "" either way, so
-  // status.error (not just head.error) has to reach assertComparable or a non-zero exit here
-  // makes the dirty gate silently disappear.
-  const refusal = assertComparable({
-    commit: head.value,
-    dirty: status.value !== "",
-    gitError: head.error !== "" ? head.error : status.error,
-  });
-  if (refusal !== undefined) {
-    console.log(`\n${refusal}`);
-    process.exit(2);
-  }
-
-  // Keyed on the tree object of packages/mcp-connectors — the only path this harness reads —
-  // not on HEAD: see reach-baseline.ts's assertComparable docstring for why a commit SHA is the
-  // wrong key.
-  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
-  const treeRefusal = connectorsTreeRefusal(connectorsTree.error);
-  if (treeRefusal !== undefined) {
-    console.log(`\n${treeRefusal}`);
-    process.exit(2);
-  }
-  const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
-    typeof compareBaseline
-  >[0];
-  const { refusal: mismatch, regressions } = compareBaseline(stored, results, connectorsTree.value);
-  if (mismatch !== undefined) {
-    console.log(`\n${mismatch}`);
-    process.exit(2);
-  }
-  for (const r of regressions) console.log(`\nREGRESSED  ${r.name}   ${r.from} -> ${r.to}`);
-  if (regressions.length > 0) {
-    console.log(
-      `\n${regressions.length} connector(s) lost a tier. If the corpus moved, re-baseline; ` +
-        "do not edit fixtures/reach-baseline.json to make this pass.",
-    );
-    process.exit(1);
-  }
-  console.log("\nNo connector lost a tier.");
+  compareAgainstBaseline(root, results);
 }
 
 // Guarded exactly as scripts/diff-golden.ts is, so importing this module cannot run the harness.

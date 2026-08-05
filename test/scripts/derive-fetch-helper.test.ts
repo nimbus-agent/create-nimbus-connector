@@ -84,6 +84,294 @@ function run(source: string) {
   return { fields: recognizeFetchHelper(statements, claims), claims, statements };
 }
 
+// Every helper recognizeFetchHelper must refuse, each with the reason it exists. One row per
+// case: the assertions are identical in all of them — no fields recovered, and nothing claimed —
+// so only the source and its rationale differ.
+const REFUSED_HELPERS = [
+  // Gap 1: rejects base template with accessor taking arguments
+  [
+    "rejects base template with accessor taking arguments",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://${region(x)}${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // Gap 2, superseded by the final fix wave: a `pathPart` const whose init does not match the
+  // normalizeLeadingSlash ternary used to be tolerated as inert clutter, because the body was
+  // only probed for known shapes rather than walked positionally. Final fix wave (Fix 2):
+  // recognizeFetchHelper now walks the body statement by statement, so an extra statement that
+  // is not the exact sequence the emitter writes is rejected outright — the same class of bug
+  // as the mutation tests below, just found first as a stale assumption in this pre-existing
+  // test rather than as a fresh mutation.
+  [
+    "rejects a pathPart const whose init is not the normalizeLeadingSlash ternary, rather than tolerating it as clutter",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const pathPart = somethingElse();",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // Defect: a SpreadElement in the headers object has no `key`, and indexing into it
+  // unguarded crashed the whole sweep on discord, google-meet, zzstandalone, zzwriterest,
+  // zzwrite and zzwriteonly. Must reject the helper, not throw.
+  [
+    "rejects (without crashing) a headers object containing a spread",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { ...common, "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // I-2: a computed `headers` key (`{ [headers]: … }`) must not be read as though it declared a
+  // property literally named "headers" just because the indexing variable happens to share that
+  // name — the same KEY VARIABLE hazard `memberName`/`memberObject` guard on the member-expression
+  // side. Reject rather than extract, the safe direction.
+  [
+    "rejects a computed [headers] key rather than treating it as the literal headers property",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    [headers]: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // Same hazard for hasUnexpectedFetchOption: a computed key elsewhere in the fetch options
+  // object (not itself named "headers") is unresolvable, not simply "not headers, therefore
+  // fine" — it must block the whole helper rather than be waved through.
+  [
+    "rejects a computed key elsewhere in the fetch options object, rather than ignoring it",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "    [opt]: controller.signal,",
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // Gap 3: rejects inline header with accessor taking arguments
+  [
+    "rejects inline header with accessor taking arguments",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey(token), Accept: "application/json" },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // --- Gap C near misses: jsonFallbackRaw is recovered from the read helper's final statement,
+  // so that statement is classified rather than assumed. Each of these is one step off the
+  // `try { return JSON.parse(text) as unknown; } catch { return { raw: text }; }` shape the
+  // emitter writes, and must reject rather than be read as it. The positive side of Gap C — the
+  // plain `return JSON.parse(text) as unknown;` ending — is asserted in its own test below.
+
+  [
+    "rejects a try/catch whose catch has a bound parameter, rather than treating it as the fallback shape",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    return JSON.parse(text) as unknown;",
+      "  } catch (err) {",
+      "    return { raw: text };",
+      "  }",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a try/catch whose catch returns something other than { raw: text }",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    return JSON.parse(text) as unknown;",
+      "  } catch {",
+      "    return null;",
+      "  }",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a try/catch with an extra statement in the try block",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  try {",
+      "    const parsed = JSON.parse(text) as unknown;",
+      "    return parsed;",
+      "  } catch {",
+      "    return { raw: text };",
+      "  }",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a final statement that is neither the plain return nor the fallback try/catch",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return text;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // Over-claiming defect: reconstructBase dropped the quasi trailing the path expression
+  // without checking it, so a template with text after `${path}` (`.json`) derived a base that
+  // silently lost the suffix instead of being rejected. `${path}` here (with nothing after it)
+  // is the one shape reconstructBase may accept; anything else after the expression must reject.
+  [
+    "rejects a fetch URL template with text after the path expression",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}.json`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+
+  // --- Computed-member sweep: same hazard as server/index.ts's isConnect. A computed member
+  // (`x[name]`) has an Identifier `property` too — the KEY variable's name, not a property
+  // name — so each of these must be rejected rather than read as the literal member access.
+
+  [
+    'rejects a computed path[startsWith]("/") instead of establishing path.startsWith',
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      '  const pathPart = path[startsWith]("/") ? path : `/${path}`;',
+      "  const res = await fetch(`https://api.example.com${pathPart}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a computed res[text]() instead of establishing res.text()",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res[text]();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a computed !res[ok] instead of establishing !res.ok",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res[ok]) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    "rejects a computed JSON[parse](text) instead of establishing JSON.parse(text)",
+    [
+      "async function probeGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.example.com${path}`, {",
+      '    headers: { "X-Api-Key": apiKey() },',
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON[parse](text) as unknown;",
+      "}",
+    ].join("\n"),
+  ],
+];
+
 describe("recognizeFetchHelper", () => {
   it("recognizes newrelic (inline headers, static base)", () => {
     const { fields, claims, statements } = run(NEWRELIC);
@@ -146,76 +434,19 @@ describe("recognizeFetchHelper", () => {
     expect(claims.claims()).toEqual([]);
   });
 
-  // Gap 1: rejects base template with accessor taking arguments
-  it("rejects base template with accessor taking arguments", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://${region(x)}${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
+  // Every REFUSED_HELPERS row: no fields recovered, and nothing claimed. See that table for each
+  // case's own rationale.
+  it.each(REFUSED_HELPERS)("%s", (_name, src) => {
     const { fields, claims } = run(src);
     expect(fields).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });
 
-  // Gap 2, superseded by the final fix wave: a `pathPart` const whose init does not match the
-  // normalizeLeadingSlash ternary used to be tolerated as inert clutter, because the body was
-  // only probed for known shapes rather than walked positionally. Final fix wave (Fix 2):
-  // recognizeFetchHelper now walks the body statement by statement, so an extra statement that
-  // is not the exact sequence the emitter writes is rejected outright — the same class of bug
-  // as the mutation tests below, just found first as a stale assumption in this pre-existing
-  // test rather than as a fresh mutation.
-  it("rejects a pathPart const whose init is not the normalizeLeadingSlash ternary, rather than tolerating it as clutter", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const pathPart = somethingElse();",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // Defect: a SpreadElement in the headers object has no `key`, and indexing into it
-  // unguarded crashed the whole sweep on discord, google-meet, zzstandalone, zzwriterest,
-  // zzwrite and zzwriteonly. Must reject the helper, not throw.
-  it("rejects (without crashing) a headers object containing a spread", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { ...common, "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // Same hazard one level up: a spread in the fetch options object itself, before `headers` is
-  // located within it. This must not crash either — and here the spread genuinely does not
-  // bear on `headers`, so the helper is still legitimately recognized; the recognizer records
-  // nothing about the spread it skipped, so this is not an over-claim.
+  // Same hazard one level up from the headers-object spread in the table above: a spread in the
+  // fetch options object itself, before `headers` is located within it. This must not crash
+  // either — and here the spread genuinely does not bear on `headers`, so the helper is still
+  // legitimately recognized; the recognizer records nothing about the spread it skipped, so this
+  // is not an over-claim.
   it("does not crash on a fetch options object containing a spread", () => {
     const src = [
       "async function probeGet(path: string): Promise<unknown> {",
@@ -239,69 +470,6 @@ describe("recognizeFetchHelper", () => {
     });
   });
 
-  // I-2: a computed `headers` key (`{ [headers]: … }`) must not be read as though it declared a
-  // property literally named "headers" just because the indexing variable happens to share that
-  // name — the same KEY VARIABLE hazard `memberName`/`memberObject` guard on the member-expression
-  // side. Reject rather than extract, the safe direction.
-  it("rejects a computed [headers] key rather than treating it as the literal headers property", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    [headers]: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // Same hazard for hasUnexpectedFetchOption: a computed key elsewhere in the fetch options
-  // object (not itself named "headers") is unresolvable, not simply "not headers, therefore
-  // fine" — it must block the whole helper rather than be waved through.
-  it("rejects a computed key elsewhere in the fetch options object, rather than ignoring it", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "    [opt]: controller.signal,",
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // Gap 3: rejects inline header with accessor taking arguments
-  it("rejects inline header with accessor taking arguments", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey(token), Accept: "application/json" },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
   // --- Gap C: jsonFallbackRaw, recovered from the read helper's final statement.
 
   it("omits jsonFallbackRaw for the plain `return JSON.parse(text) as unknown;` ending", () => {
@@ -309,91 +477,6 @@ describe("recognizeFetchHelper", () => {
     // absence explicitly, independent of any other field.
     const { fields } = run(NEWRELIC);
     expect(fields?.jsonFallbackRaw).toBeUndefined();
-  });
-
-  it("rejects a try/catch whose catch has a bound parameter, rather than treating it as the fallback shape", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  try {",
-      "    return JSON.parse(text) as unknown;",
-      "  } catch (err) {",
-      "    return { raw: text };",
-      "  }",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a try/catch whose catch returns something other than { raw: text }", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  try {",
-      "    return JSON.parse(text) as unknown;",
-      "  } catch {",
-      "    return null;",
-      "  }",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a try/catch with an extra statement in the try block", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  try {",
-      "    const parsed = JSON.parse(text) as unknown;",
-      "    return parsed;",
-      "  } catch {",
-      "    return { raw: text };",
-      "  }",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a final statement that is neither the plain return nor the fallback try/catch", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return text;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
   });
 
   // Final fix wave, Fix 2: claims.claim(s, "fetch-helper") claims the whole FunctionDeclaration
@@ -461,105 +544,6 @@ describe("recognizeFetchHelper", () => {
       expect(claims.claims()).toEqual([]);
     });
   });
-
-  // Over-claiming defect: reconstructBase dropped the quasi trailing the path expression
-  // without checking it, so a template with text after `${path}` (`.json`) derived a base that
-  // silently lost the suffix instead of being rejected. `${path}` here (with nothing after it)
-  // is the one shape reconstructBase may accept; anything else after the expression must reject.
-  it("rejects a fetch URL template with text after the path expression", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}.json`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // --- Computed-member sweep: same hazard as server/index.ts's isConnect. A computed member
-  // (`x[name]`) has an Identifier `property` too — the KEY variable's name, not a property
-  // name — so each of these must be rejected rather than read as the literal member access.
-
-  it('rejects a computed path[startsWith]("/") instead of establishing path.startsWith', () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      '  const pathPart = path[startsWith]("/") ? path : `/${path}`;',
-      "  const res = await fetch(`https://api.example.com${pathPart}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a computed res[text]() instead of establishing res.text()", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res[text]();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a computed !res[ok] instead of establishing !res.ok", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res[ok]) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON.parse(text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a computed JSON[parse](text) instead of establishing JSON.parse(text)", () => {
-    const src = [
-      "async function probeGet(path: string): Promise<unknown> {",
-      "  const res = await fetch(`https://api.example.com${path}`, {",
-      '    headers: { "X-Api-Key": apiKey() },',
-      "  });",
-      "  const text = await res.text();",
-      "  if (!res.ok) {",
-      "    throw new Error(`Probe ${String(res.status)}: ${text.slice(0, 400)}`);",
-      "  }",
-      "  return JSON[parse](text) as unknown;",
-      "}",
-    ].join("\n");
-    const { fields, claims } = run(src);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
 });
 
 function runRest(source: string) {
@@ -597,6 +581,54 @@ const ZZ_FETCH = [
   "}",
 ].join("\n");
 
+// Every source recognizeRestFetchHelper must refuse, each with the reason it exists. One row per
+// case: the assertions are identical in all of them — no fields recovered, and nothing claimed —
+// so only the source and its rationale differ.
+const REFUSED_REST_HELPERS = [
+  [
+    "rejects a helper whose params are not exactly token, path, init",
+    ZZ_FETCH.replace(
+      "  token: string,\n  path: string,\n  init?: RequestInit,",
+      "  path: string,\n  token: string,\n  init?: RequestInit,",
+    ),
+  ],
+
+  // discord and google-meet write this form (fetchHelper.baseConst); neither reaches this
+  // recognizer in practice — both block earlier, on their tools' query branch — but the
+  // refusal is asserted directly here rather than only inferred from that.
+  [
+    "refuses the ${baseConst}${path} form — a second, distinct template shape it does not model",
+    ZZ_FETCH.replace("`https://api.zzstandalone.test${path}`", "`${DISCORD_API}${path}`"),
+  ],
+
+  [
+    "rejects an extra statement inserted into the body",
+    ZZ_FETCH.replace(
+      "  const text = await res.text();",
+      "  const extra = 1;\n  const text = await res.text();",
+    ),
+  ],
+  [
+    "rejects a try/catch that returns rather than assigns — the hand-style shape, not this one",
+    ZZ_FETCH.replace(
+      "  try {\n    json = JSON.parse(text) as unknown;\n  } catch {\n    json = null;\n  }",
+      "  try {\n    return JSON.parse(text) as unknown;\n  } catch {\n    return { raw: text };\n  }",
+    ),
+  ],
+  [
+    "rejects a return statement missing a field",
+    ZZ_FETCH.replace(
+      "  return { ok: res.ok, status: res.status, json, text };",
+      "  return { ok: res.ok, status: res.status, json };",
+    ),
+  ],
+  [
+    "rejects a `let json` that carries an initializer — the emitter always leaves it bare",
+    ZZ_FETCH.replace("let json: unknown;", "let json: unknown = null;"),
+  ],
+  ["returns undefined for a module with no matching function at all", "const x = 1;"],
+];
+
 describe("recognizeRestFetchHelper", () => {
   it("recognizes zzFetch (literal base, no inline headers) — the real zzstandalone shape", () => {
     const { fields, claims, statements } = runRest(ZZ_FETCH);
@@ -617,68 +649,10 @@ describe("recognizeRestFetchHelper", () => {
     });
   });
 
-  it("rejects a helper whose params are not exactly token, path, init", () => {
-    const source = ZZ_FETCH.replace(
-      "  token: string,\n  path: string,\n  init?: RequestInit,",
-      "  path: string,\n  token: string,\n  init?: RequestInit,",
-    );
+  // Every REFUSED_REST_HELPERS row: no fields recovered, and nothing claimed. See that table for
+  // each case's own rationale.
+  it.each(REFUSED_REST_HELPERS)("%s", (_name, source) => {
     const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses the ${baseConst}${path} form — a second, distinct template shape it does not model", () => {
-    // discord and google-meet write this form (fetchHelper.baseConst); neither reaches this
-    // recognizer in practice — both block earlier, on their tools' query branch — but the
-    // refusal is asserted directly here rather than only inferred from that.
-    const source = ZZ_FETCH.replace(
-      "`https://api.zzstandalone.test${path}`",
-      "`${DISCORD_API}${path}`",
-    );
-    const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects an extra statement inserted into the body", () => {
-    const source = ZZ_FETCH.replace(
-      "  const text = await res.text();",
-      "  const extra = 1;\n  const text = await res.text();",
-    );
-    const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a try/catch that returns rather than assigns — the hand-style shape, not this one", () => {
-    const source = ZZ_FETCH.replace(
-      "  try {\n    json = JSON.parse(text) as unknown;\n  } catch {\n    json = null;\n  }",
-      "  try {\n    return JSON.parse(text) as unknown;\n  } catch {\n    return { raw: text };\n  }",
-    );
-    const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a return statement missing a field", () => {
-    const source = ZZ_FETCH.replace(
-      "  return { ok: res.ok, status: res.status, json, text };",
-      "  return { ok: res.ok, status: res.status, json };",
-    );
-    const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("rejects a `let json` that carries an initializer — the emitter always leaves it bare", () => {
-    const source = ZZ_FETCH.replace("let json: unknown;", "let json: unknown = null;");
-    const { fields, claims } = runRest(source);
-    expect(fields).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("returns undefined for a module with no matching function at all", () => {
-    const { fields, claims } = runRest("const x = 1;");
     expect(fields).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });

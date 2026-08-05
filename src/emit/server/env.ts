@@ -200,10 +200,14 @@ function renderClientCredentials(e: EnvEntry, serviceLabel: string): string {
 function renderBasic(e: EnvEntry): string {
   const readAndGuard = e.vars.flatMap((v, i) => {
     const b = bindingOf(e, i);
+    // Built here rather than inline, for the reason renderTokenFunction's missingTokenMessage
+    // is: a template literal nested inside a JSON.stringify() inside the emitted line's own
+    // template is unreadable.
+    const missingMessage = JSON.stringify(`${v} is not set`);
     return [
       `  const ${b} = process.env[${JSON.stringify(v)}]?.trim();`,
       `  if (${b} === undefined || ${b} === "") {`,
-      `    throw new Error(${JSON.stringify(`${v} is not set`)});`,
+      `    throw new Error(${missingMessage});`,
       "  }",
     ];
   });

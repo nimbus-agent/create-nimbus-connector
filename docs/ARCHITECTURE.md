@@ -139,10 +139,14 @@ generator can derive a spec for and regenerate at all. It derives a spec from ea
 `src/server.ts` and `nimbus.extension.json`, runs it through `parseSpec`, `validateSpec` and
 `generate()`, and buckets the result into a tier — `blocked`, `emits`, `server-identical`, or
 `all-identical` — without ever writing the derived spec to disk. `bun run reach:baseline`
-records the per-connector tiers alongside the Nimbus commit they were measured at in
-`fixtures/reach-baseline.json`; `bun run reach --baseline` refuses to compare across a moved or
-dirty checkout and otherwise fails when a connector has regressed a tier. Like `diff:golden` and
-`wiring:conformance`, it needs the AGPL monorepo and so cannot run in CI.
+records the per-connector tiers in `fixtures/reach-baseline.json`, keyed on `connectorsTree`:
+the git tree object of `packages/mcp-connectors`, the only path the harness reads. Keying on
+HEAD was deliberately refused — two commits can carry a byte-identical `packages/mcp-connectors`
+(a change elsewhere in the monorepo, a merge, a revert), and refusing on a commit SHA that moved
+while the tree did not made `--baseline` refuse a corpus that had not actually changed.
+`bun run reach --baseline` refuses to compare across a moved or dirty checkout and otherwise
+fails when a connector has regressed a tier. Like `diff:golden` and `wiring:conformance`, it
+needs the AGPL monorepo and so cannot run in CI.
 
 ### 2. The golden-fixture harness, in detail
 

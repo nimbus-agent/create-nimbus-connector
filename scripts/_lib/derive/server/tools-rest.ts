@@ -2,27 +2,19 @@ import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
   arrowFn,
-  binary,
-  blockBody,
-  boolLit,
   callArgs,
   calleeOf,
   callTo,
-  conditional,
   constDecl,
   expressionOf,
   identName,
   isIdent,
-  logical,
-  memberName,
-  memberObject,
-  numericValue,
   objectProps,
-  returnArgument,
   stringLit,
 } from "../read.ts";
 import { recognizeArgs } from "./args.ts";
-import { type PathLocal, recognizePath } from "./path-template.ts";
+import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
+import { recognizePath } from "./path-template.ts";
 import type { ToolFields } from "./tools-hand.ts";
 
 /**
@@ -76,7 +68,7 @@ function recognizeFactory(statement: AstNode): Factory | undefined {
   if (args === undefined) return undefined;
 
   const props = objectProps(args[0]);
-  if (props === undefined || props.length !== 4) return undefined;
+  if (props?.length !== 4) return undefined;
 
   const registrarProp = props[0];
   const tokenEnvProp = props[1];
@@ -114,111 +106,23 @@ function isRegistrarCall(node: AstNode, registrar: string): AstNode | undefined 
   return isIdent(calleeOf(call), registrar) ? call : undefined;
 }
 
+type RegistrarCallParts = {
+  readonly name: string;
+  readonly description: string;
+  readonly schemaNode: AstNode;
+  readonly pathFnNode: AstNode;
+};
+
 /**
- * `<anything>.<name>` -> "<name>", the same lax read tools-hand.ts's `memberArgName`
- * documents — deliberately not checking that the object identifier is the handler's own
- * parameter (renderTool's `PARAM` is `"parsed"` here, `"p"` in tools-hand.ts; path-template.ts's
- * own `argNameFromExpr` already resolves a bare member read this same way, so pinning a check
- * here that the use site doesn't make would only create a second, inconsistent notion of "the
- * param"). Duplicated rather than imported: tools-hand.ts does not export this, and the shape
- * — not the param name — is what the two files share.
+ * `<registrar>(name, description, schema, pathFn)`'s four arguments, with the two string-literal
+ * ones already read — arity 4 only, for the reason `recognizeOneCall` documents.
  *
- * `memberName`/`memberObject` carry the same computed-member guard tools-hand.ts's copy does: a
- * computed member (`p[key]`) has an Identifier `property` too — the KEY variable's name, not a
- * property name.
+ * The four per-element `undefined` checks are `noUncheckedIndexedAccess` bookkeeping, not a
+ * second arity test: the length check above them already fixed the count at four.
  */
-function memberArgName(node: AstNode | undefined): string | undefined {
-  if (identName(memberObject(node)) === undefined) return undefined;
-  return memberName(node);
-}
-
-/**
- * `parsed.only_open === true ? "true" : "false"` -> "only_open" — the boolean hoist form,
- * pinned to every part of renderHoists's exact shape (see tools-hand.ts's `booleanHoistArg`,
- * which this mirrors: same AST shape, different `PARAM`, which this check never looks at).
- */
-function booleanHoistArg(init: AstNode): string | undefined {
-  const c = conditional(init);
-  if (c === undefined) return undefined;
-  if (stringLit(c.consequent) !== "true" || stringLit(c.alternate) !== "false") return undefined;
-
-  const test = binary(c.test);
-  if (test === undefined || test.operator !== "===" || boolLit(test.right) !== true) {
-    return undefined;
-  }
-  return memberArgName(test.left);
-}
-
-/** A literal `renderHoists` can write as a `??` default's right-hand side — see tools-hand.ts's `hoistDefaultLiteral`, which this mirrors verbatim. */
-function hoistDefaultLiteral(node: AstNode): string | number | boolean | undefined {
-  const s = stringLit(node);
-  if (s !== undefined) return s;
-  const n = numericValue(node);
-  if (n !== undefined) return n;
-  return boolLit(node);
-}
-
-/** `parsed.scope ?? "all"` -> `{ arg: "scope", default: "all" }` — see tools-hand.ts's `defaultHoistArg`, which this mirrors verbatim. */
-function defaultHoistArg(
-  init: AstNode,
-): { arg: string; default: string | number | boolean } | undefined {
-  const l = logical(init);
-  if (l === undefined || l.operator !== "??") return undefined;
-  const arg = memberArgName(l.left);
-  if (arg === undefined) return undefined;
-  const value = hoistDefaultLiteral(l.right);
-  if (value === undefined) return undefined;
-  return { arg, default: value };
-}
-
-/**
- * One hoisted-argument const statement — see tools-hand.ts's `hoistedLocal`, which this
- * mirrors: `renderHoists` (src/emit/server/args.ts) writes an identical shape regardless of
- * style, parameterised only by `PARAM` ("parsed" here, "p" there), which neither form reads.
- */
-function hoistedLocal(
-  statement: AstNode,
-): { local: string; pathLocal: PathLocal; default?: string | number | boolean } | undefined {
-  const decl = constDecl(statement);
-  if (decl === undefined || decl.init === undefined) return undefined;
-  const local = decl.name;
-
-  const boolArg = booleanHoistArg(decl.init);
-  if (boolArg !== undefined) return { local, pathLocal: { arg: boolArg, bool: true } };
-
-  const defaultHoist = defaultHoistArg(decl.init);
-  if (defaultHoist !== undefined) {
-    return {
-      local,
-      pathLocal: { arg: defaultHoist.arg, bool: false },
-      default: defaultHoist.default,
-    };
-  }
-
-  return undefined;
-}
-
-/**
- * One `<registrar>(name, description, schema, pathFn)` call — arity 4 only. Arity 5 (a 5th
- * `initFn` argument) carries a non-`GET` method (see renderTool's `initArg`) and is plan 2's
- * territory: refused here, rather than read for its first four arguments only, so a connector
- * that needs it blocks visibly on a named blocker instead of deriving a `GET` the real
- * connector never had.
- *
- * `pathFn` has three in-scope forms — `() => <pathExpr>`, `(parsed) => <pathExpr>`, and
- * `(parsed) => { <hoists> return <pathExpr>; }` — modeled the same way tools-hand.ts's
- * `recognizeOne` models its block form. The query branch (a block whose body contains `const u
- * = new URL(...)`) is plan 2's too: it is not a hoist, so the loop below refuses it the same
- * way it refuses any other unrecognized non-last statement, with no special case needed.
- *
- * Refuses an `async` path fn: `src/emit/server/tools-rest.ts` never writes `async` on this arrow,
- * the same pin `read.ts`'s `isAsync` documents and `readOnlyWrapper` (server/index.ts) already
- * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
- * non-async form and was claimed for a shape the emitter cannot produce.
- */
-function recognizeOneCall(call: AstNode): ToolFields | undefined {
+function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
   const args = callArgs(call);
-  if (args === undefined || args.length !== 4) return undefined;
+  if (args?.length !== 4) return undefined;
 
   const nameNode = args[0];
   const descriptionNode = args[1];
@@ -237,6 +141,33 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
   const description = stringLit(descriptionNode);
   if (name === undefined || description === undefined) return undefined;
 
+  return { name, description, schemaNode, pathFnNode };
+}
+
+/**
+ * One `<registrar>(name, description, schema, pathFn)` call — arity 4 only. Arity 5 (a 5th
+ * `initFn` argument) carries a non-`GET` method (see renderTool's `initArg`) and is plan 2's
+ * territory: refused here, rather than read for its first four arguments only, so a connector
+ * that needs it blocks visibly on a named blocker instead of deriving a `GET` the real
+ * connector never had.
+ *
+ * `pathFn` has three in-scope forms — `() => <pathExpr>`, `(parsed) => <pathExpr>`, and
+ * `(parsed) => { <hoists> return <pathExpr>; }` — modeled the same way tools-hand.ts's
+ * `recognizeOne` models its block form, and through the same shared reader (`hoists.ts`'s
+ * `recognizeHoistedBlock`). The query branch (a block whose body contains `const u = new
+ * URL(...)`) is plan 2's too: it is not a hoist, so that reader's loop refuses it the same way
+ * it refuses any other unrecognized non-last statement, with no special case needed.
+ *
+ * Refuses an `async` path fn: `src/emit/server/tools-rest.ts` never writes `async` on this arrow,
+ * the same pin `read.ts`'s `isAsync` documents and `readOnlyWrapper` (server/index.ts) already
+ * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
+ * non-async form and was claimed for a shape the emitter cannot produce.
+ */
+function recognizeOneCall(call: AstNode): ToolFields | undefined {
+  const parts = registrarCallParts(call);
+  if (parts === undefined) return undefined;
+  const { name, description, schemaNode, pathFnNode } = parts;
+
   const toolArgs = recognizeArgs(schemaNode);
   if (toolArgs === undefined) return undefined;
 
@@ -245,7 +176,7 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
 
   // Forms 1/2: `() => <pathExpr>` / `(parsed) => <pathExpr>` — expression-bodied. recognizePath
   // resolves a bare `parsed.<name>` member read without checking the receiver at all (see
-  // memberArgName above), so neither form needs to be told which one it is.
+  // hoists.ts's memberArgName), so neither form needs to be told which one it is.
   if (!arrow.isBlock) {
     const path = recognizePath(arrow.body, new Map());
     return path === undefined ? undefined : { name, description, args: toolArgs, path };
@@ -256,39 +187,19 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
   // zero-param block is a shape this emitter cannot produce.
   if (arrow.params.length !== 1) return undefined;
 
-  const statements = blockBody(arrow.body);
-  if (statements === undefined || statements.length === 0) return undefined;
+  const block = recognizeHoistedBlock(arrow.body);
+  if (block === undefined) return undefined;
 
-  const locals = new Map<string, PathLocal>();
-  const hoistMeta = new Map<string, { local: string; default?: string | number | boolean }>();
-  for (const statement of statements.slice(0, -1)) {
-    const hoist = hoistedLocal(statement);
-    if (hoist === undefined) return undefined;
-    locals.set(hoist.local, hoist.pathLocal);
-    hoistMeta.set(hoist.pathLocal.arg, { local: hoist.local, default: hoist.default });
-  }
-
-  const last = statements.at(-1)!;
-  if (last.type !== "ReturnStatement") return undefined;
-  const returned = returnArgument(last);
-  const path = returned === undefined ? undefined : recognizePath(returned, locals);
+  // Unlike tools-hand.ts, what the block returns IS the path expression — there is no
+  // `jsonResult(await ...)` wrapper to unwrap first.
+  const path =
+    block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
   if (path === undefined) return undefined;
 
   // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
-  // the schema text itself, so both are only visible here, at the hoist statement.
-  let mergedArgs = toolArgs;
-  if (hoistMeta.size > 0) {
-    mergedArgs = { ...toolArgs };
-    for (const [argName, meta] of hoistMeta) {
-      const arg = mergedArgs[argName];
-      if (arg === undefined) return undefined;
-      mergedArgs[argName] = {
-        ...arg,
-        ...(meta.local !== argName ? { local: meta.local } : {}),
-        ...(meta.default !== undefined ? { default: meta.default } : {}),
-      };
-    }
-  }
+  // the schema text itself, so both are only visible at the hoist statement.
+  const mergedArgs = mergeHoistedArgs(toolArgs, block.hoistMeta);
+  if (mergedArgs === undefined) return undefined;
 
   return { name, description, args: mergedArgs, path };
 }

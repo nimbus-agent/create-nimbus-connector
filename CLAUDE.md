@@ -29,9 +29,9 @@ Three repos, three roles, and the split is load-bearing:
 repository.** Not into `src/`, not into `test/`, not into `fixtures/`. That is a licensing
 violation, not a style preference.
 
-**The one carve-out: description strings.** All ten real-connector fixtures reproduce that
+**The one carve-out: description strings.** All eleven real-connector fixtures reproduce that
 connector's `nimbus.extension.json` description and its tool descriptions verbatim — roughly
-7,363 characters across the corpus. This is required, not sloppiness: `nimbus.extension.json`
+8,452 characters across the corpus. This is required, not sloppiness: `nimbus.extension.json`
 and `src/server.ts` cannot byte-match the real connector without the exact string, and the
 four protected 6/6 fixtures (`newrelic`, `datadog`, `grafana`, `sentry`) depend on it. Both
 repositories are `nimbus-agent`-owned, which is what makes this a carve-out rather than an

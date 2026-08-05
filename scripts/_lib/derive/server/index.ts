@@ -64,10 +64,10 @@ function readOnlyWrapper(node: AstNode): { name: string; body: AstNode[] } | und
   if (args === undefined) return undefined;
 
   const full = stringLit(args[0]);
-  if (full === undefined || !full.startsWith("nimbus-")) return undefined;
+  if (!full?.startsWith("nimbus-")) return undefined;
 
   const arrow = arrowFn(args[1]);
-  if (arrow === undefined || arrow.params.length !== 1 || arrow.isAsync) return undefined;
+  if (arrow?.params.length !== 1 || arrow.isAsync) return undefined;
   if (!isIdent(arrow.params[0], "reg")) return undefined;
   const body = blockBody(arrow.body);
   if (body === undefined) return undefined;
@@ -145,7 +145,7 @@ function getMcpServerInfo(node: AstNode): { varName: string; connectorName: stri
   const args = newOf(decl.init, "McpServer", 1);
   if (args === undefined) return undefined;
   const props = objectProps(args[0]);
-  if (props === undefined || props.length !== 2) return undefined;
+  if (props?.length !== 2) return undefined;
 
   const [nameProp, versionProp] = props;
   const full = nameProp === undefined ? undefined : stringLit(nameProp.value);
@@ -361,7 +361,7 @@ function isNamedReadOnlyCallback(node: AstNode): boolean {
   const args = callTo(awaited(expressionOf(node)), "runReadOnlyMcpConnector", 2);
   if (args === undefined) return false;
   const full = stringLit(args[0]);
-  if (full === undefined || !full.startsWith("nimbus-")) return false;
+  if (!full?.startsWith("nimbus-")) return false;
   return identName(args[1]) !== undefined;
 }
 
