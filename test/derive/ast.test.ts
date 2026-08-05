@@ -95,7 +95,7 @@ describe("initParser distinguishes an absent optional dependency from a broken o
       'if (a.parserAvailable()) throw new Error("expected the parser to be unavailable");' +
       // A missing parser cannot degrade — confirm parseModule still throws, and that its
       // message is the SAME diagnosis parserUnavailableReason() reports, not the fallback
-      // "was not initialised" text (that text is for the "initParser() never ran" case only).
+      // "not initialised" text (that text is for the "initParser() never ran" case only).
       "let threw;" +
       'try { a.parseModule("const a = 1;\\n"); } catch (err) { threw = err; }' +
       'if (threw === undefined) throw new Error("expected parseModule to throw");' +

@@ -91,9 +91,7 @@ export function parserUnavailableReason(): string | undefined {
  */
 export function parseModule(source: string): AstNode[] {
   if (parse === undefined) {
-    throw new Error(
-      unavailableReason ?? `${PARSER} was not initialised — call initParser() first.`,
-    );
+    throw new Error(unavailableReason ?? `${PARSER} not initialised — call initParser() first.`);
   }
   const file = parse(source, { sourceType: "module", plugins: ["typescript"] });
   return file.program.body as unknown as AstNode[];
