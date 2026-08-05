@@ -166,9 +166,11 @@ reach number becomes a by-product.
 
 ### 3.1 The move, and the decision it reverses
 
-`CLAUDE.md` and `.claude/commands/cnc-reach-deriver.md` both state that the deriver **must stay** under
-`scripts/`: `package.json`'s `files` is `["src", "README.md"]`, so shipping it would put
-unreachable code and an unresolvable `@babel/parser` import into every published tarball.
+`.claude/commands/cnc-reach-deriver.md` states that the deriver **must stay** under `scripts/`:
+`package.json`'s `files` is `["src", "README.md"]`, so shipping it would put unreachable code and
+an unresolvable `@babel/parser` import into every published tarball. (An earlier revision of this
+section said `CLAUDE.md` carries the rule too. It does not — it has only a one-line Layout entry,
+which still needs a `src/derive/` row.)
 
 That reasoning is correct today and stops being correct the moment `--from-connector` exists —
 the code is then the feature, not dead weight. The dependency half already has a precedent in
