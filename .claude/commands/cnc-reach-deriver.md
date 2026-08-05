@@ -1,0 +1,191 @@
+---
+name: cnc-reach-deriver
+description: >
+  The corpus-reach harness and its spec deriver — `bun run reach`, the four
+  tiers, the totality rule, guarded AST accessors, byte-range claims, the
+  two-list frame contract, and the baseline keyed on `connectorsTree`. Use when
+  writing or changing anything under `scripts/_lib/derive/` or `scripts/reach*`,
+  adding a recognizer, reading a blocker histogram, or asking why a connector is
+  `blocked` / why a fixture must appear in `derive-round-trip.test.ts`.
+---
+
+# The reach harness and its deriver
+
+`bun run reach --nimbus-root <path>` answers one question: **how many of the 94 real connectors
+can this generator derive a spec for and regenerate, and how far does each get.** It reads the
+AGPL monorepo at runtime — never vendors it — so it cannot run in CI, and no job may skip when
+the root is absent.
+
+It is the inverse of the rest of the repo: `src/emit/` turns a spec into source, and
+`scripts/_lib/derive/` turns source back into a spec. The round trip is the proof.
+
+## Layout
+
+```
+scripts/reach.ts               the CLI: measure, histogram, --baseline comparison
+scripts/reach-baseline.ts      records fixtures/reach-baseline.json (full corpus, always)
+scripts/_lib/reach.ts          measure(), tiering, histogram, summary lines
+scripts/_lib/reach-baseline.ts assertComparable, compareBaseline, connectorsTreeRefusal
+scripts/_lib/derive/
+  ast.ts        the Babel boundary — parseModule, the AstNode type
+  read.ts       THE ONLY module that reads a node's fields
+  claims.ts     byte-range claims and containment coverage
+  blockers.ts   an unclaimed statement -> a histogram bucket
+  manifest.ts   nimbus.extension.json -> spec fields
+  index.ts      deriveSpec(files) -> Derivation
+  server/       one recognizer module per src/emit/server/ module
+test/scripts/derive-*.test.ts  a test file per deriver module, plus the round trip
+```
+
+**The deriver lives under `scripts/`, not `src/`, and must stay there.** `package.json`'s
+`files` is `["src", "README.md"]`, so anything under `src/` ships to npm — a dev-only deriver
+there would put unreachable code and an unresolvable `@babel/parser` import into every published
+tarball.
+
+## The four tiers
+
+| Tier | Means |
+| --- | --- |
+| `blocked` | the deriver could not produce a spec at all |
+| `emits` | `parseSpec` **and** `validateSpec` accept the derived spec |
+| `server-identical` | the emitted `src/server.ts` byte-matches the real one — **the headline** |
+| `all-identical` | every emitted file byte-matches |
+
+`server.ts` is the headline because every emitter risk lives in that file.
+
+## The invariants
+
+### The totality rule, and no escape hatch
+
+After every matcher runs, every top-level and function-body statement in `src/server.ts` must be
+covered by a claim. **An unclaimed statement fails the connector.** There is no
+ignore-the-rest path and there will not be one.
+
+This is the whole difference between this harness and the hand counts that produced 12, then 7,
+then 9: a scrape is silent about what it does not recognize, and silence reads as absence. The
+number this prints is deliberately *lower* than a scrape would report. A connector using a
+construct the spec language declines to support **is** blocked — `zoom` permanently so — and
+that is the measurement, not a shortcoming of it.
+
+**Blockers are discovered, not enumerated.** An unclaimed statement's `kind` is a normalized
+descriptor of its syntactic head (`import-from:./tools.ts`, `call:makeQueryFilter`,
+`frame:no-registrar`), and the histogram is a group-by over those strings. Never add a category
+list; a shape nobody has named appears as its own bucket.
+
+### `AstNode` has no index signature — that is the enforcement
+
+`ast.ts`'s `AstNode` carries only `type`, `start`, `end` and `loc`. **Every other field read goes
+through a guarded accessor in `read.ts`**, and `bunx tsc --noEmit` is what enforces it: with an
+index signature, `node["computed"]` typechecks for any key and yields `undefined`, and whether
+that `undefined` rejects or matches depends on which side of a comparison it lands on. Eight
+defects across five files were instances of that one shape — a matcher that validates part of a
+construct and claims the whole of it.
+
+The totality rule cannot catch that class. It detects statements nobody claimed; it is blind to
+statements claimed **wrongly**. So the guard sits where the value is obtained.
+
+- **Reaching a node field with no accessor means adding an accessor to `read.ts`**, never
+  casting at the call site.
+- Accessors return `undefined` rather than throwing, so rejecting stays the cheap default.
+- There is deliberately **no generic `getChildren`**: an untyped child list strips which *slot*
+  a node came from, and the slot is what the guards depend on.
+- One confined exception exists on purpose: `server/fetch-helper.ts`'s internal `walk`/`find`
+  recurse over `Object.entries()` to locate a `fetch()` call anywhere in a body. Neither is
+  exported. `tsc` cannot enforce that confinement, so it holds by review.
+
+### Claims are byte ranges; coverage is containment
+
+Both are required, not incidental. A matcher may claim **several statements at once**, because
+the emitter writes multi-statement constructs — hoisted argument consts, the query branch's
+`new URL` trio, the client-credentials `token`/`cachedToken`/`tokenExpiresAt` bindings. And a
+statement is covered when its range lies *inside* a claimed range, so nested statements need no
+separate claim.
+
+Containment is also the hazard the frame contract below exists to contain.
+
+### The two-list frame contract
+
+`Frame` hands downstream **two** statement lists, and they are not interchangeable:
+
+- `toolStatements` — what the tool recognizers scan.
+- `verifyStatements` — what the totality rule walks.
+
+They differ for `read-only-kit` only. That style nests its registrations inside
+`await runReadOnlyMcpConnector("nimbus-x", (reg) => { ... })`, so *claiming* that wrapper would
+cover every registration transitively: the totality rule would find nothing unclaimed and a
+connector whose tools were never recognized would derive successfully — a false `emits` produced
+by the very mechanism the rule exists to remove.
+
+So the read-only-kit branch removes **exactly one** statement — the wrapper — from
+`verifyStatements`, splices its callback body in, and **never claims the wrapper**. It is still
+fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a single-parameter
+`(reg) =>` block arrow, not async); it is simply never granted coverage.
+
+**If you add a frame style that nests registrations, it inherits this rule.**
+
+### One recognizer module per emitter module
+
+`scripts/_lib/derive/server/*` mirrors `src/emit/server/*`. A recognizer reads what its
+counterpart writes, and the round-trip test is what keeps the pair honest — including the
+places where the two must agree on a literal the other side chose (`tools-rest.ts` mirrors the
+emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`).
+
+Match only what the emitter can actually produce. Widening a matcher to accept a shape the
+emitter never writes only widens what gets claimed — see the deliberate leading slash in
+`RUN_READ_ONLY_SUFFIX`, and `isFrameImport` deliberately *not* matching it.
+
+### The baseline is keyed on `connectorsTree`, not on HEAD
+
+`fixtures/reach-baseline.json`'s first key is the git tree object of `packages/mcp-connectors` —
+the only path the harness reads. Keying on a commit SHA was tried and refused: two commits can
+carry a byte-identical `packages/mcp-connectors`, and refusing on a SHA that moved while the
+tree did not made `--baseline` refuse a corpus that had not actually changed.
+
+`bun run reach --baseline` exits 2 rather than comparing when the checkout is dirty under
+`packages/mcp-connectors`, when the recorded tree differs, or when `--baseline` is combined with
+connector names. Each refusal is the gate working. **Never edit the baseline to make a
+regression pass** — re-record with `bun run reach:baseline`, and only when the corpus moved.
+
+### `deriveSpec` returns a raw object, not a `ConnectorSpec`
+
+`Derivation` is `{ ok: true; spec: Record<string, unknown> } | { ok: false; blockers: Blocker[] }`.
+Validation is a **tier boundary the reporting layer crosses**, not something the deriver does —
+which is also what lets a derived spec that trips `RESERVED_IDENTIFIERS` be *counted* rather than
+thrown. The reach design still writes `spec: ConnectorSpec`; the plan's *Refinement of the spec*
+section records the deviation, and the code is authoritative.
+
+### Every fixture appears in exactly one of `ROUND_TRIP` / `BLOCKED`
+
+`test/scripts/derive-round-trip.test.ts` holds both lists, and its
+`accounts for every fixture in fixtures/` test fails when a fixture is in neither or in both.
+`BLOCKED` records the construct that stops each one, so the gap is on screen on every run rather
+than implied by absence — the same reason `expectations.json` omits a file instead of hiding it.
+
+**Adding a fixture means adding it to one of those two lists.** A `BLOCKED` reason must be
+checked by actually running `deriveSpec` against the fixture's emitted output, never inferred
+from the spec or the emitter: two earlier versions of that docstring went stale exactly that way.
+
+## What is not built yet
+
+`scripts/_lib/derive/server/{search,query,body}.ts` and `scripts/_lib/derive/search-filter.ts` do
+not exist. That is why `BLOCKED` still lists fixtures on "search tool", "query parameters",
+"write body" and "client-credentials auth".
+
+The specification for that work is
+[`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
+— a seven-commit sequence of which only the first three have shipped. Read it, and the plan-1 /
+plan-2 boundary in
+[`docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md`](../../docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md),
+before starting a recognizer. Plan 2 has not been written.
+
+## Before you claim a deriver change works
+
+```bash
+bun test test/scripts/                                   # per-module + round trip
+bunx tsc --noEmit                                        # the read.ts guard is a TYPE rule
+bun run reach --baseline --nimbus-root C:/gitrep/Nimbus  # tier regression, needs the monorepo
+```
+
+`bun run reach --verbose` prints the connectors behind each histogram bucket, which is how a
+near-miss gets identified rather than guessed at. A tier that *improved* is a result to state,
+not to quietly re-baseline. See the `cnc-preflight` skill for the rest of the gate order.

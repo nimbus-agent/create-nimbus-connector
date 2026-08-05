@@ -42,7 +42,7 @@ const BASE_TYPES = new Set(["string", "number", "boolean"]);
  */
 export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefined {
   const args = callArgs(node);
-  if (args === undefined || args.length !== 1) return undefined;
+  if (args?.length !== 1) return undefined;
   // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
   // variable's name, not a property name. Unguarded, this would accept `z[object](...)` as
   // `z.object(...)` whenever the index variable happened to be named "object". Same hazard as
@@ -66,8 +66,15 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
   return out;
 }
 
-function recognizeOne(node: AstNode): ArgFields | undefined {
-  const modifiers: { name: string; args: AstNode[] }[] = [];
+type Modifier = { name: string; args: AstNode[] };
+
+/**
+ * Peel a `z.<base>().<mod>()...` chain outside-in into its calls — outermost first, so the base
+ * call (`z.number()`) lands LAST — or undefined when any step is not a plain `.name(...)` member
+ * call, or the innermost receiver is not `z`.
+ */
+function unwindModifiers(node: AstNode): Modifier[] | undefined {
+  const modifiers: Modifier[] = [];
   let current: AstNode | undefined = node;
 
   while (current?.type === "CallExpression") {
@@ -82,8 +89,50 @@ function recognizeOne(node: AstNode): ArgFields | undefined {
     current = memberObject(callee);
   }
 
-  // The innermost receiver must be `z`, and the innermost call its base type.
-  if (!isIdent(current, "z")) return undefined;
+  // The innermost receiver must be `z`.
+  return isIdent(current, "z") ? modifiers : undefined;
+}
+
+/** `.optional()` / `.int()` — the two flag modifiers, both of which take no arguments. */
+function applyFlagModifier(out: ArgFields, name: "optional" | "int", args: AstNode[]): boolean {
+  if (args.length !== 0) return false;
+  if (name === "optional") out.optional = true;
+  else out.int = true;
+  return true;
+}
+
+/**
+ * `.min(n)` / `.max(n)` — the two single-argument bound modifiers.
+ *
+ * `numericValue`, not `numberLit`: ArgSchema permits a negative bound, so `.min(-5)` must
+ * recognize rather than block on a sign this schema never rejects.
+ */
+function applyBoundModifier(out: ArgFields, name: "min" | "max", args: AstNode[]): boolean {
+  if (args.length !== 1) return false;
+  const value = numericValue(args[0]);
+  if (value === undefined) return false;
+  if (name === "min") out.min = value;
+  else out.max = value;
+  return true;
+}
+
+/**
+ * Fold one modifier call onto the fields recognized so far, or `false` for a modifier — or an
+ * argument list — this recognizer does not model, which `recognizeOne` turns into the same
+ * refusal `recognizeArgs`'s docstring describes: block on it rather than drop it.
+ */
+function applyModifier(out: ArgFields, modifier: Modifier): boolean {
+  const { name, args } = modifier;
+  if (name === "optional" || name === "int") return applyFlagModifier(out, name, args);
+  if (name === "min" || name === "max") return applyBoundModifier(out, name, args);
+  return false;
+}
+
+function recognizeOne(node: AstNode): ArgFields | undefined {
+  const modifiers = unwindModifiers(node);
+  if (modifiers === undefined) return undefined;
+
+  // The innermost call is the base type — `unwindModifiers` pushes it last.
   const base = modifiers.pop();
   if (base === undefined || !BASE_TYPES.has(base.name)) return undefined;
   // `z.string` takes no arguments; a base call with args is not the plain-base shape this
@@ -91,28 +140,9 @@ function recognizeOne(node: AstNode): ArgFields | undefined {
   if (base.args.length !== 0) return undefined;
 
   const out: ArgFields = { type: base.name as ArgFields["type"] };
-  for (const modifier of modifiers.reverse()) {
-    if (modifier.name === "optional") {
-      if (modifier.args.length !== 0) return undefined;
-      out.optional = true;
-    } else if (modifier.name === "int") {
-      if (modifier.args.length !== 0) return undefined;
-      out.int = true;
-    } else if (modifier.name === "min") {
-      if (modifier.args.length !== 1) return undefined;
-      // `numericValue`, not `numberLit`: ArgSchema permits a negative bound, so `.min(-5)` must
-      // recognize rather than block on a sign this schema never rejects.
-      const value = numericValue(modifier.args[0]);
-      if (value === undefined) return undefined;
-      out.min = value;
-    } else if (modifier.name === "max") {
-      if (modifier.args.length !== 1) return undefined;
-      const value = numericValue(modifier.args[0]);
-      if (value === undefined) return undefined;
-      out.max = value;
-    } else {
-      return undefined;
-    }
+  // Innermost modifier first, matching the order they were written in.
+  for (const modifier of modifiers.toReversed()) {
+    if (!applyModifier(out, modifier)) return undefined;
   }
   return out;
 }

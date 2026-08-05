@@ -213,95 +213,6 @@ describe("recognizeTools", () => {
     });
   });
 
-  it("refuses a ?? hoist whose right-hand side is not a string/number/boolean literal, rather than guessing a default", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.string().optional() }),",
-      "  async (p) => {",
-      "    const scope = p.scope ?? fallbackScope();",
-      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  // Three more non-literal RHS shapes for the same `?? <default>` guard, each pinned to its own
-  // node type so a future change to hoistDefaultLiteral can't silently start accepting one.
-  // A negative number (`?? -1`) is NOT among these — see the numericValue test above — because
-  // `-1` unwraps to a real signed NumericLiteral, not one of these genuinely different shapes.
-  it("refuses a ?? hoist whose right-hand side is null", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.string().optional() }),",
-      "  async (p) => {",
-      "    const scope = p.scope ?? null;",
-      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a ?? hoist whose right-hand side is an array literal", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.string().optional() }),",
-      "  async (p) => {",
-      "    const scope = p.scope ?? [1, 2, 3];",
-      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a ?? hoist whose right-hand side is an object literal", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.string().optional() }),",
-      "  async (p) => {",
-      "    const scope = p.scope ?? ({ a: 1 });",
-      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a hoist naming an arg the z.object({...}) schema does not declare", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ other: z.string().optional() }),",
-      "  async (p) => {",
-      '    const scope = p.scope ?? "all";',
-      "    return jsonResult(await nrGet(`/x?s=${scope}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
   it("refuses a hoist whose right-hand side of === is not literal true, rather than mis-reading it as the boolean form", () => {
     const source = [
       "reg(",
@@ -332,64 +243,6 @@ describe("recognizeTools", () => {
     expect(run(source).result).toBeUndefined();
   });
 
-  it("refuses a reg(...) call with a fifth argument, rather than reading only the first four", () => {
-    const source =
-      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")), "extra");';
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a reg(...) call missing its handler argument (three arguments), rather than reading a partial call", () => {
-    const source = 'reg("t", "d", z.object({}));';
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a block handler with no statements at all, rather than treating it as an empty-but-valid body", () => {
-    const source = ["reg(", '  "t",', '  "d",', "  z.object({}),", "  async (p) => {},", ");"].join(
-      "\n",
-    );
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a hoist position statement declaring more than one variable, e.g. const a = 1, b = 2;", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ only_open: z.boolean().optional() }),",
-      "  async (p) => {",
-      "    const a = 1, b = 2;",
-      "    return jsonResult(await nrGet(`/x`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
-  it("refuses a hoist position statement whose declarator id is a destructuring pattern, not a plain identifier", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ only_open: z.boolean().optional() }),",
-      "  async (p) => {",
-      "    const { only_open } = p;",
-      "    return jsonResult(await nrGet(`/x`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
   it("does not recognize a reg(...) call reached through a member expression, e.g. obj.reg(...)", () => {
     // isRegCall requires an Identifier callee named "reg" — a member-expression callee is a
     // different shape (and not one renderTool ever emits), so the statement is simply not a reg
@@ -403,9 +256,152 @@ describe("recognizeTools", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("refuses a handler whose jsonResult(...) call has more than one argument, rather than reading only the first", () => {
-    const source =
-      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x"), "extra"));';
+  // Every source the recognizer must refuse outright, each with the reason it exists. One row
+  // per case: the assertions are identical in all of them — no result derived, and nothing
+  // claimed — so only the source and its rationale differ.
+  const REFUSED_SOURCES = [
+    [
+      "refuses a ?? hoist whose right-hand side is not a string/number/boolean literal, rather than guessing a default",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ scope: z.string().optional() }),",
+        "  async (p) => {",
+        "    const scope = p.scope ?? fallbackScope();",
+        "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+
+    // Three more non-literal RHS shapes for the same `?? <default>` guard, each pinned to its own
+    // node type so a future change to hoistDefaultLiteral can't silently start accepting one.
+    // A negative number (`?? -1`) is NOT among these — see the numericValue test above — because
+    // `-1` unwraps to a real signed NumericLiteral, not one of these genuinely different shapes.
+    [
+      "refuses a ?? hoist whose right-hand side is null",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ scope: z.string().optional() }),",
+        "  async (p) => {",
+        "    const scope = p.scope ?? null;",
+        "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "refuses a ?? hoist whose right-hand side is an array literal",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ scope: z.string().optional() }),",
+        "  async (p) => {",
+        "    const scope = p.scope ?? [1, 2, 3];",
+        "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "refuses a ?? hoist whose right-hand side is an object literal",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ scope: z.string().optional() }),",
+        "  async (p) => {",
+        "    const scope = p.scope ?? ({ a: 1 });",
+        "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+
+    [
+      "refuses a hoist naming an arg the z.object({...}) schema does not declare",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ other: z.string().optional() }),",
+        "  async (p) => {",
+        '    const scope = p.scope ?? "all";',
+        "    return jsonResult(await nrGet(`/x?s=${scope}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "refuses a reg(...) call with a fifth argument, rather than reading only the first four",
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x")), "extra");',
+    ],
+    [
+      "refuses a reg(...) call missing its handler argument (three arguments), rather than reading a partial call",
+      'reg("t", "d", z.object({}));',
+    ],
+    [
+      "refuses a block handler with no statements at all, rather than treating it as an empty-but-valid body",
+      ["reg(", '  "t",', '  "d",', "  z.object({}),", "  async (p) => {},", ");"].join("\n"),
+    ],
+    [
+      "refuses a hoist position statement declaring more than one variable, e.g. const a = 1, b = 2;",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ only_open: z.boolean().optional() }),",
+        "  async (p) => {",
+        "    const a = 1, b = 2;",
+        "    return jsonResult(await nrGet(`/x`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "refuses a hoist position statement whose declarator id is a destructuring pattern, not a plain identifier",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ only_open: z.boolean().optional() }),",
+        "  async (p) => {",
+        "    const { only_open } = p;",
+        "    return jsonResult(await nrGet(`/x`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "refuses a handler whose jsonResult(...) call has more than one argument, rather than reading only the first",
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x"), "extra"));',
+    ],
+
+    // Computed-member sweep: memberArgName reads `p.<name>` off a hoist's test/init — same hazard
+    // as path-template.ts's argNameFromExpr (which cites args.ts:53 for it) and server/index.ts's
+    // isConnect. A computed member (`p[only_open]`) has an Identifier `property` too — the KEY
+    // variable's name, not a property name — and must not be read as naming the arg "only_open".
+    [
+      "refuses a computed p[only_open] hoist test instead of establishing p.only_open",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({ only_open: z.boolean().optional() }),",
+        "  async (p) => {",
+        '    const only = p[only_open] === true ? "true" : "false";',
+        "    return jsonResult(await nrGet(`/x?o=${only}`));",
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+  ];
+
+  it.each(REFUSED_SOURCES)("%s", (_name, source) => {
     const { result, claims } = run(source);
     expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
@@ -453,26 +449,5 @@ describe("recognizeTools", () => {
       "newrelic_alert_violations",
       "newrelic_ping",
     ]);
-  });
-
-  // Computed-member sweep: memberArgName reads `p.<name>` off a hoist's test/init — same hazard
-  // as path-template.ts's argNameFromExpr (which cites args.ts:53 for it) and server/index.ts's
-  // isConnect. A computed member (`p[only_open]`) has an Identifier `property` too — the KEY
-  // variable's name, not a property name — and must not be read as naming the arg "only_open".
-  it("refuses a computed p[only_open] hoist test instead of establishing p.only_open", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ only_open: z.boolean().optional() }),",
-      "  async (p) => {",
-      '    const only = p[only_open] === true ? "true" : "false";',
-      "    return jsonResult(await nrGet(`/x?o=${only}`));",
-      "  },",
-      ");",
-    ].join("\n");
-    const { result, claims } = run(source);
-    expect(result).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
   });
 });

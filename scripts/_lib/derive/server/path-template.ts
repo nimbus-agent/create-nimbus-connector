@@ -91,6 +91,33 @@ function argNameFromExpr(
   return memberName(expression);
 }
 
+/**
+ * The call-expression placeholder forms: a mode wrapper around a bare reference
+ * (`String(x)` / `encodeURIComponent(x)`), or a zero-argument call to an env accessor.
+ */
+function callPlaceholder(
+  expression: AstNode,
+  args: readonly AstNode[],
+  locals: ReadonlyMap<string, PathLocal>,
+): string | undefined {
+  const calleeName = identName(calleeOf(expression));
+  if (calleeName === undefined) return undefined;
+
+  // A wrapper name (String/encodeURIComponent) is pinned to its mode's exact arity — one
+  // argument — rather than falling through to the env-accessor branch below on a mismatch.
+  // Falling through would recover `String()` as `${env.String}`, a wrong match rather than
+  // the rejection a zero-argument call to that name should produce.
+  const wrapperMode = WRAPPER_MODES[calleeName];
+  if (wrapperMode !== undefined) {
+    if (args.length !== 1) return undefined;
+    const argName = argNameFromExpr(args[0]!, locals);
+    return argName === undefined ? undefined : `\${arg.${argName}|${wrapperMode}}`;
+  }
+
+  if (args.length === 0) return `\${env.${calleeName}}`;
+  return undefined;
+}
+
 function placeholderFor(
   expression: AstNode,
   locals: ReadonlyMap<string, PathLocal>,
@@ -108,23 +135,5 @@ function placeholderFor(
   }
 
   const args = callArgs(expression);
-  if (args !== undefined) {
-    const calleeName = identName(calleeOf(expression));
-    if (calleeName === undefined) return undefined;
-
-    // A wrapper name (String/encodeURIComponent) is pinned to its mode's exact arity — one
-    // argument — rather than falling through to the env-accessor branch below on a mismatch.
-    // Falling through would recover `String()` as `${env.String}`, a wrong match rather than
-    // the rejection a zero-argument call to that name should produce.
-    const wrapperMode = WRAPPER_MODES[calleeName];
-    if (wrapperMode !== undefined) {
-      if (args.length !== 1) return undefined;
-      const argName = argNameFromExpr(args[0]!, locals);
-      return argName === undefined ? undefined : `\${arg.${argName}|${wrapperMode}}`;
-    }
-
-    if (args.length === 0) return `\${env.${calleeName}}`;
-    return undefined;
-  }
-  return undefined;
+  return args === undefined ? undefined : callPlaceholder(expression, args, locals);
 }

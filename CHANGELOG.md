@@ -2,23 +2,30 @@
 
 ## Unreleased
 
-Hand-written; release-please prepends its own generated section above this one at release
-time, and these notes then move down with it. Recorded here because release-please derives
-its entries from commit subjects, and a change to the BYTES a generated connector contains
-is something an existing user needs told even when no subject line would say so.
+Hand-written. Recorded here because release-please derives its entries from commit subjects,
+and a change to the BYTES a generated connector contains is something an existing user needs
+told even when no subject line would say so.
+
+**Move these notes down under their version when a release is cut.** release-please inserts
+its generated section *below* this one rather than above it, so the move is manual — notes
+left here read as unreleased long after they shipped, which is exactly what happened to the
+0.4.0, 0.5.0 and 0.6.0 blocks now filed under those versions.
+
+*Nothing pending.*
+
+## [0.7.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.6.0...create-nimbus-connector-v0.7.0) (2026-08-04)
+
 
 ### Features
 
-* **spec:** `filter.fields` widens from a flat list of plain-key strings to three entry
-  kinds — a plain key, `{ "path": [...] }` for a nested value, and `{ "tags": "text" |
-  "objects" }` — composing the primitives `shared/search-filter.ts` and
-  `@nimbus-dev/sdk/connector-kit` already ship, instead of always falling back to a throwing
-  stub the moment a filter needs more than top-level keys. Measured against the checkout at
-  `f4e9d93d`: of the 40 corpus filter files that hand-write an extractor, **9** are reachable
-  this way; the other 31 (30 defining a local helper function or needing logic no entry kind
-  expresses, one hand-rolled) still emit the stub. `filter.fields: string[]` and `filter.tags:
-  boolean` keep their exact current meaning and byte output; see **Breaking** below for the
-  identifiers now reserved.
+* **reach:** measure corpus regeneration coverage with its method ([#57](https://github.com/nimbus-agent/create-nimbus-connector/issues/57)) ([e64d777](https://github.com/nimbus-agent/create-nimbus-connector/commit/e64d7770f3311c75ce6ca97b61d1f945aee0767a))
+
+## [0.6.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.5.0...create-nimbus-connector-v0.6.0) (2026-08-03)
+
+
+### Features
+
+* Stage E — conditional query parameters, and the corpus reach with its method ([#54](https://github.com/nimbus-agent/create-nimbus-connector/issues/54)) ([b635ec3](https://github.com/nimbus-agent/create-nimbus-connector/commit/b635ec3bb779589d2379416b903a47583c19333e))
 
 * **spec:** a tool may declare a `query` array — `{ "name", "arg", "omitWhen"? }` — for a
   parameter the fixed `path` template DSL cannot express: one sent only when an optional
@@ -32,6 +39,78 @@ is something an existing user needs told even when no subject line would say so.
   neither reaches a byte-exact `src/server.ts`, for reasons unrelated to `query` itself — see
   `docs/ROADMAP.md`'s *Known limitations*. See **Breaking** below for the identifiers now
   reserved.
+
+### Breaking (spec validation)
+
+* **validate:** three more identifiers are reserved: `u`, `URL` and `url`. All three are names
+  the new `query` feature's emitted handler binds itself: a tool declaring `query` emits
+  `const u = new URL(<path>)` and calls the global `URL` directly, and every fetch helper — not
+  only rest-kit's, which already declared it unconditionally before this change — now emits
+  `const url = path.startsWith("http") ? path : ...` whenever the spec declares any query tool
+  at all. Each is reserved unconditionally, matching how `token` and `root` were handled
+  earlier: the list is checked before any style or tool kind is considered, so a conditional
+  entry would mean a spec validating or failing depending on a field elsewhere in the file.
+
+  **`u` and `url` are ordinary words, more so than `root` was.** A spec published against
+  0.5.0 or earlier may already spell a `fetchHelper.local` `"u"`, an env `local` `"url"`, or a
+  `fetchHelper.baseConst` `"url"` — none of those collided with anything before this release.
+  Rename the field; nothing else changes. (`URL`, being a global identifier already reserved
+  everywhere in this list's neighboring entries such as `fetch` and `JSON`, is the less likely
+  of the three to be in use, but is reserved for the same reason.)
+
+## [0.5.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.4.0...create-nimbus-connector-v0.5.0) (2026-08-02)
+
+
+### Features
+
+* Stage E — path and tag entries in filter.fields ([#51](https://github.com/nimbus-agent/create-nimbus-connector/issues/51)) ([6864a4b](https://github.com/nimbus-agent/create-nimbus-connector/commit/6864a4b9c4a72eed14814ce021502fb9bf96664f))
+
+* **spec:** `filter.fields` widens from a flat list of plain-key strings to three entry
+  kinds — a plain key, `{ "path": [...] }` for a nested value, and `{ "tags": "text" |
+  "objects" }` — composing the primitives `shared/search-filter.ts` and
+  `@nimbus-dev/sdk/connector-kit` already ship, instead of always falling back to a throwing
+  stub the moment a filter needs more than top-level keys. Measured against the checkout at
+  `f4e9d93d`: of the 40 corpus filter files that hand-write an extractor, **26 can be
+  expressed** this way and **14 cannot**; the 14 still emit the stub. `readwise` is one of the
+  26 by that measure but is separately rejected for declaring two extractor-taking filters,
+  so **25** are generatable today. An earlier note here said **9**, which was a method error —
+  it asked whether a file defines a local helper rather than what that helper does; the
+  correction and its method are in `docs/ROADMAP.md`'s *Measuring reach*.
+  `filter.fields: string[]` and `filter.tags: boolean` keep their exact current meaning and
+  byte output; see **Breaking** below for the identifiers now reserved.
+
+### Breaking (spec validation)
+
+* **validate:** eight more identifiers are reserved: `fieldsOf`, `asObjectish`, `stringField`,
+  `nestedString`, `tagText`, `tagNamesFromObjects`, `makeQueryFilter` and `fieldsFromKeys`. The
+  first six are declared or imported by the bespoke-extractor branch `filter.fields` can now
+  reach (see Features, above); the last two were already emitted by the Stage D keyed-filter
+  branch and simply never claimed until now. **`stringField` and `nestedString` are as ordinary
+  as `root` was** — an env accessor or hoisted argument local carrying either name previously
+  generated fine and now fails at parse time, naming the field.
+
+* **validate:** every `filter.export` is now claimed against every other emitted identifier, so
+  one colliding with the fetch helper, an env accessor, a hoisted argument local, or any
+  reserved name is a parse-time error rather than two declarations of the same name in the
+  generated package. This also closes a real bug: `filter.export: "makeQueryFilter"` previously
+  emitted `export const makeQueryFilter = makeQueryFilter(...)`, a self-reference that failed
+  the generated package's own typecheck.
+
+* **spec:** three shapes that previously generated a broken or misleading package are now
+  parse-time rejections. A `path` entry with fewer than two segments — a one-segment path emits
+  the same call as the plain-string spelling, so accepting both is an ambiguity rather than a
+  courtesy. Legacy `filter.tags: true` combined with a `fields` list that forces the extractor
+  branch — the extractor never reads `tags`, so it was silently dropped: the tool compiled,
+  passed every gate, and simply never matched on tags. And more than one search filter per
+  connector taking the extractor branch — the emitted extractor is always named `fieldsOf`, so a
+  second one is a duplicate declaration.
+
+## [0.4.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.3...create-nimbus-connector-v0.4.0) (2026-08-02)
+
+
+### Features
+
+* Stage D — the read-only-kit style and search tools ([#47](https://github.com/nimbus-agent/create-nimbus-connector/issues/47)) ([82e9508](https://github.com/nimbus-agent/create-nimbus-connector/commit/82e9508a6e108bf04ecccc0a34c819d197de3e80))
 
 ### Output changes (user-visible)
 
@@ -68,46 +147,6 @@ is something an existing user needs told even when no subject line would say so.
   with `rows` emits `const root = await <fetchHelper.local>(…)`. Rename the `local`; nothing
   else changes.
 
-* **validate:** eight more identifiers are reserved: `fieldsOf`, `asObjectish`, `stringField`,
-  `nestedString`, `tagText`, `tagNamesFromObjects`, `makeQueryFilter` and `fieldsFromKeys`. The
-  first six are declared or imported by the bespoke-extractor branch `filter.fields` can now
-  reach (see Features, above); the last two were already emitted by the Stage D keyed-filter
-  branch and simply never claimed until now. **`stringField` and `nestedString` are as ordinary
-  as `root` was** — an env accessor or hoisted argument local carrying either name previously
-  generated fine and now fails at parse time, naming the field.
-
-* **validate:** every `filter.export` is now claimed against every other emitted identifier, so
-  one colliding with the fetch helper, an env accessor, a hoisted argument local, or any
-  reserved name is a parse-time error rather than two declarations of the same name in the
-  generated package. This also closes a real bug: `filter.export: "makeQueryFilter"` previously
-  emitted `export const makeQueryFilter = makeQueryFilter(...)`, a self-reference that failed
-  the generated package's own typecheck.
-
-* **spec:** three shapes that previously generated a broken or misleading package are now
-  parse-time rejections. A `path` entry with fewer than two segments — a one-segment path emits
-  the same call as the plain-string spelling, so accepting both is an ambiguity rather than a
-  courtesy. Legacy `filter.tags: true` combined with a `fields` list that forces the extractor
-  branch — the extractor never reads `tags`, so it was silently dropped: the tool compiled,
-  passed every gate, and simply never matched on tags. And more than one search filter per
-  connector taking the extractor branch — the emitted extractor is always named `fieldsOf`, so a
-  second one is a duplicate declaration.
-
-* **validate:** three more identifiers are reserved: `u`, `URL` and `url`. All three are names
-  the new `query` feature's emitted handler binds itself: a tool declaring `query` emits
-  `const u = new URL(<path>)` and calls the global `URL` directly, and every fetch helper — not
-  only rest-kit's, which already declared it unconditionally before this change — now emits
-  `const url = path.startsWith("http") ? path : ...` whenever the spec declares any query tool
-  at all. Each is reserved unconditionally, matching how `token` and `root` were handled
-  earlier: the list is checked before any style or tool kind is considered, so a conditional
-  entry would mean a spec validating or failing depending on a field elsewhere in the file.
-
-  **`u` and `url` are ordinary words, more so than `root` was.** A spec published against
-  0.5.0 or earlier may already spell a `fetchHelper.local` `"u"`, an env `local` `"url"`, or a
-  `fetchHelper.baseConst` `"url"` — none of those collided with anything before this release.
-  Rename the field; nothing else changes. (`URL`, being a global identifier already reserved
-  everywhere in this list's neighboring entries such as `fetch` and `JSON`, is the less likely
-  of the three to be in use, but is reserved for the same reason.)
-
 ### Bug Fixes
 
 * **emit(manifest):** a `filesystem` path containing `$&`, `` $` ``, `$'` or `$$` no longer
@@ -115,35 +154,7 @@ is something an existing user needs told even when no subject line would say so.
   its replacement to `String.prototype.replace` as a string, which expands those tokens; a
   path of `"$&BAD"` produced a manifest `JSON.parse` rejects, and `"A$$B"` was silently
   written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
-  which is new in this same unreleased range.
-
-## [0.7.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.6.0...create-nimbus-connector-v0.7.0) (2026-08-04)
-
-
-### Features
-
-* **reach:** measure corpus regeneration coverage with its method ([#57](https://github.com/nimbus-agent/create-nimbus-connector/issues/57)) ([e64d777](https://github.com/nimbus-agent/create-nimbus-connector/commit/e64d7770f3311c75ce6ca97b61d1f945aee0767a))
-
-## [0.6.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.5.0...create-nimbus-connector-v0.6.0) (2026-08-03)
-
-
-### Features
-
-* Stage E — conditional query parameters, and the corpus reach with its method ([#54](https://github.com/nimbus-agent/create-nimbus-connector/issues/54)) ([b635ec3](https://github.com/nimbus-agent/create-nimbus-connector/commit/b635ec3bb779589d2379416b903a47583c19333e))
-
-## [0.5.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.4.0...create-nimbus-connector-v0.5.0) (2026-08-02)
-
-
-### Features
-
-* Stage E — path and tag entries in filter.fields ([#51](https://github.com/nimbus-agent/create-nimbus-connector/issues/51)) ([6864a4b](https://github.com/nimbus-agent/create-nimbus-connector/commit/6864a4b9c4a72eed14814ce021502fb9bf96664f))
-
-## [0.4.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.3...create-nimbus-connector-v0.4.0) (2026-08-02)
-
-
-### Features
-
-* Stage D — the read-only-kit style and search tools ([#47](https://github.com/nimbus-agent/create-nimbus-connector/issues/47)) ([82e9508](https://github.com/nimbus-agent/create-nimbus-connector/commit/82e9508a6e108bf04ecccc0a34c819d197de3e80))
+  which is new in this same release.
 
 ## [0.3.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.3.2...create-nimbus-connector-v0.3.3) (2026-08-01)
 

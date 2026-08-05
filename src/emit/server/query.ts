@@ -53,9 +53,11 @@ export function renderQueryLines(query: readonly QueryParam[], ctx: QueryContext
       lines.push(`u.searchParams.set(${key}, ${rendered});`);
       continue;
     }
-    lines.push(`if (${guardExpr(value, q.omitWhen)}) {`);
-    lines.push(`  u.searchParams.set(${key}, ${rendered});`);
-    lines.push("}");
+    lines.push(
+      `if (${guardExpr(value, q.omitWhen)}) {`,
+      `  u.searchParams.set(${key}, ${rendered});`,
+      "}",
+    );
   }
   return lines;
 }

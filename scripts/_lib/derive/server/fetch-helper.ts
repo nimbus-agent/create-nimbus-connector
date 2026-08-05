@@ -96,7 +96,7 @@ function reconstructBase(template: AstNode): string | undefined {
 
     if (i < numToUse) {
       const args = callArgs(expressions[i]);
-      if (args === undefined || args.length !== 0) return undefined;
+      if (args?.length !== 0) return undefined;
       const name = identName(calleeOf(expressions[i]));
       if (name === undefined) return undefined;
       parts.push(`\${env.${name}}`);
@@ -119,7 +119,7 @@ function headerValue(value: AstNode): string | undefined {
   const lit = stringLit(value);
   if (lit !== undefined) return lit;
   const args = callArgs(value);
-  if (args !== undefined && args.length === 0) {
+  if (args?.length === 0) {
     const name = identName(calleeOf(value));
     if (name !== undefined) return `\${env.${name}}`;
   }
@@ -184,7 +184,7 @@ function headersAccessor(fetchCall: AstNode): string | undefined {
   const headersValue = objectProperty(headers)?.value;
 
   const args = callArgs(headersValue);
-  if (args === undefined || args.length !== 0) return undefined;
+  if (args?.length !== 0) return undefined;
   return identName(calleeOf(headersValue));
 }
 
@@ -214,8 +214,8 @@ function countFetchCalls(fn: AstNode): number {
  * `const pathPart = path.startsWith("/") ? path : \`/${path}\`;`
  *
  * Matched positionally against ONE statement (the candidate first statement of the body) rather
- * than scanned for anywhere in the function — see recognizeFetchHelper's own comment on why the
- * whole body is now walked positionally instead of independently probed for each shape.
+ * than scanned for anywhere in the function — see `matchFetchHelperBody`'s own comment on why
+ * the whole body is now walked positionally instead of independently probed for each shape.
  *
  * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
  * `let pathPart = ...` passed every check below and was claimed as the documented `const` line,
@@ -223,7 +223,7 @@ function countFetchCalls(fn: AstNode): number {
  */
 function isPathPartConst(stmt: AstNode): boolean {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.name !== "pathPart") return false;
+  if (decl?.name !== "pathPart") return false;
 
   const c = conditional(decl.init);
   if (c === undefined) return false;
@@ -237,7 +237,7 @@ function isPathPartConst(stmt: AstNode): boolean {
 
   // Alternate: `/${path}` (TemplateLiteral)
   const alt = templateLiteral(c.alternate);
-  if (alt === undefined || alt.expressions.length !== 1 || alt.quasis[0] !== "/") return false;
+  if (alt?.expressions.length !== 1 || alt.quasis[0] !== "/") return false;
   return isIdent(alt.expressions[0], "path");
 }
 
@@ -251,7 +251,7 @@ function isPathPartConst(stmt: AstNode): boolean {
  */
 function matchFetchStatement(stmt: AstNode): AstNode | undefined {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.name !== "res") return undefined;
+  if (decl?.name !== "res") return undefined;
   const call = awaited(decl.init);
   return callTo(call, "fetch", 2) === undefined ? undefined : call;
 }
@@ -265,7 +265,7 @@ function matchFetchStatement(stmt: AstNode): AstNode | undefined {
  */
 function isTextStatement(stmt: AstNode): boolean {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.name !== "text") return false;
+  if (decl?.name !== "text") return false;
   const call = awaited(decl.init);
   return methodCallTo(call, "res", "text", 0) !== undefined;
 }
@@ -280,11 +280,11 @@ function isThrowGuard(stmt: AstNode): boolean {
   if (s === undefined || s.alternate !== undefined) return false;
 
   const u = unary(s.test);
-  if (u === undefined || u.operator !== "!") return false;
+  if (u?.operator !== "!") return false;
   if (memberOn(u.argument, "res") !== "ok") return false;
 
   const body = blockBody(s.consequent);
-  return body !== undefined && body.length === 1 && body[0]?.type === "ThrowStatement";
+  return body?.length === 1 && body[0]?.type === "ThrowStatement";
 }
 
 /**
@@ -316,7 +316,7 @@ function hasUnexpectedFetchOption(properties: readonly AstNode[]): boolean {
 /** `JSON.parse(text) as unknown` — the argument both of renderFetchHelper's return forms share. */
 function isJsonParseTextAsUnknown(node: AstNode | undefined): boolean {
   const a = asExpression(node);
-  if (a === undefined || a.typeAnnotationType !== "TSUnknownKeyword") return false;
+  if (a?.typeAnnotationType !== "TSUnknownKeyword") return false;
   const args = methodCallTo(a.expression, "JSON", "parse", 1);
   return args !== undefined && isIdent(args[0], "text");
 }
@@ -335,7 +335,7 @@ function isPlainJsonReturn(node: AstNode): boolean {
  */
 function isRawFallbackReturn(node: AstNode): boolean {
   const properties = objectExpressionProperties(returnArgument(node));
-  if (properties === undefined || properties.length !== 1) return false;
+  if (properties?.length !== 1) return false;
   const property = properties[0];
   if (property === undefined || isComputedProperty(property)) return false;
   const parts = objectProperty(property);
@@ -354,16 +354,14 @@ function isJsonFallbackTry(node: AstNode): boolean {
   if (t === undefined || t.finalizer !== undefined) return false;
 
   const tryBody = blockBody(t.block);
-  if (tryBody === undefined || tryBody.length !== 1 || !isPlainJsonReturn(tryBody[0]!)) {
+  if (tryBody?.length !== 1 || !isPlainJsonReturn(tryBody[0]!)) {
     return false;
   }
 
   const c = catchClause(t.handler);
   if (c === undefined || c.param !== undefined) return false;
   const handlerBody = blockBody(c.body);
-  return (
-    handlerBody !== undefined && handlerBody.length === 1 && isRawFallbackReturn(handlerBody[0]!)
-  );
+  return handlerBody?.length === 1 && isRawFallbackReturn(handlerBody[0]!);
 }
 
 /**
@@ -377,92 +375,138 @@ function classifyLastStatement(node: AstNode): boolean | undefined {
   return undefined;
 }
 
+/** What `matchFetchHelperBody` recovers from the read helper's statement sequence. */
+type FetchHelperBody = {
+  /** The `fetch(<url>, <options>)` CallExpression itself, for the caller's url/options reads. */
+  readonly fetchCall: AstNode;
+  readonly normalizeLeadingSlash: boolean;
+  readonly jsonFallbackRaw: boolean;
+};
+
+/**
+ * The read helper's body, walked positionally: an optional pathPart const, the fetch call, the
+ * text() read, the !res.ok guard, then exactly one closing statement (the plain return or the
+ * jsonFallbackRaw try/catch) — nothing more, nothing reordered.
+ *
+ * Final fix wave: this used to `find()`/`walk()` the whole function tree for the fetch call and
+ * classify only the LAST statement, leaving everything between the top of the body and that
+ * last statement unverified — claims.claim(s, "fetch-helper") claims the function's whole byte
+ * range at the top level, so an extra statement inserted anywhere in the middle (a stray
+ * `const retries = 3;`, an `if (res.status === 429) { … }` retry branch) was silently accepted
+ * along with it. Walking every statement here is what closes that.
+ */
+function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undefined {
+  let idx = 0;
+
+  const normalizeLeadingSlash = idx < body.length && isPathPartConst(body[idx]!);
+  if (normalizeLeadingSlash) idx++;
+
+  const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
+  if (fetchCall === undefined) return undefined;
+  idx++;
+
+  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
+  idx++;
+
+  if (idx >= body.length || !isThrowGuard(body[idx]!)) return undefined;
+  idx++;
+
+  // Exactly one statement left — the plain return or the jsonFallbackRaw try/catch. Not zero
+  // (a helper cannot end at the guard), not two-or-more (an extra statement here is exactly
+  // the class of mutation this rewrite closes).
+  if (body.length - idx !== 1) return undefined;
+  const jsonFallbackRaw = classifyLastStatement(body[idx]!);
+  if (jsonFallbackRaw === undefined) return undefined;
+
+  return { fetchCall, normalizeLeadingSlash, jsonFallbackRaw };
+}
+
+/**
+ * The fetch options object, accepted only when it is an ObjectExpression carrying nothing this
+ * recognizer cannot name — see `hasUnexpectedFetchOption` for what "unexpected" covers and why a
+ * computed key counts as unexpected. A missing or non-ObjectExpression options argument is
+ * refused here rather than read as "no unexpected options".
+ */
+function hasExpectedFetchOptions(fetchCall: AstNode): boolean {
+  const options = callArgs(fetchCall)?.[1];
+  const optionProps = objectExpressionProperties(options);
+  return optionProps !== undefined && !hasUnexpectedFetchOption(optionProps);
+}
+
+/** Either inline headers or an accessor — never both, never neither. */
+type FetchHelperHeaders = Pick<FetchHelperFields, "inlineHeaders" | "headers">;
+
+/**
+ * The headers half of the fetch options object. `renderFetchHelper` writes exactly one of the
+ * two forms, so both present at once (or neither) is refused rather than resolved in favour of
+ * one of them.
+ */
+function matchFetchHelperHeaders(fetchCall: AstNode): FetchHelperHeaders | undefined {
+  const inlineHeaders = inlineHeadersObject(fetchCall);
+  const headers = headersAccessor(fetchCall);
+  if (inlineHeaders !== undefined && headers !== undefined) return undefined;
+  if (inlineHeaders !== undefined) return { inlineHeaders };
+  return headers === undefined ? undefined : { headers };
+}
+
+/**
+ * One candidate statement, tested as the read helper — the whole of `recognizeFetchHelper`'s
+ * per-statement work, so the loop below carries only the claim. Claims nothing itself: a
+ * partial match must leave the ClaimSet untouched.
+ */
+function matchFetchHelperFunction(s: AstNode): FetchHelperFields | undefined {
+  if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
+
+  // The read helper always takes a single `path` parameter — the write helper (`<local>Send`)
+  // takes three, so this alone keeps the two from being confused before the body shapes
+  // (which already disambiguate them, via the catch's fallback value) are even considered.
+  const params = functionParams(s);
+  if (params?.length !== 1 || !isIdent(params[0], "path")) return undefined;
+
+  // Fix for correlation defect: count fetch() calls. If != 1, reject.
+  if (countFetchCalls(s) !== 1) return undefined;
+
+  const parsed = matchFetchHelperBody(functionBody(s) ?? []);
+  if (parsed === undefined) return undefined;
+  if (!hasExpectedFetchOptions(parsed.fetchCall)) return undefined;
+
+  const headers = matchFetchHelperHeaders(parsed.fetchCall);
+  if (headers === undefined) return undefined;
+
+  const url = callArgs(parsed.fetchCall)?.[0];
+  const base = url === undefined ? undefined : reconstructBase(url);
+  const serviceLabel = serviceLabelFrom(s);
+  const local = functionName(s) ?? "";
+  if (base === undefined || serviceLabel === undefined || local === "") return undefined;
+
+  return {
+    local,
+    base,
+    serviceLabel,
+    ...headers,
+    ...(parsed.normalizeLeadingSlash && { normalizeLeadingSlash: true as const }),
+    ...(parsed.jsonFallbackRaw && { jsonFallbackRaw: true as const }),
+  };
+}
+
 /**
  * The read helper, as src/emit/server/fetch-helper.ts writes it. Recognized by shape rather
  * than by name: the local is derived from the spec by formula, so matching on a name would
  * only recognize the connectors whose author happened to agree with the formula.
  *
- * Final fix wave: this used to `find()`/`walk()` the whole function tree for the fetch call and
- * classify only the LAST statement, leaving everything between the top of the body and that
- * last statement unverified — claims.claim(s, "fetch-helper") below claims the function's whole
- * byte range at the top level, so an extra statement inserted anywhere in the middle (a stray
- * `const retries = 3;`, an `if (res.status === 429) { … }` retry branch) was silently accepted
- * along with it. The body is now walked positionally instead: an optional pathPart const, the
- * fetch call, the text() read, the !res.ok guard, then exactly one closing statement (the plain
- * return or the jsonFallbackRaw try/catch) — nothing more, nothing reordered.
+ * The shape test itself is `matchFetchHelperFunction` above, whose body walk is positional —
+ * see `matchFetchHelperBody` for why the whole body is accounted for statement by statement
+ * rather than probed for known shapes.
  */
 export function recognizeFetchHelper(
   statements: readonly AstNode[],
   claims: ClaimSet,
 ): FetchHelperFields | undefined {
   for (const s of statements) {
-    if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) continue;
-
-    // The read helper always takes a single `path` parameter — the write helper (`<local>Send`)
-    // takes three, so this alone keeps the two from being confused before the body shapes
-    // (which already disambiguate them, via the catch's fallback value) are even considered.
-    const params = functionParams(s);
-    if (params === undefined || params.length !== 1 || !isIdent(params[0], "path")) continue;
-
-    // Fix for correlation defect: count fetch() calls. If != 1, reject.
-    if (countFetchCalls(s) !== 1) continue;
-
-    const body = functionBody(s) ?? [];
-    let idx = 0;
-
-    const normalizeLeadingSlash =
-      idx < body.length && isPathPartConst(body[idx]!) ? true : undefined;
-    if (normalizeLeadingSlash !== undefined) idx++;
-
-    const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
-    if (fetchCall === undefined) continue;
-    idx++;
-
-    if (idx >= body.length || !isTextStatement(body[idx]!)) continue;
-    idx++;
-
-    if (idx >= body.length || !isThrowGuard(body[idx]!)) continue;
-    idx++;
-
-    // Exactly one statement left — the plain return or the jsonFallbackRaw try/catch. Not zero
-    // (a helper cannot end at the guard), not two-or-more (an extra statement here is exactly
-    // the class of mutation this rewrite closes).
-    if (body.length - idx !== 1) continue;
-    const jsonFallback = classifyLastStatement(body[idx]!);
-    if (jsonFallback === undefined) continue;
-
-    const options = callArgs(fetchCall)?.[1];
-    const optionProps = objectExpressionProperties(options);
-    if (optionProps === undefined) continue;
-    if (hasUnexpectedFetchOption(optionProps)) continue;
-
-    const url = callArgs(fetchCall)?.[0];
-    const base = url === undefined ? undefined : reconstructBase(url);
-    const inlineHeadersObj = inlineHeadersObject(fetchCall);
-    const headersAccessorName = headersAccessor(fetchCall);
-    const serviceLabel = serviceLabelFrom(s);
-    const local = functionName(s) ?? "";
-
-    if (base === undefined || serviceLabel === undefined || local === "") continue;
-
-    // Either inline headers or accessor, but not both
-    if (
-      (inlineHeadersObj !== undefined && headersAccessorName !== undefined) ||
-      (inlineHeadersObj === undefined && headersAccessorName === undefined)
-    ) {
-      continue;
-    }
-
+    const fields = matchFetchHelperFunction(s);
+    if (fields === undefined) continue;
     claims.claim(s, "fetch-helper");
-    return {
-      local,
-      base,
-      serviceLabel,
-      ...(inlineHeadersObj !== undefined && { inlineHeaders: inlineHeadersObj }),
-      ...(headersAccessorName !== undefined && { headers: headersAccessorName }),
-      ...(normalizeLeadingSlash !== undefined && { normalizeLeadingSlash }),
-      ...(jsonFallback && { jsonFallbackRaw: true as const }),
-    };
+    return fields;
   }
   return undefined;
 }
@@ -500,7 +544,7 @@ export type RestFetchHelperFields = {
  */
 function matchRestUrlConst(stmt: AstNode): string | undefined {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.name !== "url") return undefined;
+  if (decl?.name !== "url") return undefined;
 
   const c = conditional(decl.init);
   if (c === undefined) return undefined;
@@ -510,7 +554,7 @@ function matchRestUrlConst(stmt: AstNode): string | undefined {
   if (!isIdent(c.consequent, "path")) return undefined;
 
   const alt = templateLiteral(c.alternate);
-  if (alt === undefined || alt.expressions.length !== 1 || !isIdent(alt.expressions[0], "path")) {
+  if (alt?.expressions.length !== 1 || !isIdent(alt.expressions[0], "path")) {
     return undefined;
   }
 
@@ -530,14 +574,14 @@ function matchRestUrlConst(stmt: AstNode): string | undefined {
 function isAuthorizationHeader(parts: { key: AstNode; value: AstNode }): boolean {
   if (identName(parts.key) !== "Authorization") return false;
   const t = templateLiteral(parts.value);
-  if (t === undefined || t.expressions.length !== 1) return false;
+  if (t?.expressions.length !== 1) return false;
   return t.quasis[0] === "Bearer " && t.quasis[1] === "" && isIdent(t.expressions[0], "token");
 }
 
 /** `...(init?.headers as Record<string, string> | undefined)` — the headers object's fixed trailing spread. */
 function isInitHeadersSpread(node: AstNode): boolean {
   const a = asExpression(spreadArgument(node));
-  if (a === undefined || a.typeAnnotationType !== "TSUnionType") return false;
+  if (a?.typeAnnotationType !== "TSUnionType") return false;
   return (
     optionalMemberName(a.expression) === "headers" &&
     identName(optionalMemberObject(a.expression)) === "init"
@@ -600,7 +644,7 @@ function matchRestFetchOptions(
   node: AstNode,
 ): { inlineHeaders?: Record<string, string> } | undefined {
   const properties = objectExpressionProperties(node);
-  if (properties === undefined || properties.length !== 2) return undefined;
+  if (properties?.length !== 2) return undefined;
 
   const initSpread = properties[0];
   const headersEntry = properties[1];
@@ -619,7 +663,7 @@ function matchRestFetchStatement(
   stmt: AstNode,
 ): { inlineHeaders?: Record<string, string> } | undefined {
   const decl = constDecl(stmt);
-  if (decl === undefined || decl.name !== "res") return undefined;
+  if (decl?.name !== "res") return undefined;
   const call = awaited(decl.init);
   const args = callTo(call, "fetch", 2);
   if (args === undefined || !isIdent(args[0], "url")) return undefined;
@@ -634,7 +678,7 @@ function matchRestFetchStatement(
  */
 function isJsonAssign(stmt: AstNode, matches: (right: AstNode | undefined) => boolean): boolean {
   const a = assignment(expressionOf(stmt));
-  if (a === undefined || a.operator !== "=" || !isIdent(a.left, "json")) return false;
+  if (a?.operator !== "=" || !isIdent(a.left, "json")) return false;
   return matches(a.right);
 }
 
@@ -649,28 +693,20 @@ function isRestJsonTryCatch(node: AstNode): boolean {
   if (t === undefined || t.finalizer !== undefined) return false;
 
   const tryBody = blockBody(t.block);
-  if (
-    tryBody === undefined ||
-    tryBody.length !== 1 ||
-    !isJsonAssign(tryBody[0]!, isJsonParseTextAsUnknown)
-  ) {
+  if (tryBody?.length !== 1 || !isJsonAssign(tryBody[0]!, isJsonParseTextAsUnknown)) {
     return false;
   }
 
   const c = catchClause(t.handler);
   if (c === undefined || c.param !== undefined) return false;
   const handlerBody = blockBody(c.body);
-  return (
-    handlerBody !== undefined &&
-    handlerBody.length === 1 &&
-    isJsonAssign(handlerBody[0]!, isNullLiteral)
-  );
+  return handlerBody?.length === 1 && isJsonAssign(handlerBody[0]!, isNullLiteral);
 }
 
 /** `return { ok: res.ok, status: res.status, json, text };` — statement 6, matched exactly, in this order. */
 function isRestReturnStatement(node: AstNode): boolean {
   const props = objectProps(returnArgument(node));
-  if (props === undefined || props.length !== 4) return false;
+  if (props?.length !== 4) return false;
   const ok = props[0];
   const status = props[1];
   const json = props[2];
@@ -691,56 +727,73 @@ function isRestReturnStatement(node: AstNode): boolean {
 }
 
 /**
- * The inverse of renderRestKitFetchHelper — a fixed six-statement body, matched positionally
- * (the same reason `recognizeFetchHelper` above walks its own body positionally rather than
- * `find()`/`walk()`-ing the tree: a claim covers the function's whole byte range, so an extra
- * or reordered statement anywhere inside it must be visible here, not silently swallowed by a
- * shape check that only samples part of the body). Refuses rather than partially reads any
- * step it does not recognize — a wrong `base` regenerates a connector that requests the wrong
- * host and byte-matches nothing, and the failure would look like a formatting problem rather
- * than what it is.
+ * `(token, path, init)` — the rest-kit helper's fixed parameter list, exactly and in this
+ * order. This alone separates it from the hand-style read helper, which takes a single `path`
+ * (see `recognizeFetchHelper`).
+ */
+function hasRestFetchHelperParams(fn: AstNode): boolean {
+  const params = functionParams(fn);
+  return (
+    params?.length === 3 &&
+    isIdent(params[0], "token") &&
+    isIdent(params[1], "path") &&
+    isIdent(params[2], "init")
+  );
+}
+
+/**
+ * One candidate statement, tested as the rest-kit helper: a fixed six-statement body, matched
+ * positionally (the same reason `recognizeFetchHelper` above walks its own body positionally
+ * rather than `find()`/`walk()`-ing the tree: a claim covers the function's whole byte range, so
+ * an extra or reordered statement anywhere inside it must be visible here, not silently
+ * swallowed by a shape check that only samples part of the body). Refuses rather than partially
+ * reads any step it does not recognize — a wrong `base` regenerates a connector that requests
+ * the wrong host and byte-matches nothing, and the failure would look like a formatting problem
+ * rather than what it is. Claims nothing itself: a partial match must leave the ClaimSet
+ * untouched.
+ */
+function matchRestFetchHelperFunction(s: AstNode): RestFetchHelperFields | undefined {
+  if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
+  if (!hasRestFetchHelperParams(s)) return undefined;
+
+  const body = functionBody(s);
+  if (body?.length !== 6) return undefined;
+
+  const base = matchRestUrlConst(body[0]!);
+  if (base === undefined) return undefined;
+
+  const headers = matchRestFetchStatement(body[1]!);
+  if (headers === undefined) return undefined;
+
+  if (!isTextStatement(body[2]!)) return undefined;
+  if (uninitializedLet(body[3]!) !== "json") return undefined;
+  if (!isRestJsonTryCatch(body[4]!)) return undefined;
+  if (!isRestReturnStatement(body[5]!)) return undefined;
+
+  const local = functionName(s);
+  if (local === undefined || local === "") return undefined;
+
+  return {
+    local,
+    base,
+    ...(headers.inlineHeaders !== undefined ? { inlineHeaders: headers.inlineHeaders } : {}),
+  };
+}
+
+/**
+ * The inverse of renderRestKitFetchHelper. The shape test itself is
+ * `matchRestFetchHelperFunction` above; this loop carries only the claim of the first statement
+ * that matches it.
  */
 export function recognizeRestFetchHelper(
   statements: readonly AstNode[],
   claims: ClaimSet,
 ): RestFetchHelperFields | undefined {
   for (const s of statements) {
-    if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) continue;
-
-    const params = functionParams(s);
-    if (
-      params === undefined ||
-      params.length !== 3 ||
-      !isIdent(params[0], "token") ||
-      !isIdent(params[1], "path") ||
-      !isIdent(params[2], "init")
-    ) {
-      continue;
-    }
-
-    const body = functionBody(s);
-    if (body === undefined || body.length !== 6) continue;
-
-    const base = matchRestUrlConst(body[0]!);
-    if (base === undefined) continue;
-
-    const headers = matchRestFetchStatement(body[1]!);
-    if (headers === undefined) continue;
-
-    if (!isTextStatement(body[2]!)) continue;
-    if (uninitializedLet(body[3]!) !== "json") continue;
-    if (!isRestJsonTryCatch(body[4]!)) continue;
-    if (!isRestReturnStatement(body[5]!)) continue;
-
-    const local = functionName(s);
-    if (local === undefined || local === "") continue;
-
+    const fields = matchRestFetchHelperFunction(s);
+    if (fields === undefined) continue;
     claims.claim(s, "rest-fetch-helper");
-    return {
-      local,
-      base,
-      ...(headers.inlineHeaders !== undefined ? { inlineHeaders: headers.inlineHeaders } : {}),
-    };
+    return fields;
   }
   return undefined;
 }

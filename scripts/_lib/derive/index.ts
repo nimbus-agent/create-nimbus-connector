@@ -1,10 +1,11 @@
 import { capitalize } from "../../../src/spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
-import { createClaimSet } from "./claims.ts";
+import { type ClaimSet, createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeEnv } from "./server/env.ts";
 import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
+import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
 import { recognizeTools } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
@@ -77,136 +78,125 @@ function recognizeRestTitle(
 }
 
 /**
- * Derive a spec object from one connector's source, or report what stopped it.
+ * The rest-kit assembly.
  *
- * The totality rule is the last step and it has no exceptions: every top-level statement must be
- * covered by some recognizer's claim. There is no "ignore the rest" path, because a scrape that
- * ignores what it does not recognize reports silence as absence — the method that produced three
- * consecutive wrong reach numbers.
- *
- * The returned spec is RAW, not parsed. parseSpec and validateSpec are the `emits` tier
- * boundary and run in the reporting layer, so a derived spec that trips RESERVED_IDENTIFIERS is
- * counted rather than thrown.
+ * rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
+ * read-only-kit's (recognizeRestRegistrar+recognizeRestTools vs recognizeTools,
+ * recognizeRestFetchHelper vs recognizeFetchHelper — see their own docstrings) and it emits
+ * no env accessors at all (emitServer gates renderEnvAccessors on isHandStyle), so the two
+ * styles are assembled in separate functions rather than threading a style check through
+ * recognizeEnv/recognizeFetchHelper/recognizeTools's shared call sites. `deriveSpec` dispatches
+ * on `frame.style` and does nothing else with either result.
  */
-export function deriveSpec(files: SourceFiles): Derivation {
-  let manifest: ManifestFields;
-  try {
-    manifest = deriveManifest(files.manifest);
-  } catch (err) {
-    return blocked("no-manifest", err instanceof Error ? err.message : String(err));
+function deriveRestKitSpec(
+  frame: Frame,
+  claims: ClaimSet,
+  manifest: ManifestFields,
+  serverSource: string,
+): Derivation {
+  const registrar = recognizeRestRegistrar(frame.toolStatements, claims);
+  // recognizeRestTools needs the registrar's own name to know which calls are its
+  // registrations — nothing to search for without it, so tools stays undefined rather than
+  // scanning for a name that was never recognized.
+  const tools =
+    registrar === undefined
+      ? undefined
+      : recognizeRestTools(frame.toolStatements, claims, registrar.registrar);
+  const restFetchHelper = recognizeRestFetchHelper(frame.verifyStatements, claims);
+
+  // Same totality rule as the shared path in deriveSharedStyleSpec, checked before either
+  // recognizer's own "undefined" case: an unclaimed statement (a bespoke `reg()` call, a helper
+  // function neither recognizer models, a query-branch tool) blocks the module on its own bucket
+  // rather than falling through to the generic "unrecognized-handler" blocked() below.
+  const unclaimed = claims.unclaimed(frame.verifyStatements);
+  if (unclaimed.length > 0) {
+    return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
+  }
+  if (registrar === undefined || tools === undefined || restFetchHelper === undefined) {
+    return blocked(
+      "unrecognized-handler",
+      "a rest-kit registrar, its calls, or its fetch helper were not understood",
+    );
   }
 
-  let statements: AstNode[];
-  try {
-    statements = parseModule(files.server);
-  } catch (err) {
-    return blocked("parse-error", err instanceof Error ? err.message : String(err));
+  // The factory's `fetch:` property (registrar.fetchLocal) and the recognized fetch-helper
+  // function's own name (restFetchHelper.local) are recovered by two separate recognizers
+  // that never cross-check each other's output — a module naming a DIFFERENT function in the
+  // factory than the one actually recognized (e.g. `fetch: fetch`, the global) would
+  // otherwise derive `ok: true` for a spec whose emitted factory calls a name the derived
+  // `fetchHelper.local` does not match, same "claimed but not reproducible" defect class as
+  // the registrar name below.
+  if (registrar.fetchLocal !== restFetchHelper.local) {
+    return blocked(
+      "rest-fetch-helper-name-mismatch",
+      `the factory names fetch helper "${registrar.fetchLocal}", but the recognized fetch ` +
+        `helper function is named "${restFetchHelper.local}"`,
+    );
   }
 
-  const claims = createClaimSet();
-  const frame = recognizeFrame(statements, claims);
-  if (frame === undefined) {
-    return blocked(frameFailureKind(statements), "src/server.ts is not a recognized frame");
+  const titleRecovery = recognizeRestTitle(registrar.registrar, frame.name);
+  if (titleRecovery === undefined) {
+    return blocked(
+      "unrecognized-registrar-name",
+      `"${registrar.registrar}" does not correspond to any title that reproduces it — ` +
+        "registrarName() would emit a different const name than the module's own",
+    );
   }
 
-  // rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
-  // read-only-kit's (recognizeRestRegistrar+recognizeRestTools vs recognizeTools,
-  // recognizeRestFetchHelper vs recognizeFetchHelper — see their own docstrings) and it emits
-  // no env accessors at all (emitServer gates renderEnvAccessors on isHandStyle), so the two
-  // styles are assembled in separate branches rather than threading a style check through
-  // recognizeEnv/recognizeFetchHelper/recognizeTools's shared call sites.
-  if (frame.style === "rest-kit") {
-    const registrar = recognizeRestRegistrar(frame.toolStatements, claims);
-    // recognizeRestTools needs the registrar's own name to know which calls are its
-    // registrations — nothing to search for without it, so tools stays undefined rather than
-    // scanning for a name that was never recognized.
-    const tools =
-      registrar === undefined
-        ? undefined
-        : recognizeRestTools(frame.toolStatements, claims, registrar.registrar);
-    const restFetchHelper = recognizeRestFetchHelper(frame.verifyStatements, claims);
-
-    // Same totality rule as the shared path below, checked before either recognizer's own
-    // "undefined" case: an unclaimed statement (a bespoke `reg()` call, a helper function
-    // neither recognizer models, a query-branch tool) blocks the module on its own bucket
-    // rather than falling through to the generic "unrecognized-handler" blocked() below.
-    const unclaimed = claims.unclaimed(frame.verifyStatements);
-    if (unclaimed.length > 0) {
-      return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, files.server)) };
-    }
-    if (registrar === undefined || tools === undefined || restFetchHelper === undefined) {
-      return blocked(
-        "unrecognized-handler",
-        "a rest-kit registrar, its calls, or its fetch helper were not understood",
-      );
-    }
-
-    // The factory's `fetch:` property (registrar.fetchLocal) and the recognized fetch-helper
-    // function's own name (restFetchHelper.local) are recovered by two separate recognizers
-    // that never cross-check each other's output — a module naming a DIFFERENT function in the
-    // factory than the one actually recognized (e.g. `fetch: fetch`, the global) would
-    // otherwise derive `ok: true` for a spec whose emitted factory calls a name the derived
-    // `fetchHelper.local` does not match, same "claimed but not reproducible" defect class as
-    // the registrar name below.
-    if (registrar.fetchLocal !== restFetchHelper.local) {
-      return blocked(
-        "rest-fetch-helper-name-mismatch",
-        `the factory names fetch helper "${registrar.fetchLocal}", but the recognized fetch ` +
-          `helper function is named "${restFetchHelper.local}"`,
-      );
-    }
-
-    const titleRecovery = recognizeRestTitle(registrar.registrar, frame.name);
-    if (titleRecovery === undefined) {
-      return blocked(
-        "unrecognized-registrar-name",
-        `"${registrar.registrar}" does not correspond to any title that reproduces it — ` +
-          "registrarName() would emit a different const name than the module's own",
-      );
-    }
-
-    return {
-      ok: true,
-      spec: {
-        name: frame.name,
-        ...(titleRecovery.title === undefined ? {} : { title: titleRecovery.title }),
-        displayName: manifest.displayName,
-        description: manifest.description,
-        serviceLabel: registrar.serviceLabel,
-        style: frame.style,
-        network: manifest.network,
-        ...(manifest.id === undefined ? {} : { id: manifest.id }),
-        ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
-        syncInterval: manifest.syncInterval,
-        minNimbusVersion: manifest.minNimbusVersion,
-        // The single entry ConnectorSpecSchema's rest-kit refine requires: one var, auth
-        // "bearer". `local` names nothing the emitted source calls — rest-kit's
-        // makeRestToolRegistrar resolves the credential itself via requireProcessEnv(tokenEnv)
-        // — so its value is unobservable in the emitted bytes; any valid identifier round-trips
-        // identically, and this one is chosen only to read as what it is.
-        env: [{ vars: [registrar.tokenEnv], local: "restAuthToken", auth: "bearer" }],
-        fetchHelper: {
-          local: restFetchHelper.local,
-          base: restFetchHelper.base,
-          ...(restFetchHelper.inlineHeaders === undefined
-            ? {}
-            : { inlineHeaders: restFetchHelper.inlineHeaders }),
-        },
-        tools,
+  return {
+    ok: true,
+    spec: {
+      name: frame.name,
+      ...(titleRecovery.title === undefined ? {} : { title: titleRecovery.title }),
+      displayName: manifest.displayName,
+      description: manifest.description,
+      serviceLabel: registrar.serviceLabel,
+      style: frame.style,
+      network: manifest.network,
+      ...(manifest.id === undefined ? {} : { id: manifest.id }),
+      ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
+      syncInterval: manifest.syncInterval,
+      minNimbusVersion: manifest.minNimbusVersion,
+      // The single entry ConnectorSpecSchema's rest-kit refine requires: one var, auth
+      // "bearer". `local` names nothing the emitted source calls — rest-kit's
+      // makeRestToolRegistrar resolves the credential itself via requireProcessEnv(tokenEnv)
+      // — so its value is unobservable in the emitted bytes; any valid identifier round-trips
+      // identically, and this one is chosen only to read as what it is.
+      env: [{ vars: [registrar.tokenEnv], local: "restAuthToken", auth: "bearer" }],
+      fetchHelper: {
+        local: restFetchHelper.local,
+        base: restFetchHelper.base,
+        ...(restFetchHelper.inlineHeaders === undefined
+          ? {}
+          : { inlineHeaders: restFetchHelper.inlineHeaders }),
       },
-    };
-  }
+      tools,
+    },
+  };
+}
 
+/**
+ * The hand-rolled and read-only-kit assembly — one path, because the two styles differ only in
+ * the frame that got them here (see `Frame`'s two statement lists), not in the env accessors,
+ * fetch helper or `reg()` handlers those recognizers then read.
+ */
+function deriveSharedStyleSpec(
+  frame: Frame,
+  claims: ClaimSet,
+  manifest: ManifestFields,
+  serverSource: string,
+): Derivation {
   const env = recognizeEnv(frame.verifyStatements, claims);
   const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
   const toolsResult = recognizeTools(frame.toolStatements, claims);
 
-  // The totality rule walks frame.verifyStatements, NOT `statements`. For read-only-kit those
-  // differ by exactly one statement — the wrapper, replaced by its callback body — which is what
-  // stops the registrations inside it from inheriting coverage from a claim on the wrapper.
+  // The totality rule walks frame.verifyStatements, NOT the module's own statement list. For
+  // read-only-kit those differ by exactly one statement — the wrapper, replaced by its callback
+  // body — which is what stops the registrations inside it from inheriting coverage from a claim
+  // on the wrapper.
   const unclaimed = claims.unclaimed(frame.verifyStatements);
   if (unclaimed.length > 0) {
-    return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, files.server)) };
+    return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
   }
   if (fetchHelper === undefined) {
     return blocked("no-fetch-helper", "no read helper recognized");
@@ -238,4 +228,43 @@ export function deriveSpec(files: SourceFiles): Derivation {
       tools: toolsResult.tools,
     },
   };
+}
+
+/**
+ * Derive a spec object from one connector's source, or report what stopped it.
+ *
+ * The totality rule is the last step and it has no exceptions: every top-level statement must be
+ * covered by some recognizer's claim. There is no "ignore the rest" path, because a scrape that
+ * ignores what it does not recognize reports silence as absence — the method that produced three
+ * consecutive wrong reach numbers. It is enforced inside each style's assembly, on that style's
+ * own `frame.verifyStatements`, before any recognizer's "undefined" case is reported.
+ *
+ * The returned spec is RAW, not parsed. parseSpec and validateSpec are the `emits` tier
+ * boundary and run in the reporting layer, so a derived spec that trips RESERVED_IDENTIFIERS is
+ * counted rather than thrown.
+ */
+export function deriveSpec(files: SourceFiles): Derivation {
+  let manifest: ManifestFields;
+  try {
+    manifest = deriveManifest(files.manifest);
+  } catch (err) {
+    return blocked("no-manifest", err instanceof Error ? err.message : String(err));
+  }
+
+  let statements: AstNode[];
+  try {
+    statements = parseModule(files.server);
+  } catch (err) {
+    return blocked("parse-error", err instanceof Error ? err.message : String(err));
+  }
+
+  const claims = createClaimSet();
+  const frame = recognizeFrame(statements, claims);
+  if (frame === undefined) {
+    return blocked(frameFailureKind(statements), "src/server.ts is not a recognized frame");
+  }
+
+  return frame.style === "rest-kit"
+    ? deriveRestKitSpec(frame, claims, manifest, files.server)
+    : deriveSharedStyleSpec(frame, claims, manifest, files.server);
 }

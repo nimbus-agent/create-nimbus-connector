@@ -4,6 +4,7 @@ import {
   formatAll,
   formatterAvailable,
   formatterUnavailableReason,
+  formatterUnavailableReasonFor,
   initFormatter,
 } from "../src/format.ts";
 
@@ -147,6 +148,75 @@ describe("initFormatter distinguishes an absent optional dependency from a broke
   it("has no reason to report while the formatter is available", () => {
     expect(formatterAvailable()).toBe(true);
     expect(formatterUnavailableReason()).toBeUndefined();
+  });
+});
+
+describe("formatterUnavailableReasonFor", () => {
+  // The subprocess tests above prove the WIRING — that initFormatter routes a failed import
+  // into this diagnosis. These cover the diagnosis itself, in-process, because the subprocess
+  // form cannot: Bun does not instrument child processes, so every branch below read as
+  // uncovered while being, in fact, exercised. Both layers are kept deliberately — deleting
+  // the subprocess tests would leave the wiring unproven, and deleting these would leave the
+  // branch table unable to show a regression in the misdiagnosis guard.
+  function resolutionError(code: string, extra: Record<string, unknown>): unknown {
+    return Object.assign(new Error("Cannot find module 'x' from '/y'"), { code, ...extra });
+  }
+
+  it("says 'not installed' when the missing specifier is js-api itself", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("ERR_MODULE_NOT_FOUND", { specifier: "@biomejs/js-api/nodejs" }),
+    );
+    expect(reason).toMatch(/is not installed/);
+    expect(reason).toMatch(/optionalDependency/);
+  });
+
+  it("accepts the MODULE_NOT_FOUND spelling as well as ERR_MODULE_NOT_FOUND", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("MODULE_NOT_FOUND", { specifier: "@biomejs/js-api/nodejs" }),
+    );
+    expect(reason).toMatch(/is not installed/);
+  });
+
+  it("blames the backend, not js-api, when a SIBLING specifier is what is missing", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("ERR_MODULE_NOT_FOUND", { specifier: "@biomejs/wasm-nodejs" }),
+    );
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/installed but failed to load/);
+    expect(reason).toMatch(/@biomejs\/wasm-nodejs/);
+  });
+
+  it("falls back to the message when a runtime omits the structured specifier field", () => {
+    const err = Object.assign(new Error("Cannot find module '@biomejs/js-api/nodejs' from '/x'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    expect(formatterUnavailableReasonFor(err)).toMatch(/is not installed/);
+  });
+
+  it("does not claim 'not installed' when neither specifier nor message names js-api", () => {
+    const err = Object.assign(new Error("Cannot find module 'something-else' from '/x'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    expect(formatterUnavailableReasonFor(err)).toMatch(/installed but failed to load/);
+  });
+
+  it("treats a non-resolution error code as a load failure", () => {
+    const reason = formatterUnavailableReasonFor(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+    );
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/EACCES: permission denied/);
+  });
+
+  it.each([
+    ["a plain string", "boom"],
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 42],
+  ])("stringifies %s rather than throwing on a non-Error rejection", (_label, thrown) => {
+    const reason = formatterUnavailableReasonFor(thrown);
+    expect(reason).toMatch(/installed but failed to load/);
+    expect(reason).toMatch(new RegExp(`Underlying error: ${String(thrown)}`));
   });
 });
 

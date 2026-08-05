@@ -63,6 +63,40 @@ function isMissingModule(err: unknown, specifier: string): boolean {
 }
 
 /**
+ * Diagnose why the formatter could not load, from the error the dynamic import rejected with.
+ *
+ * Two very different failures reach this point, and conflating them sends the user to fix a
+ * package that is already installed:
+ *   1. the optional dependency is genuinely absent — the tolerated case, since a
+ *      `bunx create-nimbus-connector` consumer may not have it;
+ *   2. it is present but could not load, most plausibly because its @biomejs/wasm-nodejs
+ *      backend (a separate optionalDependency) is missing or corrupt.
+ * Both still degrade to unformatted output rather than throwing — that is what
+ * optionalDependencies are for, and a platform that cannot install the wasm backend must not
+ * lose the generator entirely — but the reason returned here is what callers report, so case 2
+ * surfaces the underlying error instead of a misdiagnosis.
+ *
+ * Exported because it is the only part of the load path that is pure. Inside initFormatter's
+ * catch it is reachable only when @biomejs/js-api is genuinely unresolvable, which cannot be
+ * arranged in-process in a repo that depends on it — so the two messages went untested and
+ * the misdiagnosis this function exists to prevent could regress unnoticed.
+ */
+export function formatterUnavailableReasonFor(err: unknown): string {
+  if (isMissingModule(err, JS_API)) {
+    return (
+      `${JS_API} is not installed. It is an optionalDependency, so the generated files ` +
+      "are unformatted; they are valid TypeScript and compile as-is."
+    );
+  }
+  const detail = err instanceof Error ? err.message : String(err);
+  return (
+    `${JS_API} is installed but failed to load, so the generated files are unformatted. ` +
+    `Reinstalling it alone will not help — check that its ${WASM_BACKEND} backend is ` +
+    `present and intact. Underlying error: ${detail}`
+  );
+}
+
+/**
  * Load Biome if it is installed. Idempotent, and never throws for a missing
  * dependency — @biomejs/js-api is an optionalDependency, so a consumer running
  * `bunx create-nimbus-connector` may not have it.
@@ -77,24 +111,8 @@ export async function initFormatter(): Promise<void> {
       Biome: new () => BiomeLike;
     });
   } catch (err) {
-    // Two very different failures land here, and conflating them sends the user to fix a
-    // package that is already installed:
-    //   1. the optional dependency is genuinely absent — the tolerated case, since a
-    //      `bunx create-nimbus-connector` consumer may not have it;
-    //   2. it is present but could not load, most plausibly because its @biomejs/wasm-nodejs
-    //      backend (a separate optionalDependency) is missing or corrupt.
-    // Both still degrade to unformatted output rather than throwing — that is what
-    // optionalDependencies are for, and a platform that cannot install the wasm backend
-    // must not lose the generator entirely — but the reason recorded here is what callers
-    // report, so case 2 surfaces the underlying error instead of a misdiagnosis.
     available = false;
-    const detail = err instanceof Error ? err.message : String(err);
-    unavailableReason = isMissingModule(err, JS_API)
-      ? `${JS_API} is not installed. It is an optionalDependency, so the generated files ` +
-        "are unformatted; they are valid TypeScript and compile as-is."
-      : `${JS_API} is installed but failed to load, so the generated files are unformatted. ` +
-        `Reinstalling it alone will not help — check that its ${WASM_BACKEND} backend is ` +
-        `present and intact. Underlying error: ${detail}`;
+    unavailableReason = formatterUnavailableReasonFor(err);
     return;
   }
 
