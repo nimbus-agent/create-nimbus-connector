@@ -1211,13 +1211,15 @@ export async function deriveFromDirectory(dir: string): Promise<FromConnectorRes
 
   const derivation = deriveSpec({ server, manifest });
   if (!derivation.ok) return { ok: false, blockers: derivation.blockers };
-  // deriveSpec attaches the ambiguity from attributeEffects (Task 5) under this key; it is
-  // reporting metadata, not a spec field, so it is stripped before the spec is printed.
-  const ambiguous = (derivation.spec["$effectAmbiguity"] as string[] | undefined) ?? [];
-  const { $effectAmbiguity: _dropped, ...spec } = derivation.spec;
+  // Task 5 attaches the ambiguity as a SIBLING on Derivation, never inside `spec` — so there is
+  // nothing to strip. That placement is forced, not stylistic: ConnectorSpecSchema is a
+  // z.strictObject, and scripts/_lib/reach.ts and test/derive/round-trip.test.ts both call
+  // parseSpec(derivation.spec) unconditionally, so a key nested inside `spec` would throw on
+  // every ambiguous derivation. It is absent entirely when there is no ambiguity.
+  const ambiguous = derivation.$effectAmbiguity ?? [];
   return {
     ok: true,
-    spec,
+    spec: derivation.spec,
     target,
     notes: ambiguous.map(
       (e) =>
