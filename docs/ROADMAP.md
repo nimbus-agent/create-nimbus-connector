@@ -407,6 +407,31 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **A connector with no `test/sandbox.test.ts`.** 15 of the 94 lack one; the generator always
   emits it, so the harness reports `MISSING` rather than `DIFF`.
 
+**`--from-connector`'s report shape.**
+
+- **`--partial` prints less than the report it replaces.** `partialResult`
+  (`src/derive/from-connector.ts`) keeps only each blocker's `kind`; `renderBlockers`, the exit-1
+  report `--partial` stands in for, prints the `kind` **and** the source line. `docs/USAGE.md`
+  calls the flag "a draft to work from," which is true of the one thing it reliably carries — the
+  `$partial` marker key `ConnectorSpecSchema`'s `z.strictObject` refuses by construction, so the
+  draft cannot reach `generate()` until a human deletes it — but the exit-0 draft is strictly less
+  informative than the exit-1 report it replaces. The mechanism is sound; the label overstates
+  what ships with it.
+- **`--partial` does not reach a missing-file blocker.** `deriveFromDirectory` checks
+  `existsSync` on both inputs and returns before `options.partial` is ever read, so
+  `--from-connector <dir-missing-src/server.ts> --partial` exits 1 with the same blocker report a
+  non-partial run prints, while the identical flag against a directory that has both files but
+  blocks later exits 0 with a draft. Defensible — there is no source to draft a spec from — but
+  the asymmetry is easy to miss, since every other blocker in this module does downgrade to a
+  draft under `--partial`.
+- **A file that exists but cannot be read still throws raw.** `deriveFromDirectory` gates on
+  `existsSync`, then reads both files with `Bun.file(...).text()` unguarded. A path that exists
+  but isn't a readable file — permissions, or (verified) a directory sitting where
+  `src/server.ts` should be — throws Bun's own error message straight through `main`'s top-level
+  catch, printed as one line with none of `renderBlockers`'s formatting. `missing()`'s own
+  comment in that file claims "one report shape covers every failure"; this is the failure that
+  report shape doesn't cover.
+
 ## Considered and declined
 
 Recorded so they are not re-proposed. Each was measured before being rejected.
