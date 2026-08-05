@@ -192,6 +192,43 @@ describe("parseCliArgs", () => {
         parseCliArgs(["--from-connector", "/tmp/x", "--gateway-wiring", "C:/gitrep/Nimbus"]),
       ).toThrow(/--gateway-wiring/);
     });
+
+    // I4 (final whole-branch review): --out-dir, --standalone, --license and --dry-run were
+    // accepted alongside --from-connector with zero effect — silently ignored, which
+    // assertFlagCombination's own docstring calls a worse outcome than a loud rejection. Each
+    // is checked the same way the three refusals above already are.
+    it("rejects --from-connector combined with --out-dir, since it writes nothing to redirect", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--out-dir", "/tmp/y"])).toThrow(
+        /--out-dir/,
+      );
+    });
+
+    it("rejects --from-connector combined with --standalone, since the target comes from the directory read", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--standalone"])).toThrow(
+        /--standalone/,
+      );
+    });
+
+    // The worst pair the review named: BOTH flags are dead here, and --license exists only to
+    // be gated on --standalone — so this must fail on --from-connector's own rule, not on the
+    // generic "--license needs --standalone" one two flags away from what the user actually
+    // typed. Asserted on the exact combination, not just --license alone, in case a future edit
+    // reorders the checks and this pair starts throwing the wrong message again.
+    it("rejects --from-connector --standalone --license MIT — the worst pair, both flags dead", () => {
+      expect(() =>
+        parseCliArgs(["--from-connector", "/tmp/x", "--standalone", "--license", "MIT"]),
+      ).toThrow(/--from-connector/);
+    });
+
+    it("rejects --from-connector combined with --license alone (no --standalone)", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--license", "MIT"])).toThrow(
+        /--from-connector/,
+      );
+    });
+
+    it("rejects --from-connector combined with --dry-run, since it never writes files either way", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--dry-run"])).toThrow(/--dry-run/);
+    });
   });
 
   describe("--partial", () => {

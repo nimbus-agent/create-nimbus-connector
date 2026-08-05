@@ -60,6 +60,45 @@ describe("deriveFromDirectory", () => {
     if (!result.ok) expect(renderBlockers("x", result.blockers)).toContain("src/server.ts");
   });
 
+  // I2 (final whole-branch review): `deriveSpec`'s `ok: true` only means every AST construct was
+  // recognized, not that the recovered spec passes `validateSpec` — `token` is one of ~30
+  // RESERVED_IDENTIFIERS (alongside `path`, `res`, `text`, `url`, `u`, `server`), and a
+  // hand-authored connector is free to name its fetch helper that. Built by taking THIS repo's
+  // own emitted output and renaming the fetch helper post-hoc (never hand-writing
+  // connector-shaped source): `generate()` itself calls `validateSpec` internally, so a spec
+  // naming the helper "token" could never reach `generate()` in the first place — the rejection
+  // this test pins can only be produced this way.
+  it("rejects a derived spec that RESERVED_IDENTIFIERS would refuse, rather than reporting success", async () => {
+    const dir = tmp.make("from-connector-");
+    await emitInto("zzscratch", dir);
+    const server = join(dir, "src", "server.ts");
+    const renamed = (await Bun.file(server).text()).replaceAll("zzGet", "token");
+    await Bun.write(server, renamed);
+
+    const result = await deriveFromDirectory(dir);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers).toHaveLength(1);
+    expect(result.blockers[0]?.kind).toBe("rejected-by-validate");
+    expect(result.blockers[0]?.detail).toContain('"token"');
+  });
+
+  it("the same reserved-identifier rejection becomes a partial draft under --partial", async () => {
+    const dir = tmp.make("from-connector-");
+    await emitInto("zzscratch", dir);
+    const server = join(dir, "src", "server.ts");
+    const renamed = (await Bun.file(server).text()).replaceAll("zzGet", "token");
+    await Bun.write(server, renamed);
+
+    const result = await deriveFromDirectory(dir, { partial: true });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec).toHaveProperty(PARTIAL_MARKER);
+    expect(() => parseSpec(result.spec)).toThrow();
+    const marker = (result.spec as Record<string, { blockers: string[] }>)[PARTIAL_MARKER];
+    expect(marker?.blockers).toEqual(["rejected-by-validate"]);
+  });
+
   it("emits a partial spec the schema REFUSES", async () => {
     const dir = tmp.make("from-connector-");
     await emitInto("zzscratch", dir);

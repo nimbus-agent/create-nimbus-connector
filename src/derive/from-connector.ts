@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { parseSpec } from "../spec.ts";
+import { validateSpec } from "../validate.ts";
 import type { Blocker } from "./blockers.ts";
 import { deriveSpec } from "./index.ts";
 
@@ -43,6 +45,51 @@ export function ambiguityNote(effect: string): string {
  */
 export const PARTIAL_MARKER = "$partial";
 
+/**
+ * The `--partial` shape, shared by both failure sources below (a `deriveSpec` blocker and a
+ * post-derivation validation rejection) so a caller sees one draft format regardless of which
+ * stage produced it.
+ */
+function partialResult(
+  target: "monorepo" | "standalone",
+  blockers: readonly Blocker[],
+): FromConnectorResult {
+  return {
+    ok: true,
+    target,
+    notes: ["this spec is PARTIAL and will not validate until the marker key is resolved."],
+    spec: {
+      [PARTIAL_MARKER]: {
+        note: "Derived partially. Resolve each blocker, then delete this key.",
+        blockers: blockers.map((b) => b.kind),
+      },
+    },
+  };
+}
+
+/**
+ * `deriveSpec`'s own `ok: true` means every AST construct in `src/server.ts` was recognized — it
+ * says nothing about whether the RECOVERED spec is one this generator can actually regenerate.
+ * scripts/_lib/reach.ts's `measure()` treats `parseSpec` + `validateSpec` as the real `emits`-tier
+ * boundary: a spec that trips `RESERVED_IDENTIFIERS` (e.g. a hand-authored connector whose fetch
+ * helper happens to be named "token", one of ~30 reserved names) is `rejected-by-validate` there,
+ * not success. `deriveFromDirectory` used to skip that boundary entirely and report success —
+ * exit 0, spec on stdout — for a spec `--spec` would then refuse outright. Same blocker `kind` as
+ * `reach` uses, so this is one vocabulary, not a second shape invented for the same failure.
+ */
+function rejectedByValidate(spec: Record<string, unknown>): Blocker | undefined {
+  try {
+    validateSpec(parseSpec(spec));
+    return undefined;
+  } catch (err) {
+    return {
+      kind: "rejected-by-validate",
+      detail: err instanceof Error ? err.message : String(err),
+      line: 0,
+    };
+  }
+}
+
 export async function deriveFromDirectory(
   dir: string,
   options: { partial?: boolean } = {},
@@ -63,18 +110,15 @@ export async function deriveFromDirectory(
   const derivation = deriveSpec({ server, manifest });
   if (!derivation.ok) {
     if (options.partial !== true) return { ok: false, blockers: derivation.blockers };
-    return {
-      ok: true,
-      target,
-      notes: ["this spec is PARTIAL and will not validate until the marker key is resolved."],
-      spec: {
-        [PARTIAL_MARKER]: {
-          note: "Derived partially. Resolve each blocker, then delete this key.",
-          blockers: derivation.blockers.map((b) => b.kind),
-        },
-      },
-    };
+    return partialResult(target, derivation.blockers);
   }
+
+  const rejection = rejectedByValidate(derivation.spec);
+  if (rejection !== undefined) {
+    if (options.partial !== true) return { ok: false, blockers: [rejection] };
+    return partialResult(target, [rejection]);
+  }
+
   // Task 5 attaches the ambiguity as a SIBLING on Derivation, never inside `spec` — so there is
   // nothing to strip. That placement is forced, not stylistic: ConnectorSpecSchema is a
   // z.strictObject, and scripts/_lib/reach.ts and test/derive/round-trip.test.ts both call

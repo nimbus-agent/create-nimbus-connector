@@ -125,6 +125,39 @@ function assertFlagCombination(opts: CliOptions): void {
         "and was probably a mistake — remove one.",
     );
   }
+  // --from-connector only ever reads a directory and prints its derived spec to stdout — it
+  // generates nothing and writes nothing, so every flag that shapes a WRITE is dead weight
+  // rather than merely redundant. Checked as its own group, ahead of each flag's own generic
+  // rule below (e.g. --license normally only needs --standalone), so a combination like
+  // --from-connector --standalone --license MIT — where BOTH flags are dead — reports the
+  // reason specific to --from-connector rather than "add --standalone", which would be actively
+  // wrong advice here since --standalone itself is refused two checks below.
+  if (opts.fromConnector !== undefined && opts.outDir !== undefined) {
+    throw new Error(
+      "--from-connector always prints its derived spec to stdout; --out-dir names a directory " +
+        "to WRITE a package into, and this command writes no package. Drop --out-dir.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.standalone) {
+    throw new Error(
+      "--from-connector reads its target (monorepo or standalone) FROM the connector directory " +
+        "and prints it as a stderr note — it does not generate a package for --standalone to " +
+        "shape. Drop --standalone.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.license !== undefined) {
+    throw new Error(
+      "--license sets the SPDX field of a package this command would generate, and " +
+        "--from-connector generates no package — it only reads one and prints its spec. Drop " +
+        "--license.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.dryRun) {
+    throw new Error(
+      "--from-connector never writes files, with or without --dry-run — the two flags claim " +
+        "the same thing twice. Drop --dry-run.",
+    );
+  }
   // A user who believes they set a license and did not is a worse outcome than an error.
   if (opts.license !== undefined && !opts.standalone) {
     throw new Error(

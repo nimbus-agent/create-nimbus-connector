@@ -212,16 +212,22 @@ committed to this project's own `fixtures/`.
 
 **Two outcomes, not one.** A connector this generator's spec language cannot fully describe is
 `blocked`, not silently approximated: the CLI prints which constructs stopped the read, in the
-same vocabulary `bun run reach --verbose` uses, and exits non-zero. Add `--partial` to get a
-draft instead of only the report — the draft carries a `$partial` marker key that
-`ConnectorSpecSchema` refuses by construction, so it cannot be generated until you resolve every
-blocker and delete the key by hand. Either way, watch stderr: an `effect` (`read`/`write`/
-`delete`) that could not be pinned to one tool is printed as a note asking you to confirm it,
-because the manifest's `hitlRequired` set alone does not always say which tool earned it.
+same vocabulary `bun run reach --verbose` uses, and exits non-zero. This includes a spec that
+reads back cleanly but then trips `RESERVED_IDENTIFIERS` (`src/validate.ts`) — e.g. a
+hand-authored connector whose fetch helper happens to be named `token` or `url` — reported as a
+`rejected-by-validate` blocker rather than printed as if it were a success: every spec that
+reaches stdout on exit 0 has already passed `parseSpec` and `validateSpec`, which is what makes
+the round-trip claim below true rather than aspirational. Add `--partial` to get a draft instead
+of only the report — the draft carries a `$partial` marker key that `ConnectorSpecSchema` refuses
+by construction, so it cannot be generated until you resolve every blocker and delete the key by
+hand. Either way, watch stderr: an `effect` (`read`/`write`/`delete`) that could not be pinned to
+one tool is printed as a note asking you to confirm it, because the manifest's `hitlRequired` set
+alone does not always say which tool earned it.
 
-`--from-connector` is mutually exclusive with a positional name, `--spec` and
-`--gateway-wiring` — it takes the connector's name from the directory it reads, and it writes
-nothing, so there is no generated package for `--gateway-wiring` to attach to.
+`--from-connector` is mutually exclusive with a positional name, `--spec`, `--gateway-wiring`,
+`--out-dir`, `--standalone`, `--license` and `--dry-run` — it takes the connector's name and
+target from the directory it reads (the target is printed as a stderr note, not asked for), and
+it only ever prints to stdout, so none of the flags that shape a write have anything to act on.
 
 ---
 
@@ -236,7 +242,7 @@ nothing, so there is no generated package for `--gateway-wiring` to attach to.
 | `--license <spdx>` | SPDX identifier for the generated `package.json`. **`--standalone` only** — a monorepo-target connector is AGPL-3.0-only unconditionally, since it lives in the AGPL repo and imports AGPL code. Rejects npm's `SEE LICENSE IN <file>` form, which is not SPDX |
 | `--gateway-wiring <root>` | Also emit the Gateway wiring skeleton and checklist. Monorepo target only |
 | `--force` | Allow overwriting existing **wiring** files. Only valid with `--gateway-wiring` |
-| `--from-connector <dir>` | Read an existing connector directory and print its derived spec. Excludes a positional name, `--spec` and `--gateway-wiring` |
+| `--from-connector <dir>` | Read an existing connector directory and print its derived spec. Excludes a positional name, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run` |
 | `--partial` | With `--from-connector`, print a draft spec (marked so it cannot be generated) instead of only a blocker report. Only valid with `--from-connector` |
 | `--help` | Usage |
 | `--version` | Version |
