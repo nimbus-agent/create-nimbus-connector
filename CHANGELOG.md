@@ -117,6 +117,13 @@ is something an existing user needs told even when no subject line would say so.
   written as `"A$B"`. Only reachable from a spec that declares `permissions.filesystem`,
   which is new in this same unreleased range.
 
+## [0.8.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.7.0...create-nimbus-connector-v0.8.0) (2026-08-05)
+
+
+### Features
+
+* **derive:** read the read-only-kit and rest-kit frames, and name every frame blocker ([#59](https://github.com/nimbus-agent/create-nimbus-connector/issues/59)) ([9a20648](https://github.com/nimbus-agent/create-nimbus-connector/commit/9a20648da6851cee713ea41384953be993d85659))
+
 ## [0.7.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.6.0...create-nimbus-connector-v0.7.0) (2026-08-04)
 
 
