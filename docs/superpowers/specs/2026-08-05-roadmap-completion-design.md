@@ -491,11 +491,7 @@ An audit of the test suite, the README's claims and the non-README documents ran
 against `9c0886f`. Each item below was re-verified by hand before being written here; items the
 audit raised that did not survive that check are not listed.
 
-**The CI/CD half of that audit — the seven workflows, `dependabot.yml`, `codeql-config.yml`, the
-required-check set and the release path — had not returned when this was written, and its findings
-belong in this section.** Phase 4 does not start until it has been run and folded in. Recorded as
-an open gap rather than silently omitted, because a punch list that looks complete and is not is
-the same failure this repo keeps removing.
+The CI/CD half ran separately and is folded in at §7.6.
 
 **Four are defects in `src/`, not documentation.**
 
@@ -590,6 +586,91 @@ checks for new dangling references.
   `README.md:17`'s "reference" claim true rather than removing it.
 
 ---
+
+### 7.6 The CI/CD punch list
+
+Audited 2026-08-05 against `9c0886f`, including the live repository state — rulesets, required
+checks, the npm packument and workflow run history.
+
+**There are no blockers, and the failure shapes this repo names are absent.** No
+`continue-on-error`, no `|| true`, no `if: always()`, no discarded exit code anywhere in
+`.github/`. Every action is SHA-pinned, every job carries `permissions`, `timeout-minutes` and a
+pinned `ubuntu-24.04`. The per-file coverage floor **is** genuinely enforced. Three things
+specifically attacked and found sound: `acceptance.yml`'s SKIP path (`isUnpublishedFloorFailure`
+matches bun's exact unresolvable-range string, so a 404, a 500, an outage or a frozen lockfile all
+still fail — the latest scheduled run shows 0 SKIPs and printed the full-verification sentence);
+`sonar.yml`'s fork skip (required checks are exactly `check`, `cla` and
+`Analyze (javascript-typescript)`, so a skipped `sonar` leaves nothing pending); and the release
+path, where `create-nimbus-connector@0.7.0` carries a SLSA provenance attestation and was published
+by `trustedPublisher: github` with no token.
+
+**Four important items:**
+
+- **The CLA App token is minted with every installation permission.** `cla.yml:139-145` passes no
+  `permission-*` inputs to `actions/create-github-app-token`, so the token carries the App
+  installation's full permission set on both `create-nimbus-connector` and `.github` — and is
+  handed to `contributor-assistant/github-action`, a third-party action, on a
+  `pull_request_target` trigger any external contributor can fire. `release.yml:50-54` already
+  demonstrates the narrowing (`permission-contents`, `permission-pull-requests`,
+  `permission-issues`); this is the one high-privilege credential not narrowed. Verify a narrowed
+  set against a real external PR before trusting it.
+- **The Bun pin is one fact in four files, guarded in two.** `ci.yml:45`, `release.yml:92`,
+  `sonar.yml:72` and `acceptance.yml:65` all say `1.3.14`;
+  `test/release-workflow-guard.test.ts:174-181` compares only the first two, so `acceptance.yml` —
+  which runs the strongest checks in the repo — can drift silently. No Dependabot ecosystem tracks
+  a plain input value, and `dependabot.yml:21-24` makes exactly the "a pinned-but-stale pin is not
+  more secure" argument about action SHAs without applying it here. Widen the guard to all four,
+  and record the Bun pin as a manual periodic bump.
+- **Both scheduled workflows are auto-disabled after 60 days of repository inactivity.** The daily
+  `--registry` acceptance run and the weekly CodeQL run are precisely the unattended safety nets,
+  and "sits unattended" is the stated plan. Dependabot's weekly branch pushes reset the window
+  incidentally, which fails exactly when nothing needs updating. GitHub emails before disabling,
+  so the actionable instruction — *re-enable them; do not assume green means running* — belongs in
+  `docs/GOVERNANCE.md`.
+- **`CHANGELOG.md`'s `Unreleased` section has no gate and was missed three releases running.** The
+  file documents its own failure at :8-13. What lands there is emitted-byte changes — the one class
+  release-please cannot derive from commit subjects, and the one an existing user regenerating a
+  connector needs told. A `release.yml` step failing before `npm publish` when the section is
+  anything but the placeholder is recoverable; failing after is not, since npm cannot unpublish
+  after 72 hours.
+
+**Polish:** `release.yml:133` runs a bare `bun test` where `ci.yml:53` runs `--coverage`, and
+`coverage-gate.test.ts` parses only `ci.yml` — so its own stated rule goes unenforced against the
+one file that breaks it. `cla.yml` is the only workflow without `harden-runner`, which is the one
+where egress audit logs would be worth most. SonarCloud sets no `sonar.qualitygate.wait`, so
+findings accumulate behind a green workflow. `codeql-config.yml` uses the default query suite
+rather than `security-extended`. `package.json` declares no `description` and no `keywords`, so
+the registry page shows README's first line with the markdown unrendered. `origin/stage-c-writes`
+is live with no open PR, and 33 local branches track a gone upstream.
+
+**The dangling-citation count is fifteen, not three**, and one is user-visible:
+`scripts/_lib/golden-diff.ts:164` prints *"; update fixtures/expectations.json and the design doc's
+criterion-2 gap report"* on a changed diff — sending the maintainer to a deleted document at the
+moment they most need it. Fixing it also touches the pinned assertion at
+`test/scripts/golden-diff.test.ts:326`. The rest sit in `ci.yml`, `acceptance.yml`, `release.yml`,
+`CONTRIBUTING.md`, `src/golden/expectations.ts`, `src/golden/sdk-root.ts`, `src/spec.ts`,
+`src/emit/search-filter.ts`, `src/emit/server/index.ts` and `src/validate.ts`. A link checker would
+**not** catch these — they are prose references, not links; a full relative-link and anchor sweep
+across all 27 tracked Markdown files found **zero** broken links today.
+
+**One new gate worth adding — the only one:** `actions/dependency-review-action` on
+`pull_request` with `deny-licenses`. This repo's number-one invariant is a license boundary, and
+`test/license.test.ts` covers only the license string the generator *emits*, not this repo's own
+dependency tree. Denying AGPL/GPL transitively is the one direction of that invariant that is
+mechanically enforceable — and it matters most for Dependabot PRs, which auto-merge on patch and
+minor without a human. Free on public repos, `contents: read` only, no external service in the
+merge gate.
+
+**Considered and rejected**, recorded so they are not re-proposed: a CI job for `diff:golden` /
+`wiring:conformance` / `reach` that skips when the root is absent (refused, and the reason is
+`CLAUDE.md`'s); staging the publish under a `next` dist-tag before promoting to `latest` — it
+would close the one structural hole, since the signature and provenance checks are *detective*
+rather than preventive, but it would likely reintroduce a long-lived `NODE_AUTH_TOKEN`, which
+`release-workflow-guard.test.ts:222-244` forbids for the stronger reason that it would be a silent
+fallback; a mechanical "no AGPL source copied in" gate (ungateable without vendoring the corpus,
+which is the thing the rule forbids); `actions/cache` for `bun install`; and a required-review
+count above zero, which for a solo maintainer with three green required checks and no bypass path
+is the coherent configuration rather than a gap.
 
 ## 8. The expected result, stated in advance
 
