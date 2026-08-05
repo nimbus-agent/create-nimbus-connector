@@ -283,6 +283,17 @@ export function isAsyncFunction(node: AstNode | undefined): boolean {
   return raw(node)["async"] === true;
 }
 
+/**
+ * A `type <name> = ...;` alias declaration's own name. Needed for the standalone read-only-kit
+ * target's inlined `type ZodToolRegistrar = ...;` (src/emit/server/index.ts's
+ * `renderRunReadOnlyGlue`) — the monorepo target imports that shape instead, so no recognizer
+ * needed this accessor before standalone output existed.
+ */
+export function typeAliasName(node: AstNode | undefined): string | undefined {
+  if (node?.type !== "TSTypeAliasDeclaration") return undefined;
+  return identName(child(node, "id"));
+}
+
 // ---------------------------------------------------------------------------
 // Calls
 // ---------------------------------------------------------------------------

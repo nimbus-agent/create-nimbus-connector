@@ -7,14 +7,18 @@ import {
   callTo,
   constDecl,
   expressionOf,
+  functionName,
   identName,
   ifStatement,
+  importNames,
   importSource,
+  isAsyncFunction,
   isIdent,
   methodCallTo,
   newOf,
   objectProps,
   stringLit,
+  typeAliasName,
 } from "../read.ts";
 import type { Frame, FrameStyle } from "./frame.ts";
 
@@ -45,6 +49,30 @@ function isFrameImport(node: AstNode): boolean {
   const source = importSource(node);
   if (source === undefined) return false;
   return FRAME_IMPORTS.has(source) || source.endsWith("/mcp-tool-kit.ts");
+}
+
+/**
+ * The standalone target's single kit import. A SEPARATE predicate rather than a widened
+ * `isFrameImport`: relaxing that one in place would change what the frame claims against the
+ * AGPL corpus too, and this recognizer must not move a corpus number it has nothing to do with
+ * — no corpus connector is standalone, so `reach`'s histogram is the tripwire for that leak.
+ */
+const STANDALONE_KIT = "@nimbus-dev/sdk/connector-kit";
+
+function isStandaloneKitImport(node: AstNode): boolean {
+  return importSource(node) === STANDALONE_KIT;
+}
+
+/**
+ * The standalone read-only-kit target's inlined `async function runReadOnlyMcpConnector`
+ * (src/emit/server/index.ts's `renderRunReadOnlyGlue`) — emitted at module scope because the
+ * dependency-free SDK cannot re-export a helper that imports `@modelcontextprotocol/sdk`
+ * directly. Matched by exact identifier, same as `isNamedReadOnlyCallback` below matches its own
+ * near miss by name only: a differently-named local async function is a shape this emitter
+ * cannot produce, so accepting it would claim code this frame cannot verify.
+ */
+function isInlinedRunReadOnlyHelper(node: AstNode): boolean {
+  return isAsyncFunction(node) && functionName(node) === "runReadOnlyMcpConnector";
 }
 
 /**
@@ -79,6 +107,13 @@ function readOnlyWrapper(node: AstNode): { name: string; body: AstNode[] } | und
  * The read-only-kit frame: no `McpServer`, no transport, no registrar const — every
  * registration lives inside `await runReadOnlyMcpConnector("nimbus-<name>", (reg) => { ... })`.
  *
+ * Two ways this discriminator is satisfied, one per target: the monorepo target imports
+ * `runReadOnlyMcpConnector` from `../../shared/run-read-only-mcp-connector.ts` (`runImport`);
+ * the standalone target cannot — the SDK core stays free of `@modelcontextprotocol/sdk`, which
+ * that helper needs — so it inlines the function at module scope instead
+ * (`isInlinedRunReadOnlyHelper`). Either is enough to enter this frame; the wrapper CALL below is
+ * still required and identical either way.
+ *
  * Returns undefined and claims NOTHING when the module is not this frame, for the same reason
  * the hand-rolled recognizer below does: a partially claimed module reports blockers that read
  * as a spec-language gap when they are really a wrong-recognizer gap.
@@ -92,7 +127,8 @@ function recognizeReadOnlyFrame(
   const runImport = statements.find(
     (s) => importSource(s)?.endsWith(RUN_READ_ONLY_SUFFIX) === true,
   );
-  if (runImport === undefined) return undefined;
+  const inlinedHelper = statements.find(isInlinedRunReadOnlyHelper);
+  if (runImport === undefined && inlinedHelper === undefined) return undefined;
 
   let wrapper: AstNode | undefined;
   let recognized: { name: string; body: AstNode[] } | undefined;
@@ -110,9 +146,22 @@ function recognizeReadOnlyFrame(
   // it would cover every registration inside it by containment. `s === runImport` is load-bearing
   // here, not redundant with `isFrameImport`: that predicate deliberately does not match
   // RUN_READ_ONLY_SUFFIX (see its own docstring), so this is the only place the run-read-only
-  // import gets claimed, and only once this frame is already confirmed to exist.
-  const frameImports = statements.filter((s) => isFrameImport(s) || s === runImport);
-  claims.claim(frameImports, "frame");
+  // import gets claimed, and only once this frame is already confirmed to exist. Likewise
+  // `isStandaloneKitImport` is claimed here rather than folded into `isFrameImport` — see that
+  // predicate's own docstring on why widening `isFrameImport` in place is the wrong fix.
+  const frameImports = statements.filter(
+    (s) => isFrameImport(s) || isStandaloneKitImport(s) || s === runImport,
+  );
+  // The inlined helper's own two statements, standalone only: the function declaration
+  // `isInlinedRunReadOnlyHelper` found, and the `type ZodToolRegistrar` alias its signature
+  // names (renderRunReadOnlyGlue emits both, always as this exact pair). Matched by name, same
+  // as the function itself, so a differently-named alias is still an unclaimed blocker rather
+  // than silently covered by proximity to the function.
+  const inlinedGlue =
+    inlinedHelper === undefined
+      ? []
+      : [inlinedHelper, ...statements.filter((s) => typeAliasName(s) === "ZodToolRegistrar")];
+  claims.claim([...frameImports, ...inlinedGlue], "frame");
 
   // Exactly one statement is swapped — the wrapper, for its body. Everything else stays.
   const verifyStatements = statements.flatMap((s) => (s === wrapper ? recognized.body : [s]));
@@ -264,18 +313,23 @@ function isConnect(node: AstNode, mcpVar: string, transportVar: string): boolean
  * wrong-recognizer gap. All or nothing is what keeps the histogram honest.
  *
  * Requires all five frame elements:
- * 1. An import from /mcp-tool-kit.ts
+ * 1. An import from /mcp-tool-kit.ts (monorepo) OR "@nimbus-dev/sdk/connector-kit"
+ *    (standalone) — the two names the same registrar primitives arrive under, per
+ *    src/emit/server/index.ts's `imports()`.
  * 2. const mcp = new McpServer({ name: "nimbus-<name>", ... })
  * 3. const reg = createZodToolRegistrar(...)
  * 4. const transport = new StdioServerTransport()
  * 5. await mcp.connect(transport) — receiver must be the same variable from (2)
  *
- * A sixth, optional element decides which of the two styles this is: an import from
- * /rest-tool-kit.ts. Present -> "rest-kit" (imports() in src/emit/server/index.ts emits BOTH
- * the mcp-tool-kit.ts import, for wiring(), and this one, for the tool registrar factory).
- * Absent -> "hand-rolled". Frame recognition says nothing about whether the TOOLS inside are
- * understood — that is `deriveSpec`'s job, dispatching on `style` to recognizeTools or
- * recognizeRestTools.
+ * A sixth, optional element decides which of the two styles this is, one signal per target:
+ * present -> "rest-kit", claimed alongside the other five; absent -> "hand-rolled". On the
+ * monorepo target the signal is a second import, from /rest-tool-kit.ts (imports() emits BOTH
+ * the mcp-tool-kit.ts import, for wiring(), and this one, for the tool registrar factory). On
+ * the standalone target there is no second import — makeRestToolRegistrar is one more name
+ * inside the SAME "@nimbus-dev/sdk/connector-kit" clause found in (1) — so the signal there is
+ * that name's presence among the import's own specifiers. Frame recognition says nothing about
+ * whether the TOOLS inside are understood — that is `deriveSpec`'s job, dispatching on `style`
+ * to recognizeTools or recognizeRestTools.
  */
 export function recognizeFrame(
   statements: readonly AstNode[],
@@ -287,8 +341,9 @@ export function recognizeFrame(
   const readOnly = recognizeReadOnlyFrame(statements, claims);
   if (readOnly !== undefined) return readOnly;
 
-  // (1) Find mcp-tool-kit.ts import (REQUIRED).
-  const toolKitImport = statements.find(hasMcpToolKitImport);
+  // (1) Find the tool-kit import (REQUIRED): monorepo's mcp-tool-kit.ts, or standalone's
+  // "@nimbus-dev/sdk/connector-kit".
+  const toolKitImport = statements.find((s) => hasMcpToolKitImport(s) || isStandaloneKitImport(s));
   if (!toolKitImport) return undefined;
 
   // (2) Find McpServer const with variable name and connector name (REQUIRED).
@@ -315,11 +370,19 @@ export function recognizeFrame(
   const connectNode = statements.find((s) => isConnect(s, mcpVar, transportVar));
   if (!connectNode) return undefined;
 
-  // (6) The rest-kit discriminator (OPTIONAL): present -> "rest-kit", claimed alongside the
-  // other five; absent -> "hand-rolled". `isFrameImport` deliberately does not match this
-  // suffix, so it is never claimed twice through `optionalFrameImports` below.
+  // (6) The rest-kit discriminator (OPTIONAL) — see the docstring above for the two signals.
+  // The standalone one is read off `toolKitImport` itself (gated on it actually being the
+  // standalone kit import, so `importNames` is never asked to parse the monorepo's
+  // mcp-tool-kit.ts clause, which never carries this name anyway); no separate claim is needed
+  // for it, since that import is already claimed as `toolKitImport` below.
   const restToolKitImport = statements.find(hasRestToolKitImport);
-  const style: FrameStyle = restToolKitImport === undefined ? "hand-rolled" : "rest-kit";
+  const standaloneKitNames = isStandaloneKitImport(toolKitImport)
+    ? importNames(toolKitImport)
+    : undefined;
+  const hasStandaloneRestRegistrar =
+    standaloneKitNames?.some((n) => n.imported === "makeRestToolRegistrar") === true;
+  const style: FrameStyle =
+    restToolKitImport === undefined && !hasStandaloneRestRegistrar ? "hand-rolled" : "rest-kit";
 
   // Gather optional frame imports (does not affect recognition, but are claimed when present).
   const optionalFrameImports = statements.filter((s) => isFrameImport(s) && s !== toolKitImport);
