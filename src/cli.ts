@@ -32,6 +32,12 @@ export type CliOptions = {
   force: boolean;
   /** --from-connector <dir>: read an existing connector directory and print its derived spec. */
   fromConnector?: string;
+  /**
+   * --partial: with --from-connector, emit a DRAFT spec instead of only a blocker report when
+   * derivation fails. The draft carries PARTIAL_MARKER, which ConnectorSpecSchema (a
+   * z.strictObject) refuses by construction — see src/derive/from-connector.ts.
+   */
+  partial: boolean;
 };
 
 /** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
@@ -43,6 +49,7 @@ const KNOWN_FLAGS = [
   "--help",
   "--license",
   "--out-dir",
+  "--partial",
   "--spec",
   "--standalone",
   "--version",
@@ -87,12 +94,13 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 
 /** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
 function parseFlags(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false, standalone: false, force: false };
+  const opts: CliOptions = { dryRun: false, standalone: false, force: false, partial: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--standalone") opts.standalone = true;
     else if (a === "--force") opts.force = true;
+    else if (a === "--partial") opts.partial = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
@@ -128,6 +136,11 @@ function assertFlagCombination(opts: CliOptions): void {
   }
   if (opts.force && opts.gatewayWiring === undefined) {
     throw new Error("--force only applies to --gateway-wiring output. Add it, or drop --force.");
+  }
+  if (opts.partial && opts.fromConnector === undefined) {
+    throw new Error(
+      "--partial only applies to --from-connector output. Add it, or drop --partial.",
+    );
   }
   // --gateway-wiring is monorepo-target only, as the README says, and it was the one flag
   // conflict here that was silently accepted instead. It is not merely ineffective under
@@ -254,6 +267,7 @@ Flags:
   --gateway-wiring <root>  also emit Nimbus Gateway sync/mapping skeletons (monorepo only)
   --force                  allow --gateway-wiring to overwrite existing target files
   --from-connector <dir>   read an existing connector directory and print its spec
+  --partial                with --from-connector, emit a DRAFT spec instead of a blocker report
   --dry-run                print what would be written, write nothing
   --version                print the version
   --help                   show this message
@@ -345,7 +359,7 @@ export async function main(argv: readonly string[]): Promise<void> {
     if (!parserAvailable())
       throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
 
-    const result = await deriveFromDirectory(opts.fromConnector);
+    const result = await deriveFromDirectory(opts.fromConnector, { partial: opts.partial });
     if (!result.ok) {
       // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
       // Error as one prefixed line, which would mangle a multi-line report and repeat the

@@ -33,7 +33,20 @@ export function ambiguityNote(effect: string): string {
   );
 }
 
-export async function deriveFromDirectory(dir: string): Promise<FromConnectorResult> {
+/**
+ * `ConnectorSpecSchema` is a z.strictObject, so a top-level key it does not define is a hard
+ * rejection — a partial draft carrying this key cannot be generated until a human deletes it.
+ * The rejection is structural rather than a convention someone could forget to check: a
+ * partial spec that DID validate would silently emit a connector missing tools, which is the
+ * accepted-then-discarded failure this repo has already removed twice (src/spec.ts's
+ * omitWhen and search/query refinements narrate both).
+ */
+export const PARTIAL_MARKER = "$partial";
+
+export async function deriveFromDirectory(
+  dir: string,
+  options: { partial?: boolean } = {},
+): Promise<FromConnectorResult> {
   const serverPath = join(dir, "src", "server.ts");
   const manifestPath = join(dir, "nimbus.extension.json");
   const absent = [
@@ -48,7 +61,20 @@ export async function deriveFromDirectory(dir: string): Promise<FromConnectorRes
   const target = server.includes("@nimbus-dev/sdk/connector-kit") ? "standalone" : "monorepo";
 
   const derivation = deriveSpec({ server, manifest });
-  if (!derivation.ok) return { ok: false, blockers: derivation.blockers };
+  if (!derivation.ok) {
+    if (options.partial !== true) return { ok: false, blockers: derivation.blockers };
+    return {
+      ok: true,
+      target,
+      notes: ["this spec is PARTIAL and will not validate until the marker key is resolved."],
+      spec: {
+        [PARTIAL_MARKER]: {
+          note: "Derived partially. Resolve each blocker, then delete this key.",
+          blockers: derivation.blockers.map((b) => b.kind),
+        },
+      },
+    };
+  }
   // Task 5 attaches the ambiguity as a SIBLING on Derivation, never inside `spec` — so there is
   // nothing to strip. That placement is forced, not stylistic: ConnectorSpecSchema is a
   // z.strictObject, and scripts/_lib/reach.ts and test/derive/round-trip.test.ts both call

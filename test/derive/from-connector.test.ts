@@ -5,6 +5,7 @@ import { initParser } from "../../src/derive/ast.ts";
 import {
   ambiguityNote,
   deriveFromDirectory,
+  PARTIAL_MARKER,
   renderBlockers,
 } from "../../src/derive/from-connector.ts";
 import { generate } from "../../src/emit/index.ts";
@@ -57,6 +58,24 @@ describe("deriveFromDirectory", () => {
     const result = await deriveFromDirectory(tmp.make("from-connector-"));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(renderBlockers("x", result.blockers)).toContain("src/server.ts");
+  });
+
+  it("emits a partial spec the schema REFUSES", async () => {
+    const dir = tmp.make("from-connector-");
+    await emitInto("zzscratch", dir);
+    // Same unrecognized-construct trigger as "reports blockers by name" above, but this time
+    // asking for a draft instead of only a blocker report.
+    const server = join(dir, "src", "server.ts");
+    await Bun.write(server, `${await Bun.file(server).text()}\nconst leftover = compute();\n`);
+
+    const result = await deriveFromDirectory(dir, { partial: true });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec).toHaveProperty(PARTIAL_MARKER);
+    // The whole point: a draft must not be generatable until a human has resolved it. (This
+    // spec is missing every other required field too, so on its own this only proves SOME
+    // issue rejects it — test/spec.test.ts pins the marker key itself as sufficient cause.)
+    expect(() => parseSpec(result.spec)).toThrow();
   });
 });
 

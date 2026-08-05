@@ -13,6 +13,7 @@ describe("parseCliArgs", () => {
       dryRun: false,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -22,6 +23,7 @@ describe("parseCliArgs", () => {
       dryRun: true,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -32,6 +34,7 @@ describe("parseCliArgs", () => {
       dryRun: false,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -97,6 +100,7 @@ describe("parseCliArgs", () => {
         standalone: true,
         dryRun: false,
         force: false,
+        partial: false,
       });
     });
   });
@@ -187,6 +191,20 @@ describe("parseCliArgs", () => {
       expect(() =>
         parseCliArgs(["--from-connector", "/tmp/x", "--gateway-wiring", "C:/gitrep/Nimbus"]),
       ).toThrow(/--gateway-wiring/);
+    });
+  });
+
+  describe("--partial", () => {
+    it("defaults to false", () => {
+      expect(parseCliArgs(["acme"]).partial).toBe(false);
+    });
+
+    it("is set by the flag when combined with --from-connector", () => {
+      expect(parseCliArgs(["--from-connector", "/tmp/x", "--partial"]).partial).toBe(true);
+    });
+
+    it("rejects --partial without --from-connector rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--partial"])).toThrow(/--from-connector/);
     });
   });
 });
