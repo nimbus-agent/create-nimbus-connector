@@ -151,7 +151,7 @@ function renderImportLines(
     // never names SearchFilter in its body, so importing it unconditionally would be
     // an unused import under the generated package's own noUnusedLocals.
     const names = anyStub ? [...filterNames, "type SearchFilter"] : [...filterNames];
-    return [renderBlockImport(names.sort(byBareName), KIT)];
+    return [renderBlockImport(names.toSorted(byBareName), KIT)];
   }
   // Two modules in the monorepo, and the split is not cosmetic: SearchFilter is
   // declared in shared/mcp-search-tool.ts, NOT in shared/search-filter.ts. Emitting it

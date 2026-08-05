@@ -28,7 +28,7 @@ function req<T>(value: T | undefined, key: string): T {
  */
 function reqString(value: unknown, key: string): string {
   if (typeof value !== "string") {
-    throw new Error(
+    throw new TypeError(
       `nimbus.extension.json's "${key}" is not a string — it is not a connector manifest.`,
     );
   }
