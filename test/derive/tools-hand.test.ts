@@ -425,6 +425,27 @@ describe("recognizeTools", () => {
     expect(claims.claims()).toEqual([]);
   });
 
+  // M1 (final whole-branch review): fetchCall's arity checks were unpinned — mutation-verified
+  // that relaxing `args.length === 1` to `>= 1` (read helper) and `args.length !== 3` to `< 2`
+  // (write helper) left every test/derive/ test green. Callee identity was well covered; arity
+  // was not. These two close it, one per relaxed check.
+  it("refuses a read-helper call with a second argument, rather than reading only the first as the path", () => {
+    // Under the `>= 1` mutant this would wrongly succeed with path "/x" (args[0]), silently
+    // dropping the second argument instead of refusing the whole shape.
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x", "extra")));';
+    expect(run(source).result).toBeUndefined();
+  });
+
+  it("refuses a write-helper call missing its body argument (path, method only)", () => {
+    // Under the `< 2` mutant, 2 arguments (2 < 2 is false) would skip the arity guard entirely
+    // and succeed on the strength of a valid method literal at args[1], never checking that a
+    // body argument was even passed.
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await writeSend("/x", "POST")));';
+    expect(run(source, "write").result).toBeUndefined();
+  });
+
   // --- Connector-level handlerStyle recovery (see recognizeTools's docstring for the rule).
 
   it("derives handlerStyle: block from a single block-with-no-hoists tool", () => {
