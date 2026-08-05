@@ -188,7 +188,12 @@ function deriveSharedStyleSpec(
 ): Derivation {
   const env = recognizeEnv(frame.verifyStatements, claims);
   const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
-  const toolsResult = recognizeTools(frame.toolStatements, claims);
+  // fetchHelper?.local, not fetchHelper!.local: recognizeTools must be able to run (and refuse)
+  // even when the fetch helper itself was never recognized. Checked below, AFTER the totality
+  // rule — see this function's own comment on that ordering — rather than short-circuited here,
+  // so an unrecognized fetch helper still surfaces as a named, per-statement blocker instead of
+  // the coarse "no-fetch-helper" case.
+  const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
 
   // The totality rule walks frame.verifyStatements, NOT the module's own statement list. For
   // read-only-kit those differ by exactly one statement — the wrapper, replaced by its callback

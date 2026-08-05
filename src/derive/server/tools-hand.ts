@@ -16,16 +16,22 @@ import { type PathLocal, recognizePath } from "./path-template.ts";
 
 /**
  * The inverse of src/emit/server/tools-hand.ts's renderTool — recovers one `reg(...)` call's
- * declared spec fields. No `method` field: tools-hand.ts routes both GET and non-GET tools
- * through `jsonResult(await <helper>(<path>, ...))` / `<helper>Send(<path>, <method>, <body>)`
- * with the path always first, so this recognizer can name the path without needing to
- * distinguish which helper produced the call — the method itself is a different task's concern.
+ * declared spec fields, including which of the two fetch helpers produced the call:
+ * `jsonResult(await <helper>(<path>, ...))` for GET, `<helper>Send(<path>, <method>, <body>)`
+ * for everything else. Reading the path argument without checking WHICH function produced it
+ * used to derive a POST tool as a GET read tool — see `fetchCall`'s docstring.
  */
 export type ToolFields = {
   name: string;
   description: string;
   args: Record<string, ArgFields>;
   path: string;
+  /**
+   * Omitted for GET, so ToolSchema's `.default("GET")` applies and a read connector's derived
+   * spec is byte-unchanged by this field's existence. Present only when the emitter wrote the
+   * write helper, which is the only place a method literal appears.
+   */
+  method?: "POST" | "PUT" | "PATCH" | "DELETE";
 };
 
 /**
@@ -47,9 +53,32 @@ function isRegCall(node: AstNode): AstNode | undefined {
   return isIdent(calleeOf(call), "reg") ? call : undefined;
 }
 
-/** The path argument of `<helper>(<path>, ...)` / `<helper>Send(<path>, ...)`. */
-function fetchPathArgument(call: AstNode): AstNode | undefined {
-  return callArgs(call)?.[0];
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+type FetchCall = { path: AstNode; method?: "POST" | "PUT" | "PATCH" | "DELETE" };
+
+/**
+ * The read helper `<local>(path)` or the write helper `<local>Send(path, "METHOD", body)`, and
+ * NOTHING else. Reading args[0] without checking the callee derived a POST tool as a GET read
+ * tool — losing method, effect and therefore the manifest's hitlRequired — which is a wrong
+ * artifact rather than a byte mismatch, and invisible to the totality rule because the statement
+ * was claimed, just claimed wrongly. deriveRestKitSpec already performs the equivalent refusal.
+ */
+function fetchCall(call: AstNode, helperLocal: string): FetchCall | undefined {
+  const callee = calleeOf(call);
+  const args = callArgs(call);
+  if (args === undefined) return undefined;
+
+  if (isIdent(callee, helperLocal)) {
+    return args.length === 1 && args[0] !== undefined ? { path: args[0] } : undefined;
+  }
+  if (isIdent(callee, `${helperLocal}Send`)) {
+    if (args.length !== 3 || args[0] === undefined) return undefined;
+    const method = stringLit(args[1]);
+    if (method === undefined || !WRITE_METHODS.has(method)) return undefined;
+    return { path: args[0], method: method as "POST" | "PUT" | "PATCH" | "DELETE" };
+  }
+  return undefined;
 }
 
 function awaitedCall(node: AstNode | undefined): AstNode | undefined {
@@ -63,14 +92,22 @@ function jsonResultCall(node: AstNode | undefined): AstNode | undefined {
   return args === undefined ? undefined : awaitedCall(args[0]);
 }
 
-/** The declared path recovered from `jsonResult(await helper(path, ...))`, or undefined. */
-function pathFromJsonResult(node: AstNode | undefined, locals: ReadonlyMap<string, PathLocal>) {
+/** The declared path and method recovered from `jsonResult(await <helper|helperSend>(...))`. */
+function pathFromJsonResult(
+  node: AstNode | undefined,
+  locals: ReadonlyMap<string, PathLocal>,
+  helperLocal: string,
+): { path: string; method?: "POST" | "PUT" | "PATCH" | "DELETE" } | undefined {
   const helperCall = jsonResultCall(node);
-  const pathNode = helperCall === undefined ? undefined : fetchPathArgument(helperCall);
-  return pathNode === undefined ? undefined : recognizePath(pathNode, locals);
+  if (helperCall === undefined) return undefined;
+  const fetched = fetchCall(helperCall, helperLocal);
+  if (fetched === undefined) return undefined;
+  const path = recognizePath(fetched.path, locals);
+  if (path === undefined) return undefined;
+  return { path, ...(fetched.method === undefined ? {} : { method: fetched.method }) };
 }
 
-function recognizeOne(call: AstNode): ToolShape | undefined {
+function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
   const args = callArgs(call);
   if (args?.length !== 4) return undefined;
   const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
@@ -91,10 +128,14 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
 
   // The concise, expression-bodied form: `async (...) => jsonResult(await helper(path))`.
   if (!arrow.isBlock) {
-    const path = pathFromJsonResult(arrow.body, new Map());
-    return path === undefined
+    const recovered = pathFromJsonResult(arrow.body, new Map(), helperLocal);
+    return recovered === undefined
       ? undefined
-      : { fields: { name, description, args: toolArgs, path }, isBlock: false, hasHoists: false };
+      : {
+          fields: { name, description, args: toolArgs, ...recovered },
+          isBlock: false,
+          hasHoists: false,
+        };
   }
 
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
@@ -105,8 +146,8 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
   const block = recognizeHoistedBlock(arrow.body);
   if (block === undefined) return undefined;
 
-  const path = pathFromJsonResult(block.returned, block.locals);
-  if (path === undefined) return undefined;
+  const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);
+  if (recovered === undefined) return undefined;
 
   // Gap A / Gap B: renderZodSchema never encodes `local` or `default` in the schema text
   // itself (recognizeArgs, above, cannot see either), so both are only visible at the hoist
@@ -115,7 +156,7 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
   if (mergedArgs === undefined) return undefined;
 
   return {
-    fields: { name, description, args: mergedArgs, path },
+    fields: { name, description, args: mergedArgs, ...recovered },
     isBlock: true,
     hasHoists: block.locals.size > 0,
   };
@@ -143,11 +184,22 @@ function recognizeOne(call: AstNode): ToolShape | undefined {
  *   - "block": every tool renders block, hoisted or not — never a concise tool.
  * A module mixing a concise tool with a block-without-hoists tool matches neither, and is
  * refused as an unmodeled shape rather than guessed at.
+ *
+ * `helperLocal` is the fetch helper's recognized name (`FetchHelperFields.local`), threaded in
+ * by the caller so `fetchCall` can verify each reg() handler's fetch call is actually the
+ * connector's own helper rather than assume it. It is `undefined` when `recognizeFetchHelper`
+ * itself found nothing — with no name to check a callee against, refusing every call here is the
+ * only option that does not risk attributing a method/effect to a call this recognizer cannot
+ * verify. Refusing claims nothing, so those reg() statements fall through to the totality rule
+ * and are reported by name rather than silently inheriting the (unrelated) no-fetch-helper case.
  */
 export function recognizeTools(
   statements: readonly AstNode[],
   claims: ClaimSet,
+  helperLocal: string | undefined,
 ): ToolsResult | undefined {
+  if (helperLocal === undefined) return undefined;
+
   const regs = statements
     .map((statement) => ({ statement, call: isRegCall(statement) }))
     .filter((entry): entry is { statement: AstNode; call: AstNode } => entry.call !== undefined);
@@ -160,7 +212,7 @@ export function recognizeTools(
 
   const shapes: ToolShape[] = [];
   for (const { call } of regs) {
-    const shape = recognizeOne(call);
+    const shape = recognizeOne(call, helperLocal);
     if (shape === undefined) return undefined;
     shapes.push(shape);
   }
