@@ -440,6 +440,41 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   one level down — `matchesResult` does `Array.isArray(rows) ? … : []`, so `undefined`, `null`
   and any non-array already yield an empty match set. The coercion would be dead code that
   changes a byte-exact fixture's bytes.
+- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening (see
+  [the roadmap-completion design](./superpowers/specs/2026-08-05-roadmap-completion-design.md)'s
+  *Application: the rows pluck*): corpus connectors commonly hoist
+  `function <name>From(root: unknown): unknown[]` above their registrations and pluck the row
+  array there, so a recognizer could read that key back as `rows` even though `renderSearchTool`
+  writes the narrowing inline. The proposal drew a careful line between the pluck bodies that are
+  behaviourally identical to the inline form and the ones that fall back to the root array, which
+  `rows` cannot express. That line was correct and irrelevant: **the connectors that hoist a
+  pluck helper are exactly the ones that never call `matchesResult`.** They build the
+  `{ matches }` envelope by hand — `const matches = filterX(<pluck>(root), { query: p.query,
+  limit: p.limit }); return jsonResult({ matches });` — and `recognizeSearchTool` requires
+  `matchesResult` before it inspects a handler body at all. Every corpus `matchesResult` call
+  site instead passes a bare identifier, `root` or the narrowed const, which
+  `recognizeNoRowsBody` and `recognizeRowsBody` already read. That same design document's trap
+  list had measured this from the other side — a connector that carries `src/search-filter.ts`
+  without calling `matchesResult` builds its own envelope and is "out of the recognizer's reach
+  by construction, not by omission" — so that proposal and that trap could not both be true, and
+  the trap is the half backed by a measurement.
+
+  Recognizing the **hand-written result tail** instead would be a legitimate case-2 widening —
+  `matchesResult`'s own docstring calls it the verbatim equivalent of that tail — and is declined
+  because it moves no connector out of `blocked`. Three separate things stop it, each sufficient
+  alone: the connectors whose read-only-kit callback is a named function reference never reach a
+  statement-level blocker at all, failing earlier at `frame:no-mcp-server`; `recognizeTools` is
+  all-or-nothing, and several of these connectors also call the pluck helper from an unmodeled
+  *list* handler (`jsonResult({ items: <pluck>(root) })`), so nothing in those modules would be
+  claimed; and `matchSearchKitImport` requires `matchesResult` in a clause these connectors
+  import only `searchToolInputSchema` from. A bespoke result envelope is bespoke code — a matcher
+  for it would add surface area and a case-2 divergence to maintain, and change no number.
+
+  The sweep behind the proposal also under-counted the helper's own body shapes, and a table that
+  claims to be exhaustive and is not is worth recording as such: beside the keyed pluck, the
+  root-array pluck, the array-first prelude and the keyed-first root fallback, `figma` writes a
+  loop flattener returning `Array<{ id; name }>` rather than `unknown[]`, so it keeps a
+  `function:<name>From` blocker under any correct guard.
 - **A validation warning on a large `maxLimit`.** It measures the wrong quantity. `maxLimit`
   caps how many matches are *returned*, not how many rows are *fetched* — the connector has
   already awaited the full response. A connector with `maxLimit: 50` against an endpoint
