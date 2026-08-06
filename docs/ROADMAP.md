@@ -530,9 +530,12 @@ cost of closing each is named; none is proposed.**
   form is not emitting it: `wiring()` and `tail()` (`src/emit/server/index.ts`) still write the
   one-line registrar and the named transport const. What recognizing these forms buys is that a
   connector writing one **gets past the frame** — and it then blocks on whatever is behind it.
-  That is the measured result, not a prediction: every connector on these axes is `blocked`
-  today, on statement-level blockers the frame used to hide. **None reaches `emits`; the tier is
-  empty corpus-wide.** The frame widening reveals rather than clears, which is what it was for.
+  That is the measured result, not a prediction: all 27 connectors on these axes are `blocked`
+  today, on statement-level blockers the frame used to hide. **Not one reaches `emits`** — and no
+  connector in the corpus carries that tier as its verdict, since the only six that derive and
+  emit all go on to `server-identical`. (`bun run reach` prints the tiers cumulatively, so
+  "spec derived + emits 6/94" beside "server.ts identical 6/94" is that same fact, not a
+  separate six.) The frame widening reveals rather than clears, which is what it was for.
   The `emits` ceiling stated here is what these axes would impose *if* everything behind them
   were recognized — a connector in either form would then re-emit in **this generator's** form,
   reaching `emits` and never `server-identical`. No cosmetic spec field is added to close that
