@@ -309,9 +309,32 @@ describe("recognizeRestTools reads the arity-5 initFn", () => {
       "  someBespokeInitFn,",
     ],
     [
-      "an arrow returning an object with a third key",
+      // Two keys, not three: the object already has one (`method`), and this adds a second whose
+      // NAME is wrong (`extra`, not `body`) — the genuine three-key case is already refused by
+      // `props.length`'s own gate and needs no separate row. This is what actually forces
+      // `bodyProp.key !== "body"` to fire.
+      "a second key that is not `body`",
       '() => ({ method: "DELETE" }),',
       '() => ({ method: "DELETE", extra: 1 }),',
+    ],
+    [
+      // `renderTool` always writes `method` first — `objectProps` preserves source order, so a
+      // `body`-before-`method` object is a shape the emitter cannot write. Load-bearing on
+      // `methodProp.key !== "method"` seeing "body" in that slot instead, not merely on the key
+      // being present somewhere in the object.
+      "a `body` key before `method` — renderTool always writes `method` first",
+      '    method: "PATCH",\n    body: JSON.stringify({ title: parsed.title, mode: parsed.mode ?? "merge" }),',
+      '    body: JSON.stringify({ title: parsed.title, mode: parsed.mode ?? "merge" }),\n    method: "PATCH",',
+    ],
+    [
+      // `renderTool`'s `initArg` never writes `async` here — the same pin `read.ts`'s `isAsync`
+      // documents elsewhere, and the ONE guard in `recognizeInitFn`'s four-disjunct check that
+      // nothing downstream re-catches: `arrow.isBlock` is redundant with `objectProps` refusing a
+      // block body, and a params mismatch is re-caught by the `props.length` branches below, but
+      // an async arrow's params and body shape are otherwise identical to the non-async form.
+      "an async init arrow — renderTool never writes async here",
+      '() => ({ method: "DELETE" }),',
+      'async () => ({ method: "DELETE" }),',
     ],
     [
       "a parameter with no body — renderTool's initParam is `()` when there is nothing to reference",
