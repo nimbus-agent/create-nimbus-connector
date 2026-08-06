@@ -702,6 +702,28 @@ describe("recognizeFetchHelper", () => {
     });
   });
 
+  // --- The base template's own path interpolation, pinned to the variable this helper declares.
+  // `reconstructBase` used to require only that the last expression be SOME identifier, which
+  // recovers byte-identical fields from a helper interpolating something else and re-emits a URL
+  // it never requested — the wrong-claim class. Both cases below reproduce with ZERO query tools,
+  // on the byte-locked grafana and sentry shapes, so this laxity is not the passthrough's.
+
+  it("refuses a base template interpolating `path` where the helper normalized it into `pathPart`", () => {
+    // GRAFANA's own helper, with the fetch template reaching past its `pathPart` const to the raw
+    // `path`. Every recovered field is unchanged, so nothing but this pin can reject it.
+    const src = GRAFANA.replace("`${baseUrl()}${pathPart}`", "`${baseUrl()}${path}`");
+    expect(src).not.toBe(GRAFANA);
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a base template interpolating a variable that is not the path at all", () => {
+    const src = SENTRY.replace("`${apiRoot()}${path}`", "`${apiRoot()}${bogusVar}`");
+    expect(src).not.toBe(SENTRY);
+    expect(run(src).fields).toBeUndefined();
+  });
+
   // --- The absolute-URL passthrough, emitted IFF the spec declares a query tool (hasQueryTool,
   // src/emit/server/fetch-helper.ts). Recovered as EVIDENCE about the tools, not as a
   // `fetchHelper` field: `deriveSharedStyleSpec` cross-checks it against the recognized tools,

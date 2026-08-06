@@ -111,15 +111,19 @@ type ReconstructedBase = {
 function reconstructBase(
   template: AstNode,
   statements: readonly AstNode[],
+  pathVar: string,
 ): ReconstructedBase | undefined {
   const t = templateLiteral(template);
   if (t === undefined) return undefined;
   const { quasis, expressions } = t;
 
-  // The last expression should be the path variable (Identifier: path or pathPart).
-  // Drop it and the trailing quasi.
+  // The last expression is the path variable — pinned to the one this helper actually declares
+  // (`pathPart` when it normalizes a leading slash, `path` otherwise), not merely "some
+  // identifier". Accepting any name recovers byte-identical fields from a helper that
+  // interpolates something else entirely and re-emits a URL it never requested: a wrong claim
+  // rather than a rejection. Drop it and the trailing quasi.
   if (expressions.length === 0 || quasis.length === 0) return undefined;
-  if (identName(expressions.at(-1)) === undefined) return undefined;
+  if (!isIdent(expressions.at(-1), pathVar)) return undefined;
 
   // Reconstruct: concatenate quasis[0..n-2] and expressions[0..n-2],
   // then the first n-1 quasis' cooked values.
@@ -662,7 +666,8 @@ function matchFetchHelperFunction(
   const headers = matchFetchHelperHeaders(parsed.fetchCall);
   if (headers === undefined) return undefined;
 
-  const reconstructed = reconstructBase(parsed.baseTemplate, statements);
+  const pathVar = parsed.normalizeLeadingSlash ? "pathPart" : "path";
+  const reconstructed = reconstructBase(parsed.baseTemplate, statements, pathVar);
   const serviceLabel = serviceLabelFrom(s);
   const local = functionName(s) ?? "";
   if (reconstructed === undefined || serviceLabel === undefined || local === "") return undefined;
