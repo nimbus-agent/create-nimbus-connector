@@ -432,6 +432,40 @@ describe("recognizeEnv: split-bearer pair (tokenLocal)", () => {
     ]);
     expect(unclaimed).toHaveLength(1);
   });
+
+  it("does not form a pair when the wrapper carries a THIRD header (intercom, named OUT by renderSplitBearer's own docstring)", () => {
+    // Criterion 3 of renderSplitBearer's docstring: "with exactly two keys, Authorization then
+    // Accept — a third header cannot be emitted (intercom adds "Intercom-Version": "2.11": OUT)".
+    // This is the one exclusion the brief names by name that had no pinning test before this
+    // fix round — the emitter itself can never produce this shape (renderSplitBearer's own
+    // template writes exactly two properties), so this is hand-written, the same way
+    // REFUSED_SOURCES hand-writes every other shape the emitter cannot produce.
+    //
+    // Authorization and Accept deliberately stay FIRST and SECOND, with the extra header
+    // LAST: matchSplitBearerWrapper destructures only the first two properties, so an extra
+    // property placed BEFORE Accept would incidentally also fail the (unrelated) "acceptProp.key
+    // must be Accept" check — masking whether the `properties?.length !== 2` guard itself is
+    // what is doing the work. Placing it last isolates that guard, so this test genuinely goes
+    // red if THAT check alone regresses (see the fix report for the loosen/RED/restore proof).
+    const threeHeaderWrapper = [
+      "function authHeader(): Record<string, string> {",
+      "  return {",
+      "    Authorization: `Bearer ${apiToken()}`,",
+      '    Accept: "application/json",',
+      '    "Intercom-Version": "2.11",',
+      "  };",
+      "}",
+    ].join("\n");
+    const source = [SPLIT_BEARER_READER, "", threeHeaderWrapper].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    // No tokenLocal entry forms. The reader still stands alone as a plain required entry (the
+    // same fallback the other "no pair" cases above exercise); the three-header wrapper matches
+    // nothing at all and stays unclaimed.
+    expect(entries).toEqual([
+      { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+    ]);
+    expect(unclaimed).toHaveLength(1);
+  });
 });
 
 describe("recognizeEnv: auth: basic", () => {
@@ -532,6 +566,30 @@ describe("recognizeEnv: auth: basic", () => {
       "  }",
       "  return {",
       "    Authorization: someOtherHelper(email, token),",
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("does not recover auth: basic from a ONE-var accessor (lever, named OUT by renderBasic's own docstring)", () => {
+    // renderSplitBearer's docstring (the one this task scopes both shapes to) names lever as
+    // OUT: "Basic over one var with an empty password". EnvSchema pins auth: "basic" to
+    // exactly two vars — a username and a password — so a single process.env read paired with
+    // a literal empty-string password (rather than a second read) is a shape the emitter can
+    // never produce; hand-written, the same way REFUSED_SOURCES hand-writes every other shape
+    // the emitter cannot produce.
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const key = process.env["LEVER_API_KEY"]?.trim();',
+      '  if (key === undefined || key === "") {',
+      '    throw new Error("LEVER_API_KEY is not set");',
+      "  }",
+      "  return {",
+      '    Authorization: encodeBasicAuthHeader(key, ""),',
       '    Accept: "application/json",',
       "  };",
       "}",
