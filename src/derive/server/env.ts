@@ -6,16 +6,21 @@ import {
   callArgs,
   calleeOf,
   computedMember,
+  conditional,
   constDecl,
   functionBody,
   functionName,
+  functionParams,
   ifStatement,
   isIdent,
   logical,
   memberName,
   memberObject,
   memberOn,
+  methodCallTo,
   newOf,
+  numberLit,
+  numericValue,
   objectProps,
   optionalCallCallee,
   optionalMemberName,
@@ -36,8 +41,10 @@ export type EnvEntry = {
   transform?: "stripTrailingSlash" | "trimTrailingSlashFn";
   prefix?: string;
   suffix?: string;
-  auth?: "bearer" | "headers";
+  auth?: "bearer" | "basic" | "headers";
   headerNames?: string[];
+  /** Split-bearer's raw-token accessor name — see matchSplitBearerReader/-Wrapper below. */
+  tokenLocal?: string;
 };
 
 /**
@@ -412,13 +419,253 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   return arg.type === "ObjectExpression" ? buildAuthEntry(arg, ctx) : buildPlainEntry(arg, ctx);
 }
 
+/**
+ * The reader half of a split-bearer pair — renderSplitBearer's first function: `readLines` +
+ * `guardLines` for exactly one var, then a bare `return <binding>;`. Mirrors criterion 5 of
+ * renderSplitBearer's own docstring (src/emit/server/env.ts): the field only ever carries ONE
+ * var (EnvSchema's multi-var refine admits only auth "basic"/"headers"/"client-credentials",
+ * none of which coexist with `tokenLocal`), and the guard is always present — `auth: "bearer"`
+ * forces `guardLines`' `needsGuard` regardless of `required`, and no split-bearer entry in the
+ * corpus sets a `default` (which would suppress the guard entirely).
+ *
+ * This shape is BYTE-IDENTICAL to a plain "required" accessor (recognizeOne's REQUIRED case in
+ * the test file) — from this function alone the two are indistinguishable. What tells them
+ * apart is whether a matching WRAPPER (matchSplitBearerWrapper) immediately follows, and
+ * `recognizeEnv` checks that BEFORE ever offering this statement to the plain-accessor branch —
+ * see its own docstring for why the ordering is load-bearing.
+ */
+function matchSplitBearerReader(
+  fn: AstNode,
+): { readonly var: string; readonly binding: string; readonly local: string } | undefined {
+  const statements = functionBody(fn);
+  if (statements === undefined || statements.length === 0) return undefined;
+  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
+
+  const section = collectReadLines(statements);
+  if (section === undefined || section.reads.length !== 1) return undefined;
+  const read = section.reads[0]!;
+  if (read.default !== undefined) return undefined;
+
+  const tail = splitBodyTail(section.rest);
+  if (tail?.guardNode === undefined) return undefined;
+  if (!verifyGuard(tail.guardNode, section.reads)) return undefined;
+  if (!isIdent(returnArgument(tail.returnStmt), read.binding)) return undefined;
+
+  const local = functionName(fn);
+  return local === undefined ? undefined : { var: read.var, binding: read.binding, local };
+}
+
+/**
+ * The wrapper half — renderSplitBearer's second function: one statement,
+ * `return { Authorization: \`Bearer ${<reader>()}\`, Accept: "application/json" };`, calling the
+ * reader BY NAME with no arguments. `readerLocal` is the reader's own function name, matched here
+ * rather than assumed: a wrapper calling any OTHER function is not this pair (mendeley's inline
+ * `` `Bearer ${accessToken()}` `` has no wrapper at all — criterion 1 of renderSplitBearer's
+ * docstring, OUT).
+ */
+function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
+  const statements = functionBody(fn);
+  if (statements?.length !== 1) return undefined;
+
+  const arg = returnArgument(statements[0]!);
+  const properties = objectProps(arg);
+  if (properties?.length !== 2) return undefined;
+  const [authProp, acceptProp] = properties;
+  if (authProp === undefined || authProp.key !== "Authorization") return undefined;
+  if (acceptProp === undefined || acceptProp.key !== "Accept") return undefined;
+  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+
+  const t = templateLiteral(authProp.value);
+  if (t?.expressions.length !== 1 || t.quasis[0] !== "Bearer " || t.quasis[1] !== "") {
+    return undefined;
+  }
+  const call = t.expressions[0]!;
+  if (callArgs(call)?.length !== 0) return undefined;
+  if (!isIdent(calleeOf(call), readerLocal)) return undefined;
+
+  return functionName(fn);
+}
+
+type BasicUser = { readonly prefix?: string; readonly suffix?: string };
+
+/**
+ * The username expression `renderBasic` passes to `encodeBasicAuthHeader`: the bare binding, or
+ * `wrapped()`'s template form when a prefix/suffix decorates it (zendesk's
+ * `` `${email}/token` ``) — `auth: "basic"` is the one auth mode EnvSchema still lets carry
+ * `prefix`/`suffix`, since they decorate the USERNAME rather than the value the auth wrapper
+ * itself replaces.
+ */
+function matchBasicUserExpr(node: AstNode, binding: string): BasicUser | undefined {
+  if (isIdent(node, binding)) return {};
+  const t = templateLiteral(node);
+  if (t?.expressions.length !== 1 || !isIdent(t.expressions[0], binding)) return undefined;
+  const prefix = t.quasis[0];
+  const suffix = t.quasis[1];
+  return prefix === undefined || suffix === undefined ? undefined : { prefix, suffix };
+}
+
+type BasicSection = { readonly reads: readonly ReadLine[]; readonly rest: readonly AstNode[] };
+
+/**
+ * The leading run of `renderBasic`'s read+guard PAIRS — one read statement immediately followed
+ * by ITS OWN single-var guard (never the combined `a === "" || b === ""` form `guardLines` writes
+ * for `auth: "headers"`/`"bearer"`) — and whatever follows. Stops at the first pair it cannot
+ * verify, the same "stop rather than skip" rule `collectReadLines` documents: a non-pair
+ * statement between two pairs is not a shape `renderBasic` writes, and skipping past it would
+ * splice two halves of a different function into one entry.
+ */
+function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undefined {
+  const reads: ReadLine[] = [];
+  let i = 0;
+  while (i + 1 < statements.length) {
+    const read = parseReadLine(statements[i]!);
+    if (read === undefined) break;
+    // renderBasic's readAndGuard has no defaulted form — a default suppresses the guard
+    // entirely (guardLines), and renderBasic always guards every credential.
+    if (read.default !== undefined) break;
+    if (!verifyGuard(statements[i + 1]!, [read])) break;
+    reads.push(read);
+    i += 2;
+  }
+  return reads.length === 0 ? undefined : { reads, rest: statements.slice(i) };
+}
+
+/**
+ * `auth: "basic"` — the airflow/zendesk shape `renderBasic` writes: `collectBasicPairs`' read+
+ * guard pairs (EnvSchema pins this to exactly two, a username and a password) followed by one
+ * `return { Authorization: encodeBasicAuthHeader(<user>, <password>), Accept:
+ * "application/json" };`. Structurally distinct from every shape `recognizeOne` models — its
+ * `collectReadLines` requires ALL reads before the first guard, which `renderBasic`'s interleaved
+ * read/guard/read/guard never satisfies — so the two never compete for the same statement.
+ */
+function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
+  const statements = functionBody(fn);
+  if (statements === undefined || statements.length === 0) return undefined;
+  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
+
+  const section = collectBasicPairs(statements);
+  if (section === undefined) return undefined;
+  // "auth: basic requires exactly two vars" — src/spec.ts's EnvSchema refine.
+  if (section.reads.length !== 2 || section.rest.length !== 1) return undefined;
+
+  const local = functionName(fn);
+  if (local === undefined) return undefined;
+
+  const arg = returnArgument(section.rest[0]!);
+  const properties = objectProps(arg);
+  if (properties?.length !== 2) return undefined;
+  const [authProp, acceptProp] = properties;
+  if (authProp === undefined || authProp.key !== "Authorization") return undefined;
+  if (acceptProp === undefined || acceptProp.key !== "Accept") return undefined;
+  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+
+  const callArguments = callArgs(authProp.value);
+  if (callArguments?.length !== 2) return undefined;
+  if (!isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader")) return undefined;
+
+  const user = matchBasicUserExpr(callArguments[0]!, section.reads[0]!.binding);
+  if (user === undefined) return undefined;
+  if (!isIdent(callArguments[1], section.reads[1]!.binding)) return undefined;
+
+  return {
+    vars: section.reads.map((r) => r.var),
+    local,
+    bindings: section.reads.map((r) => r.binding),
+    // needsGuard is unconditional for auth: "basic" — renderBasic never checks it — so, like
+    // buildAuthEntry's own `required: false`, the schema default is recorded rather than a
+    // value the bytes cannot distinguish.
+    required: false,
+    auth: "basic",
+    ...(user.prefix !== undefined ? { prefix: user.prefix } : {}),
+    ...(user.suffix !== undefined ? { suffix: user.suffix } : {}),
+  };
+}
+
+/**
+ * Whether a statement is exactly src/emit/server/env.ts's `TRIM_TRAILING_SLASH_FN`, mirrored as
+ * TEXT here rather than imported — `src/derive/` never imports from `src/emit/` (see read.ts's
+ * own module header on why the boundary is deliberate). The body is
+ * `s.endsWith("/") ? s.slice(0, -1) : s`, NOT `.replace(/\/$/, "")` (that is
+ * `stripTrailingSlash`'s inlined shape, matched by `matchTransformExpr` above) — a matcher
+ * written against the regex form would match nothing this emitter actually produces for the
+ * shared helper.
+ */
+function matchTrimTrailingSlashFn(node: AstNode): boolean {
+  if (functionName(node) !== "trimTrailingSlash") return false;
+  const params = functionParams(node);
+  if (params?.length !== 1 || !isIdent(params[0], "s")) return false;
+
+  const statements = functionBody(node);
+  if (statements?.length !== 1) return false;
+  const c = conditional(returnArgument(statements[0]!));
+  if (c === undefined) return false;
+
+  const endsWithArgs = methodCallTo(c.test, "s", "endsWith", 1);
+  if (endsWithArgs === undefined || stringLit(endsWithArgs[0]) !== "/") return false;
+
+  const sliceArgs = methodCallTo(c.consequent, "s", "slice", 2);
+  if (sliceArgs === undefined) return false;
+  if (numberLit(sliceArgs[0]) !== 0 || numericValue(sliceArgs[1]) !== -1) return false;
+
+  return isIdent(c.alternate, "s");
+}
+
+/**
+ * Every env accessor in `statements`, in DECLARATION order — not "every pair, then every plain
+ * entry", which would scramble the array position `renderEnvAccessors` depends on to regenerate
+ * byte-identical output (it emits `spec.env` in array order, unconditionally).
+ *
+ * The split-bearer pair is detected in a pass over the WHOLE list, BEFORE the single-statement
+ * loop below ever reaches the inner reader. This ordering is the fix for the hazard
+ * `matchSplitBearerReader`'s own docstring names: that shape is byte-identical to a plain
+ * "required" accessor, so a walk that tried the plain branch first would claim the reader alone
+ * — individually plausible, and wrong, because the wrapper right after it would then be the ONLY
+ * thing standing between a wrong spec and the totality rule. Detecting the pair first and
+ * claiming both statements in one `claims.claim()` call (rather than teaching the plain branch
+ * to recognize and skip a shape it does not otherwise handle) keeps that decision in one place.
+ */
 export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): EnvEntry[] {
-  const entries: EnvEntry[] = [];
-  for (const s of statements) {
-    const entry = recognizeOne(s);
+  const consumed = new Set<number>();
+  const indexed: { readonly index: number; readonly entry: EnvEntry }[] = [];
+
+  for (let i = 0; i < statements.length - 1; i++) {
+    const reader = matchSplitBearerReader(statements[i]!);
+    if (reader === undefined) continue;
+    const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
+    if (wrapperLocal === undefined) continue;
+
+    claims.claim([statements[i]!, statements[i + 1]!], "env");
+    consumed.add(i);
+    consumed.add(i + 1);
+    indexed.push({
+      index: i,
+      entry: {
+        vars: [reader.var],
+        local: wrapperLocal,
+        tokenLocal: reader.local,
+        bindings: [reader.binding],
+        required: false,
+        auth: "bearer",
+      },
+    });
+  }
+
+  for (let i = 0; i < statements.length; i++) {
+    if (consumed.has(i)) continue;
+    const s = statements[i]!;
+    const entry = recognizeBasicAuth(s) ?? recognizeOne(s);
     if (entry === undefined) continue;
     claims.claim(s, "env");
-    entries.push(entry);
+    indexed.push({ index: i, entry });
   }
-  return entries;
+
+  // The shared trimTrailingSlash helper is claimed only once an entry actually carries the
+  // transform that calls it — gated on that, not on the function's name alone, so a same-named
+  // helper doing something else is left unclaimed rather than silently absorbed.
+  if (indexed.some(({ entry }) => entry.transform === "trimTrailingSlashFn")) {
+    const helperIndex = statements.findIndex((s) => matchTrimTrailingSlashFn(s));
+    if (helperIndex !== -1) claims.claim(statements[helperIndex]!, "env");
+  }
+
+  return indexed.sort((a, b) => a.index - b.index).map(({ entry }) => entry);
 }

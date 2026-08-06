@@ -10,11 +10,11 @@ import { displayPath } from "../../src/types.ts";
 
 /**
  * Fixtures whose emitted src/server.ts + nimbus.extension.json (+ src/search-filter.ts, for the
- * three search fixtures) this plan's recognizers derive, and which then re-emit byte-identical
- * output for every file the fixture produces. Confirmed by running the full parseSpec ->
- * generate -> deriveSpec -> parseSpec -> generate pipeline against every fixture in fixtures/,
- * and the "accounts for every fixture in fixtures/" test below re-confirms it on every run
- * rather than trusting a count recorded here that would go stale silently as fixtures are added.
+ * search fixtures) this plan's recognizers derive, and which then re-emit byte-identical output
+ * for every file the fixture produces. Confirmed by running the full parseSpec -> generate ->
+ * deriveSpec -> parseSpec -> generate pipeline against every fixture in fixtures/, and the
+ * "accounts for every fixture in fixtures/" test below re-confirms it on every run rather than
+ * trusting a count recorded here that would go stale silently as fixtures are added.
  * newrelic/datadog/grafana/sentry are the byte-locked corpus fixtures (all "hand-rolled" style);
  * zzscratch and zzstandalonehand are synthetic "hand-rolled" fixtures that exercise the same
  * frame from the opposite direction; zzreadonly is a synthetic "read-only-kit" fixture with no
@@ -31,6 +31,16 @@ import { displayPath } from "../../src/types.ts";
  * `type SearchFilter` import; zzextract one bespoke-extractor filter (all four shared
  * primitives) alongside one keyed filter in the same file, proving the import list is computed
  * per FILE, not per filter.
+ *
+ * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
+ * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
+ * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
+ * and its `trimTrailingSlashFn`/`auth: "basic"` accessors (zendesk, dependencytrack). Of these
+ * four, only mercury and zendesk also move the `reach` headline (server-identical against the
+ * REAL corpus) — netlify and dependencytrack were already excluded from `src/server.ts` in
+ * fixtures/expectations.json for reasons unrelated to env (their real corpus source diverges
+ * elsewhere), so this local round trip (this repo's own spec -> emit -> derive -> re-emit) is a
+ * weaker, and different, claim than corpus byte-identity.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -44,6 +54,10 @@ const ROUND_TRIP = [
   "zzextract",
   "zzsearch",
   "zzsearchstub",
+  "mercury",
+  "netlify",
+  "zendesk",
+  "dependencytrack",
 ];
 
 /**
@@ -77,12 +91,15 @@ const ROUND_TRIP = [
  *
  * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
  * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
- * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. The other five
- * `style: "read-only-kit"` fixtures with a search tool block on a DIFFERENT construct each —
- * confirmed by running `deriveSpec` directly against each one's own search `reg()` call in
- * isolation (`recognizeSearchTool` recognizes all five correctly, filter fields included) before
- * checking the whole connector, so each reason below is the ACTUAL remaining blocker, not a
- * guess at what search recognition left behind:
+ * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. `bitrise` is the only
+ * remaining `style: "read-only-kit"` fixture with a search tool that still blocks — on a
+ * DIFFERENT construct, confirmed by running `deriveSpec` directly against its own search `reg()`
+ * call in isolation (`recognizeSearchTool` recognizes it correctly, filter fields included)
+ * before checking the whole connector, so the reason below is the ACTUAL remaining blocker, not
+ * a guess at what search recognition left behind. `mercury`, `netlify`, `zendesk` and
+ * `dependencytrack` — the other four fixtures that had a search tool alongside an env gap — moved
+ * to ROUND_TRIP once Task 4 landed the split-bearer pair and the `trimTrailingSlashFn`/
+ * `auth: "basic"` accessors (see ROUND_TRIP's own docstring above):
  *
  * - `bitrise` — "stub tool handler". Its other two tools are `impl: "stub"`
  *   (`async () => { throw ...; }`), a shape no recognizer in tools-hand.ts models (see
@@ -91,18 +108,6 @@ const ROUND_TRIP = [
  *   whole module — including its own search tool and both search-specific imports, which
  *   `deriveSpec` never even attempts to claim (`claimSearchImports` only runs once `toolsResult`
  *   itself succeeds). Reported: three unclaimed `call:reg` statements plus both search imports.
- * - `mercury`, `netlify` — "split-bearer env accessor". Both set `env[0].tokenLocal`
- *   (`apiToken`), the two-function split-bearer shape `server/env.ts`'s `recognizeOne` does not
- *   model (Task 4's territory, per the phase plan). Reported: `function:authHeader` (the
- *   accessor's own `local` name in both fixtures, not a generic label).
- * - `zendesk` — "trimTrailingSlash + basic-auth env accessors". `ZENDESK_URL` needs
- *   `trimTrailingSlashFn`, and the credential pair uses `auth: "basic"` — both are Task 4's
- *   territory too, and env recognition failing on the first blocks the totality rule from ever
- *   reaching the second's own name. Reported: `function:trimTrailingSlash` and
- *   `function:authHeader`.
- * - `dependencytrack` — "trimTrailingSlash env accessor". Same gap as zendesk's URL accessor,
- *   alone this time — its own credential accessor (`auth: "headers"`, a single var) IS a shape
- *   `recognizeOne` already models. Reported: `function:trimTrailingSlash`.
  *
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.
@@ -126,12 +131,8 @@ const ROUND_TRIP = [
  */
 const BLOCKED: Record<string, string> = {
   bitrise: "stub tool handler",
-  dependencytrack: "trimTrailingSlash env accessor",
   discord: "query parameters",
   "google-meet": "query parameters",
-  mercury: "split-bearer env accessor",
-  netlify: "split-bearer env accessor",
-  zendesk: "trimTrailingSlash + basic-auth env accessors",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
   zzwriterest: "write body",
