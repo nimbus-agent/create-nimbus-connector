@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
@@ -23,7 +24,7 @@ import {
   typeLiteralMembers,
   unionTypes,
 } from "../read.ts";
-import { type ArgFields, recognizeArgs } from "./args.ts";
+import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { recognizePath } from "./path-template.ts";
 import type { ToolFields } from "./tools-hand.ts";
 
@@ -49,8 +50,8 @@ export type SearchToolFields = ToolFields & {
  */
 export type SearchToolResult = {
   fields: SearchToolFields;
-  staticStyle?: "quoted" | "template";
-  schemaShape: { propertyCount: number; oneLine: boolean };
+  staticStyle?: StaticPathStyle;
+  schemaShape: SchemaShape;
 };
 
 /** `z.string().min(1)` — the search schema's fixed `query` field, exactly. */
@@ -70,7 +71,7 @@ function fieldsEqual(a: ArgFields, b: ArgFields): boolean {
 type SchemaRecovery = {
   args: Record<string, ArgFields>;
   maxLimit: number;
-  schemaShape: { propertyCount: number; oneLine: boolean };
+  schemaShape: SchemaShape;
 };
 
 /**

@@ -756,6 +756,15 @@ export type ToolSpec = z.infer<typeof ToolSchema>;
 export type ArgSpec = z.infer<typeof ArgSchema>;
 export type FetchHelperSpec = z.infer<typeof FetchHelperSchema>;
 
+/**
+ * `fetchHelper.staticPathStyle`'s two values, derived from the schema rather than restated — it
+ * appeared as an inline `"quoted" | "template"` at eleven sites across src/emit and src/derive,
+ * which is eleven places for the schema to be widened and one of them to be missed. The field
+ * carries `.default("quoted")`, so `z.infer`'s output is already the non-optional union —
+ * `NonNullable` would be noise (verified: both forms compile identically).
+ */
+export type StaticPathStyle = z.infer<typeof FetchHelperSchema>["staticPathStyle"];
+
 export type ConnectorSpec = z.infer<typeof ConnectorSpecSchema> & {
   readonly title: string;
   readonly id: string;

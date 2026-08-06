@@ -1,9 +1,10 @@
-import { capitalize } from "../spec.ts";
+import { capitalize, type StaticPathStyle } from "../spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
+import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
 import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
@@ -161,9 +162,9 @@ function recognizeRestTitle(
  * winner; the caller turns it into `blocked("style:mixed-static-path", …)`.
  */
 export function voteStaticPathStyle(
-  styles: readonly ("quoted" | "template" | undefined)[],
-): { ok: true; value: "quoted" | "template" | undefined } | { ok: false } {
-  const decisive = styles.filter((s): s is "quoted" | "template" => s !== undefined);
+  styles: readonly (StaticPathStyle | undefined)[],
+): { ok: true; value: StaticPathStyle | undefined } | { ok: false } {
+  const decisive = styles.filter((s): s is StaticPathStyle => s !== undefined);
   if (new Set(decisive).size > 1) return { ok: false };
   return { ok: true, value: decisive[0] };
 }
@@ -194,7 +195,7 @@ export function voteStaticPathStyle(
  * single one-liner settles the question outright, so there is no disagreement case to refuse.
  */
 export function voteArgsSchemaStyle(
-  schemas: readonly { propertyCount: number; oneLine: boolean }[],
+  schemas: readonly SchemaShape[],
 ): "inline" | "expanded" | undefined {
   const nonEmpty = schemas.filter((s) => s.propertyCount > 0);
   if (nonEmpty.some((s) => s.oneLine)) return "inline";

@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
@@ -12,7 +13,7 @@ import {
   objectProps,
   stringLit,
 } from "../read.ts";
-import { recognizeArgs } from "./args.ts";
+import { recognizeArgs, type SchemaShape } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
 import type { ToolFields } from "./tools-hand.ts";
@@ -151,8 +152,8 @@ function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
  */
 type ToolShape = {
   readonly fields: ToolFields;
-  readonly staticStyle?: "quoted" | "template";
-  readonly schemaShape: { propertyCount: number; oneLine: boolean };
+  readonly staticStyle?: StaticPathStyle;
+  readonly schemaShape: SchemaShape;
 };
 
 /**
@@ -278,8 +279,8 @@ export function recognizeRestRegistrar(
  */
 export type RestToolsResult = {
   readonly tools: ToolFields[];
-  readonly staticPathStyles: readonly ("quoted" | "template" | undefined)[];
-  readonly schemaShapes: readonly { propertyCount: number; oneLine: boolean }[];
+  readonly staticPathStyles: readonly (StaticPathStyle | undefined)[];
+  readonly schemaShapes: readonly SchemaShape[];
 };
 
 export function recognizeRestTools(

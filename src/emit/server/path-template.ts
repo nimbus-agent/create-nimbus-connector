@@ -1,3 +1,5 @@
+import type { StaticPathStyle } from "../../spec.ts";
+
 export type ArgMode = "raw" | "enc" | "num" | "bool";
 
 export type PathSegment =
@@ -16,7 +18,7 @@ export type RenderContext = {
    * `FetchHelperSchema.staticPathStyle`. Has no effect on a path with any dynamic segment,
    * which always renders as a template literal regardless of this setting.
    */
-  readonly staticStyle?: "quoted" | "template";
+  readonly staticStyle?: StaticPathStyle;
   /**
    * Emitted at the start of the template, before the first segment. The conditional-query
    * branch passes the fetch helper's base here so `new URL(...)` receives an absolute URL —

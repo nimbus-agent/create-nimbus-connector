@@ -34,6 +34,7 @@ src/derive/
   manifest.ts   nimbus.extension.json -> spec fields
   search-filter.ts  src/search-filter.ts -> filter entries, its own totality rule
   index.ts      deriveSpec(files) -> Derivation
+  from-connector.ts  a connector DIRECTORY -> a spec, or named blockers (--from-connector)
   server/       one recognizer module per src/emit/server/ module
 test/derive/*.test.ts          a test file per deriver module, plus the round trip
 ```

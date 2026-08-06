@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import {
   callArgs,
@@ -32,7 +33,7 @@ export type RecognizedPath = {
    * `RenderContext.staticStyle` docstring: it "has no effect on a path with any dynamic
    * segment"), so it is not evidence of either convention and is left unset.
    */
-  staticStyle?: "quoted" | "template";
+  staticStyle?: StaticPathStyle;
 };
 
 /**

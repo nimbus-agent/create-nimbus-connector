@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
@@ -10,7 +11,7 @@ import {
   isIdent,
   stringLit,
 } from "../read.ts";
-import { type ArgFields, recognizeArgs } from "./args.ts";
+import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
 import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
@@ -58,8 +59,8 @@ type ToolShape = {
   isBlock: boolean;
   hasHoists: boolean;
   isSearch?: true;
-  staticStyle?: "quoted" | "template";
-  schemaShape: { propertyCount: number; oneLine: boolean };
+  staticStyle?: StaticPathStyle;
+  schemaShape: SchemaShape;
 };
 
 /** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. `staticPathStyles`/
@@ -67,8 +68,8 @@ type ToolShape = {
 export type ToolsResult = {
   tools: (ToolFields | SearchToolFields)[];
   handlerStyle?: "block";
-  staticPathStyles: readonly ("quoted" | "template" | undefined)[];
-  schemaShapes: readonly { propertyCount: number; oneLine: boolean }[];
+  staticPathStyles: readonly (StaticPathStyle | undefined)[];
+  schemaShapes: readonly SchemaShape[];
 };
 
 function isRegCall(node: AstNode): AstNode | undefined {
@@ -124,7 +125,7 @@ function pathFromJsonResult(
 ):
   | {
       path: string;
-      staticStyle?: "quoted" | "template";
+      staticStyle?: StaticPathStyle;
       method?: "POST" | "PUT" | "PATCH" | "DELETE";
     }
   | undefined {

@@ -32,6 +32,14 @@ export type ArgFields = {
   default?: string | number | boolean;
 };
 
+/**
+ * One tool's evidence for the connector-wide `argsSchemaStyle` vote — see `voteArgsSchemaStyle`
+ * (src/derive/index.ts) for why a `propertyCount` of 0 abstains and why a single one-liner is
+ * decisive while multi-line is not. Named because it was inlined at seven sites, and an inline
+ * structural type is a place for one site to gain a field the other six silently ignore.
+ */
+export type SchemaShape = { readonly propertyCount: number; readonly oneLine: boolean };
+
 const BASE_TYPES = new Set(["string", "number", "boolean"]);
 
 /** `recognizeArgs`'s result: the args record it always produced, plus the inline/expanded
