@@ -10,10 +10,17 @@ beforeAll(async () => {
   await initParser();
 });
 
-function pathOf(expression: string, locals: Map<string, PathLocal> = new Map()) {
+function recognizedOf(expression: string, locals: Map<string, PathLocal> = new Map()) {
   const statement = parseModule(`const x = ${expression};`)[0]!;
   const init = constDecl(statement)!.init!;
   return recognizePath(init, locals);
+}
+
+/** Just the recovered path string — most of this file's assertions predate `staticStyle` and
+ * stay concerned with placeholder recognition, not the static-path evidence tested separately
+ * below. */
+function pathOf(expression: string, locals: Map<string, PathLocal> = new Map()) {
+  return recognizedOf(expression, locals)?.path;
 }
 
 /**
@@ -187,8 +194,11 @@ describe("recognizePath", () => {
       pathArg as never,
       new Map([["scope", { arg: "scope", bool: false }]]),
     );
-    expect(recovered).toBe(tool.path);
-    expect(recovered).toBe("/v1/items?scope=${arg.scope}");
+    expect(recovered?.path).toBe(tool.path);
+    expect(recovered?.path).toBe("/v1/items?scope=${arg.scope}");
+    // Dynamic (interpolates arg.scope), so it carries no staticPathStyle evidence — see
+    // RecognizedPath's own docstring.
+    expect(recovered?.staticStyle).toBeUndefined();
   });
 
   it("rejects (rather than mis-recovers) a query-branch new URL(...) template, whose leading expression is a base-URL prefix fused in by baseExpr", async () => {
@@ -230,5 +240,21 @@ describe("recognizePath", () => {
     findUrlArg(body);
 
     expect(recognizePath(urlArg as never, new Map())).toBeUndefined();
+  });
+});
+
+describe("recognizePath: staticStyle", () => {
+  // The staticPathStyle evidence index.ts's voteStaticPathStyle consumes — see RecognizedPath's
+  // own docstring for why only these two shapes are decisive.
+  it('reports "quoted" for a plain string literal', () => {
+    expect(recognizedOf('"/v2/applications.json"')?.staticStyle).toBe("quoted");
+  });
+
+  it('reports "template" for a backtick literal with no interpolation', () => {
+    expect(recognizedOf("`/v2/applications.json`")?.staticStyle).toBe("template");
+  });
+
+  it("reports no staticStyle for a dynamic template — the emitter's own choice is invisible on it", () => {
+    expect(recognizedOf("`/api/${org()}/issues/`")?.staticStyle).toBeUndefined();
   });
 });

@@ -68,6 +68,23 @@ function stringField(node: AstNode | undefined, key: string): string | undefined
 }
 
 // ---------------------------------------------------------------------------
+// Position
+// ---------------------------------------------------------------------------
+
+/**
+ * The 1-based source line a node starts on, or undefined when the parser omitted `loc`.
+ *
+ * `AstNode.loc` is a typed field (ast.ts), not reached through the index-signature workaround
+ * the rest of this module exists for — but the accessor still lives here rather than at a call
+ * site, so `args.ts`'s inline-vs-expanded check (comparing a `z.object(...)` argument's start
+ * line against its first property's) reads position the same disciplined way every other field
+ * is read: through read.ts, never node.loc directly.
+ */
+export function startLine(node: AstNode | undefined): number | undefined {
+  return node?.loc?.start.line;
+}
+
+// ---------------------------------------------------------------------------
 // Identifiers and literals
 // ---------------------------------------------------------------------------
 

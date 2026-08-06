@@ -77,6 +77,11 @@ describe("recognizeTools", () => {
           path: "/v2/applications.json",
         },
       ],
+      // A plain string literal path ("quoted") and an empty z.object({}) — see the
+      // staticPathStyle/argsSchemaStyle recovery describe blocks below for the votes these
+      // per-tool values feed into.
+      staticPathStyles: ["quoted"],
+      schemaShapes: [{ propertyCount: 0, oneLine: false }],
     });
     expect(unclaimed).toEqual([]);
   });
@@ -97,6 +102,10 @@ describe("recognizeTools", () => {
           path: "/v2/alerts_violations.json?only_open=${arg.only_open|bool}",
         },
       ],
+      // A dynamic path (interpolates the hoisted local) carries no staticPathStyle evidence; the
+      // one-property schema shares its source line with `z.object({`, so it is "inline" evidence.
+      staticPathStyles: [undefined],
+      schemaShapes: [{ propertyCount: 1, oneLine: true }],
     });
   });
 
@@ -163,6 +172,8 @@ describe("recognizeTools", () => {
           method: "POST",
         },
       ],
+      staticPathStyles: [undefined],
+      schemaShapes: [{ propertyCount: 1, oneLine: true }],
     });
   });
 
@@ -198,6 +209,8 @@ describe("recognizeTools", () => {
           path: "/api/v2/incidents?page[size]=${arg.limit|num}",
         },
       ],
+      staticPathStyles: [undefined],
+      schemaShapes: [{ propertyCount: 1, oneLine: true }],
     });
   });
 
@@ -228,6 +241,8 @@ describe("recognizeTools", () => {
           path: "/x?o=${arg.offset|num}",
         },
       ],
+      staticPathStyles: [undefined],
+      schemaShapes: [{ propertyCount: 1, oneLine: true }],
     });
   });
 
@@ -460,6 +475,8 @@ describe("recognizeTools", () => {
         },
       ],
       handlerStyle: "block",
+      staticPathStyles: ["quoted"],
+      schemaShapes: [{ propertyCount: 0, oneLine: false }],
     });
   });
 

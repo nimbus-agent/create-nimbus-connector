@@ -93,7 +93,7 @@ describe("recognizeRestTools", () => {
     const claims = createClaimSet();
     const tools = recognizeRestTools(statements, claims, "registerZzTool");
 
-    expect(tools?.map((t) => t.name)).toEqual(["zz_list"]);
+    expect(tools?.tools.map((t) => t.name)).toEqual(["zz_list"]);
     expect(claims.covers(statements[1]!)).toBe(true);
     // The factory (statement 0) is NOT this function's concern — recognizeRestRegistrar claims
     // it, separately.
@@ -162,7 +162,7 @@ describe("recognizeRestTools", () => {
         "  (parsed) => `/things/${encodeURIComponent(parsed.id)}`,",
     );
     const tools = recognizeRestTools(parseModule(source), createClaimSet(), "registerZzTool");
-    expect(tools?.[0]?.path).toBe("/things/${arg.id|enc}");
+    expect(tools?.tools[0]?.path).toBe("/things/${arg.id|enc}");
   });
 
   it("recovers a default-hoisted arg in the block form", () => {
@@ -177,8 +177,8 @@ describe("recognizeRestTools", () => {
     const statements = parseModule(source);
     const claims = createClaimSet();
     const tools = recognizeRestTools(statements, claims, "registerZzTool");
-    expect(tools?.[0]?.path).toBe("/things/${arg.mode}");
-    expect(tools?.[0]?.args.mode).toEqual({
+    expect(tools?.tools[0]?.path).toBe("/things/${arg.mode}");
+    expect(tools?.tools[0]?.args.mode).toEqual({
       type: "string",
       optional: true,
       default: "merge",
@@ -196,8 +196,8 @@ describe("recognizeRestTools", () => {
         "  },",
     );
     const tools = recognizeRestTools(parseModule(source), createClaimSet(), "registerZzTool");
-    expect(tools?.[0]?.path).toBe("/things?open=${arg.onlyOpen|bool}");
-    expect(tools?.[0]?.args.onlyOpen).toEqual({ type: "boolean", local: "oo" });
+    expect(tools?.tools[0]?.path).toBe("/things?open=${arg.onlyOpen|bool}");
+    expect(tools?.tools[0]?.args.onlyOpen).toEqual({ type: "boolean", local: "oo" });
   });
 
   it("refuses a block form whose non-last statement is not a recognized hoist", () => {
@@ -229,7 +229,7 @@ describe("recognizeRestTools", () => {
     ].join("\n");
     const claims = createClaimSet();
     const tools = recognizeRestTools(parseModule(source), claims, "registerZzTool");
-    expect(tools).toEqual([]);
+    expect(tools).toEqual({ tools: [], staticPathStyles: [], schemaShapes: [] });
     expect(claims.claims()).toEqual([]);
   });
 });

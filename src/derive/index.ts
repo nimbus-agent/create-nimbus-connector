@@ -131,6 +131,64 @@ function recognizeRestTitle(
 }
 
 /**
+ * `staticPathStyle` from the SET of tools whose path is fully static — the only ones that carry
+ * evidence at all.
+ *
+ * A static path renders `"…"` under `quoted` and `` `…` `` under `template`, and Biome never
+ * rewrites one into the other (unlike `argsSchemaStyle` below, there is no reformatting hazard
+ * here), so every tool that recognizePath reports a `staticStyle` for is unambiguous evidence of
+ * the connector's own convention. A tool with a dynamic path abstains — `recognizePath` leaves
+ * `staticStyle` unset for one (src/emit/server/path-template.ts's `RenderContext.staticStyle`:
+ * it "has no effect on a path with any dynamic segment", so the emitter's choice is invisible on
+ * that tool) — and abstaining tools neither vote nor block.
+ *
+ * Two DECISIVE tools disagreeing is a module this emitter cannot have written — it writes one
+ * value per connector, never per tool — so that case reports `ok: false` rather than picking a
+ * winner; the caller turns it into `blocked("style:mixed-static-path", …)`.
+ */
+export function voteStaticPathStyle(
+  styles: readonly ("quoted" | "template" | undefined)[],
+): { ok: true; value: "quoted" | "template" | undefined } | { ok: false } {
+  const decisive = styles.filter((s): s is "quoted" | "template" => s !== undefined);
+  if (new Set(decisive).size > 1) return { ok: false };
+  return { ok: true, value: decisive[0] };
+}
+
+/**
+ * `argsSchemaStyle` from the SET of emitted arg schemas. Asymmetric on purpose — an earlier
+ * draft of this recognizer voted symmetrically (multi-line -> "expanded" the same way a
+ * one-liner -> "inline") and that was wrong, measured against the fixtures, not merely
+ * suspected.
+ *
+ * A one-line non-empty `z.object({ … })` is decisive: `renderZodSchema`'s expanded branch
+ * (src/emit/server/args.ts) always writes one field per line, so it can NEVER produce a
+ * one-liner for a non-empty object — seeing one proves "inline" outright.
+ *
+ * Multi-line is NOT the mirror of that. Biome (`lineWidth: 100`) re-wraps an over-long inline
+ * schema into bytes byte-identical to the expanded form, so "every schema this connector emits
+ * is multi-line" is consistent with either "expanded", or "inline" where every schema happened
+ * to be too long to stay on one line. Voting "expanded" in that case is nonetheless byte-safe —
+ * measured, not assumed: `test/derive/style-recovery.test.ts`'s Step 6b check forces this vote's
+ * output back onto every one of the 21 fixtures and requires byte-identical re-emission. Forcing
+ * `argsSchemaStyle: "expanded"` on an inline connector whose schemas are all wrapped (zzsearch,
+ * zzwriterest) reproduces the original bytes; discord and google-meet carry a short schema that
+ * stayed a one-liner, so the decisive rule above catches those before the multi-line fallback
+ * would ever run.
+ *
+ * `propertyCount === 0` (an empty `z.object({})`, identical under both styles) is excluded from
+ * `nonEmpty` and never votes either way. Unlike `voteStaticPathStyle`, this never blocks: a
+ * single one-liner settles the question outright, so there is no disagreement case to refuse.
+ */
+export function voteArgsSchemaStyle(
+  schemas: readonly { propertyCount: number; oneLine: boolean }[],
+): "inline" | "expanded" | undefined {
+  const nonEmpty = schemas.filter((s) => s.propertyCount > 0);
+  if (nonEmpty.some((s) => s.oneLine)) return "inline";
+  if (nonEmpty.length > 0) return "expanded";
+  return undefined;
+}
+
+/**
  * The rest-kit assembly.
  *
  * rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
@@ -196,10 +254,22 @@ function deriveRestKitSpec(
     );
   }
 
+  // Tools disagreeing on a connector-wide convention their own emitter can only have written
+  // one value for — see voteStaticPathStyle's own docstring for why this is a refusal rather
+  // than a pick.
+  const staticVote = voteStaticPathStyle(tools.staticPathStyles);
+  if (!staticVote.ok) {
+    return blocked(
+      "style:mixed-static-path",
+      "tools disagree on whether a fully static path renders quoted or as a template literal",
+    );
+  }
+  const argsSchemaStyle = voteArgsSchemaStyle(tools.schemaShapes);
+
   // Last, because it is a different kind of refusal from everything above — every earlier
   // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
   // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(tools, manifest.hitlRequired);
+  const attribution = attributeEffects(tools.tools, manifest.hitlRequired);
   if (attribution === undefined) {
     return blocked(
       "manifest:unattributable-hitl",
@@ -217,6 +287,9 @@ function deriveRestKitSpec(
       description: manifest.description,
       serviceLabel: registrar.serviceLabel,
       style: frame.style,
+      // Emitted only when it differs from ConnectorSpecSchema's "inline" default, so a
+      // connector using the default stays byte-comparable with the hand-written fixtures.
+      ...(argsSchemaStyle === undefined || argsSchemaStyle === "inline" ? {} : { argsSchemaStyle }),
       network: manifest.network,
       ...(manifest.id === undefined ? {} : { id: manifest.id }),
       ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
@@ -234,6 +307,11 @@ function deriveRestKitSpec(
         ...(restFetchHelper.inlineHeaders === undefined
           ? {}
           : { inlineHeaders: restFetchHelper.inlineHeaders }),
+        // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
+        // reasoning as argsSchemaStyle above.
+        ...(staticVote.value === undefined || staticVote.value === "quoted"
+          ? {}
+          : { staticPathStyle: staticVote.value }),
       },
       tools: attribution.tools,
     },
@@ -276,6 +354,18 @@ function deriveSharedStyleSpec(
     return blocked("unrecognized-handler", "a reg() handler was not understood");
   }
 
+  // Tools disagreeing on a connector-wide convention their own emitter can only have written
+  // one value for — see voteStaticPathStyle's own docstring for why this is a refusal rather
+  // than a pick.
+  const staticVote = voteStaticPathStyle(toolsResult.staticPathStyles);
+  if (!staticVote.ok) {
+    return blocked(
+      "style:mixed-static-path",
+      "tools disagree on whether a fully static path renders quoted or as a template literal",
+    );
+  }
+  const argsSchemaStyle = voteArgsSchemaStyle(toolsResult.schemaShapes);
+
   // Last, because it is a different kind of refusal from everything above — every earlier
   // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
   // attribution of it reproduces what the manifest declares".
@@ -301,13 +391,23 @@ function deriveSharedStyleSpec(
       // recovers it from the SET of recognized tools; see its docstring for the rule.
       // Omitted lets the schema's `.default("concise")` apply.
       ...(toolsResult.handlerStyle === undefined ? {} : { handlerStyle: toolsResult.handlerStyle }),
+      // Emitted only when it differs from ConnectorSpecSchema's "inline" default, so a
+      // connector using the default stays byte-comparable with the hand-written fixtures.
+      ...(argsSchemaStyle === undefined || argsSchemaStyle === "inline" ? {} : { argsSchemaStyle }),
       network: manifest.network,
       ...(manifest.id === undefined ? {} : { id: manifest.id }),
       ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
       syncInterval: manifest.syncInterval,
       minNimbusVersion: manifest.minNimbusVersion,
       env,
-      fetchHelper: helper,
+      fetchHelper: {
+        ...helper,
+        // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
+        // reasoning as argsSchemaStyle above.
+        ...(staticVote.value === undefined || staticVote.value === "quoted"
+          ? {}
+          : { staticPathStyle: staticVote.value }),
+      },
       tools: attribution.tools,
     },
     ...(attribution.ambiguous.length > 0 ? { $effectAmbiguity: attribution.ambiguous } : {}),

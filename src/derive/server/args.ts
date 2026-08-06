@@ -7,6 +7,7 @@ import {
   memberObject,
   numericValue,
   objectProps,
+  startLine,
 } from "../read.ts";
 
 export type ArgFields = {
@@ -33,6 +34,20 @@ export type ArgFields = {
 
 const BASE_TYPES = new Set(["string", "number", "boolean"]);
 
+/** `recognizeArgs`'s result: the args record it always produced, plus the inline/expanded
+ * evidence this tool's own schema carries — see `recognizeArgs`'s docstring. */
+export type ArgsResult = {
+  args: Record<string, ArgFields>;
+  /**
+   * "inline" when the `z.object(...)` argument and its first property share a source line,
+   * "expanded" when they do not, and omitted for an empty `z.object({})` — identical under
+   * both conventions, so it is not evidence of either. index.ts's `voteArgsSchemaStyle`
+   * consumes this across every tool; see that function's docstring for why the two labels are
+   * NOT treated symmetrically.
+   */
+  schemaStyle?: "inline" | "expanded";
+};
+
 /**
  * Unwind `z.number().int().min(1).optional()` from the outside in.
  *
@@ -40,7 +55,7 @@ const BASE_TYPES = new Set(["string", "number", "boolean"]);
  * silently dropping `.email()` would derive a spec that regenerates a DIFFERENT schema and then
  * report the byte mismatch as a mystery, instead of naming the modifier as the blocker.
  */
-export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefined {
+export function recognizeArgs(node: AstNode): ArgsResult | undefined {
   const args = callArgs(node);
   if (args?.length !== 1) return undefined;
   // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
@@ -54,7 +69,8 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
   if (memberName(callee) !== "object") return undefined;
   if (!isIdent(memberObject(callee), "z")) return undefined;
 
-  const props = objectProps(args[0]);
+  const objectNode = args[0];
+  const props = objectProps(objectNode);
   if (props === undefined) return undefined;
 
   const out: Record<string, ArgFields> = {};
@@ -63,7 +79,19 @@ export function recognizeArgs(node: AstNode): Record<string, ArgFields> | undefi
     if (parsed === undefined) return undefined;
     out[property.key] = parsed;
   }
-  return out;
+
+  // An empty object has no first property to compare against — "inline" and "expanded" both
+  // spell it `z.object({})` (renderZodSchema's own empty-object special case), so it carries no
+  // evidence either way and schemaStyle stays unset.
+  const first = props[0];
+  const schemaStyle: "inline" | "expanded" | undefined =
+    first === undefined
+      ? undefined
+      : startLine(objectNode) === startLine(first.value)
+        ? "inline"
+        : "expanded";
+
+  return { args: out, ...(schemaStyle === undefined ? {} : { schemaStyle }) };
 }
 
 type Modifier = { name: string; args: AstNode[] };

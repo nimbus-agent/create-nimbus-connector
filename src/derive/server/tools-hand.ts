@@ -41,12 +41,28 @@ export type ToolFields = {
  *
  * The result of one tool's recognition, before that aggregation: whether its handler was a
  * block body, and — only meaningful when it was — whether that block contained any hoisted
- * consts.
+ * consts. `staticStyle`/`schemaShape` are the same per-tool evidence for the other two
+ * connector-wide style votes (index.ts's `voteStaticPathStyle`/`voteArgsSchemaStyle`) — carried
+ * here rather than folded into `fields`, because neither belongs on a TOOL in the derived spec:
+ * both are `ConnectorSpecSchema`/`FetchHelperSchema` fields, and `ToolSchema` is a
+ * `strictObject` that would reject them.
  */
-type ToolShape = { fields: ToolFields; isBlock: boolean; hasHoists: boolean };
+type ToolShape = {
+  fields: ToolFields;
+  isBlock: boolean;
+  hasHoists: boolean;
+  staticStyle?: "quoted" | "template";
+  schemaShape: { propertyCount: number; oneLine: boolean };
+};
 
-/** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. */
-export type ToolsResult = { tools: ToolFields[]; handlerStyle?: "block" };
+/** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. `staticPathStyles`/
+ * `schemaShapes` are the per-tool style evidence index.ts's two votes consume. */
+export type ToolsResult = {
+  tools: ToolFields[];
+  handlerStyle?: "block";
+  staticPathStyles: readonly ("quoted" | "template" | undefined)[];
+  schemaShapes: readonly { propertyCount: number; oneLine: boolean }[];
+};
 
 function isRegCall(node: AstNode): AstNode | undefined {
   const call = expressionOf(node);
@@ -92,19 +108,30 @@ function jsonResultCall(node: AstNode | undefined): AstNode | undefined {
   return args === undefined ? undefined : awaitedCall(args[0]);
 }
 
-/** The declared path and method recovered from `jsonResult(await <helper|helperSend>(...))`. */
+/** The declared path, its static-path-style evidence, and method recovered from
+ * `jsonResult(await <helper|helperSend>(...))`. */
 function pathFromJsonResult(
   node: AstNode | undefined,
   locals: ReadonlyMap<string, PathLocal>,
   helperLocal: string,
-): { path: string; method?: "POST" | "PUT" | "PATCH" | "DELETE" } | undefined {
+):
+  | {
+      path: string;
+      staticStyle?: "quoted" | "template";
+      method?: "POST" | "PUT" | "PATCH" | "DELETE";
+    }
+  | undefined {
   const helperCall = jsonResultCall(node);
   if (helperCall === undefined) return undefined;
   const fetched = fetchCall(helperCall, helperLocal);
   if (fetched === undefined) return undefined;
-  const path = recognizePath(fetched.path, locals);
-  if (path === undefined) return undefined;
-  return { path, ...(fetched.method === undefined ? {} : { method: fetched.method }) };
+  const recognized = recognizePath(fetched.path, locals);
+  if (recognized === undefined) return undefined;
+  return {
+    path: recognized.path,
+    ...(recognized.staticStyle === undefined ? {} : { staticStyle: recognized.staticStyle }),
+    ...(fetched.method === undefined ? {} : { method: fetched.method }),
+  };
 }
 
 function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
@@ -123,19 +150,25 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   const arrow = arrowFn(handlerNode);
   if (arrow === undefined) return undefined;
 
-  const toolArgs = recognizeArgs(schemaNode);
-  if (toolArgs === undefined) return undefined;
+  const argsResult = recognizeArgs(schemaNode);
+  if (argsResult === undefined) return undefined;
+  const schemaShape = {
+    propertyCount: Object.keys(argsResult.args).length,
+    oneLine: argsResult.schemaStyle === "inline",
+  };
 
   // The concise, expression-bodied form: `async (...) => jsonResult(await helper(path))`.
   if (!arrow.isBlock) {
     const recovered = pathFromJsonResult(arrow.body, new Map(), helperLocal);
-    return recovered === undefined
-      ? undefined
-      : {
-          fields: { name, description, args: toolArgs, ...recovered },
-          isBlock: false,
-          hasHoists: false,
-        };
+    if (recovered === undefined) return undefined;
+    const { staticStyle, ...pathFields } = recovered;
+    return {
+      fields: { name, description, args: argsResult.args, ...pathFields },
+      isBlock: false,
+      hasHoists: false,
+      staticStyle,
+      schemaShape,
+    };
   }
 
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
@@ -148,17 +181,20 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
 
   const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);
   if (recovered === undefined) return undefined;
+  const { staticStyle, ...pathFields } = recovered;
 
   // Gap A / Gap B: renderZodSchema never encodes `local` or `default` in the schema text
   // itself (recognizeArgs, above, cannot see either), so both are only visible at the hoist
   // statement — merge them back onto the matching arg now that both are known.
-  const mergedArgs = mergeHoistedArgs(toolArgs, block.hoistMeta);
+  const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
   if (mergedArgs === undefined) return undefined;
 
   return {
-    fields: { name, description, args: mergedArgs, ...recovered },
+    fields: { name, description, args: mergedArgs, ...pathFields },
     isBlock: true,
     hasHoists: block.locals.size > 0,
+    staticStyle,
+    schemaShape,
   };
 }
 
@@ -228,5 +264,7 @@ export function recognizeTools(
   return {
     tools: shapes.map((s) => s.fields),
     ...(hasBlockWithoutHoists ? { handlerStyle: "block" as const } : {}),
+    staticPathStyles: shapes.map((s) => s.staticStyle),
+    schemaShapes: shapes.map((s) => s.schemaShape),
   };
 }
