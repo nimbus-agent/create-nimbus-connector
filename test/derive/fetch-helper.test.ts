@@ -837,10 +837,12 @@ describe("recognizeFetchHelper", () => {
 
     it("refuses a passthrough template interpolating a variable other than the one it guards", () => {
       // The wrong-claim hole this closes: the ternary's test and consequent agree on `pathPart`,
-      // but the base template interpolates the UN-NORMALIZED `path`. `reconstructBase` requires the
-      // last expression to be an identifier, not WHICH one, so every field recovers byte-identically
-      // and the derived spec re-emits a helper that fetches a different URL — accepted, not
-      // rejected, until `passthroughUrlTemplate` pinned the template's own interpolation too.
+      // but the base template interpolates the UN-NORMALIZED `path`, so every field recovers
+      // byte-identically and the derived spec re-emits a helper that fetches a different URL —
+      // accepted, not rejected, until `passthroughUrlTemplate` pinned the template's own
+      // interpolation too. Two checks now refuse it: that pin, and `reconstructBase`'s own, which
+      // stopped accepting any identifier in the same fix round. Kept as a pair on purpose — this
+      // test names the shape, and either side losing its pin should still fail something.
       const src = NORMALIZED_PASSTHROUGH.replace(
         "`${baseUrl()}${pathPart}`",
         "`${baseUrl()}${path}`",

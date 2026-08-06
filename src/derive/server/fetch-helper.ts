@@ -295,12 +295,18 @@ function startsWithLiteral(node: AstNode | undefined, receiver: string, literal:
  * `pathVar` is a parameter because the hand-style helper renames it: `renderFetchHelper` writes
  * the passthrough over `pathPart` when `normalizeLeadingSlash` also asked for that const, and
  * over `path` otherwise. All THREE of its occurrences are pinned to it — the test's receiver, the
- * consequent, and the base template's own trailing interpolation — and the third is not
- * redundant: `reconstructBase` (and `matchRestUrlConst`'s two template shapes) require that last
- * expression to be an identifier but never say WHICH, so a helper guarding `pathPart` and then
- * interpolating the un-normalized `path` — or a variable that is not a path at all — recovers
- * byte-identical fields and re-emits a helper that fetches a different URL. A wrong claim, not a
- * rejection, and only refusable here, where `pathVar` is known.
+ * consequent, and the base template's own trailing interpolation.
+ *
+ * The third is deliberate duplication, not sole protection, and the distinction is worth stating
+ * because it changed under this very fix round. It was written when `reconstructBase` required
+ * that last expression to be *an* identifier without saying WHICH — so a helper guarding
+ * `pathPart` and then interpolating the un-normalized `path` recovered byte-identical fields and
+ * re-emitted a helper fetching a different URL. `reconstructBase` now pins `pathVar` itself, and
+ * `matchRestUrlConst` has always pinned the literal `"path"` for rest-kit, so both of this
+ * function's callers are now covered downstream too. The check stays because a recognizer that
+ * validates part of a construct and claims the whole of it is this module's recurring defect, and
+ * the two sides being able to drift apart is the reason `hoists.ts` exists — but it is defence in
+ * depth now, and a reader must not take it for the only thing standing between the two shapes.
  */
 function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undefined {
   const decl = constDecl(stmt);
