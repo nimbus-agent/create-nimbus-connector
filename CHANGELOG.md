@@ -13,6 +13,14 @@ left here read as unreleased long after they shipped, which is exactly what happ
 
 *Nothing pending.*
 
+## [0.8.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.7.0...create-nimbus-connector-v0.8.0) (2026-08-06)
+
+
+### Features
+
+* **derive:** read the read-only-kit and rest-kit frames, and name every frame blocker ([#59](https://github.com/nimbus-agent/create-nimbus-connector/issues/59)) ([9a20648](https://github.com/nimbus-agent/create-nimbus-connector/commit/9a20648da6851cee713ea41384953be993d85659))
+* **derive:** ship the spec deriver as --from-connector ([#62](https://github.com/nimbus-agent/create-nimbus-connector/issues/62)) ([16196d1](https://github.com/nimbus-agent/create-nimbus-connector/commit/16196d1f0fd1f9b4959413d02471c6a541cb31bd))
+
 ## [0.7.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.6.0...create-nimbus-connector-v0.7.0) (2026-08-04)
 
 
