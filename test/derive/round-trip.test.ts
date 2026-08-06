@@ -177,12 +177,16 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it.
  *
- * **This list is empty.** Every fixture in `fixtures/` now derives: 20 of them round-trip every
- * file byte-identically (ROUND_TRIP), and `google-meet` derives with one file moving for a reason
- * PARTIAL_ROUND_TRIP records and re-checks. The list is kept rather than deleted because the
- * "accounts for every fixture" test spans all three: a fixture added later that does NOT derive
- * belongs here, on screen, rather than being quietly absent — the same reason
- * fixtures/expectations.json omits a file instead of hiding it.
+ * **This list is empty**, and the invariant it now records is: every fixture in `fixtures/`
+ * derives, and every one of them re-emits byte-identically except `google-meet`, whose single
+ * moving file PARTIAL_ROUND_TRIP names and re-checks in both directions. No count appears here
+ * deliberately — the "accounts for every fixture" test does that arithmetic on every run, which is
+ * this file's own top docstring's rule and CLAUDE.md's ("do not restate live numbers"): a number
+ * written down here goes stale silently the next time a fixture is added.
+ *
+ * The list is kept rather than deleted because that same test spans all three: a fixture added
+ * later that does NOT derive belongs here, on screen, rather than being quietly absent — the same
+ * reason fixtures/expectations.json omits a file instead of hiding it.
  *
  * The rule for any future entry is unchanged, and it is the reason this docstring is a rule
  * rather than a narrative: **the reason must be measured by actually running `deriveSpec` against

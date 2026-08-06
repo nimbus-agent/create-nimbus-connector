@@ -260,6 +260,29 @@ describe("deriveSpec, client-credentials cross-checks", () => {
     expect(result.blockers.some((b) => b.kind === "function:token")).toBe(true);
   });
 
+  it("blocks a module whose emitted comment was stripped — the one defect neither diff:golden nor the round trip can see", () => {
+    // `renderTokenFunction` writes three `//` lines above `const ttl`, and it is the only emitter
+    // in src/emit/ that puts a comment into src/server.ts at all. A claim is a byte range, so an
+    // unpinned comment is claimed with the statements around it and vanishes on re-emission —
+    // `ok: true` for a module the derived spec provably cannot regenerate. Neither byte gate can
+    // catch it: both emit the comment going in and coming out, so the input and the re-emission
+    // agree with each other while disagreeing with the module actually read.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("// Renew a little early"))
+      .join("\n");
+    expect(corrupted).not.toBe(server);
+    // The defect it stands in for, stated as the assertion it is: before the pin, this derived.
+    expect(deriveSpec({ server: corrupted, manifest }).ok).toBe(false);
+
+    // And the group is reported statement by statement rather than half-claimed.
+    const result = deriveSpec({ server: corrupted, manifest });
+    if (result.ok) return;
+    expect(result.blockers.some((b) => b.kind === "function:token")).toBe(true);
+    expect(result.blockers.some((b) => b.kind === "function:authHeaders")).toBe(true);
+  });
+
   it("blocks a token exchange naming a different service than the fetch helper does", () => {
     // One `spec.serviceLabel` writes the token function's two error messages AND the fetch
     // helper's — recovered by two recognizers that never see each other.

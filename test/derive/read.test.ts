@@ -32,6 +32,7 @@ import {
   labelCallee,
   labelFirstInit,
   labelName,
+  leadingCommentTexts,
   letDecl,
   logical,
   memberName,
@@ -569,6 +570,36 @@ describe("letDecl", () => {
     expect(letDecl(only("let a = 1, b = 2;"))).toBeUndefined();
     expect(letDecl(only("let { a } = o;"))).toBeUndefined();
     expect(letDecl(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * `renderTokenFunction` (src/emit/server/env.ts) is the only emitter in this repository that
+ * writes a comment into `src/server.ts`, so `server/env.ts` has to compare its TEXT — presence,
+ * which is all `hasLeadingComment` reports and all `search-filter.ts` needs, would accept a
+ * reworded comment and silently re-emit the original.
+ */
+describe("leadingCommentTexts", () => {
+  it("reads every leading comment's text in source order, for both comment syntaxes", () => {
+    const [stmt] = parseModule(["// one", "// two", "const a = 1;"].join("\n"));
+    expect(leadingCommentTexts(stmt)).toEqual([" one", " two"]);
+    const [block] = parseModule(["/* doc */", "const b = 2;"].join("\n"));
+    expect(leadingCommentTexts(block)).toEqual([" doc "]);
+  });
+
+  it("is empty — not undefined — for a node with no comment, and for no node at all", () => {
+    // The distinction matters at the call site: `commentsAre(stmt, [])` asserts the ABSENCE of a
+    // comment, which only works if absence is an empty list rather than a refusal.
+    expect(leadingCommentTexts(only("const a = 1;"))).toEqual([]);
+    expect(leadingCommentTexts(undefined)).toEqual([]);
+  });
+
+  it("attaches to the FOLLOWING statement, which is the one a positional walk checks", () => {
+    // Babel records the same comment on the previous statement's `trailingComments` too; this
+    // accessor reads only `leadingComments`, so the statement BEFORE a comment stays clean.
+    const statements = parseModule(["const a = 1;", "// mid", "const b = 2;"].join("\n"));
+    expect(leadingCommentTexts(statements[0])).toEqual([]);
+    expect(leadingCommentTexts(statements[1])).toEqual([" mid"]);
   });
 });
 

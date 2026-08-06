@@ -21,6 +21,7 @@ import {
   isAsyncFunction,
   isIdent,
   isNullLiteral,
+  leadingCommentTexts,
   letDecl,
   logical,
   memberName,
@@ -653,7 +654,47 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
 // module differing in the skew arithmetic, the cache comparison or an error message derives a
 // spec that regenerates DIFFERENT bytes, and the totality rule cannot see it, because the
 // statement was claimed.
+//
+// **Including the COMMENT.** `renderTokenFunction` writes three `//` lines above `const ttl`, and
+// that is the ONLY comment any emitter in src/emit/ puts into src/server.ts — so before this
+// recognizer existed, no module this deriver could claim contained one, and nothing here looked.
+// A claim is a byte range, so a comment inside it is claimed along with the statements and simply
+// vanishes on re-emission: `deriveSpec` returns `ok: true` for a module it provably cannot
+// regenerate, which is the one thing its contract forbids. Neither `diff:golden` nor the round
+// trip can see it, since both emit the comment on the way in and out.
+//
+// `search-filter.ts` is the precedent and this is its mirror image: there `emitSearchFilter`
+// writes NO comment, so `hasLeadingComment` refusing any is the whole check. Here the emitter
+// DOES write one, so the TEXT is the fact (`leadingCommentTexts`) — presence alone would accept a
+// reworded comment and re-emit the original. `commentsAre` below checks both the expected comment
+// and the expected ABSENCE of one on every other statement in the construct.
+//
+// What stays unchecked, deliberately and deriver-wide: a comment attached to a NON-statement node
+// inside a claimed range (inside the fetch options object, say). Every recognizer in this deriver
+// has that property — `newrelic`'s fetch helper drops one too — and it is not something this
+// construct introduces; what IS new here is an emitter that writes a comment at all.
 // ---------------------------------------------------------------------------
+
+/**
+ * `renderTokenFunction`'s own three comment lines, as `leadingCommentTexts` reports them — the
+ * text after `//`, so each begins with the single space the emitter writes.
+ */
+const TTL_COMMENT: readonly string[] = [
+  " Renew a little early so a token cannot expire mid-flight between this check and the",
+  " request that uses it. The skew is halved for short-lived tokens, which would",
+  " otherwise be treated as already expired and re-exchanged on every call.",
+];
+
+/**
+ * Whether a statement's leading comments are exactly `expected` — `[]` asserting it carries none.
+ * Length first, so a comment added to or removed from the block is refused rather than matched on
+ * its surviving lines.
+ */
+function commentsAre(stmt: AstNode, expected: readonly string[]): boolean {
+  const texts = leadingCommentTexts(stmt);
+  if (texts?.length !== expected.length) return false;
+  return texts.every((text, i) => text === expected[i]);
+}
 
 /**
  * `let cachedToken: string | null = null;` — the first of renderTokenFunction's two bindings.
@@ -1030,6 +1071,7 @@ function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
   if (idx >= body.length || !isCacheAssignment(body[idx]!)) return undefined;
   idx++;
   if (idx >= body.length || !isTtlDecl(body[idx]!)) return undefined;
+  const ttlIndex = idx;
   idx++;
   if (idx >= body.length || !isExpiryAssignment(body[idx]!)) return undefined;
   idx++;
@@ -1037,6 +1079,13 @@ function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
   // Exactly one statement left: `return cachedToken;`.
   if (body.length - idx !== 1) return undefined;
   if (!isIdent(returnArgument(body[idx]!), "cachedToken")) return undefined;
+
+  // The comment sweep — see this section's header. Checked over the WHOLE body rather than at the
+  // `ttl` statement alone: the claim covers this function's entire byte range, so a comment above
+  // ANY of these statements is claimed with it and vanishes on re-emission just the same.
+  if (!body.every((stmt, i) => commentsAre(stmt, i === ttlIndex ? TTL_COMMENT : []))) {
+    return undefined;
+  }
 
   return {
     reads: section.reads,
@@ -1067,6 +1116,8 @@ function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
 
   const statements = functionBody(fn);
   if (statements?.length !== 1) return undefined;
+  // renderClientCredentials writes no comment in the wrapper — see the section header.
+  if (!commentsAre(statements[0]!, [])) return undefined;
   const properties = objectProps(returnArgument(statements[0]!));
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
@@ -1095,15 +1146,23 @@ type ClientCredentials = { readonly entry: EnvEntry; readonly serviceLabel: stri
  * accessors are joined in `spec.env` array order by `renderEnvAccessors`, and
  * `renderClientCredentials` builds these four as ONE string, so no spec can produce a layout with
  * anything between them — the same adjacency argument `matchSplitBearerWrapper` makes.
+ *
+ * The four `=== undefined` checks below are redundant with the loop bound `recognizeEnv` calls
+ * this under (`i + 3 < statements.length`) and exist only to narrow the destructured type; they
+ * are not a boundary condition any caller can reach.
  */
 function matchClientCredentials(
   statements: readonly AstNode[],
   i: number,
 ): ClientCredentials | undefined {
-  const [cached, expiry, tokenFn, wrapper] = statements.slice(i, i + 4);
+  const group = statements.slice(i, i + 4);
+  const [cached, expiry, tokenFn, wrapper] = group;
   if (cached === undefined || expiry === undefined) return undefined;
   if (tokenFn === undefined || wrapper === undefined) return undefined;
   if (!isCachedTokenBinding(cached) || !isTokenExpiresAtBinding(expiry)) return undefined;
+  // None of the four carries a comment of its own — see the section header. The `ttl` statement
+  // INSIDE the token function is the only place in this whole construct that does.
+  if (!group.every((stmt) => commentsAre(stmt, []))) return undefined;
 
   const exchange = matchTokenFunction(tokenFn);
   if (exchange === undefined) return undefined;

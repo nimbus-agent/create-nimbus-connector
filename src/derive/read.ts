@@ -390,6 +390,38 @@ export function hasLeadingComment(node: AstNode | undefined): boolean {
 }
 
 /**
+ * Every leading comment's own TEXT, in source order — `// x` reads as `" x"`, the slashes and the
+ * newline being the parser's rather than the comment's. `[]` when the node carries none, so ONE
+ * comparison against an expected list settles both presence and content.
+ *
+ * `hasLeadingComment` above answers only "is there one", which is all `search-filter.ts` needs:
+ * `emitSearchFilter` never writes a comment, so ANY comment there is unproducible and the text is
+ * irrelevant. `server/env.ts`'s token exchange is the mirror image and needs this instead —
+ * `renderTokenFunction` is the ONE place in all of `src/emit/` that writes a comment into
+ * `src/server.ts`, so presence alone would accept an ALTERED comment and silently re-emit the
+ * original wording. The text is the fact there, not the presence.
+ *
+ * A comment node carrying no string `value` refuses the whole list rather than being skipped —
+ * the all-or-nothing rule `childList` follows, and for the same reason: dropping one silently
+ * would shorten the list and could make it equal an expected one it does not match. Babel gives
+ * every CommentLine/CommentBlock a string `value`, so that branch guards a shape this parser does
+ * not produce, exactly as `templateLiteral`'s own cooked-string guard does.
+ */
+export function leadingCommentTexts(node: AstNode | undefined): string[] | undefined {
+  if (node === undefined) return [];
+  const comments = raw(node)["leadingComments"];
+  if (!Array.isArray(comments)) return [];
+
+  const out: string[] = [];
+  for (const comment of comments) {
+    const value = (comment as { value?: unknown }).value;
+    if (typeof value !== "string") return undefined;
+    out.push(value);
+  }
+  return out;
+}
+
+/**
  * A `type <name> = ...;` alias declaration's own name. Needed for the standalone read-only-kit
  * target's inlined `type ZodToolRegistrar = ...;` (src/emit/server/index.ts's
  * `renderRunReadOnlyGlue`) — the monorepo target imports that shape instead, so no recognizer

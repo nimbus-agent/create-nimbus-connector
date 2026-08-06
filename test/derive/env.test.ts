@@ -808,6 +808,20 @@ function emitClientCredentials(overrides: Record<string, unknown> = {}): string 
 
 const CLIENT_CREDENTIALS = emitClientCredentials();
 
+/**
+ * The three comment lines `renderTokenFunction` writes above `const ttl`, verbatim — the ONLY
+ * comment any emitter in src/emit/ puts into src/server.ts, and therefore the only one a claimed
+ * module can contain. A claim is a byte range, so an unpinned comment is claimed with the
+ * statements around it and vanishes on re-emission: `ok: true` for a module the spec provably
+ * cannot regenerate, invisible to `diff:golden` and to the round trip alike (both emit it going in
+ * and coming out).
+ */
+const TTL_COMMENT = [
+  "  // Renew a little early so a token cannot expire mid-flight between this check and the",
+  "  // request that uses it. The skew is halved for short-lived tokens, which would",
+  "  // otherwise be treated as already expired and re-exchanged on every call.",
+].join("\n");
+
 /** What `CLIENT_CREDENTIALS` must derive back to — `CC_SPEC` plus the schema defaults. */
 const CC_ENTRY = {
   vars: ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
@@ -994,6 +1008,45 @@ const REFUSED_CLIENT_CREDENTIALS: [string, string][] = [
   [
     "a wrapper calling a function other than token()",
     CLIENT_CREDENTIALS.replace("await token()", "await otherToken()"),
+  ],
+
+  // --- The emitted comment. renderTokenFunction is the only emitter that writes one into
+  // src/server.ts, so nothing in this deriver looked for one until this construct existed.
+  [
+    "a STRIPPED comment above `const ttl` — the module re-emits with it, so `ok: true` here would be a spec that provably cannot regenerate the input",
+    CLIENT_CREDENTIALS.replace(`${TTL_COMMENT}\n`, ""),
+  ],
+  [
+    "an ALTERED comment above `const ttl` — presence alone (hasLeadingComment) would accept this and silently restore the original wording",
+    CLIENT_CREDENTIALS.replace("Renew a little early", "Refresh a little early"),
+  ],
+  [
+    "a comment block one line SHORTER than the emitted one — the length check, not just the per-line comparison",
+    CLIENT_CREDENTIALS.replace(
+      "  // otherwise be treated as already expired and re-exchanged on every call.\n",
+      "",
+    ),
+  ],
+  [
+    "a comment above a statement the emitter writes none above — the claim covers the whole function, so this vanishes on re-emission exactly as a stripped one does",
+    CLIENT_CREDENTIALS.replace(
+      "  const text = await res.text();",
+      "  // fetched above\n  const text = await res.text();",
+    ),
+  ],
+  [
+    "a comment inside the wrapper, which renderClientCredentials writes bare",
+    CLIENT_CREDENTIALS.replace(
+      "  return { Authorization:",
+      "  // build the header\n  return { Authorization:",
+    ),
+  ],
+  [
+    "a comment above one of the two module-scope `let` bindings",
+    CLIENT_CREDENTIALS.replace(
+      "let tokenExpiresAt = 0;",
+      "// epoch millis\nlet tokenExpiresAt = 0;",
+    ),
   ],
 ];
 
