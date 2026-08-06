@@ -327,7 +327,8 @@ function prefixedPath(
   // the first expression is a CallExpression, so `identName` returns undefined and no base const
   // is invented; the form with text ahead of the accessor (`"https://${env.HOST}/api"`) takes the
   // literal branch below instead and is refused by `rebaseQueryTools` (src/derive/index.ts),
-  // whose docstring carries the proof that the two halves cover every env-ref base between them.
+  // whose docstring carries the proof that the two halves cover every UNESCAPED env-ref base
+  // between them — and names the escaped form as the pre-existing hole neither of them closes.
   // Supporting it would mean a third `BasePrefix` variant spanning a quasi AND an expression,
   // splittable only against a base whose own value is decided per request — and the whole point
   // of `BasePrefix` is that this recognizer cannot pick the split, only the caller's fetch helper

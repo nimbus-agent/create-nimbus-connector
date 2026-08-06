@@ -233,13 +233,24 @@ export function voteArgsSchemaStyle(
  * function is what REFUSES that combination rather than mis-splitting it. `baseExpr` resolves the
  * reference, so `base: "https://${env.HOST}/api"` reaches `new URL` as
  * `` `https://${HOST()}/api/v1/items` ``, whose leading quasi is "https://" — and `base` still
- * spells the accessor as `${env.HOST}`, which no rendered quasi can ever contain (a path's own
- * `${` is rejected by `parsePathTemplate`'s `assertNoUnparsedPlaceholders`). `startsWith` is
- * therefore false for every env-ref base with text ahead of the accessor, and one with none
- * (`base: "${env.HOST}"`) never reaches here at all: `prefixedPath` refuses an empty leading
- * quasi whose first expression is a call rather than a base const. Both halves are deliberate —
- * see `prefixedPath`'s own comment — because a base that is decided per REQUEST is not one this
- * recognizer can split off a template statically.
+ * spells the accessor as `${env.HOST}`, which an UNESCAPED reference can never leave in a rendered
+ * quasi: `resolveEnvRefs` consumes the base's own, and a path's is rejected by
+ * `parsePathTemplate`'s `assertNoUnparsedPlaceholders`. `startsWith` is therefore false for every
+ * such base with text ahead of the accessor, and one with none (`base: "${env.HOST}"`) never
+ * reaches here at all: `prefixedPath` refuses an empty leading quasi whose first expression is a
+ * call rather than a base const. Both halves are deliberate — see `prefixedPath`'s own comment —
+ * because a base that is decided per REQUEST is not one this recognizer can split off a template
+ * statically.
+ *
+ * "Unescaped" is load-bearing and the exception is NOT closed here. A base that escapes the
+ * sequence (`base: "https://a\\${env.X}"`) is not a reference `resolveEnvRefs`' own pattern
+ * consumes, and `renderPath` splices the prefix in raw — `assertNoUnparsedPlaceholders` inspects
+ * only the PATH's segments, never the base — so those characters do survive into a quasi,
+ * `startsWith` succeeds, and the module derives `ok: true` while re-emitting different bytes. That
+ * is a wrong claim, and it is a pre-existing one: it reproduces on a plain `grafana`-shaped
+ * connector with no query tool at all, because it is `reconstructBase`'s laxity about what the
+ * base template may contain rather than anything this function decides. Recorded rather than
+ * fixed, so the refusal above is not read as covering more than it does.
  */
 function rebaseQueryTools<T extends { readonly path: string }>(
   tools: readonly T[],

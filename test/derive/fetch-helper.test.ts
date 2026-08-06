@@ -800,10 +800,39 @@ describe("recognizeFetchHelper", () => {
       expect(claims.claims()).toEqual([]);
     });
 
-    it("refuses a passthrough const testing a different variable from the one it returns", () => {
+    it("refuses a passthrough const guarding `path` where the helper normalized it into `pathPart`", () => {
+      // Both halves of the ternary are rewritten, so they still AGREE with each other — the fault
+      // is that they name the wrong variable, one the leading-slash rule above has already
+      // superseded. Caught by the httpArm/passthrough cross-check: the widened guard is still
+      // there, but no passthrough const over `pathPart` is found beside it.
       const src = NORMALIZED_PASSTHROUGH.replace(
         'const url = pathPart.startsWith("http") ? pathPart',
         'const url = path.startsWith("http") ? path',
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
+    });
+
+    it("refuses a passthrough template interpolating a variable other than the one it guards", () => {
+      // The wrong-claim hole this closes: the ternary's test and consequent agree on `pathPart`,
+      // but the base template interpolates the UN-NORMALIZED `path`. `reconstructBase` requires the
+      // last expression to be an identifier, not WHICH one, so every field recovers byte-identically
+      // and the derived spec re-emits a helper that fetches a different URL — accepted, not
+      // rejected, until `passthroughUrlTemplate` pinned the template's own interpolation too.
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        "`${baseUrl()}${pathPart}`",
+        "`${baseUrl()}${path}`",
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses a passthrough template interpolating a variable that is not a path at all", () => {
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        "`${baseUrl()}${pathPart}`",
+        "`${baseUrl()}${bogusVar}`",
       );
       expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
       expect(run(src).fields).toBeUndefined();

@@ -290,9 +290,13 @@ function startsWithLiteral(node: AstNode | undefined, receiver: string, literal:
  *
  * `pathVar` is a parameter because the hand-style helper renames it: `renderFetchHelper` writes
  * the passthrough over `pathPart` when `normalizeLeadingSlash` also asked for that const, and
- * over `path` otherwise. Pinning the test's receiver and the consequent to the SAME variable is
- * what stops a helper that normalizes `path` into `pathPart` and then passes the un-normalized
- * `path` through from being read as the shape the emitter writes.
+ * over `path` otherwise. All THREE of its occurrences are pinned to it — the test's receiver, the
+ * consequent, and the base template's own trailing interpolation — and the third is not
+ * redundant: `reconstructBase` (and `matchRestUrlConst`'s two template shapes) require that last
+ * expression to be an identifier but never say WHICH, so a helper guarding `pathPart` and then
+ * interpolating the un-normalized `path` — or a variable that is not a path at all — recovers
+ * byte-identical fields and re-emits a helper that fetches a different URL. A wrong claim, not a
+ * rejection, and only refusable here, where `pathVar` is known.
  */
 function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undefined {
   const decl = constDecl(stmt);
@@ -302,6 +306,9 @@ function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undef
   if (c === undefined) return undefined;
   if (!startsWithLiteral(c.test, pathVar, "http")) return undefined;
   if (!isIdent(c.consequent, pathVar)) return undefined;
+
+  const t = templateLiteral(c.alternate);
+  if (t === undefined || !isIdent(t.expressions.at(-1), pathVar)) return undefined;
   return c.alternate;
 }
 
@@ -539,7 +546,7 @@ function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undef
   // `renderFetchHelper` cannot write. Checked only in that case: with no pathPart const there is
   // no guard to widen, and demanding `httpArm` of an absent statement would refuse every
   // passthrough helper that does not also normalize its leading slash — which is every one of
-  // them apart from the grafana/newrelic-shaped `normalizeLeadingSlash: true` specs.
+  // them apart from the `normalizeLeadingSlash: true` shape `grafana` is the only fixture to set.
   if (pathPart !== undefined && pathPart.httpArm !== passthrough) return undefined;
 
   const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
