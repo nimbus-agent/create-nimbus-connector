@@ -47,18 +47,21 @@ const ROUND_TRIP = [
  * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
  * over the calls only).
  *
- * "query parameters" (`discord`, `google-meet`) is TWO independent gaps, both plan 2's
- * territory, not one: each tool's pathFn is the query branch — a block whose body contains
- * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) refuses outright; and
- * both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their fetch-helper
- * function's URL template is `` `${baseConst}${path}` ``, a second, distinct shape
- * `recognizeRestFetchHelper` (server/fetch-helper.ts) does not model either — it only recognizes
- * the literal-base form. Measured at HEAD, both fixtures report five to six unclaimed
- * statements each — the `baseConst` literal, the fetch-helper function, and every
- * `register<X>Tool(...)` call (`recognizeRestTools` claims none of them once even one fails) —
- * but never the factory (`recognizeRestRegistrar` claims it independently), never a bare
- * `no-frame` (the frame itself matches fine, as `rest-kit`), and never
- * `import-from:.../rest-tool-kit.ts` (claimed by the frame too).
+ * "query parameters" (`discord`, `google-meet`) used to be TWO independent gaps; it is down to
+ * ONE. Both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their
+ * fetch-helper function's URL template is `` `${baseConst}${path}` `` — `matchRestUrlConst`
+ * (server/fetch-helper.ts) now resolves that shape against the module-scope const and claims
+ * both the function and the const's own statement, closing what used to be the second gap here.
+ * What remains: each tool's pathFn is the query branch — a block whose body contains
+ * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) still refuses outright,
+ * plan 2's territory. Re-measured against HEAD (after that fetch-helper fix landed):
+ * `deriveSpec` run against each fixture's own emitted output reports ONLY `register<X>Tool(...)`
+ * calls unclaimed — `call:registerDiscordTool` ×4 for discord, `call:registerGoogleMeetTool` ×3
+ * for google-meet (`recognizeRestTools` claims none of them once even one fails) — never the
+ * `baseConst` literal or the fetch-helper function anymore (both now claimed), never the factory
+ * (`recognizeRestRegistrar` claims it independently), never a bare `no-frame` (the frame itself
+ * matches fine, as `rest-kit`), and never `import-from:.../rest-tool-kit.ts` (claimed by the
+ * frame too).
  *
  * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
  * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
@@ -87,7 +90,10 @@ const ROUND_TRIP = [
  * `recognizeRestRegistrar`, independently of the calls) and its fetch helper (a literal,
  * non-`baseConst` base) matches `recognizeRestFetchHelper` on its own; measured at HEAD, this
  * fixture reports exactly its two `call:registerZzwriterestTool` statements unclaimed — nothing
- * else — unlike `discord`/`google-meet` above, whose blockers span three different recognizers.
+ * else — the same narrow shape `discord`/`google-meet` above now report too, now that their
+ * fetch-helper gap (the `baseConst` literal and the fetch-helper function) is closed; all three
+ * fixtures' remaining blockers come from the one recognizer, `recognizeOneCall`/
+ * `recognizeRestTools` (tools-rest.ts).
  */
 const BLOCKED: Record<string, string> = {
   bitrise: "search tool",
