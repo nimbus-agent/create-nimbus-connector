@@ -1413,8 +1413,25 @@ shape the emitter cannot write.
 **The rest-kit body is built with an EMPTY hoist map** (`renderTool` passes `new Map()`), because the
 init callback is a different arrow from the path callback and nothing the latter declares is in scope.
 So a defaulted arg renders the inlined `?? <default>` form here and the hoisted-const form in the path
-callback — the same argument, two different expressions, deliberately. Pass an empty `locals` map to
-`recognizeBodyExpr` from this call site and say why in a comment.
+callback — the same argument, two different expressions, deliberately.
+
+**Read `recognizeBodyExpr`'s real signature before calling it — it is not what an earlier draft of
+this plan said.** Task 5 shipped:
+
+```ts
+export function recognizeBodyExpr(
+  node: AstNode,
+  tool: BodyTool,
+  hoistsInScope: boolean,
+): { body?: Record<string, string> } | undefined
+```
+
+`param` was dropped because the receiver is deliberately *not* pinned — the house rule
+`memberArgName` and `argNameFromExpr` both state, and both tool recognizers follow. `hoistsInScope`
+replaced the map because a boolean is the whole of what the caller must say: it is the one bit
+deciding between `fieldValue`'s two second-case forms, and it cannot be inferred from the expression.
+**Pass `false` from this call site** — the rest-kit contract — and say why in a comment. Task 5
+already tests that contract, so a wrong value here fails rather than deriving quietly.
 
 - [ ] **Step 1: Write the failing test**
 
