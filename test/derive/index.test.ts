@@ -197,7 +197,7 @@ describe("deriveSpec, search-filter assembly checks (Trap 6 and its neighbours)"
     expect(result.blockers.map((b) => b.kind)).toEqual(["search-filter:mismatch"]);
   });
 
-  it("recovers a non-default title from the search-filter type alias, verifying the FULL round trip (server.ts, search-filter.ts, nimbus.extension.json and README.md all consume spec.title)", () => {
+  it("recovers a non-default title from the search-filter type alias, verifying the full round trip — spec.title's two real consumers (src/search-filter.ts's type alias and README.md), plus src/server.ts and nimbus.extension.json asserted as general round-trip coverage even though neither reads spec.title at all", () => {
     const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));
     const server = pick(files, "src/server.ts");
     const manifest = pick(files, "nimbus.extension.json");

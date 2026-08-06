@@ -439,8 +439,16 @@ function matchOneFilter(statements: readonly AstNode[], i: number): FilterMatch 
  * generator's own emitter can produce, not merely a round-trip check on a lossy formula. Since
  * `emitReadme`'s two templates (`src/emit/readme.ts`) also splice `spec.title` verbatim with no
  * sanitization of their own, a `titleFragment` that reproduces THIS alias reproduces `README.md`
- * byte-for-byte too — there is no second, independently-lossy consumer for a recovered title to
- * silently diverge from here.
+ * byte-for-byte too.
+ *
+ * Scoped deliberately to what `generate()` actually emits — `src/emit/wiring.ts`'s
+ * `titleIdentifier` applies the SAME lossy `replaceAll(/[^A-Za-z0-9]/g, "")` regex to
+ * `spec.title` that `registrarNameFor` does, so a third, independently-lossy consumer of
+ * `spec.title` does exist in this codebase. It does not undermine the argument above only
+ * because `emitWiring`/`renderWiringInstructions` are not part of `generate()`'s output (see
+ * `src/emit/index.ts`) and therefore outside both the round-trip test's file set and the
+ * `all-identical` byte-diff tier — a claim about round-tripping every file `generate()` produces
+ * has nothing to say about a file it does not produce.
  */
 export function recognizeSearchFilter(source: string): SearchFilterDerivation {
   let statements: AstNode[];
