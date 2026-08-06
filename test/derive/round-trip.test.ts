@@ -32,6 +32,18 @@ import { displayPath } from "../../src/types.ts";
  * primitives) alongside one keyed filter in the same file, proving the import list is computed
  * per FILE, not per filter.
  *
+ * discord is the rest-kit fixture the query recognizer unblocks — server/query.ts reads
+ * `renderTool`'s query branch (`const u = new URL(<base><path>)`, the `searchParams.set` lines,
+ * and the `` return `${u}`; `` tail). It sets `fetchHelper.baseConst` (`DISCORD_API`), so it
+ * exercises `BasePrefix`'s hoisted form and `deriveRestKitSpec`'s cross-check of it against the
+ * base `recognizeRestFetchHelper` recovered independently; and it pins the staticPathStyle
+ * abstention, since its `discord_guild_list` path is fully static and votes "quoted" — a query
+ * tool voting "template" beside it would make `voteStaticPathStyle` block a connector this
+ * generator emits correctly. `google-meet` is the same unblocking, one file short of a full
+ * round trip; see PARTIAL_ROUND_TRIP. `BasePrefix`'s LITERAL form has no fixture — both of these
+ * hoist their base — and is proved instead by test/derive/query.test.ts, against this
+ * repository's own emitter output.
+ *
  * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
  * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
  * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
@@ -58,7 +70,37 @@ const ROUND_TRIP = [
   "netlify",
   "zendesk",
   "dependencytrack",
+  "discord",
 ];
+
+/**
+ * Fixtures that DERIVE, and re-emit every file byte-identically except the ones named — each
+ * because the spec field that file depends on is not encoded in anything `deriveSpec` reads.
+ *
+ * A third list rather than an omission from either of the other two, for the same reason
+ * fixtures/expectations.json omits a file instead of hiding it: "derives, but one file moves" is
+ * a real outcome, and filing it under BLOCKED (it is not blocked) or ROUND_TRIP (it does not
+ * round-trip) would state something untrue. The listed files are asserted to actually DIFFER, so
+ * an entry that closes fails here rather than quietly weakening the check that remains.
+ *
+ * `google-meet` — README.md. Its spec `title` is "Google Meet", and the only place a rest-kit
+ * connector's title reaches the emitted package at all is the registrar const's own name, which
+ * `registrarName` (src/spec.ts) builds by stripping every non-alphanumeric character:
+ * `registerGoogleMeetTool`. `recognizeRestTitle` (src/derive/index.ts) inverts that to
+ * "GoogleMeet" — the fragment it verifies reproduces the observed name, and therefore the right
+ * answer for src/server.ts, which stays byte-identical. `emitReadme` (src/emit/readme.ts) then
+ * interpolates `spec.title` verbatim, so the space is gone from the prose. The information is
+ * destroyed by the emitter, not lost by the recognizer: every title differing only in
+ * non-alphanumerics emits one identical server.ts, so no reader of that file can tell them apart.
+ * Deriving `title: undefined` instead would emit `registerGooglemeetTool` and move src/server.ts,
+ * which is the file the whole harness is pointed at.
+ */
+const PARTIAL_ROUND_TRIP: Record<string, { reason: string; files: string[] }> = {
+  "google-meet": {
+    reason: 'title "Google Meet" survives into src/server.ts only with its space stripped',
+    files: ["README.md"],
+  },
+};
 
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it. Listed so the
@@ -73,21 +115,13 @@ const ROUND_TRIP = [
  * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
  * over the calls only).
  *
- * "query parameters" (`discord`, `google-meet`) used to be TWO independent gaps; it is down to
- * ONE. Both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their
- * fetch-helper function's URL template is `` `${baseConst}${path}` `` — `matchRestUrlConst`
- * (server/fetch-helper.ts) now resolves that shape against the module-scope const and claims
- * both the function and the const's own statement, closing what used to be the second gap here.
- * What remains: each tool's pathFn is the query branch — a block whose body contains
- * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) still refuses outright,
- * plan 2's territory. Re-measured against HEAD (after that fetch-helper fix landed):
- * `deriveSpec` run against each fixture's own emitted output reports ONLY `register<X>Tool(...)`
- * calls unclaimed — `call:registerDiscordTool` for discord, `call:registerGoogleMeetTool` for
- * google-meet (`recognizeRestTools` claims none of them once even one fails) — never the
- * `baseConst` literal or the fetch-helper function anymore (both now claimed), never the factory
- * (`recognizeRestRegistrar` claims it independently), never a bare `no-frame` (the frame itself
- * matches fine, as `rest-kit`), and never `import-from:.../rest-tool-kit.ts` (claimed by the
- * frame too).
+ * "query parameters" no longer names any fixture's blocker — server/query.ts landed the
+ * recognizer, and `discord`/`google-meet`, which blocked on the query branch alone, are in
+ * ROUND_TRIP / PARTIAL_ROUND_TRIP above. Both had been down to that one gap already: `matchRestUrlConst`
+ * (server/fetch-helper.ts) closed their `` `${baseConst}${path}` `` fetch-helper gap earlier,
+ * and re-measuring at HEAD before this task began showed each reporting ONLY its own
+ * `register<X>Tool(...)` calls unclaimed — never the `baseConst` literal, the fetch-helper
+ * function, or the factory.
  *
  * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
  * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
@@ -120,19 +154,14 @@ const ROUND_TRIP = [
  * two fixtures. `zzwriteonly` (hand-rolled/read-only-kit) has a write-effect fetch helper
  * (`zzGetSend`) no recognizer in this plan claims. `zzwriterest` (rest-kit) has an arity-5
  * `<registrar>(...)` call — a non-`GET` `initFn` argument `recognizeOneCall` refuses outright,
- * plan 2's territory the same way the query branch is. Its factory IS claimed (by
- * `recognizeRestRegistrar`, independently of the calls) and its fetch helper (a literal,
- * non-`baseConst` base) matches `recognizeRestFetchHelper` on its own; measured at HEAD, this
- * fixture reports exactly its two `call:registerZzwriterestTool` statements unclaimed — nothing
- * else — the same narrow shape `discord`/`google-meet` above now report too, now that their
- * fetch-helper gap (the `baseConst` literal and the fetch-helper function) is closed; all three
- * fixtures' remaining blockers come from the one recognizer, `recognizeOneCall`/
- * `recognizeRestTools` (tools-rest.ts).
+ * the last of that recognizer's four unread `pathFn`/arity shapes now that the query branch is
+ * read. Its factory IS claimed (by `recognizeRestRegistrar`, independently of the calls) and its
+ * fetch helper (a literal, non-`baseConst` base) matches `recognizeRestFetchHelper` on its own;
+ * measured at HEAD, this fixture reports exactly its two `call:registerZzwriterestTool`
+ * statements unclaimed — nothing else.
  */
 const BLOCKED: Record<string, string> = {
   bitrise: "stub tool handler",
-  discord: "query parameters",
-  "google-meet": "query parameters",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
   zzwriterest: "write body",
@@ -166,57 +195,70 @@ beforeAll(async () => {
   await initParser();
 });
 
+/**
+ * Emit -> derive -> re-emit, asserting file-for-file. `moved` names the files this fixture is
+ * known NOT to reproduce, and each one is asserted to actually differ: an entry that closes must
+ * fail here rather than quietly turning into a weaker check on the files that remain.
+ */
+function checkReEmission(name: string, moved: readonly string[]): void {
+  const files = emittedFiles(name);
+  const server = files.get("src/server.ts");
+  const manifest = files.get("nimbus.extension.json");
+  if (server === undefined || manifest === undefined) {
+    throw new Error(`${name} emitted no src/server.ts or nimbus.extension.json`);
+  }
+
+  const derivation = deriveSpec({ server, manifest, filter: files.get("src/search-filter.ts") });
+  if (!derivation.ok) {
+    throw new Error(`${name} did not derive: ${derivation.blockers.map((b) => b.kind).join(", ")}`);
+  }
+
+  const reFiles = new Map(
+    formatAll(generate(parseSpec(derivation.spec))).map((f) => [displayPath(f.path), f.content]),
+  );
+
+  // Byte equality per file is not enough: a recognizer that caused an extra file to be
+  // emitted (or dropped one) would still pass a loop that only checks paths present in
+  // `files`. Assert the two path sets are equal in both directions first.
+  const originalPaths = [...files.keys()].sort();
+  const reEmittedPaths = [...reFiles.keys()].sort();
+  expect(reEmittedPaths).toEqual(originalPaths);
+
+  for (const [path, content] of files) {
+    if (moved.includes(path)) {
+      expect(reFiles.get(path)).not.toBe(content);
+      continue;
+    }
+    expect(reFiles.get(path)).toBe(content);
+  }
+}
+
 describe("deriveSpec round-trips this repository's own output", () => {
-  // Every fixture in fixtures/ must appear in exactly one of ROUND_TRIP / BLOCKED — an
-  // unlisted fixture is a gap nobody can see. Fail loudly rather than silently skipping one
-  // added later.
+  // Every fixture in fixtures/ must appear in exactly one of ROUND_TRIP / PARTIAL_ROUND_TRIP /
+  // BLOCKED — an unlisted fixture is a gap nobody can see. Fail loudly rather than silently
+  // skipping one added later.
   it("accounts for every fixture in fixtures/", () => {
     const names = readdirSync(join(import.meta.dir, "..", "..", "fixtures"))
       .filter((f) => f.endsWith(".spec.json"))
       .map((f) => f.replace(".spec.json", ""))
       .sort();
-    const listed = new Set([...ROUND_TRIP, ...Object.keys(BLOCKED)]);
-    expect(names.filter((n) => !listed.has(n))).toEqual([]);
-    expect([...listed].filter((n) => !names.includes(n))).toEqual([]);
+    const listed = [...ROUND_TRIP, ...Object.keys(PARTIAL_ROUND_TRIP), ...Object.keys(BLOCKED)];
+    expect(names.filter((n) => !listed.includes(n))).toEqual([]);
+    expect(listed.filter((n) => !names.includes(n))).toEqual([]);
+    // In EXACTLY one: a fixture in two lists would satisfy both checks above while making one of
+    // them vacuous.
+    expect(listed.length).toBe(new Set(listed).size);
   });
 
   for (const name of ROUND_TRIP) {
     it(`re-emits byte-identical output for every file ${name} emits`, () => {
-      const files = emittedFiles(name);
-      const server = files.get("src/server.ts");
-      const manifest = files.get("nimbus.extension.json");
-      if (server === undefined || manifest === undefined) {
-        throw new Error(`${name} emitted no src/server.ts or nimbus.extension.json`);
-      }
+      checkReEmission(name, []);
+    });
+  }
 
-      const derivation = deriveSpec({
-        server,
-        manifest,
-        filter: files.get("src/search-filter.ts"),
-      });
-      if (!derivation.ok) {
-        throw new Error(
-          `${name} did not derive: ${derivation.blockers.map((b) => b.kind).join(", ")}`,
-        );
-      }
-
-      const reFiles = new Map(
-        formatAll(generate(parseSpec(derivation.spec))).map((f) => [
-          displayPath(f.path),
-          f.content,
-        ]),
-      );
-
-      // Byte equality per file is not enough: a recognizer that caused an extra file to be
-      // emitted (or dropped one) would still pass a loop that only checks paths present in
-      // `files`. Assert the two path sets are equal in both directions first.
-      const originalPaths = [...files.keys()].sort();
-      const reEmittedPaths = [...reFiles.keys()].sort();
-      expect(reEmittedPaths).toEqual(originalPaths);
-
-      for (const [path, content] of files) {
-        expect(reFiles.get(path)).toBe(content);
-      }
+  for (const [name, gap] of Object.entries(PARTIAL_ROUND_TRIP)) {
+    it(`re-emits every file ${name} emits but ${gap.files.join(", ")} (${gap.reason})`, () => {
+      checkReEmission(name, gap.files);
     });
   }
 

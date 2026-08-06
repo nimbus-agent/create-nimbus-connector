@@ -14,6 +14,7 @@ import {
 import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
+import type { QueryEntry } from "./query.ts";
 import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
 
 /**
@@ -34,6 +35,14 @@ export type ToolFields = {
    * write helper, which is the only place a method literal appears.
    */
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
+  /**
+   * The entries recovered from a query-branch handler (see server/query.ts). Omitted for every
+   * other handler shape, so a tool with none is byte-unchanged by this field's existence — the
+   * same reason `method` is omitted for GET. It lives on the shared `ToolFields` rather than on
+   * tools-rest.ts's own result because `renderQueryLines` writes one statement shape for both
+   * styles, parameterised only by the handler's parameter name.
+   */
+  query?: QueryEntry[];
 };
 
 /**

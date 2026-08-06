@@ -6,9 +6,14 @@ import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
-import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
+import {
+  type RestFetchHelperFields,
+  recognizeFetchHelper,
+  recognizeRestFetchHelper,
+} from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
+import type { BasePrefix } from "./server/query.ts";
 import { claimSearchImports, type SearchToolFields } from "./server/search.ts";
 import { recognizeTools, type ToolFields } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
@@ -204,6 +209,52 @@ export function voteArgsSchemaStyle(
 }
 
 /**
+ * Every query tool's `new URL(...)` was rendered with `baseExpr(spec)` (src/emit/server/
+ * fetch-helper.ts) spliced in as a prefix, so each one must agree with the fetch helper this same
+ * module declares — and, for the literal form, the base has to come back OFF the recovered path
+ * before it can be a spec `path` again.
+ *
+ * Both happen HERE rather than inside `recognizeQueryBlock`, and not only because the tool
+ * recognizers run before `recognizeRestFetchHelper` and take no helper metadata. Two recognizers
+ * producing the base independently is how they drift; comparing them in the caller is the same
+ * guard `rest-fetch-helper-name-mismatch` below applies, for the same reason. And the literal
+ * split is not merely inconvenient to do earlier — it is not DECIDABLE earlier: `renderPath`
+ * fuses the base onto the path's first literal segment with nothing between them, a base may
+ * itself carry a path component, and a query tool's path must start with "/" — so several splits
+ * of that quasi are byte-identical and only the fetch helper's own `base` says which is right.
+ * See `BasePrefix`.
+ *
+ * `restFetchHelper.base` is already in `baseExpr`'s own terms for a rest-kit connector: the
+ * schema's rest-kit refine (src/spec.ts) rejects any `${env.X}` in `fetchHelper.base`, so
+ * `resolveEnvRefs` is the identity on it and no second normalizer is needed here.
+ */
+function rebaseQueryTools(
+  tools: readonly ToolFields[],
+  prefixes: readonly (BasePrefix | undefined)[],
+  helper: RestFetchHelperFields,
+): ToolFields[] | undefined {
+  const out: ToolFields[] = [];
+  for (const [i, tool] of tools.entries()) {
+    const prefix = prefixes[i];
+    if (prefix === undefined) {
+      out.push(tool);
+      continue;
+    }
+    if (prefix.kind === "const") {
+      if (prefix.name !== helper.baseConst) return undefined;
+      out.push(tool);
+      continue;
+    }
+    // `prefix.text` is the template's leading quasi, and the base must lie wholly inside it —
+    // it cannot span a `${…}`. Testing the quasi rather than the recovered path is what keeps a
+    // base longer than that quasi from matching by running on into a placeholder's text.
+    if (helper.baseConst !== undefined || !prefix.text.startsWith(helper.base)) return undefined;
+    out.push({ ...tool, path: tool.path.slice(helper.base.length) });
+  }
+  return out;
+}
+
+/**
  * The rest-kit assembly.
  *
  * rest-kit's tool registrar and fetch helper are both a different shape from hand-rolled/
@@ -260,6 +311,17 @@ function deriveRestKitSpec(
     );
   }
 
+  // The same class of guard as the name mismatch above, one recognizer further along: the query
+  // tools' base prefixes and the fetch helper's own base are recovered independently and have to
+  // agree. See `rebaseQueryTools`, which also finishes a literal prefix's path.
+  const rebasedTools = rebaseQueryTools(tools.tools, tools.basePrefixes, restFetchHelper);
+  if (rebasedTools === undefined) {
+    return blocked(
+      "query:base-prefix-mismatch",
+      "a query tool's new URL(...) prefix is not the base this module's fetch helper declares",
+    );
+  }
+
   const titleRecovery = recognizeRestTitle(registrar.registrar, frame.name);
   if (titleRecovery === undefined) {
     return blocked(
@@ -284,7 +346,7 @@ function deriveRestKitSpec(
   // Last, because it is a different kind of refusal from everything above — every earlier
   // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
   // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(tools.tools, manifest.hitlRequired);
+  const attribution = attributeEffects(rebasedTools, manifest.hitlRequired);
   if (attribution === undefined) {
     return blocked(
       "manifest:unattributable-hitl",

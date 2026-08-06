@@ -229,7 +229,12 @@ describe("recognizeRestTools", () => {
     ].join("\n");
     const claims = createClaimSet();
     const tools = recognizeRestTools(parseModule(source), claims, "registerZzTool");
-    expect(tools).toEqual({ tools: [], staticPathStyles: [], schemaShapes: [] });
+    expect(tools).toEqual({
+      tools: [],
+      staticPathStyles: [],
+      schemaShapes: [],
+      basePrefixes: [],
+    });
     expect(claims.claims()).toEqual([]);
   });
 });

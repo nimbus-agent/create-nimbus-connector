@@ -16,6 +16,7 @@ import {
 import { recognizeArgs, type SchemaShape } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
+import { type BasePrefix, recognizeQueryBlock } from "./query.ts";
 import type { ToolFields } from "./tools-hand.ts";
 
 /**
@@ -149,11 +150,17 @@ function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
  * One `<registrar>(...)` call's fields, plus the same two connector-wide style votes'
  * per-tool evidence tools-hand.ts's `ToolShape` carries — see that type's docstring for why
  * neither `staticStyle` nor `schemaShape` belongs on `ToolFields` itself.
+ *
+ * `basePrefix` is a third piece of per-tool evidence with the same character: set only for a
+ * query tool, whose `new URL(...)` was rendered with the fetch helper's base spliced in ahead of
+ * the path. It is not a spec field — it is a fact about this module that only the assembly can
+ * check, against the fetch helper recognized separately from the same file. See `BasePrefix`.
  */
 type ToolShape = {
   readonly fields: ToolFields;
   readonly staticStyle?: StaticPathStyle;
   readonly schemaShape: SchemaShape;
+  readonly basePrefix?: BasePrefix;
 };
 
 /**
@@ -163,12 +170,13 @@ type ToolShape = {
  * that needs it blocks visibly on a named blocker instead of deriving a `GET` the real
  * connector never had.
  *
- * `pathFn` has three in-scope forms — `() => <pathExpr>`, `(parsed) => <pathExpr>`, and
- * `(parsed) => { <hoists> return <pathExpr>; }` — modeled the same way tools-hand.ts's
- * `recognizeOne` models its block form, and through the same shared reader (`hoists.ts`'s
- * `recognizeHoistedBlock`). The query branch (a block whose body contains `const u = new
- * URL(...)`) is plan 2's too: it is not a hoist, so that reader's loop refuses it the same way
- * it refuses any other unrecognized non-last statement, with no special case needed.
+ * `pathFn` has four in-scope forms — `() => <pathExpr>`, `(parsed) => <pathExpr>`,
+ * `(parsed) => { <hoists> return <pathExpr>; }` and the query branch
+ * `(parsed) => { <hoists> const u = new URL(...); <query lines> return `${u}`; }` — the first
+ * three modeled the same way tools-hand.ts's `recognizeOne` models its block form, and through
+ * the same shared reader (`hoists.ts`'s `recognizeHoistedBlock`); the fourth by
+ * `recognizeQueryBlock` (server/query.ts), which takes a different tail off the same
+ * `splitHoists`.
  *
  * Refuses an `async` path fn: `src/emit/server/tools-rest.ts` never writes `async` on this arrow,
  * the same pin `read.ts`'s `isAsync` documents and `readOnlyWrapper` (server/index.ts) already
@@ -209,23 +217,42 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
   if (arrow.params.length !== 1) return undefined;
 
   const block = recognizeHoistedBlock(arrow.body);
-  if (block === undefined) return undefined;
+  if (block !== undefined) {
+    // Unlike tools-hand.ts, what the block returns IS the path expression — there is no
+    // `jsonResult(await ...)` wrapper to unwrap first.
+    const recognized =
+      block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
+    if (recognized === undefined) return undefined;
 
-  // Unlike tools-hand.ts, what the block returns IS the path expression — there is no
-  // `jsonResult(await ...)` wrapper to unwrap first.
-  const recognized =
-    block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
-  if (recognized === undefined) return undefined;
+    // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
+    // the schema text itself, so both are only visible at the hoist statement.
+    const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
+    if (mergedArgs === undefined) return undefined;
 
-  // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
-  // the schema text itself, so both are only visible at the hoist statement.
-  const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
+    return {
+      fields: { name, description, args: mergedArgs, path: recognized.path },
+      staticStyle: recognized.staticStyle,
+      schemaShape,
+    };
+  }
+
+  // The query branch — src/emit/server/tools-rest.ts's `if (query !== undefined)` block. Tried
+  // only once the plain hoists-then-return form has failed, so no shape that already recognized
+  // changes meaning: the two are disjoint by construction (that reader requires exactly one
+  // statement after the hoists, and this one requires at least three).
+  //
+  // `staticStyle` is deliberately absent from what this returns — see `QueryBlock`'s docstring
+  // for why a query tool carries no evidence of the connector's `staticPathStyle` at all.
+  const query = recognizeQueryBlock(arrow.body, argsResult.args);
+  if (query === undefined) return undefined;
+
+  const mergedArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);
   if (mergedArgs === undefined) return undefined;
 
   return {
-    fields: { name, description, args: mergedArgs, path: recognized.path },
-    staticStyle: recognized.staticStyle,
+    fields: { name, description, args: mergedArgs, path: query.path, query: query.query },
     schemaShape,
+    basePrefix: query.basePrefix,
   };
 }
 
@@ -281,6 +308,12 @@ export type RestToolsResult = {
   readonly tools: ToolFields[];
   readonly staticPathStyles: readonly (StaticPathStyle | undefined)[];
   readonly schemaShapes: readonly SchemaShape[];
+  /**
+   * Parallel to `tools`, and `undefined` for every tool that is not a query tool — the same
+   * per-index shape `staticPathStyles` uses. The caller reads it alongside `tools[i]`, which is
+   * what lets a `literal` prefix's base be taken off that tool's own path; see `BasePrefix`.
+   */
+  readonly basePrefixes: readonly (BasePrefix | undefined)[];
 };
 
 export function recognizeRestTools(
@@ -307,5 +340,6 @@ export function recognizeRestTools(
     tools: shapes.map((s) => s.fields),
     staticPathStyles: shapes.map((s) => s.staticStyle),
     schemaShapes: shapes.map((s) => s.schemaShape),
+    basePrefixes: shapes.map((s) => s.basePrefix),
   };
 }

@@ -35,9 +35,9 @@ reasons, and the difference matters before you start work.
 
 - [Completing the deriver's recognizer set](./superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
   specifies a seven-commit sequence of which only the first four have shipped — commit 4 being
-  search and search-filter, both now landed. The query and body recognizers have not,
-  which is why `test/derive/round-trip.test.ts`'s `BLOCKED` map still names fixtures blocked on
-  query parameters and write body.
+  search and search-filter, both now landed — as is the rest-kit half of the query recognizer.
+  The body recognizer has not, which is why `test/derive/round-trip.test.ts`'s `BLOCKED` map
+  still names fixtures blocked on write body.
   [Its review](./superpowers/specs/2026-08-04-completing-the-recognizer-set-review.md) leaves
   two questions open against that unbuilt work.
 - [Guarded accessors and the two missing frames](./superpowers/plans/2026-08-04-guarded-accessors-and-frames.md)

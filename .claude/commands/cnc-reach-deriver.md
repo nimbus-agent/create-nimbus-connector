@@ -161,23 +161,31 @@ which is also what lets a derived spec that trips `RESERVED_IDENTIFIERS` be *cou
 thrown. The reach design still writes `spec: ConnectorSpec`; the plan's *Refinement of the spec*
 section records the deviation, and the code is authoritative.
 
-### Every fixture appears in exactly one of `ROUND_TRIP` / `BLOCKED`
+### Every fixture appears in exactly one of `ROUND_TRIP` / `PARTIAL_ROUND_TRIP` / `BLOCKED`
 
-`test/derive/round-trip.test.ts` holds both lists, and its
-`accounts for every fixture in fixtures/` test fails when a fixture is in neither or in both.
-`BLOCKED` records the construct that stops each one, so the gap is on screen on every run rather
+`test/derive/round-trip.test.ts` holds all three lists, and its
+`accounts for every fixture in fixtures/` test fails when a fixture is in none or in more than one.
+`BLOCKED` records the construct that stops each one, and `PARTIAL_ROUND_TRIP` the FILES a fixture
+that does derive still fails to reproduce (and why), so the gap is on screen on every run rather
 than implied by absence — the same reason `expectations.json` omits a file instead of hiding it.
+A `PARTIAL_ROUND_TRIP` file is asserted to actually differ, so an entry that closes fails loudly
+instead of silently weakening the check.
 
-**Adding a fixture means adding it to one of those two lists.** A `BLOCKED` reason must be
+**Adding a fixture means adding it to one of those lists.** A `BLOCKED` reason must be
 checked by actually running `deriveSpec` against the fixture's emitted output, never inferred
 from the spec or the emitter: two earlier versions of that docstring went stale exactly that way.
 
 ## What is not built yet
 
-`src/derive/server/search.ts` and `src/derive/search-filter.ts` now exist; `src/derive/server/query.ts`
-and `src/derive/server/body.ts` do not. `BLOCKED` no longer lists anything on "search tool" — what
-remains is `bitrise` on a stub tool handler, `discord`/`google-meet` on query parameters, `zzwrite`
-on client-credentials auth, and `zzwriteonly`/`zzwriterest` on write body.
+`src/derive/server/search.ts`, `src/derive/search-filter.ts` and `src/derive/server/query.ts` now
+exist; `src/derive/server/body.ts` does not. `BLOCKED` no longer lists anything on "search tool" or
+"query parameters" — `discord` moved to `ROUND_TRIP` and `google-meet` to `PARTIAL_ROUND_TRIP` (a
+third list: it derives, and re-emits every file but `README.md`, whose `title` is not recoverable
+from `src/server.ts`). What remains is `bitrise` on a stub tool handler, `zzwrite` on
+client-credentials auth, and `zzwriteonly`/`zzwriterest` on write body.
+
+`recognizeQueryBlock` reads only the rest-kit query branch so far; the hand-rolled one, which
+`renderQueryLines` writes into a different handler shape, is not wired.
 
 The specification for that work is
 [`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
