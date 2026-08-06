@@ -372,12 +372,17 @@ describe("deriveSpec", () => {
     expect(result.blockers.map((b) => b.kind)).toEqual(["manifest:unattributable-hitl"]);
   });
 
-  // A genuinely non-trivial attribution (a real write tool, or two tools competing for the
-  // same declared effect) is not reachable through deriveSpec() yet: no recognizer in this
-  // plan claims a write-effect fetch helper (hand-rolled/read-only-kit) or a non-GET rest-kit
-  // registration (round-trip.test.ts's BLOCKED["zzwriteonly"/"zzwriterest"], "write body") — a
-  // later phase's territory. attributeEffects' own success and ambiguity behaviour is exercised
-  // directly, and exhaustively, in test/derive/effect.test.ts instead.
+  // A real write tool IS reachable through deriveSpec() now — `recognizeWriteHelper` claims the
+  // hand-rolled `<local>Send` and `recognizeOneCall` reads the rest-kit arity-5 initFn, so
+  // `zzwriteonly` and `zzwriterest` both round-trip rather than blocking. What is still not
+  // reachable from any fixture is an AMBIGUOUS attribution: that needs two or more tools
+  // competing for one declared effect, and every write fixture so far carries a single
+  // candidate per effect, which `attributeEffects` resolves as forced rather than ambiguous.
+  //
+  // So this test still asserts the no-op case, and `test/derive/effect.test.ts` still carries
+  // the exhaustive direct coverage — but the reason is now "no fixture exercises it", not "no
+  // recognizer reaches it", and those two go stale differently. Adding a fixture with two
+  // same-effect write tools would make the ambiguity path end-to-end testable.
   it("attaches no $effectAmbiguity when attribution is a no-op, and the spec re-parses", () => {
     const result = deriveSpec({ server: SERVER, manifest: MANIFEST });
     expect(result.ok).toBe(true);
