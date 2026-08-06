@@ -274,6 +274,17 @@ describe("recognizeFrame reads the split registrar and the inlined transport", (
     expect(derive("zzscratch", inlinedTransport("mcp"))).toEqual(derive("zzscratch"));
   });
 
+  // Both styles, same as the split registrar above, because this axis spans both: five of the six
+  // corpus connectors writing the inlined tail are rest-kit (`gmail`, `onedrive`, `outlook`,
+  // `google-meet`, `google-photos`) and `google-drive` is hand-rolled. The hand-rolled case alone
+  // would have proved the axis only on the MINORITY style — `isInlinedTransportConnect` takes the
+  // McpServer binding as a parameter precisely because `wiring()` names it `mcp` for one style and
+  // `server` for the other, and a parameter that is only ever exercised with one value is a
+  // parameter nothing has checked.
+  it("derives the same spec from an inlined transport tail on the rest-kit style too", () => {
+    expect(derive("zzstandalone", inlinedTransport("server"))).toEqual(derive("zzstandalone"));
+  });
+
   // google-meet and google-photos write BOTH near misses. frameFailureKind checks the registrar
   // element before the transport one, so either axis alone leaves them blocked on the registrar
   // bucket — which is why the two land together, and why the combination is asserted rather than

@@ -488,13 +488,32 @@ function splitRegistrarConsts(
 
 /**
  * `await <mcpVar>.connect(new StdioServerTransport());` — the INLINED transport tail, the file's
- * last statement in `gmail`, `google-drive`, `onedrive` and `outlook`, with no transport const
- * anywhere.
+ * last statement with no transport const anywhere.
+ *
+ * **SIX corpus connectors write this shape, not four**, and the difference between the two numbers
+ * is precedence rather than measurement. `gmail`, `google-drive`, `onedrive` and `outlook` were the
+ * whole of the `frame:tail-inlined-transport` BUCKET, because `frameFailureKind` checks the
+ * registrar element before the transport one and `google-meet` and `google-photos` — which write
+ * the split registrar too — were reported on that earlier axis instead. Both still write this tail,
+ * and now that both axes are recognized, this matcher is what carries them past element 5: they
+ * have no transport const for `isConnect` to find. Four is a bucket size; six is the shape count,
+ * and only the second is a fact about this function.
+ *
+ * Recorded at this length because the distinction was already established once and then lost: the
+ * label-era docstring this replaced had the six right, and noted it was found "by reading the
+ * source, not by assuming the original three-axis count was complete" — and the first rewrite of it
+ * quietly restated the bucket's four. docs/ROADMAP.md's *Shape variance the emitter models one way*
+ * states the "a connector may write both" relationship that makes the two numbers differ.
+ *
+ * Five of the six are rest-kit (`gmail`, `onedrive`, `outlook`, `google-meet`, `google-photos`);
+ * `google-drive` is hand-rolled, declaring its own local `registerDriveTool` rather than importing
+ * `makeRestToolRegistrar`. So the axis spans both styles, which is why `mcpVar` is a PARAMETER
+ * here — `wiring()` binds `mcp` for hand-rolled and `server` for rest-kit — and why
+ * test/derive/frame.test.ts proves this axis on `zzscratch` and `zzstandalone` both.
  *
  * Accepted only once the strict two-statement form is absent (see `recognizeFrame`, elements 4
  * and 5), so no module that already recognized changes meaning. `tail()` (src/emit/server/
- * index.ts) writes the named const, so a module in this shape re-emits with one — recorded in
- * docs/ROADMAP.md's *Shape variance the emitter models one way* alongside the split registrar.
+ * index.ts) writes the named const, so a module in this shape re-emits with one.
  *
  * This used to be a LABEL (`frame:tail-inlined-transport`), where leniency was correct; it is a
  * CLAIM now, and every part was already pinned to claim depth: the await, the receiver's identity,
