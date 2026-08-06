@@ -209,6 +209,12 @@ describe("recognizeSearchFilter", () => {
 
   it("rejects an extractor guarded with asRecord instead of asObjectish", () => {
     const corrupted = MONOREPO_SOURCE.replace(/asObjectish/g, "asRecord");
+    // MONOREPO_SOURCE is already asserted ok:true above, so a no-op replace here would still fail
+    // expect(result.ok).toBe(false) loudly — this guard isn't about staying green, it's about
+    // where the failure points: without it, a no-op reads "expected false, got true" (looks like
+    // the recognizer); with it, "corrupted equals pristine" names the real cause (emitSearchFilter
+    // stopped writing asObjectish).
+    expect(corrupted).not.toBe(MONOREPO_SOURCE);
     const result = recognizeSearchFilter(corrupted);
     expect(result.ok).toBe(false);
   });

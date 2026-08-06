@@ -82,8 +82,8 @@ const ROUND_TRIP = [
  * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) still refuses outright,
  * plan 2's territory. Re-measured against HEAD (after that fetch-helper fix landed):
  * `deriveSpec` run against each fixture's own emitted output reports ONLY `register<X>Tool(...)`
- * calls unclaimed — `call:registerDiscordTool` ×4 for discord, `call:registerGoogleMeetTool` ×3
- * for google-meet (`recognizeRestTools` claims none of them once even one fails) — never the
+ * calls unclaimed — `call:registerDiscordTool` for discord, `call:registerGoogleMeetTool` for
+ * google-meet (`recognizeRestTools` claims none of them once even one fails) — never the
  * `baseConst` literal or the fetch-helper function anymore (both now claimed), never the factory
  * (`recognizeRestRegistrar` claims it independently), never a bare `no-frame` (the frame itself
  * matches fine, as `rest-kit`), and never `import-from:.../rest-tool-kit.ts` (claimed by the
@@ -107,7 +107,7 @@ const ROUND_TRIP = [
  *   refused). `recognizeTools` is all-or-nothing, so the one unrecognized stub call blocks the
  *   whole module — including its own search tool and both search-specific imports, which
  *   `deriveSpec` never even attempts to claim (`claimSearchImports` only runs once `toolsResult`
- *   itself succeeds). Reported: three unclaimed `call:reg` statements plus both search imports.
+ *   itself succeeds). Reported: unclaimed `call:reg` statements plus both search imports.
  *
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.

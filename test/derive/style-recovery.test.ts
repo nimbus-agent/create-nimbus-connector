@@ -155,11 +155,11 @@ describe("style recovery", () => {
 
 // ---------------------------------------------------------------------------
 // Step 6b: prove the vote rule against every fixture's own emitted bytes, rather than trust the
-// paragraph in the plan. Independent of whether deriveSpec succeeds end-to-end for a fixture —
-// five of the 21 (bitrise, dependencytrack, mercury, netlify, zendesk) block on an unrelated gap
-// (search tool / query parameters) despite being exactly the fixtures that declare a non-default
-// style, so this scans the emitted AST directly for the same evidence recognizeArgs/recognizePath
-// would find inside a fully-recognized frame, rather than routing through deriveSpec.
+// paragraph in the plan. Independent of whether deriveSpec succeeds end-to-end for a fixture — a
+// fixture can declare a non-default style while its module blocks on a gap that has nothing to do
+// with style recovery, so routing through deriveSpec is not a reliable path to this evidence.
+// Scanning the emitted AST directly finds the same evidence recognizeArgs/recognizePath would
+// find inside a fully-recognized frame, without depending on every other recognizer succeeding.
 // ---------------------------------------------------------------------------
 
 type RawNode = Record<string, unknown>;

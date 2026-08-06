@@ -858,8 +858,10 @@ not make clear that `TRIM_TRAILING_SLASH_FN` (`src/emit/server/env.ts:17-21`) **
 entire source, body included — so comparing against it already is body verification. Task 4 Step 3
 now quotes it, and flags that the body is `s.endsWith("/") ? s.slice(0, -1) : s`, **not** the
 `.replace(/\/$/, "")` the review assumed: a recognizer written against the regex form would match
-nothing this emitter produces. It also says to import the constant rather than re-type it, so the
-recognizer cannot drift from the emitter the way a copied string would.
+nothing this emitter produces. It also says to mirror that text rather than import the constant —
+`src/derive/` never imports from `src/emit/` — so the round-trip test is what catches drift
+instead, the same way it does for `zendesk`/`dependencytrack`'s `transform:
+"trimTrailingSlashFn"`.
 
 ## Self-Review
 
