@@ -16,11 +16,12 @@ export type ManifestFields = {
 
 /**
  * A manifest that IS a manifest but lacks a key `src/emit/manifest.ts` always writes — distinct
- * from a file that is absent or unparseable, which is what `no-manifest` means. `iac` is the live
- * corpus instance: its `nimbus.extension.json` exists and parses; it simply predates
- * `syncInterval`. `deriveSpec` maps this to `manifest:missing-<key>` rather than the generic
- * `no-manifest` bucket, so the histogram sends a reader to the missing field rather than to a
- * file that is right there.
+ * from a file that is absent, unparseable, or carrying a wrong-typed field, all three of which
+ * stay in the coarse `no-manifest` bucket (`reqString`'s `TypeError` is the third, and is neither
+ * absent nor unparseable). `iac` is the live corpus instance: its `nimbus.extension.json` exists
+ * and parses; it simply predates `syncInterval`. `deriveSpec` maps this to
+ * `manifest:missing-<key>` rather than the generic bucket, so the histogram sends a reader to the
+ * missing field rather than to a file that is right there.
  */
 export class MissingManifestKey extends Error {
   constructor(readonly key: string) {
