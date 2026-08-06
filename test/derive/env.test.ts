@@ -672,3 +672,102 @@ describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
     expect(unclaimed).toHaveLength(1);
   });
 });
+
+/**
+ * The-honest-histogram's task 1, Finding B: matchSplitBearerReader, matchSplitBearerWrapper,
+ * recognizeBasicAuth and recognizeOne previously read a function's body and its name but never
+ * its return-type annotation or its async-ness, so a function whose TEXT the emitter cannot write
+ * still read as a match — `async function headers(): Promise<number>` read exactly like
+ * `function headers(): Record<string, string>`. Each `.replace()` below is preceded by an
+ * `expect(...).not.toBe(...)` guard — the same discipline test/derive/search-filter.test.ts's
+ * corruption tests use — so a no-op replace (because the emitter stopped writing that text)
+ * cannot silently stop testing anything.
+ */
+describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
+  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitBearer always writes `(): string`", () => {
+    const corruptedReader = SPLIT_BEARER_READER.replace(
+      "function apiToken(): string {",
+      "function apiToken(): unknown {",
+    );
+    expect(corruptedReader).not.toBe(SPLIT_BEARER_READER);
+    const source = [corruptedReader, "", SPLIT_BEARER_WRAPPER].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    // Neither statement is claimed: the reader fails both matchSplitBearerReader's new
+    // annotation check (inside the pairing loop) and recognizeOne's identical check (the plain-
+    // accessor fallback), and the wrapper is never even offered to the pairing logic once the
+    // reader itself is refused there.
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(2);
+  });
+
+  it("refuses an async split-bearer wrapper — renderSplitBearer never writes `async` on either half", () => {
+    const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace(
+      "function authHeader(): Record<string, string> {",
+      "async function authHeader(): Promise<Record<string, string>> {",
+    );
+    expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+    const source = [SPLIT_BEARER_READER, "", corruptedWrapper].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    // No tokenLocal-carrying entry forms — matchSplitBearerWrapper refuses the async half, the
+    // same "no pair" outcome the hand-written cases in "recognizeEnv: split-bearer pair
+    // (tokenLocal)" above cover. The untouched reader is BYTE-IDENTICAL to a plain required
+    // accessor (its own docstring), so it still falls back through the plain-accessor branch
+    // exactly as "falls back to a plain required entry when no wrapper follows the reader"
+    // (above) already establishes; the async wrapper itself now matches neither
+    // recognizeBasicAuth nor recognizeOne (both refuse async before reading anything else) and
+    // stays unclaimed.
+    expect(entries).toEqual([
+      { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+    ]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a basic accessor annotated something other than `: Record<string, string>` — renderBasic always writes that", () => {
+    const pristine = [
+      "function authHeader(): Record<string, string> {",
+      '  const user = process.env["AIRFLOW_USER"]?.trim();',
+      '  if (user === undefined || user === "") {',
+      '    throw new Error("AIRFLOW_USER is not set");',
+      "  }",
+      '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+      '  if (pass === undefined || pass === "") {',
+      '    throw new Error("AIRFLOW_PASSWORD is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: encodeBasicAuthHeader(user, pass),",
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const corrupted = pristine.replace(
+      "function authHeader(): Record<string, string> {",
+      "function authHeader(): unknown {",
+    );
+    expect(corrupted).not.toBe(pristine);
+    const { entries, unclaimed } = run(corrupted);
+    // recognizeBasicAuth refuses on the annotation; recognizeOne never competes for this
+    // read/guard/read/guard shape at all (its own docstring), so nothing else claims it either.
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a plain accessor whose annotation contradicts its auth shape — renderEnvAccessor writes `: string` for a bare read and `: Record<string, string>` for an auth one", () => {
+    const pristine = [
+      "function authHeaders(): Record<string, string> {",
+      '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+      '  if (tok === undefined || tok === "") {',
+      '    throw new Error("GRAFANA_API_TOKEN is not set");',
+      "  }",
+      '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const corrupted = pristine.replace(
+      "function authHeaders(): Record<string, string> {",
+      "function authHeaders(): string {",
+    );
+    expect(corrupted).not.toBe(pristine);
+    const { entries, unclaimed } = run(corrupted);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});

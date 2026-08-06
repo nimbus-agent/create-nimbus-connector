@@ -11,7 +11,9 @@ import {
   functionBody,
   functionName,
   functionParams,
+  functionReturnType,
   ifStatement,
+  isAsyncFunction,
   isIdent,
   logical,
   memberName,
@@ -30,6 +32,7 @@ import {
   stringLit,
   templateLiteral,
   throwArgument,
+  typeAnnotationName,
 } from "../read.ts";
 
 export type EnvEntry = {
@@ -385,6 +388,9 @@ function buildPlainEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined 
  * is the defect this rewrite exists to close.
  */
 function recognizeOne(fn: AstNode): EnvEntry | undefined {
+  // renderEnvAccessor's tail is never async.
+  if (isAsyncFunction(fn)) return undefined;
+
   const statements = functionBody(fn);
   if (statements === undefined || statements.length === 0) return undefined;
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
@@ -404,6 +410,12 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
 
   const arg = returnArgument(tail.returnStmt);
   if (arg === undefined) return undefined;
+
+  // renderEnvAccessor writes `(): string` for the plain branch and `(): Record<string, string>`
+  // for the auth (bearer/headers) branch — the identical `arg.type === "ObjectExpression"` split
+  // made just below, so the two checks must agree or this shape is not one the emitter can write.
+  const expectedReturnType = arg.type === "ObjectExpression" ? "Record" : "string";
+  if (typeAnnotationName(functionReturnType(fn)) !== expectedReturnType) return undefined;
 
   const local = functionName(fn);
   if (local === undefined) return undefined;
@@ -437,6 +449,11 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
 function matchSplitBearerReader(
   fn: AstNode,
 ): { readonly var: string; readonly binding: string; readonly local: string } | undefined {
+  // renderSplitBearer's reader half is never async and always returns exactly `string`.
+  if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "string") {
+    return undefined;
+  }
+
   const statements = functionBody(fn);
   if (statements === undefined || statements.length === 0) return undefined;
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
@@ -470,6 +487,11 @@ function matchSplitBearerReader(
  * spec can produce a layout with a statement between them.
  */
 function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
+  // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`.
+  if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "Record") {
+    return undefined;
+  }
+
   const statements = functionBody(fn);
   if (statements?.length !== 1) return undefined;
 
@@ -545,6 +567,11 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * read/guard/read/guard never satisfies — so the two never compete for the same statement.
  */
 function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
+  // renderBasic is never async and always returns `Record<string, string>`.
+  if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "Record") {
+    return undefined;
+  }
+
   const statements = functionBody(fn);
   if (statements === undefined || statements.length === 0) return undefined;
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;

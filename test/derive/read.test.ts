@@ -20,6 +20,7 @@ import {
   functionBody,
   functionName,
   functionParams,
+  functionReturnType,
   identName,
   ifStatement,
   importNames,
@@ -51,6 +52,7 @@ import {
   templateLiteral,
   throwArgument,
   tryStatement,
+  typeAnnotationName,
   unary,
   uninitializedLet,
 } from "../../src/derive/read.ts";
@@ -525,5 +527,36 @@ describe("Task 5 accessors", () => {
     expect(uninitializedLet(only("const json = 1;"))).toBeUndefined();
     expect(uninitializedLet(only("var json;"))).toBeUndefined();
     expect(uninitializedLet(only("let json = 1;"))).toBeUndefined();
+  });
+});
+
+/**
+ * Added for the-honest-histogram's task 1: server/env.ts's four accessor matchers previously read
+ * a function's body and name but ignored its return-type annotation entirely, so `(): unknown`
+ * read exactly like `(): string`. See task-1-report.md.
+ */
+describe("typeAnnotationName", () => {
+  it("reads a keyword annotation's own name off the node's type — no name child exists to read", () => {
+    const fn = only('function a(): string { return "x"; }');
+    expect(typeAnnotationName(functionReturnType(fn))).toBe("string");
+  });
+
+  it("reads a type reference's head name, ignoring its type arguments", () => {
+    const fn = only("function b(): Record<string, string> { return {}; }");
+    expect(typeAnnotationName(functionReturnType(fn))).toBe("Record");
+  });
+
+  it("returns undefined for a type shape that is neither a keyword nor a type reference", () => {
+    const fn = only("function c(): string[] { return []; }");
+    const returnType = functionReturnType(fn);
+    // Anchored: confirm the annotation really did parse as a TSArrayType before relying on
+    // typeAnnotationName's refusal of it — otherwise this assertion would pass just as well if
+    // functionReturnType itself had returned undefined.
+    expect(returnType?.type).toBe("TSArrayType");
+    expect(typeAnnotationName(returnType)).toBeUndefined();
+  });
+
+  it("returns undefined for an absent annotation", () => {
+    expect(typeAnnotationName(undefined)).toBeUndefined();
   });
 });

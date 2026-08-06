@@ -1,4 +1,4 @@
-import { type FieldEntry, isPathEntry } from "../spec.ts";
+import { type FieldEntry, isPathEntry, resolveKeyedShape } from "../spec.ts";
 import type { AstNode } from "./ast.ts";
 import { parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
@@ -192,6 +192,13 @@ function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
     if (entry === undefined) return undefined;
     entries.push(entry);
   }
+  // emitSearchFilter writes the extractor form ONLY when resolveKeyedShape refuses the field list
+  // (see its `keyedShape`); for a keys-expressible list it writes `fieldsFromKeys([...])` instead.
+  // Recovering these entries would derive a spec that regenerates a DIFFERENT file — the
+  // wrong-claim class, which the totality rule cannot see because the statement was claimed, just
+  // claimed wrongly. Same source of truth as the schema's superRefine and validateSpec, so the
+  // three cannot drift.
+  if (resolveKeyedShape(entries) !== undefined) return undefined;
   return entries;
 }
 

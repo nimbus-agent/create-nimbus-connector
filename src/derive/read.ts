@@ -644,9 +644,10 @@ export function asExpression(
 
 // ---------------------------------------------------------------------------
 // TS type shapes — needed only by server/search.ts's rows-narrowing matcher
-// (`(root as { <rows>?: unknown[] } | null)?.<rows>`) and search-filter.ts's extractor-function
-// signature (`(item: unknown): readonly string[] | null`), so this section models exactly those
-// shapes rather than the general shape of a TS type.
+// (`(root as { <rows>?: unknown[] } | null)?.<rows>`), search-filter.ts's extractor-function
+// signature (`(item: unknown): readonly string[] | null`), and server/env.ts's four accessor
+// matchers (a return-type annotation, e.g. `(): string` vs `(): Record<string, string>`), so
+// this section models exactly those shapes rather than the general shape of a TS type.
 // ---------------------------------------------------------------------------
 
 /** A TSUnionType's member type nodes, in source order — `{ … } | null`'s two members. */
@@ -702,6 +703,28 @@ export function typeOperator(node: AstNode | undefined): TypeOperator | undefine
   const typeAnnotation = child(node, "typeAnnotation");
   if (operator === undefined || typeAnnotation === undefined) return undefined;
   return { operator, typeAnnotation };
+}
+
+/**
+ * A return-type annotation that is exactly the keyword or type reference `name` — `string`,
+ * `unknown`, `Record`, and so on. Returns the head name only; a generic's type arguments are NOT
+ * inspected, because every caller so far pairs this with a full-text comparison of the emitted
+ * annotation. Needed by server/env.ts's four accessor matchers, which previously read the body and
+ * the name and ignored the annotation entirely — so `(): unknown` read exactly like `(): string`.
+ *
+ * A keyword type (`TSStringKeyword`, `TSUnknownKeyword`, …) carries no name field of its own —
+ * Babel spells the keyword INTO the node's `type`, so the name is recovered from it rather than
+ * read off a child. `TSTypeReference` (`Record<...>`) is the one shape that does carry a name
+ * child, `typeName`, and its type arguments are deliberately not walked — see above.
+ */
+export function typeAnnotationName(node: AstNode | undefined): string | undefined {
+  if (node === undefined) return undefined;
+  if (node.type === "TSTypeReference") return identName(child(node, "typeName"));
+  const KEYWORD_SUFFIX = "Keyword";
+  if (node.type.startsWith("TS") && node.type.endsWith(KEYWORD_SUFFIX)) {
+    return node.type.slice("TS".length, -KEYWORD_SUFFIX.length).toLowerCase();
+  }
+  return undefined;
 }
 
 export type TryParts = {
