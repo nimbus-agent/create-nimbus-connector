@@ -422,6 +422,25 @@ function matchOneFilter(statements: readonly AstNode[], i: number): FilterMatch 
  * iteration; everything before it is checked LAST, against the import list the recognized
  * filters imply — the emitter's own ordering ("the recognizer reads the body first, computes
  * the import list the emitter would have written") rather than an assumption about the preamble.
+ *
+ * `titleFragment` (folded into `spec.title` by the caller — index.ts's `deriveSharedStyleSpec`)
+ * is checked against only ONE of `spec.title`'s two consumers here — the type alias itself — the
+ * same shape docs/ROADMAP.md's "Known limitations" records as unsound for rest-kit's
+ * `recognizeRestTitle`: that recovery verifies the registrar-name round trip and leaves
+ * `src/emit/readme.ts`'s independent use of `spec.title` unchecked, and because
+ * `registrarNameFor` (src/spec.ts) is a LOSSY `replaceAll(/[^A-Za-z0-9]/g, "")`, a title that
+ * reproduces the sanitized registrar name is not guaranteed to reproduce `README.md`'s bytes —
+ * bounded by the `all-identical` tier rather than silent, but still a real gap.
+ *
+ * That gap does NOT apply here, and the reason is `emitSearchFilter` itself: `` `export type
+ * ${spec.title}SearchMatchOptions = SearchMatchOptions;` `` splices `spec.title` into the alias
+ * name with NO sanitization — unlike `registrarNameFor`, nothing is stripped, so the extraction
+ * (`aliasName.slice(0, -TITLE_SUFFIX.length)`) is an exact inverse for every string this
+ * generator's own emitter can produce, not merely a round-trip check on a lossy formula. Since
+ * `emitReadme`'s two templates (`src/emit/readme.ts`) also splice `spec.title` verbatim with no
+ * sanitization of their own, a `titleFragment` that reproduces THIS alias reproduces `README.md`
+ * byte-for-byte too — there is no second, independently-lossy consumer for a recovered title to
+ * silently diverge from here.
  */
 export function recognizeSearchFilter(source: string): SearchFilterDerivation {
   let statements: AstNode[];
