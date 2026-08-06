@@ -85,7 +85,7 @@ Every task's requirements implicitly include this section.
 reason. Run each gate so its own exit code is the thing you read.
 
 `bun run reach --baseline` currently **exits 2** and that is the gate working: the corpus tree moved
-to `ec2b4e01` while `fixtures/reach-baseline.json` records `e3751a3a`. **Do not re-baseline before
+to `94fd3623` while `fixtures/reach-baseline.json` records `e3751a3a`. **Do not re-baseline before
 Task 12.** Re-baselining early to silence the refusal destroys the only signal that would catch a
 corpus move mid-branch — which is not hypothetical: it fired once already, during phase 2a.
 
@@ -93,7 +93,7 @@ corpus move mid-branch — which is not hypothetical: it fired once already, dur
 
 ## The measurement this plan is written against
 
-Taken at `c04fd2b` (v0.9.0) against the Nimbus checkout at `packages/mcp-connectors` tree `ec2b4e01`.
+Taken at `c04fd2b` (v0.9.0) against the Nimbus checkout at `packages/mcp-connectors` tree `94fd3623`.
 
 ```
 REACH  6/94  (server.ts byte-identical)
@@ -128,7 +128,7 @@ regression. Record the new numbers; do not predict them.
 
 ### Tasks 3–8 close the inverse, not the corpus gap — measured, and stated before the work starts
 
-A corpus sweep taken 2026-08-06 against tree `ec2b4e01` found that **the three constructs item 10 names
+A corpus sweep taken 2026-08-06 against tree `94fd3623` found that **the three constructs item 10 names
 are written differently by every corpus connector that has them.** Each of Tasks 3–8 closes a fixture
 round trip and is expected to move **no** corpus connector.
 
@@ -2163,9 +2163,20 @@ git commit -m "feat(derive): read the split registrar, the inlined transport and
 git -C C:/gitrep/Nimbus status --short packages/mcp-connectors
 git -C C:/gitrep/Nimbus rev-parse HEAD:packages/mcp-connectors
 ```
-The tree must be `ec2b4e01…` and the checkout clean under that path. **If it moved, stop.** Every
-measurement in this plan was taken against `ec2b4e01`, and re-baselining across a moved corpus records
+The tree must be `94fd3623…` and the checkout clean under that path. **If it moved, stop.** Every
+measurement in this plan was taken against `94fd3623`, and re-baselining across a moved corpus records
 a number that means nothing. Report the new tree and let the controller decide.
+
+**That hash was corrected mid-branch, and the correction is worth knowing before you act on it.**
+Every earlier draft of this plan named `ec2b4e01`, carried from a prior session's notes and never
+verified. It is a real tree object, and it was the tree during the *previous* branch — but
+`packages/mcp-connectors` last changed at Nimbus commit `b3a6f159` (2026-08-05), which is **before
+this branch began**, so the tree has been `94fd3623` for every measurement taken here. The
+independent confirmation is that the blocker histogram stayed byte-identical to the branch-point
+capture through Tasks 1–10, which could not happen across a moved corpus.
+
+So: do **not** read a mismatch against `ec2b4e01` as the corpus having moved. Compare against
+`94fd3623`. If *that* differs, the stop rule applies for real.
 
 - [ ] **Step 2: Re-baseline**
 
@@ -2176,7 +2187,7 @@ bun run reach --baseline --nimbus-root C:/gitrep/Nimbus
 The first regenerates `fixtures/reach-baseline.json`; the second must now exit **0** rather than 2.
 **Never hand-edit the baseline** — it is regenerated or it is wrong.
 
-Confirm the new file's `connectorsTree` is `ec2b4e01…` and that no connector's recorded tier is
+Confirm the new file's `connectorsTree` is `94fd3623…` and that no connector's recorded tier is
 *lower* than in the old file. A tier that fell is a regression this branch introduced; find it before
 recording it.
 
@@ -2195,7 +2206,7 @@ The design's requirement is "a stated ceiling with a denominator". Write, in `do
 
 **Then add a third category the histogram cannot show**, because these connectors are blocked earlier
 and their divergence never surfaces as a bucket. All three were measured 2026-08-06 against tree
-`ec2b4e01` and each is a construct this generator *emits* and the corpus *writes differently*:
+`94fd3623` and each is a construct this generator *emits* and the corpus *writes differently*:
 
 - **The query tail.** Ten connectors write `new URL(...)` in a path-builder lambda and end it with
   `` `${u.pathname}${u.search}` `` or `u.toString()`; this generator writes ``return `${u}`;``,
