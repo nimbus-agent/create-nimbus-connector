@@ -708,9 +708,12 @@ export function typeOperator(node: AstNode | undefined): TypeOperator | undefine
 /**
  * A return-type annotation that is exactly the keyword or type reference `name` — `string`,
  * `unknown`, `Record`, and so on. Returns the head name only; a generic's type arguments are NOT
- * inspected, because every caller so far pairs this with a full-text comparison of the emitted
- * annotation. Needed by server/env.ts's four accessor matchers, which previously read the body and
- * the name and ignored the annotation entirely — so `(): unknown` read exactly like `(): string`.
+ * inspected, because every position its callers check is one the emitter writes as a fixed literal:
+ * `renderBasic`, `renderSplitBearer` and `renderEnvAccessor` (src/emit/server/env.ts) write exactly
+ * `Record<string, string>` or `string` and never another instantiation, so the head name alone
+ * distinguishes them. Needed by server/env.ts's four accessor matchers, which previously read the
+ * body and the name and ignored the annotation entirely — so `(): unknown` read exactly like
+ * `(): string`.
  *
  * A keyword type (`TSStringKeyword`, `TSUnknownKeyword`, …) carries no name field of its own —
  * Babel spells the keyword INTO the node's `type`, so the name is recovered from it rather than
