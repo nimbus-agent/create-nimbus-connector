@@ -319,15 +319,6 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
-- **A read-only-kit callback that is a named function reference, not an inline arrow.**
-  `argocd`, `bigeye`, `flux`, `looker`, `mlflow`, `monte-carlo`, `powerbi`, `snowflake`,
-  `tableau` and `workday` write `runReadOnlyMcpConnector("nimbus-X", registerXTools)` — gated
-  behind `if (import.meta.main) { … }` — passing an already-declared `function
-  registerXTools(reg) { … }` by name, where the emitter always writes an inline `(reg) => { …
-  }` arrow at the call site. Reported as `frame:readonly-callback-not-inline`. Found by tracing
-  why the read-only-kit frame recognizer moved 50 connectors rather than the roughly 60
-  predicted going in — see [Measuring reach](#measuring-reach) on reading what the code does
-  rather than trusting a prediction.
 - **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
   `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
   Reported as `frame:no-registrar`.
@@ -369,16 +360,42 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   match, so this downgrades such a connector to `server-identical` rather than passing falsely.
 - **Wiring and tail idiom.** The emitter always writes the one-line registrar form
   (`const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));`) and a named transport
-  const. `bun run reach --verbose`'s `frame:registrar-not-inlined` and `frame:tail-inlined-transport`
-  buckets name the connectors that instead hoist the registrar's inner call to its own
-  `const registerSimpleTool = …;` one line above, or construct the transport inline in the
-  `connect()` call. Neither axis is rest-kit-only: the registrar bucket mixes hand-rolled
-  connectors (e.g. `bitbucket`, `notion`) with rest-kit ones (e.g. `discord`, `github`). A
-  connector failing both axes is reported on the registrar bucket only, because the frame
-  diagnostic checks elements in the order `recognizeFrame` does and stops at the first miss —
-  `google-meet` and `google-photos` write both near-miss shapes but surface only as
-  `frame:registrar-not-inlined`. There is no majority to converge on, so the emitter picks one
-  form per axis and the other differs.
+  const. Real connectors write two other forms, and `recognizeFrame`
+  (`src/derive/server/index.ts`) now **reads** both: the **split registrar**, which hoists the
+  inner call to its own `const registerSimpleTool = …;` one line above, and the **inlined
+  transport tail**, `await <mcpVar>.connect(new StdioServerTransport());` as the file's last
+  statement with no transport const at all. Neither axis is rest-kit-only: the split registrar
+  mixes hand-rolled connectors (e.g. `bitbucket`, `notion`) with rest-kit ones (e.g. `discord`,
+  `github`), and a connector may write both (`google-meet`, `google-photos`) — which is why the
+  two recognizers had to land together, since `frameFailureKind` checks the registrar element
+  before the transport one and such a connector stays blocked while either is missing. Reading a
+  form is not emitting it: `wiring()` and `tail()` (`src/emit/server/index.ts`) still write the
+  one-line registrar and the named transport const, so a connector in either form derives a spec
+  and re-emits in **this generator's** form. It reaches `emits`, never `server-identical`. No
+  cosmetic spec field is added to close that gap — the operative bar is "no cosmetic field
+  without a fixture that byte-matches *because of* it", and no such fixture can exist until what
+  sits behind those frames has itself been measured, which reading them is what makes possible.
+  There is no majority to converge on, so the emitter picks one form per axis and the other
+  differs.
+- **A read-only-kit callback that is a named function reference, not an inline arrow.**
+  `argocd`, `bigeye`, `flux`, `looker`, `mlflow`, `monte-carlo`, `powerbi`, `snowflake`,
+  `tableau` and `workday` write three top-level statements where the emitter writes one: an
+  exported `register<X>Tools(reg: ZodToolRegistrar)`, an exported `async startConnector()` whose
+  body awaits `runReadOnlyMcpConnector("nimbus-<x>", register<X>Tools)` with a **bare function
+  reference**, and `if (import.meta.main) await startConnector();`. `recognizeReadOnlyFrame`
+  reads this as a second entry shape alongside the inline wrapper, splicing
+  `register<X>Tools`' **body** into `verifyStatements` rather than claiming the declaration —
+  see `src/derive/server/frame.ts` on why claiming it would cover every registration by
+  containment. As with the wiring and tail idioms above, `renderTools` still writes the inline
+  `(reg) => { … }` arrow at the call site, so these derive a spec, re-emit in the generator's own
+  form, and reach `emits` rather than `server-identical`. This entry used to promise a
+  `frame:readonly-callback-not-inline` histogram bucket, which upstream commit `b3a6f159`
+  emptied when it refactored these ten into the shape above; until this recognizer existed they
+  were reported as `frame:no-mcp-server`, that shape having no top-level `McpServer` const at
+  all. The divergence was found by tracing why the read-only-kit frame recognizer moved 50
+  connectors rather than the roughly 60 predicted going in — see
+  [Measuring reach](#measuring-reach) on reading what the code does rather than trusting a
+  prediction.
 - **`permissions.filesystem` is always collapsed to one line**, which is what 27 of the 29
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the

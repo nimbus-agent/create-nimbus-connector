@@ -211,6 +211,29 @@ export function optionalMemberObject(node: AstNode | undefined): AstNode | undef
 }
 
 /**
+ * `import.meta`'s two halves — `{ meta: "import", property: "meta" }`.
+ *
+ * A MetaProperty is not a MemberExpression and carries no `object`, so `memberObject` cannot
+ * reach it; `import.meta.main` is a MemberExpression whose OBJECT is one of these. Needed by
+ * `server/index.ts`'s named read-only registrar, whose `if (import.meta.main) await
+ * startConnector();` entrypoint guard is CLAIMED — an earlier, label-only version of that
+ * matcher deliberately left the test unchecked ("a label may be more permissive than a
+ * recognizer"), which stops being true the moment the statement is granted coverage: claiming
+ * `if (<anything>) await startConnector();` would cover a condition this frame never verified.
+ * Both halves are returned rather than a bare boolean, so the caller pins `import` and `meta`
+ * separately instead of trusting one composite check.
+ */
+export function metaPropertyNames(
+  node: AstNode | undefined,
+): { meta: string; property: string } | undefined {
+  if (node?.type !== "MetaProperty") return undefined;
+  const meta = identName(child(node, "meta"));
+  const property = identName(child(node, "property"));
+  if (meta === undefined || property === undefined) return undefined;
+  return { meta, property };
+}
+
+/**
  * `<receiver>["<literal>"]` -> its receiver and its literal string key, when the member IS
  * computed.
  *
