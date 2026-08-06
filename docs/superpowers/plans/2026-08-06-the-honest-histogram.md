@@ -1645,8 +1645,19 @@ build it in this task.
 
 - [ ] **Step 5: Move `zzwrite` to `ROUND_TRIP` — and empty `BLOCKED`**
 
-`BLOCKED` becomes `{}`. The `accounts for every fixture in fixtures/` test requires every fixture to
-be in exactly one list, so this is the moment it is satisfied by `ROUND_TRIP` alone.
+`BLOCKED` becomes `{}`.
+
+**Task 3 changed the shape of this milestone, so do not try to force it back.** That task found
+`title` is recoverable from a rest-kit `src/server.ts` only up to `registrarName`'s sanitization:
+`google-meet`'s `"Google Meet"` derives as `"GoogleMeet"` — identical `src/server.ts`, different
+`README.md`, since `emitReadme` interpolates `spec.title` verbatim. It added a third list,
+`PARTIAL_ROUND_TRIP`, recording the fixture, the reason, and the files that differ, and
+`checkReEmission` asserts those files **actually** differ so the entry cannot go stale silently.
+
+So the end state is: **`BLOCKED` empty, `PARTIAL_ROUND_TRIP` holding exactly `google-meet`, and
+every other fixture in `ROUND_TRIP`.** The `accounts for every fixture` test spans all three lists.
+Do **not** move `google-meet` into `ROUND_TRIP` — its README genuinely differs, and the test would
+fail honestly. Do not delete `PARTIAL_ROUND_TRIP` either.
 
 **Rewrite both docstrings.** `BLOCKED`'s is now a statement about a list that is empty — say that all
 21 fixtures round-trip, and keep the rule that any future entry's reason must be measured by running
@@ -2284,8 +2295,12 @@ Task 7's own text.
 the `all-identical` count. Every new recognizer reads a shape the emitter already writes, except the
 two case-2 tasks, each of which records its divergence in `docs/ROADMAP.md` before claiming anything.
 
-**The honest expectation.** `BLOCKED` in `test/derive/round-trip.test.ts` becomes empty — all 21
-fixtures (22 with `zzquery`) round-trip, which is checkable in CI without an AGPL checkout. Tasks 3–8
+**The honest expectation.** `BLOCKED` in `test/derive/round-trip.test.ts` becomes empty — every
+fixture derives, and all but one re-emit byte-identically, which is checkable in CI without an AGPL
+checkout. The exception is `google-meet`, whose `README.md` differs: Task 3 measured that `title` is
+recoverable from a rest-kit `src/server.ts` only up to `registrarName`'s sanitization, so
+`"Google Meet"` derives as `"GoogleMeet"`. It sits in a third list, `PARTIAL_ROUND_TRIP`, which names
+the files that differ and asserts they really do. Tasks 3–8
 are measured to move **no** corpus connector: every construct they read is written differently by
 every corpus connector that has it. Task 9 shrinks the `function:*From` buckets by up to 12 without
 necessarily moving a tier. Task 10 changes labels and nothing else, by design. Task 11 puts 27
