@@ -241,6 +241,13 @@ const REFUSED_BODIES: ReadonlyArray<readonly [string, string, string]> = [
     "JSON.stringify({ scope: scope })",
   ],
   [
+    // `ToolSchema`'s `body` is `z.record(z.string().min(1), …)`, so passing this on would derive a
+    // spec that fails parseSpec — counted one tier down, with no bucket naming what caused it.
+    "an empty quoted key, which no `body` mapping can carry",
+    "JSON.stringify({ display_name: p.title })",
+    'JSON.stringify({ "": p.title })',
+  ],
+  [
     "a field naming an arg the schema never declared",
     "JSON.stringify({ display_name: p.title })",
     "JSON.stringify({ display_name: p.nickname })",

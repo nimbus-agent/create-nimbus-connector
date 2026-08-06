@@ -54,6 +54,7 @@ import {
   throwArgument,
   tryStatement,
   typeAnnotationName,
+  typeArguments,
   unary,
   uninitializedLet,
 } from "../../src/derive/read.ts";
@@ -537,6 +538,33 @@ describe("Task 5 accessors", () => {
  * unconditionally — Babel gives the two forms identical key and value children, so no other
  * accessor here can tell them apart. See task-5-report.md.
  */
+describe("typeArguments", () => {
+  it("reads a type reference's arguments, which typeAnnotationName deliberately does not", () => {
+    const unknownArg = functionReturnType(only("function a(): Promise<unknown> { return x; }"));
+    const voidArg = functionReturnType(only("function b(): Promise<void> { return x; }"));
+    // Indistinguishable through typeAnnotationName, which reports the head name only.
+    expect(typeAnnotationName(unknownArg)).toBe("Promise");
+    expect(typeAnnotationName(voidArg)).toBe("Promise");
+
+    expect(typeArguments(unknownArg)).toHaveLength(1);
+    expect(typeAnnotationName(typeArguments(unknownArg)?.[0])).toBe("unknown");
+    expect(typeAnnotationName(typeArguments(voidArg)?.[0])).toBe("void");
+    expect(
+      typeArguments(functionReturnType(only("function c(): Record<string, string> { return x; }"))),
+    ).toHaveLength(2);
+  });
+
+  it("is undefined for a reference with no arguments, and for a keyword annotation", () => {
+    expect(
+      typeArguments(functionReturnType(only("function d(): Thing { return x; }"))),
+    ).toBeUndefined();
+    expect(
+      typeArguments(functionReturnType(only("function e(): string { return x; }"))),
+    ).toBeUndefined();
+    expect(typeArguments(undefined)).toBeUndefined();
+  });
+});
+
 describe("isShorthandProperty", () => {
   it("distinguishes shorthand from a longhand property with the identical key and value", () => {
     const shorthand = objectExpressionProperties(initOf("({ scope })"));

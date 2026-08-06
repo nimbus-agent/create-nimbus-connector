@@ -746,6 +746,28 @@ export function typeAnnotationName(node: AstNode | undefined): string | undefine
   return undefined;
 }
 
+/**
+ * A type reference's own type arguments — `Promise<unknown>`'s single `unknown` — or undefined
+ * when the node is not a reference or carries none (`Promise`, `RequestInit`).
+ *
+ * `typeAnnotationName` above deliberately reports a reference's HEAD NAME only, which is all its
+ * env.ts callers need: `renderBasic`/`renderSplitBearer`/`renderEnvAccessor` write exactly
+ * `Record<string, string>` and no other instantiation, so the head name alone distinguishes them.
+ * `renderWriteHelper`'s `): Promise<unknown>` is the first place the ARGUMENT is load-bearing —
+ * `Promise<void>` shares the head name and is a return type the emitter never writes, so
+ * accepting it would claim a whole FunctionDeclaration this generator re-emits differently.
+ *
+ * Babel spells the list `typeArguments` on a type REFERENCE, wrapped in a
+ * `TSTypeParameterInstantiation` whose `params` hold the types. That is a different key and a
+ * different wrapper from `typeParameters`/`TSTypeParameterDeclaration`, which is a generic
+ * DECLARATION's own `<T>` — nothing here reads that, and the two must not be confused.
+ */
+export function typeArguments(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "TSTypeReference") return undefined;
+  const wrapper = child(node, "typeArguments");
+  return wrapper === undefined ? undefined : childList(wrapper, "params");
+}
+
 export type TryParts = {
   readonly block: AstNode;
   readonly handler: AstNode | undefined;

@@ -39,6 +39,7 @@ import {
   templateLiteral,
   tryStatement,
   typeAnnotationName,
+  typeArguments,
   unary,
   uninitializedLet,
   unionTypes,
@@ -216,21 +217,24 @@ function findObjectProperty(properties: readonly AstNode[], name: string): AstNo
 }
 
 /**
- * Extract inline headers from an ObjectExpression headers object.
- * Returns the headers object or undefined if not inline form.
+ * An object literal read wholesale as `inlineHeaders` — the shape `headerOption`
+ * (src/emit/server/fetch-helper.ts) writes when the spec sets that field.
  *
- * The inner entries are parsed wholesale via `objectProps` (any entry it cannot resolve —
- * a spread, a computed key, e.g. `{ ...common, "X-Api-Key": k }` as the headers object itself —
- * rejects the whole object rather than being skipped): unlike `findObjectProperty`'s search
- * over the outer fetch-options list, every entry here is meant to become a header.
+ * Parsed via `objectProps`, so any entry it cannot resolve — a spread, a computed key, e.g.
+ * `{ ...common, "X-Api-Key": k }` — rejects the WHOLE object rather than being skipped: unlike
+ * `findObjectProperty`'s search over the outer fetch-options list, every entry here is meant to
+ * become a header. An empty object is refused too, since `FetchHelperSchema` never carries an
+ * empty `inlineHeaders` and the accessor form is what its absence actually looks like.
+ *
+ * Shared by both helpers, which differ only in where the object arrives from: the read helper's
+ * `headers:` option value (`inlineHeadersObject` below) and the write helper's
+ * `{ ...<headerExpr>, "Content-Type": … }` spread argument (`matchWriteHelperHeaders`). The same
+ * share-the-shell rule `isJsonTryCatch` and `passthroughUrlTemplate` follow in this file — a copy
+ * is a place for one side to be tightened while the other keeps accepting what its twin just
+ * learned to reject.
  */
-function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undefined {
-  const options = callArgs(fetchCall)?.[1];
-  const properties = objectExpressionProperties(options) ?? [];
-  const headers = findObjectProperty(properties, "headers");
-  const headersValue = objectProperty(headers)?.value;
-
-  const entries = objectProps(headersValue);
+function headerFields(node: AstNode | undefined): Record<string, string> | undefined {
+  const entries = objectProps(node);
   if (entries === undefined || entries.length === 0) return undefined;
 
   const out: Record<string, string> = {};
@@ -240,6 +244,14 @@ function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undef
     out[entry.key] = value;
   }
   return out;
+}
+
+/** The read helper's `headers: { … }` option value, as header fields — see `headerFields`. */
+function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undefined {
+  const options = callArgs(fetchCall)?.[1];
+  const properties = objectExpressionProperties(options) ?? [];
+  const headers = findObjectProperty(properties, "headers");
+  return headerFields(objectProperty(headers)?.value);
 }
 
 /**
@@ -767,10 +779,9 @@ const WRITE_SUFFIX = "Send";
  * Pinned by TYPE as well as by name, unlike the read helper's single `path` parameter — this
  * function claims a whole FunctionDeclaration on the strength of its name and body, and a
  * `body: string` where the emitter writes `body: string | undefined` re-emits different bytes
- * while every recovered field stays identical. The return type's ARGUMENT is not inspected
- * (`typeAnnotationName` reports the head name only, so `Promise<void>` passes here), which is the
- * one shape difference this recognizer does not see; closing it would need a type-argument
- * accessor no other recognizer has a use for.
+ * while every recovered field stays identical. The return type is pinned all the way through its
+ * ARGUMENT for the same reason: `Promise<void>` shares the head name `typeAnnotationName` reports,
+ * and is a return type `renderWriteHelper` never writes.
  */
 function hasWriteHelperSignature(fn: AstNode): boolean {
   const params = functionParams(fn);
@@ -785,7 +796,10 @@ function hasWriteHelperSignature(fn: AstNode): boolean {
   if (typeAnnotationName(bodyType[0]) !== "string") return false;
   if (typeAnnotationName(bodyType[1]) !== "undefined") return false;
 
-  return typeAnnotationName(functionReturnType(fn)) === "Promise";
+  const returnType = functionReturnType(fn);
+  if (typeAnnotationName(returnType) !== "Promise") return false;
+  const resolved = typeArguments(returnType);
+  return resolved?.length === 1 && typeAnnotationName(resolved[0]) === "unknown";
 }
 
 /**
@@ -833,19 +847,13 @@ function matchWriteHelperHeaders(node: AstNode): FetchHelperHeaders | undefined 
   if (stringLit(parts.key) !== "Content-Type") return undefined;
   if (stringLit(parts.value) !== "application/json") return undefined;
 
-  // The inline form. Parsed wholesale, exactly as `inlineHeadersObject` parses the read helper's:
-  // every entry here is meant to become a header, so one this recognizer cannot resolve rejects
-  // the object rather than being skipped.
-  const entries = objectProps(spread);
-  if (entries !== undefined) {
-    if (entries.length === 0) return undefined;
-    const inlineHeaders: Record<string, string> = {};
-    for (const entry of entries) {
-      const value = headerValue(entry.value);
-      if (value === undefined) return undefined;
-      inlineHeaders[entry.key] = value;
-    }
-    return { inlineHeaders };
+  // The inline form, through the same `headerFields` the read helper's own option value goes
+  // through. Discriminated on the spread argument being an object AT ALL, rather than on
+  // `headerFields` succeeding: an object literal this recognizer cannot read must refuse here,
+  // not fall through to the accessor branch and be refused there for an unrelated reason.
+  if (objectExpressionProperties(spread) !== undefined) {
+    const inlineHeaders = headerFields(spread);
+    return inlineHeaders === undefined ? undefined : { inlineHeaders };
   }
 
   if (callArgs(spread)?.length !== 0) return undefined;
@@ -961,6 +969,14 @@ function matchWriteHelperFunction(
   if (local === "") return undefined;
 
   if (!hasWriteHelperSignature(s)) return undefined;
+
+  // The same guard the read helper carries, applied here for the same reason and against a real
+  // hole rather than for symmetry: `matchWriteHelperHeaders`' accessor branch accepts any
+  // zero-argument call, and `fetch()` is one — so `{ ...fetch(), "Content-Type": … }` would
+  // otherwise recover `fetchHelper.headers: "fetch"`. That spec re-emits the identical bytes, so
+  // no byte-diff could ever see it; it is the wrong-claim class, invisible to the totality rule
+  // because the statement IS claimed, just claimed wrongly.
+  if (countFetchCalls(s) !== 1) return undefined;
 
   const parsed = matchWriteHelperBody(functionBody(s) ?? []);
   if (parsed === undefined) return undefined;

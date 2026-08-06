@@ -988,6 +988,18 @@ const REFUSED_WRITE_HELPERS: ReadonlyArray<readonly [string, string]> = [
     ZZ_BOTH_WRITE.replace("    method,", "    method: method,"),
   ],
   [
+    "refuses `): Promise<void>`, which shares the head name typeAnnotationName reports",
+    ZZ_BOTH_WRITE.replace("): Promise<unknown> {", "): Promise<void> {"),
+  ],
+  [
+    // countFetchCalls, and a real hole rather than defence in depth: the accessor branch of
+    // `matchWriteHelperHeaders` accepts ANY zero-argument call, and `fetch()` is one — so without
+    // that guard this recovers `fetchHelper.headers: "fetch"`, a spec that re-emits the identical
+    // bytes and which therefore no byte-diff could ever catch.
+    "refuses a second fetch() call smuggled in as the headers accessor",
+    ZZ_BOTH_WRITE.replace("...headers()", "...fetch()"),
+  ],
+  [
     "refuses a missing Content-Type header",
     ZZ_BOTH_WRITE.replace(
       '{ ...headers(), "Content-Type": "application/json" }',
@@ -1179,9 +1191,16 @@ describe("recognizeWriteHelper", () => {
  * one recognizer later. Neither recognizer can see the other's evidence, so `deriveSharedStyleSpec`
  * is where both are checked.
  *
- * Both modules below are otherwise perfectly recognizable: every helper matches, every tool
- * matches, and nothing is left unclaimed. Only the cross-check can reject them, which is why they
- * are built by ADDING a whole valid helper rather than by corrupting one.
+ * The check is symmetric (`h.present !== h.called`) and so are the tests: four cases, one per
+ * role per direction. The PRESENT-but-uncalled pair adds a whole valid, agreeing helper to a
+ * module that would not have one; the CALLED-but-absent pair removes one from the module that
+ * has both. Either way every remaining helper matches, every tool recognizes, and nothing is left
+ * unclaimed — so only the cross-check can reject them, which is the point of building them this
+ * way rather than by corrupting a helper.
+ *
+ * The absent-helper direction is the one that matters most, and it is not hypothetical: nothing
+ * in `fetchCall` (tools-hand.ts) checks that the function a `reg()` handler calls actually EXISTS,
+ * so without this half a module with a GET tool and no read helper would derive and re-emit one.
  */
 describe("the fetch helpers' presence is cross-checked against the tools' methods", () => {
   /** `source` with `helper` spliced in ahead of the wiring, where the emitter puts its helpers. */
@@ -1191,26 +1210,54 @@ describe("the fetch helpers' presence is cross-checked against the tools' method
     return source.replace(anchor, `${helper}\n\n${anchor}`);
   }
 
-  function blockerKinds(spec: unknown, helper: string): string[] {
+  /** `source` with one of its helper functions deleted, the tools that call it left in place. */
+  function withoutHelper(source: string, helper: string): string {
+    expect(source).toContain(helper);
+    return source.replace(helper, "");
+  }
+
+  function blockerKinds(spec: unknown, mutate: (server: string) => string): string[] {
     const { server, manifest } = emitted(spec);
-    const derivation = deriveSpec({ server: withExtraHelper(server, helper), manifest });
+    const derivation = deriveSpec({ server: mutate(server), manifest });
     expect(derivation.ok).toBe(false);
     return derivation.ok ? [] : derivation.blockers.map((b) => b.kind);
   }
 
+  const WRITE_ONLY = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[1]] };
+  const READ_ONLY = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[0]] };
+
   it("refuses a read helper no tool would call — renderReadHelper emits none for a write-only spec", () => {
-    const writeOnly = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[1]] };
     // Sanity: on its own this spec derives, and emits no read helper at all.
-    expect(emitted(writeOnly).server).not.toContain("async function zzGet(");
-    expect(deriveSpec(emitted(writeOnly)).ok).toBe(true);
-    expect(blockerKinds(writeOnly, ZZ_BOTH_READ)).toEqual(["fetch-helper:read-helper-mismatch"]);
+    expect(emitted(WRITE_ONLY).server).not.toContain("async function zzGet(");
+    expect(deriveSpec(emitted(WRITE_ONLY)).ok).toBe(true);
+    expect(blockerKinds(WRITE_ONLY, (s) => withExtraHelper(s, ZZ_BOTH_READ))).toEqual([
+      "fetch-helper:read-helper-mismatch",
+    ]);
   });
 
   it("refuses a write helper no tool would call — renderWriteHelper emits none for an all-GET spec", () => {
-    const readOnly = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[0]] };
-    expect(emitted(readOnly).server).not.toContain("zzGetSend");
-    expect(deriveSpec(emitted(readOnly)).ok).toBe(true);
-    expect(blockerKinds(readOnly, ZZ_BOTH_WRITE)).toEqual(["fetch-helper:write-helper-mismatch"]);
+    expect(emitted(READ_ONLY).server).not.toContain("zzGetSend");
+    expect(deriveSpec(emitted(READ_ONLY)).ok).toBe(true);
+    expect(blockerKinds(READ_ONLY, (s) => withExtraHelper(s, ZZ_BOTH_WRITE))).toEqual([
+      "fetch-helper:write-helper-mismatch",
+    ]);
+  });
+
+  it("refuses a GET tool whose read helper is missing — the half nothing else would catch", () => {
+    // The module has both tools and only `zzGetSend`. `recognizeTools` takes its `helperLocal`
+    // from the write helper (`zzGetSend` -> `zzGet`) and happily recognizes the GET call, because
+    // no recognizer verifies the callee exists — so the derived spec would re-emit a read helper
+    // this module never had. Both helpers are otherwise untouched and everything is claimed.
+    expect(deriveSpec(emitted(ZZ_BOTH_SPEC)).ok).toBe(true);
+    expect(blockerKinds(ZZ_BOTH_SPEC, (s) => withoutHelper(s, ZZ_BOTH_READ))).toEqual([
+      "fetch-helper:read-helper-mismatch",
+    ]);
+  });
+
+  it("refuses a non-GET tool whose write helper is missing", () => {
+    expect(blockerKinds(ZZ_BOTH_SPEC, (s) => withoutHelper(s, ZZ_BOTH_WRITE))).toEqual([
+      "fetch-helper:write-helper-mismatch",
+    ]);
   });
 });
 

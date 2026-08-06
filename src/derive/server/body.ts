@@ -35,6 +35,19 @@ import type { QueryEntry } from "./query.ts";
  * rather than as bytes that happen to match.
  */
 
+/**
+ * `renderBodyExpr`'s own `IDENT`, copied rather than imported — the one duplication this module's
+ * header argues against and cannot avoid: sharing it means exporting it from
+ * `src/emit/server/body.ts`, and this task's brief forbids touching `src/emit/`. (The
+ * `parsePathTemplate` import above needed no such change, which is why THAT one is shared.)
+ *
+ * The asymmetry is what makes the copy tolerable meanwhile. This constant decides only how a
+ * field name is SPELLED, and `fieldName` below rejects a quoted key this regex accepts — so a
+ * copy that drifts LOOSER refuses a producible module (a visible blocker) and one that drifts
+ * TIGHTER refuses it too. Neither direction can produce a wrong claim, unlike the path parser,
+ * whose under-parsing direction is silent. Fold it back into one definition when a task may edit
+ * `src/emit/`.
+ */
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
@@ -164,12 +177,18 @@ function bodyValueArg(value: AstNode, tool: BodyTool, hoistsInScope: boolean): s
  * A quoted key that IS a valid identifier is refused: the emitter quotes a field name only when
  * `IDENT` rejects it, so `{ "title": … }` is a shape it cannot write, and reading it anyway would
  * derive a spec that re-emits the bare form.
+ *
+ * The EMPTY key is refused here rather than passed on: `ToolSchema`'s `body` is
+ * `z.record(z.string().min(1), z.string().min(1))`, so `{ "": … }` produces a derived spec that
+ * fails `parseSpec` — counted as rejected-by-validate, one tier down, with no bucket naming the
+ * construct that caused it. A named refusal at the recognizer is what keeps the histogram honest.
  */
 function fieldName(key: AstNode): string | undefined {
   const bare = identName(key);
   if (bare !== undefined) return bare;
   const quoted = stringLit(key);
-  return quoted !== undefined && !IDENT.test(quoted) ? quoted : undefined;
+  if (quoted === undefined || quoted === "" || IDENT.test(quoted)) return undefined;
+  return quoted;
 }
 
 /** One observed body field: the API name it fills, and the spec arg it reads. */
