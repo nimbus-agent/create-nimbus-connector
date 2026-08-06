@@ -268,34 +268,66 @@ evidence** — report nothing.
 Both fields are connector-wide (`ConnectorSpecSchema.argsSchemaStyle`,
 `FetchHelperSchema.staticPathStyle`), so the value comes from the SET of tools, not any one.
 
-In `src/derive/index.ts`, add one helper used by both:
+**The two fields need DIFFERENT vote rules. Do not write one helper for both** — an earlier draft
+of this plan did, and it was wrong in a way measured against the fixtures.
+
+**`staticPathStyle` — unanimity.** A static path renders `"…"` under `quoted` and `` `…` `` under
+`template`; Biome never rewrites one into the other, so every static path is unambiguous evidence.
+Tools with a dynamic path abstain (the emitter's own docstring: `staticStyle` *"has no effect on a
+path with any dynamic segment"*). Disagreement among tools that *do* carry evidence is a module
+the emitter cannot have produced — it writes one value per connector — so refuse with
+`blocked("style:mixed-static-path", …)` rather than picking a winner.
+
+**`argsSchemaStyle` — asymmetric, because Biome re-wraps.** `renderZodSchema` emits
+`z.object({ … })` on one line under `inline`, but Biome (`lineWidth: 100`) re-wraps an over-long
+inline schema into bytes **byte-identical to the expanded form**. So multi-line is NOT evidence of
+`expanded`. Measured on the fixtures — `discord`, `google-meet`, `zzsearch`, `zzwrite` and
+`zzwriterest` all declare no `argsSchemaStyle` (so they are `inline`) yet emit multi-line
+`z.object`:
 
 ```ts
 /**
- * The single value every tool that carries evidence agrees on, or undefined.
+ * `argsSchemaStyle` from the SET of emitted arg schemas. Asymmetric on purpose.
  *
- * Abstentions are expected and are not a failure: a tool whose path is dynamic carries no
- * staticPathStyle evidence (the emitter's own docstring: staticStyle "has no effect on a path
- * with any dynamic segment"), and Biome re-wraps an over-long inline z.object, so a long-arg tool
- * carries no argsSchemaStyle evidence either. Silence is not a vote. DISAGREEMENT, on the other
- * hand, is a shape the emitter cannot produce — it writes one value per connector — so it must
- * refuse rather than pick a winner.
+ * A one-line non-empty `z.object({ … })` is decisive: `renderZodSchema`'s expanded branch always
+ * writes one field per line, so it can never produce a one-liner for a non-empty object. Seeing
+ * one proves "inline".
+ *
+ * Multi-line is NOT the mirror of that. Biome re-wraps an over-long inline schema into exactly
+ * the expanded form's bytes, so "every schema is multi-line" means either expanded, or inline
+ * where every schema happened to be too long. Voting "expanded" there is nonetheless BYTE-SAFE,
+ * and that is measured rather than assumed: for `zzsearch` and `zzwriterest` — inline connectors
+ * whose schemas are all wrapped — emitting with `argsSchemaStyle: "expanded"` reproduces
+ * byte-identical `src/server.ts`. For `discord` and `google-meet` it does NOT, and those are
+ * exactly the connectors that have a short schema, so the one-liner rule catches them first.
+ *
+ * Carries no evidence, and must not vote: an empty `z.object({})` (identical under both styles),
+ * and a search tool with no args of its own, which emits `searchToolInputSchema(n)` rather than a
+ * z.object at all.
  */
-function unanimous<T>(votes: readonly (T | undefined)[]): T | undefined {
-  const cast = votes.filter((v): v is T => v !== undefined);
-  if (cast.length === 0) return undefined;
-  const [first] = cast;
-  return cast.every((v) => v === first) ? first : undefined;
+function voteArgsSchemaStyle(schemas: readonly SchemaShape[]): "inline" | "expanded" | undefined {
+  const nonEmpty = schemas.filter((s) => s.propertyCount > 0);
+  if (nonEmpty.some((s) => s.oneLine)) return "inline";
+  if (nonEmpty.length > 0) return "expanded";
+  return undefined;
 }
 ```
 
-Emit each field **only when the vote is decisive AND differs from the schema default** — `"quoted"`
-for `staticPathStyle`, `"inline"` for `argsSchemaStyle`. Emitting a default-valued field would make
-every derived spec differ from the hand-written fixtures for no behavioural reason.
+`SchemaShape` is whatever `recognizeArgs` reports per tool — at minimum
+`{ propertyCount: number; oneLine: boolean }`. Note this rule **never blocks**: unlike
+`staticPathStyle` there is no disagreement case, because a single one-liner settles it.
 
-**Disagreement must block, not silently pick.** If `unanimous` returns undefined because tools
-disagreed (as opposed to all abstaining), that is a module the emitter cannot have produced.
-Distinguish the two cases and return `blocked("style:mixed-<field>", …)` for disagreement.
+Emit each field **only when the vote is decisive AND differs from the schema default** —
+`"quoted"` for `staticPathStyle`, `"inline"` for `argsSchemaStyle`. Emitting a default-valued
+field would make every derived spec differ from the hand-written fixtures for no behavioural
+reason.
+
+- [ ] **Step 6b: Prove the rule against every fixture before trusting it**
+
+Do not take the paragraph above on faith. For each of the 21 fixtures, emit `src/server.ts` as the
+fixture declares it, then emit it again with the style field forced to the value your vote would
+produce, and require the two to be **byte-identical**. Any fixture where they differ means the
+vote is wrong for that shape — report it rather than special-casing it.
 
 - [ ] **Step 7: Run the gates**
 
