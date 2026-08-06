@@ -254,7 +254,22 @@ function pathFromJsonResult(
   };
 }
 
-function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
+/**
+ * `reg(name, description, schema, handler)`'s four arguments, with the two string-literal ones
+ * already read — the exact starting point `recognizeOne` and `recognizeStubShape` both need,
+ * shared here rather than duplicated. tools-rest.ts's own four-argument unpack is already
+ * factored into `registrarCallParts` for the identical reason (see that function's own
+ * docstring); leaving this one duplicated across two functions in the same file is how the two
+ * *files'* recognizers drifted before hoists.ts was extracted, one level down.
+ */
+type RegCallParts = {
+  readonly name: string;
+  readonly description: string;
+  readonly schemaNode: AstNode;
+  readonly handlerNode: AstNode;
+};
+
+function regCallParts(call: AstNode): RegCallParts | undefined {
   const args = callArgs(call);
   if (args?.length !== 4) return undefined;
   const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
@@ -266,6 +281,13 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   const name = stringLit(nameNode);
   const description = stringLit(descriptionNode);
   if (name === undefined || description === undefined) return undefined;
+  return { name, description, schemaNode, handlerNode };
+}
+
+function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
+  const parts = regCallParts(call);
+  if (parts === undefined) return undefined;
+  const { name, description, schemaNode, handlerNode } = parts;
 
   const arrow = arrowFn(handlerNode);
   if (arrow === undefined) return undefined;
@@ -448,9 +470,9 @@ export function recognizeStubHandler(node: AstNode, name: string, requireAsync: 
 /**
  * The fallback tried when neither `recognizeOne` nor `recognizeSearchShape` recognizes a
  * `reg(...)` call — `renderTool`'s stub branch (src/emit/server/tools-hand.ts:53-65), the same
- * four-argument call shape `recognizeOne` reads, but a handler that throws rather than fetches.
- * `recognizeStubHandler` above does the actual shape check, requiring `async` — this file's own
- * stub always writes it, unlike tools-rest.ts's.
+ * four-argument call shape `recognizeOne` reads (`regCallParts`, shared with it), but a handler
+ * that throws rather than fetches. `recognizeStubHandler` above does the actual shape check,
+ * requiring `async` — this file's own stub always writes it, unlike tools-rest.ts's.
  *
  * `isBlock: true, hasHoists: false` report what the emitter actually writes — the same discipline
  * `recognizeSearchShape`'s docstring states for its own two fields — and `votesHandlerStyle:
@@ -459,17 +481,9 @@ export function recognizeStubHandler(node: AstNode, name: string, requireAsync: 
  * the first place, restated for a third shape rather than re-derived here).
  */
 function recognizeStubShape(call: AstNode): ToolShape | undefined {
-  const args = callArgs(call);
-  if (args?.length !== 4) return undefined;
-  const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
-    AstNode,
-    AstNode,
-    AstNode,
-    AstNode,
-  ];
-  const name = stringLit(nameNode);
-  const description = stringLit(descriptionNode);
-  if (name === undefined || description === undefined) return undefined;
+  const parts = regCallParts(call);
+  if (parts === undefined) return undefined;
+  const { name, description, schemaNode, handlerNode } = parts;
   if (!recognizeStubHandler(handlerNode, name, true)) return undefined;
 
   const argsResult = recognizeArgs(schemaNode);

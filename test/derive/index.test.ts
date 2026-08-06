@@ -374,15 +374,7 @@ describe("deriveSpec", () => {
 
   // A real write tool IS reachable through deriveSpec() now — `recognizeWriteHelper` claims the
   // hand-rolled `<local>Send` and `recognizeOneCall` reads the rest-kit arity-5 initFn, so
-  // `zzwriteonly` and `zzwriterest` both round-trip rather than blocking. What is still not
-  // reachable from any fixture is an AMBIGUOUS attribution: that needs two or more tools
-  // competing for one declared effect, and every write fixture so far carries a single
-  // candidate per effect, which `attributeEffects` resolves as forced rather than ambiguous.
-  //
-  // So this test still asserts the no-op case, and `test/derive/effect.test.ts` still carries
-  // the exhaustive direct coverage — but the reason is now "no fixture exercises it", not "no
-  // recognizer reaches it", and those two go stale differently. Adding a fixture with two
-  // same-effect write tools would make the ambiguity path end-to-end testable.
+  // `zzwriteonly` and `zzwriterest` both round-trip rather than blocking.
   it("attaches no $effectAmbiguity when attribution is a no-op, and the spec re-parses", () => {
     const result = deriveSpec({ server: SERVER, manifest: MANIFEST });
     expect(result.ok).toBe(true);
@@ -390,5 +382,62 @@ describe("deriveSpec", () => {
     expect("$effectAmbiguity" in result).toBe(false);
     expect("$effectAmbiguity" in result.spec).toBe(false);
     expect(() => parseSpec(result.spec)).not.toThrow();
+  });
+
+  /**
+   * The AMBIGUOUS attribution path, end-to-end at last (Task 7 follow-up). It used to need two
+   * or more METHOD-carrying tools competing for one declared effect, and every write fixture so
+   * far carries a single candidate per effect — no recognizer reached this before `recognizeTools`
+   * could read a stub at all. A stub reaches it a different way: it carries no `method`, so it is
+   * never itself the attributed tool, but `attributeEffects`'s own docstring is what actually
+   * fires here — a stub is a silent SECOND candidate for whatever effect this function attributes
+   * to a real tool, since `ToolSchema` lets a stub declare any effect it likes. A spec, not a
+   * fixture, is enough to exercise it — see `attributeEffects`'s own direct unit coverage
+   * (test/derive/effect.test.ts) for the exhaustive case table this end-to-end test does not
+   * repeat.
+   */
+  const STUB_AMBIGUITY_SPEC = {
+    name: "zzeffectstub",
+    displayName: "Zz Effect Stub",
+    description: "Fixture for the stub effect-ambiguity path.",
+    serviceLabel: "ZzEffectStub",
+    style: "hand-rolled",
+    env: [{ vars: ["ZZEFFECTSTUB_TOKEN"], local: "headers", auth: "bearer", required: true }],
+    fetchHelper: { local: "zzGet", base: "https://api.zzeffectstub.test", headers: "headers" },
+    tools: [
+      {
+        name: "zzeffectstub_list",
+        description: "Not yet implemented.",
+        impl: "stub",
+        effect: "write",
+      },
+      {
+        name: "zzeffectstub_create",
+        description: "Create an item.",
+        method: "POST",
+        effect: "write",
+        path: "/v1/items",
+        args: { title: { type: "string", min: 1 } },
+      },
+    ],
+  };
+
+  it("attaches $effectAmbiguity when a stub sits beside a write tool competing for the same declared effect", () => {
+    const files = formatAll(generate(parseSpec(STUB_AMBIGUITY_SPEC)));
+    const server = pick(files, "src/server.ts");
+    const manifest = pick(files, "nimbus.extension.json");
+
+    const result = deriveSpec({ server, manifest });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.$effectAmbiguity).toEqual(["write"]);
+
+    // Byte-safe, not wrong: emitManifest's hitlRequired is a deduplicated SET, so it reproduces
+    // "write" whichever tool the derived spec attributes it to, and src/server.ts never reads
+    // `effect` at all — the ambiguity is real (a human editing this spec cannot tell which tool
+    // the author meant) without costing a single byte.
+    const reFiles = formatAll(generate(parseSpec(result.spec)));
+    expect(pick(reFiles, "src/server.ts")).toBe(server);
+    expect(pick(reFiles, "nimbus.extension.json")).toBe(manifest);
   });
 });

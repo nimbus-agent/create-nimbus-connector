@@ -1235,6 +1235,29 @@ describe("the fetch helpers' presence is cross-checked against the tools' method
     ]);
   });
 
+  /**
+   * A regression test for a gap Task 7 opened and closed in the same change: a stub carries no
+   * `method`, and before this file's own `deriveSharedStyleSpec` fix, `toolsResult.tools.some((t)
+   * => t.method === undefined)` counted that `undefined` as "a tool calls the read helper" —
+   * exactly what a genuine GET tool's `undefined` method means too, so the two were
+   * indistinguishable to that check. Reverting the fix (excluding `impl: "stub"` tools from the
+   * "called" evidence) makes this fail with `fetch-helper:read-helper-mismatch`: the read helper
+   * stays correctly ABSENT (nothing calls it — the stub throws, it never fetches), but the old
+   * check would have reported it as wrongly called anyway, blocking a connector this generator
+   * can regenerate byte-for-byte.
+   */
+  it("does not let a stub's undefined method read as read-helper evidence — the helper stays correctly absent", () => {
+    const writeOnlyWithStub = {
+      ...WRITE_ONLY,
+      tools: [
+        ...WRITE_ONLY.tools,
+        { name: "zzboth_stub", description: "Not yet implemented.", impl: "stub" },
+      ],
+    };
+    expect(emitted(writeOnlyWithStub).server).not.toContain("async function zzGet(");
+    expect(deriveSpec(emitted(writeOnlyWithStub)).ok).toBe(true);
+  });
+
   it("refuses a write helper no tool would call — renderWriteHelper emits none for an all-GET spec", () => {
     expect(emitted(READ_ONLY).server).not.toContain("zzGetSend");
     expect(deriveSpec(emitted(READ_ONLY)).ok).toBe(true);

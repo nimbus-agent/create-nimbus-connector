@@ -646,81 +646,69 @@ describe("recognizeTools recognizes the stub tool handler", () => {
     ]);
   });
 
-  // Every source the recognizer must refuse outright — the brief's own four cases, plus the
-  // async guard: renderTool's hand-rolled stub always writes `async`, so a non-async one is a
-  // shape it cannot have written either. Each is provably one edit away from STUB_CALL, so
-  // whichever guard catches it is load-bearing for THAT edit, not merely plausible.
-  const REFUSED_STUBS: ReadonlyArray<readonly [string, string]> = [
+  it("recovers STUB_CALL on its own — the base every REFUSED_STUBS row below corrupts", () => {
+    const { result } = run(STUB_CALL);
+    expect(result?.tools).toEqual([
+      { name: "newrelic_stub_tool", description: "Not yet implemented.", args: {}, impl: "stub" },
+    ]);
+  });
+
+  // Every mutation the recognizer must refuse outright — the brief's own four cases, plus the
+  // async guard (renderTool's hand-rolled stub always writes `async`, so a non-async one is a
+  // shape it cannot have written either), an arity-5 call (recognizeStubShape's own regCallParts
+  // pins arity 4 — nothing else here refuses the extra argument), and a single statement that is
+  // not a throw at all (distinct from "a thrown value that is not new Error(...)": that row still
+  // has a ThrowStatement, so `throwArgument` succeeds and `newOf` is what refuses it; this row has
+  // no throw at all, so `throwArgument` itself returns undefined first).
+  //
+  // Each row is a corruption of STUB_CALL — the same base the test just above pins as recognized
+  // — so a row is never vacuously "refused" by starting from an already-broken shape; the row
+  // above proves the base recovers, and `expect(corrupted).not.toBe(pristine)` proves each edit
+  // actually changed something.
+  const REFUSED_STUBS: ReadonlyArray<readonly [string, string, string]> = [
     [
       "a throw message that does not match `${name} is not implemented` exactly",
-      [
-        "reg(",
-        '  "t",',
-        '  "d",',
-        "  z.object({}),",
-        "  async () => {",
-        '    throw new Error("something else went wrong");',
-        "  },",
-        ");",
-      ].join("\n"),
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      'throw new Error("something else went wrong");',
     ],
     [
       "a thrown value that is not new Error(...)",
-      [
-        "reg(",
-        '  "t",',
-        '  "d",',
-        "  z.object({}),",
-        "  async () => {",
-        '    throw "t is not implemented";',
-        "  },",
-        ");",
-      ].join("\n"),
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      'throw "newrelic_stub_tool is not implemented";',
+    ],
+    [
+      "a single statement that is not a throw at all",
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      "return undefined;",
     ],
     [
       "a block with a statement before the throw",
-      [
-        "reg(",
-        '  "t",',
-        '  "d",',
-        "  z.object({}),",
-        "  async () => {",
-        "    const x = 1;",
-        '    throw new Error("t is not implemented");',
-        "  },",
-        ");",
-      ].join("\n"),
+      '  async () => {\n    throw new Error("newrelic_stub_tool is not implemented");',
+      '  async () => {\n    const x = 1;\n    throw new Error("newrelic_stub_tool is not implemented");',
     ],
     [
       "a stub handler taking a parameter — renderTool writes async () always",
-      [
-        "reg(",
-        '  "t",',
-        '  "d",',
-        "  z.object({}),",
-        "  async (p) => {",
-        '    throw new Error("t is not implemented");',
-        "  },",
-        ");",
-      ].join("\n"),
+      "async () => {",
+      "async (p) => {",
     ],
     [
       "a non-async stub handler — renderTool's hand-rolled stub is always async",
-      [
-        "reg(",
-        '  "t",',
-        '  "d",',
-        "  z.object({}),",
-        "  () => {",
-        '    throw new Error("t is not implemented");',
-        "  },",
-        ");",
-      ].join("\n"),
+      "async () => {",
+      "() => {",
+    ],
+    [
+      "a fifth argument — recognizeStubShape's regCallParts pins arity 4 like recognizeOne's own",
+      "  },\n);",
+      '  },\n  "extra",\n);',
     ],
   ];
 
-  it.each(REFUSED_STUBS)("refuses %s", (_name, source) => {
-    const { result, claims } = run(source);
+  it.each(REFUSED_STUBS)("refuses %s", (_name, from, to) => {
+    const pristine = STUB_CALL;
+    const corrupted = pristine.replace(from, to);
+    expect(corrupted).not.toBe(pristine);
+
+    const { result, claims } = run(corrupted);
     expect(result).toBeUndefined();
     expect(claims.claims()).toEqual([]);
   });

@@ -53,13 +53,23 @@ function blocked(kind: string, detail: string): Derivation {
  * the observed set cannot be reproduced. --from-connector reports the attribution as unverified,
  * because for its purposes — a spec a human will edit — semantically wrong is a real cost even
  * when byte-identical.
+ *
+ * A recognized STUB is a second, silent candidate for every effect attributed below, and is
+ * treated as one (Task 7 follow-up): `ToolSchema`'s refine that pins a GET tool to
+ * `effect: "read"` explicitly excludes `impl: "stub"`, so a stub may declare "write" or "delete"
+ * freely, with no `method` for this function to ever notice — it can only ever fall through to
+ * the unattributed branch below. A single non-stub candidate is therefore no longer "the only
+ * attribution reproducing the observed set" the moment a stub is also in the tool list: the
+ * author could have written the effect on the stub instead, and `emitManifest`'s deduplicated-SET
+ * `hitlRequired` cannot tell the difference either way.
  */
 export type EffectAttribution = {
   tools: Record<string, unknown>[];
   /**
-   * Effects assigned to MORE THAN ONE tool, and therefore not forced by the evidence. With a
-   * single candidate the attribution is the only one reproducing the observed set, so it is
-   * correct; with several, at least one carries the effect and this function cannot say which.
+   * Effects not forced by the evidence — assigned to MORE THAN ONE tool, OR assigned to any tool
+   * at all while a stub sits in the list (see this function's own docstring for why a stub is a
+   * candidate too, despite never appearing in `counts` itself). With neither condition, a single
+   * candidate is the only attribution reproducing the observed set, so it is correct.
    */
   ambiguous: string[];
 };
@@ -87,9 +97,13 @@ export function attributeEffects(
   for (const e of wanted) {
     if (!counts.has(e)) return undefined;
   }
+  // See this function's own docstring: a stub is a free extra candidate for every effect
+  // attributed above, so `n > 1` alone (which a stub never contributes to, having no `method`)
+  // understates the ambiguity whenever one is present.
+  const hasStub = tools.some((t) => t.impl === "stub");
   return {
     tools: out,
-    ambiguous: [...counts].filter(([, n]) => n > 1).map(([e]) => e),
+    ambiguous: [...counts].filter(([, n]) => n > 1 || hasStub).map(([e]) => e),
   };
 }
 
