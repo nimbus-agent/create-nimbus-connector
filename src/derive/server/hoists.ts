@@ -223,7 +223,8 @@ export type HoistedBlock = {
  * No special case is needed for any of them: a statement that is not a hoist ends `splitHoists`'
  * run like any other unmodeled statement, and `rest` is then longer than the single `return`
  * required below. (server/query.ts models the query branch by taking a different tail off the
- * same split; tools-rest.ts tries this reader first and that one only once this has refused.)
+ * same split; both tools-rest.ts and tools-hand.ts try this reader first and that one only once
+ * this has refused.)
  */
 export function recognizeHoistedBlock(body: AstNode): HoistedBlock | undefined {
   const statements = blockBody(body);

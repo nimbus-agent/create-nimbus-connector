@@ -24,14 +24,21 @@ import { type PathLocal, recognizePathParts } from "./path-template.ts";
 
 /**
  * The inverse of src/emit/server/query.ts's `renderQueryLines`, plus the block it lives inside —
- * `renderTool`'s query branch (src/emit/server/tools-rest.ts), which writes
+ * `renderTool`'s query branch, which BOTH emitters write, differing only in how the block ends:
  *
- *   (parsed) => {
- *     <zero or more hoist consts>
- *     const u = new URL(<pathExpr, built with the base spliced in as a prefix>);
- *     <query lines>
- *     return `${u}`;
- *   }
+ *   (parsed) => {                            |   async (p) => {
+ *     <zero or more hoist consts>            |     <zero or more hoist consts>
+ *     const u = new URL(<prefixed pathExpr>);|     const u = new URL(<prefixed pathExpr>);
+ *     <query lines>                          |     <query lines>
+ *     return `${u}`;                         |     const path = `${u}`;
+ *   }                                        |     return <jsonResult(await …(path))>;
+ *                                            |   }
+ *   src/emit/server/tools-rest.ts            |   src/emit/server/tools-hand.ts
+ *
+ * The tail is selected by the caller rather than tried in turn, so neither style's ending can be
+ * accepted for the other's block: a rest-kit `pathFn` binding `path` and returning a fetch call
+ * is not a shape `renderTool` writes for rest-kit, and a hand-rolled handler returning a bare
+ * `` `${u}` `` returns a string where the registrar expects an MCP result.
  *
  * `String(...)` is NOT recorded — it is VERIFIED. `wrapsInString` (src/emit/server/query.ts)
  * derives the wrapper from the argument's declared type alone; see its own docstring, which
@@ -45,9 +52,9 @@ import { type PathLocal, recognizePathParts } from "./path-template.ts";
  * type; `recognizeQueryBlock`, which is handed `recognizeArgs`'s result, is where `wrapped` is
  * held against that type and the entry either becomes a `QueryEntry` or the block is refused.
  *
- * Nothing here claims: `recognizeRestTools` claims the whole `<registrar>(...)` statement, and
- * claims are byte ranges with containment coverage (see claims.ts), so every statement of this
- * block is covered by that one claim.
+ * Nothing here claims: `recognizeRestTools` claims the whole `<registrar>(...)` statement and
+ * `recognizeTools` the whole `reg(...)` one, and claims are byte ranges with containment coverage
+ * (see claims.ts), so every statement of this block is covered by that one claim either way.
  */
 
 /** One recovered `query` entry, in the shape QueryParamSchema (src/spec.ts) declares. */
@@ -262,6 +269,15 @@ export type QueryBlock = {
   readonly query: QueryEntry[];
   readonly basePrefix: BasePrefix;
   readonly hoistMeta: ReadonlyMap<string, HoistMeta>;
+  /**
+   * The expression the block's final `return` returns, left UNREAD — set only for the
+   * `"binds-path"` tail, whose `return` carries a `jsonResult(await <helper>(path))` call rather
+   * than the URL itself. Handed back rather than read here for the same reason
+   * `recognizeHoistedBlock` hands its own `returned` back (hoists.ts): what a returned expression
+   * means is the caller's concern, and only tools-hand.ts knows the fetch helper's local name to
+   * check that call against.
+   */
+  readonly returned?: AstNode;
 };
 
 /**
@@ -271,6 +287,19 @@ export type QueryBlock = {
  * and reading it anyway would derive a spec that re-emits `u` and byte-matches nothing.
  */
 const URL_LOCAL = "u";
+
+/**
+ * The hand-rolled tail's path const, pinned for the same reason `URL_LOCAL` is: `renderTool`
+ * (src/emit/server/tools-hand.ts) writes `` const path = `${u}`; `` literally and then
+ * substitutes the bare identifier `path` into the fetch call (`callPath`), and
+ * `RESERVED_IDENTIFIERS` (src/validate.ts) reserves "path" unconditionally BECAUSE it does.
+ *
+ * Exported because the statement that BINDS it is matched here while the call that READS it is
+ * matched in tools-hand.ts, and the two must name the same binding. A second literal there is a
+ * place for one side to be tightened while the other keeps accepting what its twin just learned
+ * to reject — the rule hoists.ts's module docstring states.
+ */
+export const PATH_LOCAL = "path";
 
 /** The `new URL(...)` argument: its base prefix, and the path template behind it. */
 function prefixedPath(
@@ -290,11 +319,22 @@ function prefixedPath(
   // An empty leading quasi does NOT prove the hoisted form on its own, and the check that
   // actually decides it is `identName` below. For rest-kit a literal base cannot produce one —
   // `base` is non-empty and the schema's rest-kit refine forbids `${env.X}` in it, so `baseExpr`
-  // returns that literal text verbatim. Under hand-rolled wiring (not yet wired to this
-  // recognizer) `baseExpr` returns `resolveEnvRefs(base)`, and a base of `"${env.HOST}/api"`
-  // renders `` `${HOST()}/api…` `` — an empty leading quasi with a literal base behind it. That
-  // falls through correctly because its first expression is a CallExpression, not an identifier,
-  // so `identName` returns undefined and this branch refuses rather than inventing a base const.
+  // returns that literal text verbatim. Hand-rolled has no such refine: `baseExpr` runs
+  // `resolveEnvRefs(base)` there, so a base of `"${env.HOST}/api"` renders `` `${HOST()}/api…` ``
+  // — an empty leading quasi with a literal base behind it.
+  //
+  // An env-ref base is REFUSED, deliberately, not merely unhandled. It is refused here because
+  // the first expression is a CallExpression, so `identName` returns undefined and no base const
+  // is invented; the form with text ahead of the accessor (`"https://${env.HOST}/api"`) takes the
+  // literal branch below instead and is refused by `rebaseQueryTools` (src/derive/index.ts),
+  // whose docstring carries the proof that the two halves cover every env-ref base between them.
+  // Supporting it would mean a third `BasePrefix` variant spanning a quasi AND an expression,
+  // splittable only against a base whose own value is decided per request — and the whole point
+  // of `BasePrefix` is that this recognizer cannot pick the split, only the caller's fetch helper
+  // can. Nothing in the corpus writes it (the hand-rolled query shape appears zero times across
+  // 94 connectors, measured 2026-08-06), so the cost of the refusal is a named blocker on a spec
+  // someone would have to write on purpose.
+  //
   // An identifier already in `locals` is a path placeholder, not a base const, and is refused for
   // the same reason.
   if (head === "") {
@@ -310,22 +350,51 @@ function prefixedPath(
     : { path, basePrefix: { kind: "literal", leadingQuasi: head } };
 }
 
-/** `` return `${u}`; `` — one expression, two empty quasis. */
-function isUrlReturn(statement: AstNode, urlVar: string): boolean {
-  const t = templateLiteral(returnArgument(statement));
+/**
+ * `` `${u}` `` — one expression, two empty quasis: the absolute URL both tails are built from.
+ *
+ * The template form is pinned, not `u` in any stringifying position. Ten corpus connectors write
+ * `new URL(...)` in a buildPath callback and every one of them reaches for
+ * `` `${u.pathname}${u.search}` `` or `u.toString()` instead — measured 2026-08-06 — so a lax
+ * reader would claim ten modules this generator cannot reproduce.
+ */
+function isUrlTemplate(node: AstNode | undefined, urlVar: string): boolean {
+  const t = templateLiteral(node);
   if (t?.expressions.length !== 1) return false;
   return t.quasis[0] === "" && t.quasis[1] === "" && isIdent(t.expressions[0], urlVar);
 }
 
+/** `` return `${u}`; `` — the rest-kit tail, whole. */
+function isUrlReturn(statement: AstNode, urlVar: string): boolean {
+  return isUrlTemplate(returnArgument(statement), urlVar);
+}
+
+/** `` const path = `${u}`; `` — the hand-rolled tail's first statement. See `PATH_LOCAL`. */
+function isPathConst(statement: AstNode, urlVar: string): boolean {
+  const decl = constDecl(statement);
+  return decl?.name === PATH_LOCAL && isUrlTemplate(decl.init, urlVar);
+}
+
+/**
+ * The hand-rolled tail: `` const path = `${u}`; `` then a `return`, whose argument is handed
+ * back unread (see `QueryBlock.returned`). A `return` with no argument is refused — `renderTool`
+ * always returns the fetch call — rather than recorded as a tool that returns nothing.
+ */
+function readPathConstTail(statements: readonly AstNode[], urlVar: string): AstNode | undefined {
+  const [bind, ret] = statements;
+  if (bind === undefined || ret === undefined) return undefined;
+  if (!isPathConst(bind, urlVar) || ret.type !== "ReturnStatement") return undefined;
+  return returnArgument(ret);
+}
+
 /**
  * `renderTool`'s query branch, whole: the hoists, `const u = new URL(<pathExpr>)`, the query
- * lines, and `` return `${u}`; `` (src/emit/server/tools-rest.ts).
+ * lines, and the `tail` the caller names — see this module's header for the two forms and why
+ * the caller chooses rather than this function trying both.
  *
- * The tail is verified precisely rather than accepted as "any return". Ten corpus connectors
- * write `new URL(...)` in a buildPath callback and every one of them ends the block with
- * `` `${u.pathname}${u.search}` `` or `u.toString()` instead — measured 2026-08-06 — so a lax
- * tail would claim ten modules this generator cannot reproduce. The emitter's choice of the
- * absolute form is deliberate and documented at the `` return `${u}`; `` line itself.
+ * The tail is verified precisely rather than accepted as "any return"; `isUrlTemplate` carries
+ * the corpus measurement behind that. The emitter's choice of the absolute form is deliberate and
+ * documented at the `` `${u}` `` line in each emitter.
  *
  * `args` is `recognizeArgs`'s result — the schema's declared types, before `mergeHoistedArgs` —
  * which is what the `String(...)` wrapper is held against; see this module's header.
@@ -333,14 +402,16 @@ function isUrlReturn(statement: AstNode, urlVar: string): boolean {
 export function recognizeQueryBlock(
   body: AstNode,
   args: Readonly<Record<string, ArgFields>>,
+  tail: "returns-url" | "binds-path",
 ): QueryBlock | undefined {
   const statements = blockBody(body);
   if (statements === undefined) return undefined;
 
   const section = splitHoists(statements);
-  // The URL const, at least one query line, and the tail. Fewer than three means either a
-  // missing tail or an empty query, and `renderTool` writes the trio only for a non-empty one.
-  if (section.rest.length < 3) return undefined;
+  const tailLength = tail === "binds-path" ? 2 : 1;
+  // The URL const, at least one query line, and the tail. Fewer means either a missing tail or an
+  // empty query, and `renderTool` writes the trio only for a non-empty one.
+  if (section.rest.length < 2 + tailLength) return undefined;
 
   const urlDecl = constDecl(section.rest[0]!);
   if (urlDecl?.name !== URL_LOCAL) return undefined;
@@ -350,9 +421,16 @@ export function recognizeQueryBlock(
   const prefixed = prefixedPath(urlArgs[0]!, section.locals);
   if (prefixed === undefined) return undefined;
 
-  if (!isUrlReturn(section.rest.at(-1)!, URL_LOCAL)) return undefined;
+  const tailStatements = section.rest.slice(-tailLength);
+  let returned: AstNode | undefined;
+  if (tail === "returns-url") {
+    if (!isUrlReturn(tailStatements[0]!, URL_LOCAL)) return undefined;
+  } else {
+    returned = readPathConstTail(tailStatements, URL_LOCAL);
+    if (returned === undefined) return undefined;
+  }
 
-  const lines = recognizeQueryLines(section.rest.slice(1, -1), URL_LOCAL, section.locals);
+  const lines = recognizeQueryLines(section.rest.slice(1, -tailLength), URL_LOCAL, section.locals);
   if (lines === undefined) return undefined;
 
   const query: QueryEntry[] = [];
@@ -374,5 +452,6 @@ export function recognizeQueryBlock(
     query,
     basePrefix: prefixed.basePrefix,
     hoistMeta: section.hoistMeta,
+    ...(returned === undefined ? {} : { returned }),
   };
 }

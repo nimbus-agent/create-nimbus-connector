@@ -44,6 +44,16 @@ import { displayPath } from "../../src/types.ts";
  * hoist their base — and is proved instead by test/derive/query.test.ts, against this
  * repository's own emitter output.
  *
+ * zzquery is the HAND-ROLLED half of that same branch, and the only fixture that exercises it:
+ * the sweep found the hand-rolled tail `` const path = `${u}` `` zero times across the 94 corpus
+ * connectors (measured 2026-08-06), so this fixture is the only thing that will ever run it. It
+ * pairs a query tool with the read helper's `path.startsWith("http")` passthrough line, which
+ * `renderFetchHelper` emits IFF some tool declares a `query` array — the two halves are useless
+ * apart, since without the helper half the tools would recognize and the module would still
+ * block on the helper. Its `zzquery_health` tool is fully static and votes "quoted", so a query
+ * tool voting "template" beside it would make `voteStaticPathStyle` block a connector this
+ * generator emits correctly.
+ *
  * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
  * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
  * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
@@ -71,6 +81,7 @@ const ROUND_TRIP = [
   "zendesk",
   "dependencytrack",
   "discord",
+  "zzquery",
 ];
 
 /**

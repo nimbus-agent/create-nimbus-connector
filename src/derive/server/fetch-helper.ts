@@ -21,6 +21,7 @@ import {
   isComputedProperty,
   isIdent,
   isNullLiteral,
+  logical,
   memberOn,
   methodCallTo,
   objectExpressionProperties,
@@ -267,9 +268,53 @@ function countFetchCalls(fn: AstNode): number {
   return count;
 }
 
+/** `<receiver>.startsWith("<literal>")` — the one predicate both statements below are built from. */
+function startsWithLiteral(node: AstNode | undefined, receiver: string, literal: string): boolean {
+  const args = methodCallTo(node, receiver, "startsWith", 1);
+  return args !== undefined && stringLit(args[0]) === literal;
+}
+
+/**
+ * `const url = <pathVar>.startsWith("http") ? <pathVar> : <template>;` -> that template, which is
+ * the only part of the statement whose shape differs between the emitters that write it:
+ * `renderRestKitFetchHelper` (unconditionally, with a base the schema's rest-kit refine keeps free
+ * of `${env.X}`) and `renderFetchHelper` (iff `hasQueryTool` — see that function in
+ * src/emit/server/fetch-helper.ts — with a base that may carry env accessors). The ternary shell
+ * around it is byte-identical in both, so it is read here once rather than copied into each: a
+ * copy is a place for one side to be tightened while the other keeps accepting what its twin just
+ * learned to reject (hoists.ts's module docstring states the rule).
+ *
+ * `renderWriteHelper` writes the same statement under the same gate, and is NOT read here — no
+ * recognizer in this plan claims the write helper at all (see round-trip.test.ts's `zzwriteonly`
+ * entry), so a spec whose query tool is non-GET blocks on that function rather than on this line.
+ *
+ * `pathVar` is a parameter because the hand-style helper renames it: `renderFetchHelper` writes
+ * the passthrough over `pathPart` when `normalizeLeadingSlash` also asked for that const, and
+ * over `path` otherwise. Pinning the test's receiver and the consequent to the SAME variable is
+ * what stops a helper that normalizes `path` into `pathPart` and then passes the un-normalized
+ * `path` through from being read as the shape the emitter writes.
+ */
+function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undefined {
+  const decl = constDecl(stmt);
+  if (decl?.name !== "url") return undefined;
+
+  const c = conditional(decl.init);
+  if (c === undefined) return undefined;
+  if (!startsWithLiteral(c.test, pathVar, "http")) return undefined;
+  if (!isIdent(c.consequent, pathVar)) return undefined;
+  return c.alternate;
+}
+
 /**
  * The normalizeLeadingSlash statement, exactly:
- * `const pathPart = path.startsWith("/") ? path : \`/${path}\`;`
+ * `const pathPart = <guard> ? path : \`/${path}\`;`
+ *
+ * `<guard>` is `path.startsWith("/")`, or `path.startsWith("http") || path.startsWith("/")` when
+ * the spec ALSO declares a query tool — `renderFetchHelper` widens it there so an absolute URL is
+ * not forced through `` `/${path}` `` into "/https://…". Which guard it carries is returned rather
+ * than tolerated (`httpArm`), because the emitter writes the wide guard and the passthrough const
+ * below together or neither: `matchFetchHelperBody` holds the two against each other, and a
+ * helper carrying one alone is a shape `renderFetchHelper` cannot produce.
  *
  * Matched positionally against ONE statement (the candidate first statement of the body) rather
  * than scanned for anywhere in the function — see `matchFetchHelperBody`'s own comment on why
@@ -279,24 +324,27 @@ function countFetchCalls(fn: AstNode): number {
  * `let pathPart = ...` passed every check below and was claimed as the documented `const` line,
  * same gap as server/index.ts's isRegistrarConst.
  */
-function isPathPartConst(stmt: AstNode): boolean {
+function matchPathPartConst(stmt: AstNode): { httpArm: boolean } | undefined {
   const decl = constDecl(stmt);
-  if (decl?.name !== "pathPart") return false;
+  if (decl?.name !== "pathPart") return undefined;
 
   const c = conditional(decl.init);
-  if (c === undefined) return false;
-
-  // Test: path.startsWith("/")
-  const testArgs = methodCallTo(c.test, "path", "startsWith", 1);
-  if (testArgs === undefined || stringLit(testArgs[0]) !== "/") return false;
+  if (c === undefined) return undefined;
 
   // Consequent: path (Identifier)
-  if (!isIdent(c.consequent, "path")) return false;
+  if (!isIdent(c.consequent, "path")) return undefined;
 
   // Alternate: `/${path}` (TemplateLiteral)
   const alt = templateLiteral(c.alternate);
-  if (alt?.expressions.length !== 1 || alt.quasis[0] !== "/") return false;
-  return isIdent(alt.expressions[0], "path");
+  if (alt?.expressions.length !== 1 || alt.quasis[0] !== "/") return undefined;
+  if (!isIdent(alt.expressions[0], "path")) return undefined;
+
+  // Test: path.startsWith("/"), or that disjoined behind path.startsWith("http").
+  if (startsWithLiteral(c.test, "path", "/")) return { httpArm: false };
+  const wide = logical(c.test);
+  if (wide?.operator !== "||") return undefined;
+  if (!startsWithLiteral(wide.left, "path", "http")) return undefined;
+  return startsWithLiteral(wide.right, "path", "/") ? { httpArm: true } : undefined;
 }
 
 /**
@@ -437,14 +485,32 @@ function classifyLastStatement(node: AstNode): boolean | undefined {
 type FetchHelperBody = {
   /** The `fetch(<url>, <options>)` CallExpression itself, for the caller's url/options reads. */
   readonly fetchCall: AstNode;
+  /**
+   * The template `reconstructBase` reads the base off: the fetch call's own url argument, or —
+   * when the passthrough const stands in front of it — that const's alternate, since the fetch
+   * call then receives only the `url` binding.
+   */
+  readonly baseTemplate: AstNode;
   readonly normalizeLeadingSlash: boolean;
   readonly jsonFallbackRaw: boolean;
+  /**
+   * `` const url = <pathVar>.startsWith("http") ? <pathVar> : `<base>${<pathVar>}`; `` — the
+   * statement `renderFetchHelper` emits IFF the spec declares a query tool (`hasQueryTool`,
+   * src/emit/server/fetch-helper.ts), so a query tool's absolute-URL return is used as-is rather
+   * than having the base prepended a second time.
+   *
+   * Its presence is EVIDENCE, not a spec field: it appears exactly when some tool carries a
+   * `query` array, so the caller cross-checks it against the recognized tools rather than
+   * recording it. See `deriveSharedStyleSpec`'s `fetch-helper:query-passthrough-mismatch`.
+   */
+  readonly passthrough: boolean;
 };
 
 /**
- * The read helper's body, walked positionally: an optional pathPart const, the fetch call, the
- * text() read, the !res.ok guard, then exactly one closing statement (the plain return or the
- * jsonFallbackRaw try/catch) — nothing more, nothing reordered.
+ * The read helper's body, walked positionally: an optional pathPart const, an optional
+ * passthrough url const, the fetch call, the text() read, the !res.ok guard, then exactly one
+ * closing statement (the plain return or the jsonFallbackRaw try/catch) — nothing more, nothing
+ * reordered.
  *
  * Final fix wave: this used to `find()`/`walk()` the whole function tree for the fetch call and
  * classify only the LAST statement, leaving everything between the top of the body and that
@@ -456,12 +522,37 @@ type FetchHelperBody = {
 function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undefined {
   let idx = 0;
 
-  const normalizeLeadingSlash = idx < body.length && isPathPartConst(body[idx]!);
+  const pathPart = idx < body.length ? matchPathPartConst(body[idx]!) : undefined;
+  const normalizeLeadingSlash = pathPart !== undefined;
   if (normalizeLeadingSlash) idx++;
+
+  // `renderFetchHelper` writes the passthrough over `pathPart` when it wrote that const, and over
+  // `path` otherwise — one `pathVar` local in the emitter, one here.
+  const pathVar = normalizeLeadingSlash ? "pathPart" : "path";
+  const passthroughTemplate =
+    idx < body.length ? passthroughUrlTemplate(body[idx]!, pathVar) : undefined;
+  const passthrough = passthroughTemplate !== undefined;
+  if (passthrough) idx++;
+
+  // When the pathPart const IS present, its guard and the passthrough const come from the same
+  // `hasQueryTool(spec)` call, so a helper carrying one and not the other is a shape
+  // `renderFetchHelper` cannot write. Checked only in that case: with no pathPart const there is
+  // no guard to widen, and demanding `httpArm` of an absent statement would refuse every
+  // passthrough helper that does not also normalize its leading slash — which is every one of
+  // them apart from the grafana/newrelic-shaped `normalizeLeadingSlash: true` specs.
+  if (pathPart !== undefined && pathPart.httpArm !== passthrough) return undefined;
 
   const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
   if (fetchCall === undefined) return undefined;
   idx++;
+
+  const fetchUrl = callArgs(fetchCall)?.[0];
+  if (fetchUrl === undefined) return undefined;
+  // With the passthrough const in front of it the emitter passes that const's own binding, so
+  // the base has already been consumed above; pinned to the identifier `url` rather than accepted
+  // as "some expression", or a helper fetching something else entirely would be recorded with a
+  // base it never actually requests.
+  if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
 
   if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
   idx++;
@@ -476,7 +567,13 @@ function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undef
   const jsonFallbackRaw = classifyLastStatement(body[idx]!);
   if (jsonFallbackRaw === undefined) return undefined;
 
-  return { fetchCall, normalizeLeadingSlash, jsonFallbackRaw };
+  return {
+    fetchCall,
+    baseTemplate: passthroughTemplate ?? fetchUrl,
+    normalizeLeadingSlash,
+    jsonFallbackRaw,
+    passthrough,
+  };
 }
 
 /**
@@ -511,6 +608,20 @@ function matchFetchHelperHeaders(fetchCall: AstNode): FetchHelperHeaders | undef
 type MatchedFetchHelper = {
   readonly fields: FetchHelperFields;
   readonly constStatement?: AstNode;
+  /** See `FetchHelperBody.passthrough` — evidence about the tools, not a `fetchHelper` field. */
+  readonly passthrough: boolean;
+};
+
+/**
+ * What `recognizeFetchHelper` hands back: the spec fields, and the one piece of recovered
+ * evidence that is NOT one. Kept beside `fields` rather than folded into `FetchHelperFields` for
+ * the same reason tools-hand.ts's `ToolShape` keeps `staticStyle`/`schemaShape` beside its own
+ * `fields` — `FetchHelperSchema` is a `strictObject` that would reject a `passthrough` key, and
+ * `deriveSharedStyleSpec` spreads these fields straight into the derived spec.
+ */
+export type RecognizedFetchHelper = {
+  readonly fields: FetchHelperFields;
+  readonly passthrough: boolean;
 };
 
 /**
@@ -544,8 +655,7 @@ function matchFetchHelperFunction(
   const headers = matchFetchHelperHeaders(parsed.fetchCall);
   if (headers === undefined) return undefined;
 
-  const url = callArgs(parsed.fetchCall)?.[0];
-  const reconstructed = url === undefined ? undefined : reconstructBase(url, statements);
+  const reconstructed = reconstructBase(parsed.baseTemplate, statements);
   const serviceLabel = serviceLabelFrom(s);
   const local = functionName(s) ?? "";
   if (reconstructed === undefined || serviceLabel === undefined || local === "") return undefined;
@@ -561,6 +671,7 @@ function matchFetchHelperFunction(
       ...(parsed.jsonFallbackRaw && { jsonFallbackRaw: true as const }),
     },
     constStatement: reconstructed.constStatement,
+    passthrough: parsed.passthrough,
   };
 }
 
@@ -576,7 +687,7 @@ function matchFetchHelperFunction(
 export function recognizeFetchHelper(
   statements: readonly AstNode[],
   claims: ClaimSet,
-): FetchHelperFields | undefined {
+): RecognizedFetchHelper | undefined {
   for (const s of statements) {
     const matched = matchFetchHelperFunction(s, statements);
     if (matched === undefined) continue;
@@ -587,7 +698,7 @@ export function recognizeFetchHelper(
     if (matched.constStatement !== undefined) {
       claims.claim(matched.constStatement, "fetch-helper");
     }
-    return matched.fields;
+    return { fields: matched.fields, passthrough: matched.passthrough };
   }
   return undefined;
 }
@@ -621,8 +732,9 @@ type MatchedRestUrlConst = {
 
 /**
  * `const url = path.startsWith("http") ? path : \`<base>${path}\`;` — statement 1 of
- * renderRestKitFetchHelper's body, matched exactly (same `path.startsWith("http")` guard
- * `isPathPartConst` above checks, but naming a different const).
+ * renderRestKitFetchHelper's body. The ternary shell is read by `passthroughUrlTemplate` above,
+ * shared with the hand-style helper's own passthrough statement, which is byte-identical to this
+ * one apart from the base expression it wraps; only that base is read here.
  *
  * Two template shapes, both `baseExpr` (src/emit/server/fetch-helper.ts) can write: the LITERAL
  * form (one expression, `path`) and, when `fetchHelper.baseConst` is set, the hoisted form
@@ -632,22 +744,17 @@ type MatchedRestUrlConst = {
  * for why a name that does not resolve to exactly that shape is refused rather than guessed at);
  * `renderRestKitFetchHelper` can only ever produce ONE such identifier here, so anything with
  * more expressions than that is refused, not partially read.
+ *
+ * `reconstructBase` is deliberately NOT reused for it, unlike the hand-style caller: rest-kit's
+ * base cannot carry `${env.X}` at all (ConnectorSpecSchema's rest-kit refine, src/spec.ts, since
+ * rest-kit emits no env accessors), so accepting an env-accessor call here would recover a base
+ * no rest-kit spec can declare.
  */
 function matchRestUrlConst(
   stmt: AstNode,
   statements: readonly AstNode[],
 ): MatchedRestUrlConst | undefined {
-  const decl = constDecl(stmt);
-  if (decl?.name !== "url") return undefined;
-
-  const c = conditional(decl.init);
-  if (c === undefined) return undefined;
-
-  const testArgs = methodCallTo(c.test, "path", "startsWith", 1);
-  if (testArgs === undefined || stringLit(testArgs[0]) !== "http") return undefined;
-  if (!isIdent(c.consequent, "path")) return undefined;
-
-  const alt = templateLiteral(c.alternate);
+  const alt = templateLiteral(passthroughUrlTemplate(stmt, "path"));
   if (alt === undefined) return undefined;
 
   // Literal form: `` `<base>${path}` `` — one expression, the path.

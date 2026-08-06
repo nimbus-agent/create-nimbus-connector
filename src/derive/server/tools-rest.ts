@@ -248,7 +248,7 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
   //
   // `staticStyle` is deliberately absent from what this returns — see `QueryBlock`'s docstring
   // for why a query tool carries no evidence of the connector's `staticPathStyle` at all.
-  const query = recognizeQueryBlock(arrow.body, argsResult.args);
+  const query = recognizeQueryBlock(arrow.body, argsResult.args, "returns-url");
   if (query === undefined) return undefined;
 
   const mergedArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);

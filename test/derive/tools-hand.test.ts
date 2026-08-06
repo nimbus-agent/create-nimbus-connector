@@ -82,6 +82,7 @@ describe("recognizeTools", () => {
       // per-tool values feed into.
       staticPathStyles: ["quoted"],
       schemaShapes: [{ propertyCount: 0, oneLine: false }],
+      basePrefixes: [undefined],
     });
     expect(unclaimed).toEqual([]);
   });
@@ -106,6 +107,7 @@ describe("recognizeTools", () => {
       // one-property schema shares its source line with `z.object({`, so it is "inline" evidence.
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -174,6 +176,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -211,6 +214,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -243,6 +247,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -477,6 +482,7 @@ describe("recognizeTools", () => {
       handlerStyle: "block",
       staticPathStyles: ["quoted"],
       schemaShapes: [{ propertyCount: 0, oneLine: false }],
+      basePrefixes: [undefined],
     });
   });
 

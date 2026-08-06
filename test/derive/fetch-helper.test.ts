@@ -101,7 +101,11 @@ const TWO_FETCHES = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  return { fields: recognizeFetchHelper(statements, claims), claims, statements };
+  // `passthrough` is recovered beside the spec fields rather than among them (see
+  // RecognizedFetchHelper) — unpacked here so every assertion below keeps comparing `fields`
+  // against exactly the object the derived spec's `fetchHelper` is spread from.
+  const matched = recognizeFetchHelper(statements, claims);
+  return { fields: matched?.fields, passthrough: matched?.passthrough, claims, statements };
 }
 
 // Every helper recognizeFetchHelper must refuse, each with the reason it exists. One row per
@@ -695,6 +699,120 @@ describe("recognizeFetchHelper", () => {
       const { fields, claims } = run(src);
       expect(fields).toBeUndefined();
       expect(claims.claims()).toEqual([]);
+    });
+  });
+
+  // --- The absolute-URL passthrough, emitted IFF the spec declares a query tool (hasQueryTool,
+  // src/emit/server/fetch-helper.ts). Recovered as EVIDENCE about the tools, not as a
+  // `fetchHelper` field: `deriveSharedStyleSpec` cross-checks it against the recognized tools,
+  // and test/derive/query.test.ts drives both directions of that check end to end.
+
+  describe("the query-tool passthrough const", () => {
+    /** The zzquery-shaped read helper: no normalizeLeadingSlash, so the passthrough reads `path`. */
+    const PASSTHROUGH = [
+      "async function zzGet(path: string): Promise<unknown> {",
+      '  const url = path.startsWith("http") ? path : `https://api.zzquery.test${path}`;',
+      "  const res = await fetch(url, { headers: headers() });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`ZZ Query ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+
+    /**
+     * The same helper with `normalizeLeadingSlash` as well — the only combination in which the
+     * passthrough reads `pathPart` rather than `path`, and the only one in which the leading-slash
+     * guard is widened. `renderFetchHelper` orders the two so the absolute-URL test runs BEFORE
+     * the leading-slash rule; a URL forced through `` `/${path}` `` would emit "/https://…".
+     */
+    const NORMALIZED_PASSTHROUGH = [
+      "async function zzGet(path: string): Promise<unknown> {",
+      '  const pathPart = path.startsWith("http") || path.startsWith("/") ? path : `/${path}`;',
+      '  const url = pathPart.startsWith("http") ? pathPart : `${baseUrl()}${pathPart}`;',
+      "  const res = await fetch(url, {",
+      "    headers: authHeaders(),",
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`ZZ Query ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+
+    it("recovers the base from the passthrough const, not from the fetch call's own argument", () => {
+      // The fetch call now receives the bare identifier `url`, so a recognizer still reading its
+      // first argument as the base template would refuse the helper outright.
+      const { fields, passthrough, claims, statements } = run(PASSTHROUGH);
+      expect(fields).toEqual({
+        local: "zzGet",
+        base: "https://api.zzquery.test",
+        serviceLabel: "ZZ Query",
+        headers: "headers",
+      });
+      expect(passthrough).toBe(true);
+      expect(claims.unclaimed(statements)).toEqual([]);
+    });
+
+    it("reads the passthrough over `pathPart` when normalizeLeadingSlash also asked for that const", () => {
+      const { fields, passthrough } = run(NORMALIZED_PASSTHROUGH);
+      expect(fields).toEqual({
+        local: "zzGet",
+        base: "${env.baseUrl}",
+        serviceLabel: "ZZ Query",
+        headers: "authHeaders",
+        normalizeLeadingSlash: true,
+      });
+      expect(passthrough).toBe(true);
+    });
+
+    it("reports passthrough: false for a helper with no query tool behind it", () => {
+      // NEWRELIC is byte-locked and declares no query tool, so this is the negative half of the
+      // cross-check's input, taken from a shape that cannot drift without failing diff:golden.
+      expect(run(NEWRELIC).passthrough).toBe(false);
+    });
+
+    it("refuses the widened leading-slash guard without the passthrough const it comes with", () => {
+      // Both are written from the same `hasQueryTool(spec)` call, so one alone is a shape
+      // renderFetchHelper cannot produce — GRAFANA's own guard, widened and nothing else.
+      const src = GRAFANA.replace(
+        'path.startsWith("/") ? path',
+        'path.startsWith("http") || path.startsWith("/") ? path',
+      );
+      expect(src).not.toBe(GRAFANA);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses the passthrough const beside an un-widened leading-slash guard", () => {
+      // The mirror: the passthrough is present, but the guard ahead of it was never widened, so
+      // an absolute URL would already have been mangled into "/https://…" one statement earlier.
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        'path.startsWith("http") || path.startsWith("/") ? path',
+        'path.startsWith("/") ? path',
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses a passthrough const testing a different variable from the one it returns", () => {
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        'const url = pathPart.startsWith("http") ? pathPart',
+        'const url = path.startsWith("http") ? path',
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
+    });
+
+    it("refuses a helper that declares the passthrough const and then fetches something else", () => {
+      const src = PASSTHROUGH.replace("await fetch(url,", "await fetch(`https://elsewhere.test`,");
+      expect(src).not.toBe(PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
     });
   });
 });

@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { type AstNode, initParser, parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
 import { arrowFn, blockBody, callArgs, expressionOf } from "../../src/derive/read.ts";
 import { type ArgFields, recognizeArgs } from "../../src/derive/server/args.ts";
 import { type HoistSection, splitHoists } from "../../src/derive/server/hoists.ts";
 import { recognizeQueryBlock, recognizeQueryLines } from "../../src/derive/server/query.ts";
+import { recognizeTools } from "../../src/derive/server/tools-hand.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -89,6 +91,84 @@ const MIXED_TEMPLATE_SPEC = {
   fetchHelper: { ...SPEC.fetchHelper, staticPathStyle: "template" },
 };
 
+/**
+ * The HAND-ROLLED counterpart, whose `renderTool` (src/emit/server/tools-hand.ts) ends the same
+ * query block with `` const path = `${u}`; `` and a `return jsonResult(await zzGet(path));` — the
+ * `"binds-path"` tail — instead of returning the URL. Its query tool reuses `SPEC`'s verbatim, so
+ * the two styles are compared on the one thing that actually differs between them.
+ *
+ * `zzqueryhand_ping` is fully static and therefore QUOTED, the pairing that makes the
+ * staticPathStyle abstention below decisive rather than merely unobserved.
+ */
+const HAND_SPEC = {
+  name: "zzqueryhand",
+  displayName: "ZZ Query Hand",
+  description: "Fixture for the hand-rolled query branch.",
+  serviceLabel: "ZZ Query Hand",
+  style: "hand-rolled",
+  network: ["api.zzqueryhand.test"],
+  syncInterval: 600,
+  minNimbusVersion: "0.2.0",
+  env: [{ vars: ["ZZQUERYHAND_TOKEN"], local: "headers", auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzqueryhand.test", headers: "headers" },
+  tools: [
+    { ...SPEC.tools[0]!, name: "zzqueryhand_list" },
+    { name: "zzqueryhand_ping", description: "Ping.", path: "/v1/ping" },
+  ],
+};
+
+/** The mirror of `MIXED_TEMPLATE_SPEC` for the hand-rolled style — see that constant. */
+const HAND_TEMPLATE_SPEC = {
+  ...HAND_SPEC,
+  fetchHelper: { ...HAND_SPEC.fetchHelper, staticPathStyle: "template" },
+};
+
+/**
+ * `${env.X}` inside `fetchHelper.base` is legal for a hand-rolled connector — ConnectorSpecSchema
+ * scopes that prohibition to rest-kit — and `baseExpr` resolves it, so the base reaches `new URL`
+ * as an ACCESSOR CALL rather than text. Deriving it is refused deliberately, in the two places the
+ * two forms reach: an accessor with nothing ahead of it produces an empty leading quasi, which
+ * `prefixedPath` refuses (it is not the hoisted-const form it looks like); one with text ahead of
+ * it takes the literal branch and is refused by `rebaseQueryTools`, since `base` still spells the
+ * accessor `${env.apiRoot}` and no rendered quasi can contain those characters.
+ */
+const ENV_BASE_SPEC = {
+  ...HAND_SPEC,
+  env: [
+    { vars: ["ZZQUERYHAND_URL"], local: "apiRoot", default: "https://api.zzqueryhand.test" },
+    { vars: ["ZZQUERYHAND_TOKEN"], local: "headers", auth: "bearer" },
+  ],
+  fetchHelper: { local: "zzGet", base: "${env.apiRoot}", headers: "headers" },
+};
+
+const ENV_PREFIXED_BASE_SPEC = {
+  ...ENV_BASE_SPEC,
+  fetchHelper: { ...ENV_BASE_SPEC.fetchHelper, base: "https://${env.apiRoot}/api" },
+};
+
+/**
+ * A query tool with NO hoisted arg, beside a concise one. `renderTool`'s query branch returns its
+ * block form BEFORE the `used.size === 0 && spec.handlerStyle === "concise"` test is reached, so
+ * this block is one a "concise" connector emits — and counting it as `handlerStyle` evidence would
+ * make `recognizeTools` refuse the pair outright (block-without-hoists beside concise).
+ */
+const HOISTLESS_QUERY_SPEC = {
+  ...HAND_SPEC,
+  tools: [
+    {
+      name: "zzqueryhand_list",
+      description: "List items.",
+      path: "/v1/items",
+      args: { q: { type: "string" }, after: { type: "string", optional: true } },
+      query: [
+        { name: "q", arg: "q" },
+        { name: "after", arg: "after", omitWhen: "absent" },
+      ],
+    },
+    { name: "zzqueryhand_ping", description: "Ping.", path: "/v1/ping" },
+  ],
+};
+
 function emit(spec: unknown): Map<string, string> {
   const files = formatAll(generate(parseSpec(spec)));
   return new Map(files.map((f) => [displayPath(f.path), f.content]));
@@ -102,12 +182,14 @@ function emittedServer(spec: unknown): string {
 
 let PRISTINE: string;
 let HOISTED_BASE: string;
+let HAND: string;
 
 beforeAll(async () => {
   await initFormatter();
   await initParser();
   PRISTINE = emittedServer(SPEC);
   HOISTED_BASE = emittedServer(HOISTED_BASE_SPEC);
+  HAND = emittedServer(HAND_SPEC);
 });
 
 /** The module's first block-bodied `pathFn`, plus the args of the same registrar call's schema. */
@@ -187,7 +269,7 @@ describe("recognizeQueryLines", () => {
 describe("recognizeQueryBlock", () => {
   it("keeps a literal base on the recovered path, and hands back the whole leading quasi", () => {
     const { body, args } = queryCall(PRISTINE);
-    const block = recognizeQueryBlock(body, args);
+    const block = recognizeQueryBlock(body, args, "returns-url");
     expect(block?.path).toBe("https://api.zzqueryunit.test/v1/items");
     // The quasi is base + the path's first literal segment, fused — NOT the base, which is
     // exactly why the caller does the split. See BasePrefix.
@@ -206,14 +288,14 @@ describe("recognizeQueryBlock", () => {
 
   it("drops a hoisted base const from the path and names it as the prefix", () => {
     const { body, args } = queryCall(HOISTED_BASE);
-    const block = recognizeQueryBlock(body, args);
+    const block = recognizeQueryBlock(body, args, "returns-url");
     expect(block?.path).toBe("/v1/items");
     expect(block?.basePrefix).toEqual({ kind: "const", name: "ZZ_BASE" });
   });
 
   it("recovers the hoist's own Gap A / Gap B metadata", () => {
     const { body, args } = queryCall(PRISTINE);
-    expect(recognizeQueryBlock(body, args)?.hoistMeta.get("limit")).toEqual({
+    expect(recognizeQueryBlock(body, args, "returns-url")?.hoistMeta.get("limit")).toEqual({
       local: "limit",
       default: 50,
     });
@@ -222,25 +304,25 @@ describe("recognizeQueryBlock", () => {
   it("refuses String(...) around a string-typed arg — a shape wrapsInString cannot write", () => {
     const source = corrupt(PRISTINE, 'set("q", parsed.q)', 'set("q", String(parsed.q))');
     const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
   it("refuses a bare number-typed arg — wrapsInString always wraps one", () => {
     const source = corrupt(PRISTINE, 'set("limit", String(limit))', 'set("limit", limit)');
     const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
   it("refuses the corpus's `u.toString()` tail — renderTool writes the template form", () => {
     const source = corrupt(PRISTINE, "return `${u}`;", "return u.toString();");
     const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
   it("refuses the corpus's `${u.pathname}${u.search}` tail", () => {
     const source = corrupt(PRISTINE, "return `${u}`;", "return `${u.pathname}${u.search}`;");
     const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
   it("refuses a URL const under any name but `u`", () => {
@@ -248,7 +330,7 @@ describe("recognizeQueryBlock", () => {
       .replaceAll("u.searchParams", "v.searchParams")
       .replace("return `${u}`;", "return `${v}`;");
     const { body, args } = queryCall(renamed);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
   it("refuses a block with no query lines — renderTool would not have written the trio", () => {
@@ -258,7 +340,7 @@ describe("recognizeQueryBlock", () => {
       "$1$2",
     );
     const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args)).toBeUndefined();
+    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 });
 
@@ -355,6 +437,194 @@ describe("the query branch inside deriveSpec", () => {
         "new URL(`${ZZ_BASE}/v1/items`)",
         "new URL(`https://api.zzqueryunit.test/v1/items`)",
       ),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The hand-rolled half: the same query block under the `"binds-path"` tail, plus the read
+// helper's passthrough line, which `renderFetchHelper` emits IFF some tool declares a query
+// array. Neither half is any use without the other — without the fetch-helper half the tools
+// would recognize and the module would still block on its own read helper.
+// ---------------------------------------------------------------------------
+
+describe("recognizeQueryBlock, hand-rolled tail", () => {
+  it("recovers the same entries the rest-kit tail does, plus the return it hands back unread", () => {
+    const { body, args } = queryCall(HAND);
+    const block = recognizeQueryBlock(body, args, "binds-path");
+    expect(block?.path).toBe("https://api.zzqueryhand.test/v1/items");
+    expect(block?.basePrefix).toEqual({
+      kind: "literal",
+      leadingQuasi: "https://api.zzqueryhand.test/v1/items",
+    });
+    expect(block?.query).toEqual([
+      { name: "q", arg: "q" },
+      { name: "after", arg: "after", omitWhen: "absent" },
+      { name: "filter", arg: "filter", omitWhen: "empty" },
+      { name: "page", arg: "page", omitWhen: "absent" },
+      { name: "limit", arg: "limit" },
+    ]);
+    // Left unread here on purpose — only tools-hand.ts knows the fetch helper's local name to
+    // check the call against. See QueryBlock.returned.
+    expect(block?.returned).toBeDefined();
+  });
+
+  it("refuses each style's tail under the other style's reader", () => {
+    // The two are selected by the caller, never tried in turn: a hand-rolled handler that merely
+    // returns the URL returns a string where the registrar expects an MCP result, and a rest-kit
+    // pathFn that binds `path` and returns a fetch call is not a shape renderTool writes for it.
+    const hand = queryCall(HAND);
+    expect(recognizeQueryBlock(hand.body, hand.args, "returns-url")).toBeUndefined();
+    const rest = queryCall(PRISTINE);
+    expect(recognizeQueryBlock(rest.body, rest.args, "binds-path")).toBeUndefined();
+  });
+
+  it("refuses a tail binding the URL to any name but `path`", () => {
+    const source = corrupt(HAND, "const path = `${u}`;", "const target = `${u}`;").replace(
+      "zzGet(path)",
+      "zzGet(target)",
+    );
+    const { body, args } = queryCall(source);
+    expect(recognizeQueryBlock(body, args, "binds-path")).toBeUndefined();
+  });
+
+  it("refuses the corpus's `${u.pathname}${u.search}` tail under this reader too", () => {
+    const source = corrupt(
+      HAND,
+      "const path = `${u}`;",
+      "const path = `${u.pathname}${u.search}`;",
+    );
+    const { body, args } = queryCall(source);
+    expect(recognizeQueryBlock(body, args, "binds-path")).toBeUndefined();
+  });
+});
+
+describe("the hand-rolled query branch inside deriveSpec", () => {
+  function derive(files: Map<string, string>, server = files.get("src/server.ts")!) {
+    return deriveSpec({ server, manifest: files.get("nimbus.extension.json")! });
+  }
+
+  function expectRoundTrip(spec: unknown): void {
+    const files = emit(spec);
+    const derivation = derive(files);
+    if (!derivation.ok) throw new Error(derivation.blockers.map((b) => b.kind).join(", "));
+    const reEmitted = emit(derivation.spec);
+    expect([...reEmitted.keys()].sort()).toEqual([...files.keys()].sort());
+    for (const [path, content] of files) expect(reEmitted.get(path)).toBe(content);
+  }
+
+  function expectBlockers(files: Map<string, string>, server: string, kind: string): void {
+    const derivation = derive(files, server);
+    expect(derivation.ok).toBe(false);
+    if (derivation.ok) return;
+    expect(derivation.blockers.map((b) => b.kind)).toContain(kind);
+  }
+
+  it("round-trips a hand-rolled query connector", () => {
+    expectRoundTrip(HAND_SPEC);
+  });
+
+  it("recovers a non-GET query tool's method through the same reader a plain tool uses", () => {
+    // Not a full deriveSpec round trip: a non-GET tool also emits `zzGetSend`, a write helper no
+    // recognizer in this plan claims (see round-trip.test.ts's zzwriteonly entry), so the module
+    // blocks on that statement. recognizeTools is run directly instead, over the whole emitted
+    // module — it reads only the top-level `reg(...)` statements, so the unclaimed write helper
+    // does not stand in the way of checking what the query branch recovered.
+    const source = emittedServer({
+      ...HAND_SPEC,
+      tools: [{ ...HAND_SPEC.tools[0]!, method: "POST" }],
+    });
+    const result = recognizeTools(parseModule(source), createClaimSet(), "zzGet");
+    expect(result?.tools.map((t) => (t as { method?: string }).method)).toEqual(["POST"]);
+  });
+
+  /**
+   * The abstention, in both directions, exactly as the rest-kit half tests it — `renderPath`'s
+   * `!dynamic && prefix === ""` fast path is shared by the two styles, so a hand-rolled query
+   * tool carries no `staticPathStyle` evidence either. Each `expectRoundTrip` carries the "not
+   * blocked" half: a deriveSpec reporting `style:mixed-static-path` throws there.
+   */
+  function expectQueryToolAbstains(spec: unknown, expected: string | undefined): void {
+    const derivation = derive(emit(spec));
+    if (!derivation.ok) throw new Error(derivation.blockers.map((b) => b.kind).join(", "));
+    const fetchHelper = derivation.spec.fetchHelper as Record<string, unknown>;
+    expect(fetchHelper.staticPathStyle).toBe(expected);
+    expectRoundTrip(spec);
+  }
+
+  it("does not let a hand-rolled query tool vote `template` against a quoted static path", () => {
+    // Omitted, not "quoted": deriveSharedStyleSpec drops the value reproducing the schema default.
+    expectQueryToolAbstains(HAND_SPEC, undefined);
+  });
+
+  it("does not let a hand-rolled query tool vote `quoted` against a template static path", () => {
+    expectQueryToolAbstains(HAND_TEMPLATE_SPEC, "template");
+  });
+
+  it("does not let a hoistless query tool vote `block` against a concise tool", () => {
+    // Without the abstention this pair is refused outright by recognizeTools (a block with no
+    // hoists beside a concise handler matches neither connector-wide handlerStyle), so a passing
+    // round trip is the assertion.
+    expectRoundTrip(HOISTLESS_QUERY_SPEC);
+  });
+
+  it("blocks a literal prefix that is not the hand-rolled fetch helper's base", () => {
+    const files = emit(HAND_SPEC);
+    expectBlockers(
+      files,
+      corrupt(
+        files.get("src/server.ts")!,
+        "new URL(`https://api.zzqueryhand.test/v1/items`)",
+        "new URL(`https://other.test/v1/items`)",
+      ),
+      "query:base-prefix-mismatch",
+    );
+  });
+
+  // The env-ref base, refused in both of the places its two forms reach — see ENV_BASE_SPEC.
+  // Neither is a mis-derivation: an `${env.X}` base is decided per request, so no static split of
+  // the `new URL(...)` template can separate it from the path.
+
+  it("refuses an ${env.X} base with nothing ahead of it, at the new URL template", () => {
+    const derivation = derive(emit(ENV_BASE_SPEC));
+    expect(derivation.ok).toBe(false);
+    // prefixedPath refuses, so no tool recognizes and every reg() statement stays unclaimed —
+    // reported by the totality rule rather than by a named cross-check.
+    if (!derivation.ok) expect(derivation.blockers.map((b) => b.kind)).toContain("call:reg");
+  });
+
+  it("refuses an ${env.X} base with text ahead of it, at the base cross-check", () => {
+    const derivation = derive(emit(ENV_PREFIXED_BASE_SPEC));
+    expect(derivation.ok).toBe(false);
+    if (!derivation.ok) {
+      expect(derivation.blockers.map((b) => b.kind)).toContain("query:base-prefix-mismatch");
+    }
+  });
+
+  // The passthrough cross-check, both directions. `hasQueryTool` decides the read helper's line
+  // from the SET of tools, so neither recognizer can see the other's evidence on its own.
+
+  const PASSTHROUGH_LINE =
+    '  const url = path.startsWith("http") ? path : `https://api.zzqueryhand.test${path}`;\n' +
+    "  const res = await fetch(url, { headers: headers() });";
+  const PLAIN_FETCH_LINE =
+    "  const res = await fetch(`https://api.zzqueryhand.test${path}`, { headers: headers() });";
+
+  it("blocks a read helper carrying the passthrough line with no query tool behind it", () => {
+    const files = emit({ ...HAND_SPEC, tools: [HAND_SPEC.tools[1]!] });
+    expectBlockers(
+      files,
+      corrupt(files.get("src/server.ts")!, PLAIN_FETCH_LINE, PASSTHROUGH_LINE),
+      "fetch-helper:query-passthrough-mismatch",
+    );
+  });
+
+  it("blocks a query tool whose read helper lacks the passthrough line", () => {
+    const files = emit(HAND_SPEC);
+    expectBlockers(
+      files,
+      corrupt(files.get("src/server.ts")!, PASSTHROUGH_LINE, PLAIN_FETCH_LINE),
+      "fetch-helper:query-passthrough-mismatch",
     );
   });
 });

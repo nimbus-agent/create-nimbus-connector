@@ -14,7 +14,7 @@ import {
 import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
-import type { QueryEntry } from "./query.ts";
+import { type BasePrefix, PATH_LOCAL, type QueryEntry, recognizeQueryBlock } from "./query.ts";
 import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
 
 /**
@@ -58,18 +58,30 @@ export type ToolFields = {
  * both are `ConnectorSpecSchema`/`FetchHelperSchema` fields, and `ToolSchema` is a
  * `strictObject` that would reject them.
  *
- * `isSearch` marks a shape recovered by `recognizeSearchTool` rather than `recognizeOne` — see
- * the handlerStyle vote below for why it must be excluded rather than counted: `renderSearchTool`
- * always writes a hoist-free block, so counting it would force `handlerStyle: "block"` on every
- * connector that declares a search tool, regardless of what its OTHER tools actually show.
+ * `votesHandlerStyle` is false for the two shapes whose handler form the emitter FORCES,
+ * independently of `spec.handlerStyle`, and which therefore carry no evidence for the vote below
+ * — counting either would force `handlerStyle: "block"` on connectors that never declared it,
+ * regardless of what their OTHER tools show:
+ *
+ *   - a search tool: `renderSearchTool` always writes a hoist-free block;
+ *   - a query tool: `renderTool`'s `if (query !== undefined)` branch returns its block form
+ *     BEFORE the `used.size === 0 && spec.handlerStyle === "concise"` test is ever reached
+ *     (src/emit/server/tools-hand.ts), so a query tool with no hoists is a block a "concise"
+ *     connector emits too.
+ *
+ * `basePrefix` is set only for a query tool, whose `new URL(...)` was rendered with the fetch
+ * helper's base spliced in ahead of the path. It is not a spec field — it is a fact about this
+ * module that only the assembly can check, against the fetch helper recognized separately from
+ * the same file. See `BasePrefix`.
  */
 type ToolShape = {
   fields: ToolFields | SearchToolFields;
   isBlock: boolean;
   hasHoists: boolean;
-  isSearch?: true;
+  votesHandlerStyle: boolean;
   staticStyle?: StaticPathStyle;
   schemaShape: SchemaShape;
+  basePrefix?: BasePrefix;
 };
 
 /** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. `staticPathStyles`/
@@ -79,6 +91,13 @@ export type ToolsResult = {
   handlerStyle?: "block";
   staticPathStyles: readonly (StaticPathStyle | undefined)[];
   schemaShapes: readonly SchemaShape[];
+  /**
+   * Parallel to `tools`, and `undefined` for every tool that is not a query tool — the same
+   * per-index shape `staticPathStyles` uses, and the same field tools-rest.ts's `RestToolsResult`
+   * carries. The caller reads it alongside `tools[i]`, which is what lets a `literal` prefix's
+   * base be taken off that tool's own path; see `BasePrefix`.
+   */
+  basePrefixes: readonly (BasePrefix | undefined)[];
 };
 
 function isRegCall(node: AstNode): AstNode | undefined {
@@ -125,6 +144,24 @@ function jsonResultCall(node: AstNode | undefined): AstNode | undefined {
   return args === undefined ? undefined : awaitedCall(args[0]);
 }
 
+/**
+ * `jsonResult(await <helper|helperSend>(...))` -> its path ARGUMENT, unread, and the method.
+ *
+ * Split out from `pathFromJsonResult` below for the query branch, whose path argument is the bare
+ * `path` binding its own tail declares rather than a path expression `recognizePath` could read.
+ * One reader for both, not two: reading args[0] without checking the callee is what derived a
+ * POST tool as a GET read tool once already (see `fetchCall`), and a query tool routes through
+ * the same two helpers a plain tool does — `renderTool` substitutes only the path, keeping the
+ * method's choice of helper (src/emit/server/tools-hand.ts's `callPath`).
+ */
+function fetchFromJsonResult(
+  node: AstNode | undefined,
+  helperLocal: string,
+): FetchCall | undefined {
+  const helperCall = jsonResultCall(node);
+  return helperCall === undefined ? undefined : fetchCall(helperCall, helperLocal);
+}
+
 /** The declared path, its static-path-style evidence, and method recovered from
  * `jsonResult(await <helper|helperSend>(...))`. */
 function pathFromJsonResult(
@@ -138,9 +175,7 @@ function pathFromJsonResult(
       method?: "POST" | "PUT" | "PATCH" | "DELETE";
     }
   | undefined {
-  const helperCall = jsonResultCall(node);
-  if (helperCall === undefined) return undefined;
-  const fetched = fetchCall(helperCall, helperLocal);
+  const fetched = fetchFromJsonResult(node, helperLocal);
   if (fetched === undefined) return undefined;
   const recognized = recognizePath(fetched.path, locals);
   if (recognized === undefined) return undefined;
@@ -183,18 +218,59 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
       fields: { name, description, args: argsResult.args, ...pathFields },
       isBlock: false,
       hasHoists: false,
+      votesHandlerStyle: true,
       staticStyle,
       schemaShape,
     };
   }
 
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
-  // A tool whose block contains anything else (e.g. the query branch's `new URL(...)` trio, or
-  // a stub's `throw`) is a shape this recognizer does not model, and is refused rather than
-  // partially read — hoists.ts's `recognizeHoistedBlock` is where that refusal happens, shared
-  // with tools-rest.ts, which reads the identical hoist statements behind a different registrar.
+  // A tool whose block contains anything else (a stub's `throw`, say) is a shape this recognizer
+  // does not model, and is refused rather than partially read — hoists.ts's
+  // `recognizeHoistedBlock` is where that refusal happens, shared with tools-rest.ts, which reads
+  // the identical hoist statements behind a different registrar. The query branch's `new URL(...)`
+  // trio is the one shape that refusal hands on rather than ends at; see below.
   const block = recognizeHoistedBlock(arrow.body);
-  if (block === undefined) return undefined;
+  if (block === undefined) {
+    // The query branch — `renderTool`'s `if (query !== undefined)` block (src/emit/server/
+    // tools-hand.ts). Tried only once the plain hoists-then-return reader has refused, exactly as
+    // tools-rest.ts's `recognizeOneCall` orders the same pair: the two are disjoint by
+    // construction (that reader requires exactly one statement after the hoists, this one at
+    // least four).
+    //
+    // `staticStyle` is deliberately absent from what this returns — see `QueryBlock`'s docstring
+    // for why a query tool carries no evidence of the connector's `staticPathStyle` at all.
+    const query = recognizeQueryBlock(arrow.body, argsResult.args, "binds-path");
+    if (query?.returned === undefined) return undefined;
+
+    // The tail's `return` is read by the SAME reader the two non-query forms use, so a non-GET
+    // query tool recovers its `method` — and therefore its effect and the manifest's
+    // hitlRequired — exactly as a non-GET plain tool does. Its path argument must be the binding
+    // the tail's own `const path` declares, not merely any identifier: `renderTool` substitutes
+    // the literal `"path"` for the inline path expression (`callPath`), so a call fetching
+    // anything else is a shape it cannot write.
+    const fetched = fetchFromJsonResult(query.returned, helperLocal);
+    if (fetched === undefined || !isIdent(fetched.path, PATH_LOCAL)) return undefined;
+
+    const queryArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);
+    if (queryArgs === undefined) return undefined;
+
+    return {
+      fields: {
+        name,
+        description,
+        args: queryArgs,
+        path: query.path,
+        ...(fetched.method === undefined ? {} : { method: fetched.method }),
+        query: query.query,
+      },
+      isBlock: true,
+      hasHoists: query.hoistMeta.size > 0,
+      votesHandlerStyle: false,
+      schemaShape,
+      basePrefix: query.basePrefix,
+    };
+  }
 
   const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);
   if (recovered === undefined) return undefined;
@@ -210,6 +286,7 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
     fields: { name, description, args: mergedArgs, ...pathFields },
     isBlock: true,
     hasHoists: block.locals.size > 0,
+    votesHandlerStyle: true,
     staticStyle,
     schemaShape,
   };
@@ -223,8 +300,8 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
  * produces so the caller's loop, claim and votes do not need to know which recognizer fired.
  *
  * `isBlock`/`hasHoists` are reported as what `renderSearchTool` actually writes (a block with no
- * hoists) rather than a value chosen to influence the vote — `isSearch: true` is what excludes
- * this shape from the vote outright, so these two stay honest.
+ * hoists) rather than a value chosen to influence the vote — `votesHandlerStyle: false` is what
+ * excludes this shape from the vote outright, so these two stay honest.
  */
 function recognizeSearchShape(call: AstNode, helperLocal: string): ToolShape | undefined {
   const result = recognizeSearchTool(call, helperLocal);
@@ -233,7 +310,7 @@ function recognizeSearchShape(call: AstNode, helperLocal: string): ToolShape | u
     fields: result.fields,
     isBlock: true,
     hasHoists: false,
-    isSearch: true,
+    votesHandlerStyle: false,
     staticStyle: result.staticStyle,
     schemaShape: result.schemaShape,
   };
@@ -294,10 +371,10 @@ export function recognizeTools(
     shapes.push(shape);
   }
 
-  // Search shapes carry no handlerStyle evidence either way — see ToolShape's own docstring —
-  // so the vote runs over the non-search subset only. A connector whose every tool is a search
-  // tool correctly abstains entirely (both booleans false), leaving handlerStyle unset.
-  const votingShapes = shapes.filter((s) => s.isSearch !== true);
+  // Search and query shapes carry no handlerStyle evidence either way — see ToolShape's own
+  // docstring — so the vote runs over the subset that does. A connector whose every tool is one
+  // of those two correctly abstains entirely (both booleans false), leaving handlerStyle unset.
+  const votingShapes = shapes.filter((s) => s.votesHandlerStyle);
   const hasBlockWithoutHoists = votingShapes.some((s) => s.isBlock && !s.hasHoists);
   const hasConcise = votingShapes.some((s) => !s.isBlock);
   if (hasBlockWithoutHoists && hasConcise) return undefined;
@@ -311,5 +388,6 @@ export function recognizeTools(
     ...(hasBlockWithoutHoists ? { handlerStyle: "block" as const } : {}),
     staticPathStyles: shapes.map((s) => s.staticStyle),
     schemaShapes: shapes.map((s) => s.schemaShape),
+    basePrefixes: shapes.map((s) => s.basePrefix),
   };
 }

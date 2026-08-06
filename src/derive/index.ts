@@ -6,11 +6,7 @@ import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
-import {
-  type RestFetchHelperFields,
-  recognizeFetchHelper,
-  recognizeRestFetchHelper,
-} from "./server/fetch-helper.ts";
+import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
 import type { BasePrefix } from "./server/query.ts";
@@ -229,16 +225,28 @@ export function voteArgsSchemaStyle(
  * of that quasi are byte-identical and only the fetch helper's own `base` says which is right.
  * See `BasePrefix`.
  *
- * `restFetchHelper.base` is already in `baseExpr`'s own terms for a rest-kit connector: the
- * schema's rest-kit refine (src/spec.ts) rejects any `${env.X}` in `fetchHelper.base`, so
- * `resolveEnvRefs` is the identity on it and no second normalizer is needed here.
+ * `helper.base` is already in `baseExpr`'s own terms for a rest-kit connector: the schema's
+ * rest-kit refine (src/spec.ts) rejects any `${env.X}` in `fetchHelper.base`, so `resolveEnvRefs`
+ * is the identity on it and no second normalizer is needed there.
+ *
+ * The HAND-ROLLED caller has no such refine — `${env.X}` in `base` is legal for it — and this
+ * function is what REFUSES that combination rather than mis-splitting it. `baseExpr` resolves the
+ * reference, so `base: "https://${env.HOST}/api"` reaches `new URL` as
+ * `` `https://${HOST()}/api/v1/items` ``, whose leading quasi is "https://" — and `base` still
+ * spells the accessor as `${env.HOST}`, which no rendered quasi can ever contain (a path's own
+ * `${` is rejected by `parsePathTemplate`'s `assertNoUnparsedPlaceholders`). `startsWith` is
+ * therefore false for every env-ref base with text ahead of the accessor, and one with none
+ * (`base: "${env.HOST}"`) never reaches here at all: `prefixedPath` refuses an empty leading
+ * quasi whose first expression is a call rather than a base const. Both halves are deliberate —
+ * see `prefixedPath`'s own comment — because a base that is decided per REQUEST is not one this
+ * recognizer can split off a template statically.
  */
-function rebaseQueryTools(
-  tools: readonly ToolFields[],
+function rebaseQueryTools<T extends { readonly path: string }>(
+  tools: readonly T[],
   prefixes: readonly (BasePrefix | undefined)[],
-  helper: RestFetchHelperFields,
-): ToolFields[] | undefined {
-  const out: ToolFields[] = [];
+  helper: { readonly base: string; readonly baseConst?: string },
+): T[] | undefined {
+  const out: T[] = [];
   for (const [i, tool] of tools.entries()) {
     const prefix = prefixes[i];
     if (prefix === undefined) {
@@ -419,13 +427,13 @@ function deriveSharedStyleSpec(
   filterSource: string | undefined,
 ): Derivation {
   const env = recognizeEnv(frame.verifyStatements, claims);
-  const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
-  // fetchHelper?.local, not fetchHelper!.local: recognizeTools must be able to run (and refuse)
-  // even when the fetch helper itself was never recognized. Checked below, AFTER the totality
-  // rule — see this function's own comment on that ordering — rather than short-circuited here,
-  // so an unrecognized fetch helper still surfaces as a named, per-statement blocker instead of
-  // the coarse "no-fetch-helper" case.
-  const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
+  const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);
+  // recognizedHelper?.fields.local, not a non-null assertion: recognizeTools must be able to run
+  // (and refuse) even when the fetch helper itself was never recognized. Checked below, AFTER the
+  // totality rule — see this function's own comment on that ordering — rather than
+  // short-circuited here, so an unrecognized fetch helper still surfaces as a named,
+  // per-statement blocker instead of the coarse "no-fetch-helper" case.
+  const toolsResult = recognizeTools(frame.toolStatements, claims, recognizedHelper?.fields.local);
 
   // Claim the two search-specific imports only once a search tool is positively recognized —
   // the same scoping recognizeReadOnlyFrame uses for its own frame imports (server/index.ts).
@@ -445,11 +453,41 @@ function deriveSharedStyleSpec(
   if (unclaimed.length > 0) {
     return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
   }
-  if (fetchHelper === undefined) {
+  if (recognizedHelper === undefined) {
     return blocked("no-fetch-helper", "no read helper recognized");
   }
   if (toolsResult === undefined) {
     return blocked("unrecognized-handler", "a reg() handler was not understood");
+  }
+  const fetchHelper = recognizedHelper.fields;
+
+  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides the read helper's passthrough line
+  // from the SET of tools, so the two must agree in both directions. A helper with the line and
+  // no query tool regenerates a helper without it; a query tool with no line regenerates one with
+  // it. Either way the derived spec would not reproduce this module — the wrong-claim class,
+  // caught here because neither recognizer can see the other's evidence on its own.
+  // `query` is read off the union without narrowing on purpose: `SearchToolFields` extends
+  // `ToolFields`, so the field is there for both, and a search tool never carries one anyway
+  // (ToolSchema rejects `impl: "search"` beside `query`). Guarding it would state the opposite.
+  const anyQuery = toolsResult.tools.some((t) => t.query !== undefined);
+  if (anyQuery !== recognizedHelper.passthrough) {
+    return blocked(
+      "fetch-helper:query-passthrough-mismatch",
+      `the read helper ${recognizedHelper.passthrough ? "carries" : "lacks"} the absolute-URL ` +
+        `passthrough line, but ${anyQuery ? "a tool declares" : "no tool declares"} a query array`,
+    );
+  }
+
+  // The same class of guard, one recognizer further along: the query tools' base prefixes and the
+  // fetch helper's own base are recovered independently and have to agree. See `rebaseQueryTools`,
+  // which also finishes a literal prefix's path — and which is where an `${env.X}` base, legal for
+  // this style but not for rest-kit, is refused rather than mis-split.
+  const rebasedTools = rebaseQueryTools(toolsResult.tools, toolsResult.basePrefixes, fetchHelper);
+  if (rebasedTools === undefined) {
+    return blocked(
+      "query:base-prefix-mismatch",
+      "a query tool's new URL(...) prefix is not the base this module's fetch helper declares",
+    );
   }
 
   // A search tool whose filter file cannot be read must not derive a spec that regenerates a
@@ -459,7 +497,7 @@ function deriveSharedStyleSpec(
   // style's `spec.title` is recoverable at all (rest-kit recovers it from the registrar name
   // instead, in deriveRestKitSpec below) — so it stays unset for every connector with no search
   // tool, unchanged from before this task.
-  let tools: (ToolFields | SearchToolFields)[] = toolsResult.tools;
+  let tools: (ToolFields | SearchToolFields)[] = rebasedTools;
   let title: string | undefined;
   if (searchTools.length > 0) {
     if (filterSource === undefined) {
@@ -483,7 +521,7 @@ function deriveSharedStyleSpec(
     }
 
     const filterByExport = new Map(filterDerivation.result.filters.map((f) => [f.export, f]));
-    tools = toolsResult.tools.map((t) => {
+    tools = rebasedTools.map((t) => {
       if (!isSearchTool(t)) return t;
       const recovered = filterByExport.get(t.filter.export);
       return {
