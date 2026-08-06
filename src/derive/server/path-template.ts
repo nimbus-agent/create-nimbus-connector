@@ -21,6 +21,20 @@ import {
  */
 export type PathLocal = { arg: string; bool: boolean };
 
+/** A recovered path, plus the static-path-style evidence it carries — see `recognizePath`. */
+export type RecognizedPath = {
+  path: string;
+  /**
+   * Set only when this path is UNAMBIGUOUS staticPathStyle evidence: a plain string literal
+   * ("quoted") or a template literal with zero expressions — a fully static path someone chose
+   * to spell with backticks ("template"). A template WITH expressions is forced to render that
+   * way regardless of the spec's `staticPathStyle` (src/emit/server/path-template.ts's
+   * `RenderContext.staticStyle` docstring: it "has no effect on a path with any dynamic
+   * segment"), so it is not evidence of either convention and is left unset.
+   */
+  staticStyle?: "quoted" | "template";
+};
+
 /**
  * The inverse of src/emit/server/path-template.ts's rendering.
  *
@@ -39,9 +53,9 @@ export type PathLocal = { arg: string; bool: boolean };
 export function recognizePath(
   node: AstNode,
   locals: ReadonlyMap<string, PathLocal>,
-): string | undefined {
+): RecognizedPath | undefined {
   const lit = stringLit(node);
-  if (lit !== undefined) return lit;
+  if (lit !== undefined) return { path: lit, staticStyle: "quoted" };
 
   const t = templateLiteral(node);
   if (t === undefined) return undefined;
@@ -57,7 +71,7 @@ export function recognizePath(
     if (placeholder === undefined) return undefined;
     out += placeholder;
   }
-  return out;
+  return { path: out, ...(t.expressions.length === 0 ? { staticStyle: "template" as const } : {}) };
 }
 
 /** The two modes whose forward rendering wraps the bare reference in a named call. */

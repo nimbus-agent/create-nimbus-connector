@@ -32,6 +32,7 @@ src/derive/
   claims.ts     byte-range claims and containment coverage
   blockers.ts   an unclaimed statement -> a histogram bucket
   manifest.ts   nimbus.extension.json -> spec fields
+  search-filter.ts  src/search-filter.ts -> filter entries, its own totality rule
   index.ts      deriveSpec(files) -> Derivation
   server/       one recognizer module per src/emit/server/ module
 test/derive/*.test.ts          a test file per deriver module, plus the round trip
@@ -172,13 +173,15 @@ from the spec or the emitter: two earlier versions of that docstring went stale 
 
 ## What is not built yet
 
-`src/derive/server/{search,query,body}.ts` and `src/derive/search-filter.ts` do
-not exist. That is why `BLOCKED` still lists fixtures on "search tool", "query parameters",
-"write body" and "client-credentials auth".
+`src/derive/server/search.ts` and `src/derive/search-filter.ts` now exist; `src/derive/server/query.ts`
+and `src/derive/server/body.ts` do not. `BLOCKED` no longer lists anything on "search tool" — what
+remains is `bitrise` on a stub tool handler, `discord`/`google-meet` on query parameters, `zzwrite`
+on client-credentials auth, and `zzwriteonly`/`zzwriterest` on write body.
 
 The specification for that work is
 [`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-— a seven-commit sequence of which only the first three have shipped. Read it, and the plan-1 /
+— a seven-commit sequence of which only the first four have shipped (commit 4 being search and
+search-filter, both now landed). Read it, and the plan-1 /
 plan-2 boundary in
 [`docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md`](../../docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md),
 before starting a recognizer. Plan 2 has not been written.

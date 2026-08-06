@@ -40,6 +40,8 @@ import {
 export type FetchHelperFields = {
   local: string;
   base: string;
+  /** Set only when `base` was hoisted to a module-scope const — see `reconstructBase`. */
+  baseConst?: string;
   serviceLabel: string;
   inlineHeaders?: Record<string, string>;
   headers?: string;
@@ -70,11 +72,45 @@ function find(root: AstNode, predicate: (n: AstNode) => boolean): AstNode | unde
 }
 
 /**
- * Reconstruct the full base URL from the template literal, handling env variable references.
- * For `` `https://${siteHost()}${path}` ``, extracts "https://${env.siteHost}".
- * The last expression is the path variable and is excluded from the base.
+ * Resolve an Identifier's name against a top-level `const <name> = "<literal>";` in the same
+ * module — the read side of `renderBaseConst` (src/emit/server/fetch-helper.ts), which writes
+ * exactly that shape when `fetchHelper.baseConst` is set. A name that resolves to anything else
+ * (a `let`, an import, a computed initializer such as `someExpression()`) is refused rather than
+ * partially read: resolving loosely would invent a base, and a connector requesting the wrong
+ * host is a worse outcome than a visible blocker. Shared by `reconstructBase` (hand-rolled) and
+ * `matchRestUrlConst` (rest-kit) below — both read the identical const shape.
  */
-function reconstructBase(template: AstNode): string | undefined {
+function resolveConstString(
+  name: string,
+  statements: readonly AstNode[],
+): { text: string; statement: AstNode } | undefined {
+  for (const stmt of statements) {
+    const decl = constDecl(stmt);
+    if (decl?.name !== name) continue;
+    const text = stringLit(decl.init);
+    return text === undefined ? undefined : { text, statement: stmt };
+  }
+  return undefined;
+}
+
+/** What `reconstructBase` recovers: the base text, and — only for a hoisted base — the const's name and its own statement (for the caller to claim). */
+type ReconstructedBase = {
+  readonly base: string;
+  readonly baseConst?: string;
+  readonly constStatement?: AstNode;
+};
+
+/**
+ * Reconstruct the full base URL from the template literal, handling env variable references and
+ * a hoisted base const. For `` `https://${siteHost()}${path}` ``, extracts
+ * "https://${env.siteHost}". For `` `${BASE}${path}` ``, resolves `BASE` against `statements`
+ * and extracts the literal it holds, recording `baseConst: "BASE"`. The last expression is the
+ * path variable and is excluded from the base.
+ */
+function reconstructBase(
+  template: AstNode,
+  statements: readonly AstNode[],
+): ReconstructedBase | undefined {
   const t = templateLiteral(template);
   if (t === undefined) return undefined;
   const { quasis, expressions } = t;
@@ -88,6 +124,8 @@ function reconstructBase(template: AstNode): string | undefined {
   // then the first n-1 quasis' cooked values.
   const parts: string[] = [];
   const numToUse = expressions.length - 1;
+  let baseConst: string | undefined;
+  let constStatement: AstNode | undefined;
 
   for (let i = 0; i <= numToUse; i++) {
     const cooked = quasis[i];
@@ -95,6 +133,26 @@ function reconstructBase(template: AstNode): string | undefined {
     parts.push(cooked);
 
     if (i < numToUse) {
+      // The hoisted-base identifier branch applies only when it is the SOLE non-final
+      // expression — not a judgment call, but what the emitter can produce. renderBaseConst
+      // writes exactly ONE const holding the ENTIRE base
+      // (`const ${baseConst} = ${JSON.stringify(base)};`), and FetchHelperSchema's own refine
+      // (spec.ts) forbids mixing that const with a ${env.X} accessor. So `` `${BASE}${path}` ``
+      // (numToUse === 1) is the only shape a hoisted base can produce; `` `${A}${B}${path}` ``
+      // (two consts — unproducible, "baseConst" is a single name with nowhere to put the
+      // second) and `` `${BASE}${apiVersion()}${path}` `` (a const beside an accessor — the
+      // schema refinement forbids the combination) are both refused here, by falling through to
+      // the zero-argument-call path below, which rejects a bare Identifier outright.
+      if (numToUse === 1 && identName(expressions[i]) !== undefined) {
+        const name = identName(expressions[i]);
+        const resolved = name === undefined ? undefined : resolveConstString(name, statements);
+        if (resolved === undefined) return undefined;
+        baseConst = name;
+        constStatement = resolved.statement;
+        parts.push(resolved.text);
+        continue;
+      }
+
       const args = callArgs(expressions[i]);
       if (args?.length !== 0) return undefined;
       const name = identName(calleeOf(expressions[i]));
@@ -112,7 +170,7 @@ function reconstructBase(template: AstNode): string | undefined {
   // claim, not a rejection. Reject instead.
   if (quasis[numToUse + 1] !== "") return undefined;
 
-  return parts.join("");
+  return { base: parts.join(""), baseConst, constStatement };
 }
 
 function headerValue(value: AstNode): string | undefined {
@@ -449,12 +507,25 @@ function matchFetchHelperHeaders(fetchCall: AstNode): FetchHelperHeaders | undef
   return headers === undefined ? undefined : { headers };
 }
 
+/** `matchFetchHelperFunction`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */
+type MatchedFetchHelper = {
+  readonly fields: FetchHelperFields;
+  readonly constStatement?: AstNode;
+};
+
 /**
  * One candidate statement, tested as the read helper — the whole of `recognizeFetchHelper`'s
- * per-statement work, so the loop below carries only the claim. Claims nothing itself: a
+ * per-statement work, so the loop below carries only the claim(s). Claims nothing itself: a
  * partial match must leave the ClaimSet untouched.
+ *
+ * `statements` is the module's top-level statement list, threaded through only so
+ * `reconstructBase` can resolve a hoisted base identifier against it — this function does not
+ * otherwise search outside `s`.
  */
-function matchFetchHelperFunction(s: AstNode): FetchHelperFields | undefined {
+function matchFetchHelperFunction(
+  s: AstNode,
+  statements: readonly AstNode[],
+): MatchedFetchHelper | undefined {
   if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
 
   // The read helper always takes a single `path` parameter — the write helper (`<local>Send`)
@@ -474,18 +545,22 @@ function matchFetchHelperFunction(s: AstNode): FetchHelperFields | undefined {
   if (headers === undefined) return undefined;
 
   const url = callArgs(parsed.fetchCall)?.[0];
-  const base = url === undefined ? undefined : reconstructBase(url);
+  const reconstructed = url === undefined ? undefined : reconstructBase(url, statements);
   const serviceLabel = serviceLabelFrom(s);
   const local = functionName(s) ?? "";
-  if (base === undefined || serviceLabel === undefined || local === "") return undefined;
+  if (reconstructed === undefined || serviceLabel === undefined || local === "") return undefined;
 
   return {
-    local,
-    base,
-    serviceLabel,
-    ...headers,
-    ...(parsed.normalizeLeadingSlash && { normalizeLeadingSlash: true as const }),
-    ...(parsed.jsonFallbackRaw && { jsonFallbackRaw: true as const }),
+    fields: {
+      local,
+      base: reconstructed.base,
+      ...(reconstructed.baseConst === undefined ? {} : { baseConst: reconstructed.baseConst }),
+      serviceLabel,
+      ...headers,
+      ...(parsed.normalizeLeadingSlash && { normalizeLeadingSlash: true as const }),
+      ...(parsed.jsonFallbackRaw && { jsonFallbackRaw: true as const }),
+    },
+    constStatement: reconstructed.constStatement,
   };
 }
 
@@ -503,10 +578,16 @@ export function recognizeFetchHelper(
   claims: ClaimSet,
 ): FetchHelperFields | undefined {
   for (const s of statements) {
-    const fields = matchFetchHelperFunction(s);
-    if (fields === undefined) continue;
+    const matched = matchFetchHelperFunction(s, statements);
+    if (matched === undefined) continue;
     claims.claim(s, "fetch-helper");
-    return fields;
+    // The hoisted base's own `const <name> = "…";` is a separate top-level statement (see
+    // renderBaseConst) — claim it too, or the totality rule re-blocks the very connector this
+    // resolution was meant to unblock, on an unclaimed statement:VariableDeclaration.
+    if (matched.constStatement !== undefined) {
+      claims.claim(matched.constStatement, "fetch-helper");
+    }
+    return matched.fields;
   }
   return undefined;
 }
@@ -526,23 +607,36 @@ export function recognizeFetchHelper(
 export type RestFetchHelperFields = {
   local: string;
   base: string;
+  /** Set only when `base` was hoisted to a module-scope const — see `matchRestUrlConst`. */
+  baseConst?: string;
   inlineHeaders?: Record<string, string>;
+};
+
+/** `matchRestUrlConst`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */
+type MatchedRestUrlConst = {
+  readonly base: string;
+  readonly baseConst?: string;
+  readonly constStatement?: AstNode;
 };
 
 /**
  * `const url = path.startsWith("http") ? path : \`<base>${path}\`;` — statement 1 of
  * renderRestKitFetchHelper's body, matched exactly (same `path.startsWith("http")` guard
- * `isPathPartConst` above checks, but naming a different const). Returns the literal base
- * text.
+ * `isPathPartConst` above checks, but naming a different const).
  *
- * Only the LITERAL base form. `baseExpr` can also produce `` `${baseConst}${path}` `` — a
- * second, distinct template shape (two expressions instead of one) — which this recognizer
- * refuses rather than partially reads: none of the three connectors this plan's frame and
- * tools recognizers newly reach (circleci, github-actions, pagerduty) need it to derive
- * successfully, since each blocks earlier on its own out-of-scope tool shape (a query branch
- * or a bespoke `reg()` call).
+ * Two template shapes, both `baseExpr` (src/emit/server/fetch-helper.ts) can write: the LITERAL
+ * form (one expression, `path`) and, when `fetchHelper.baseConst` is set, the hoisted form
+ * (`` `${baseConst}${path}` ``, two expressions) — discord's `DISCORD_API`, google-meet's
+ * `MEET_BASE`. The hoisted identifier is resolved against a top-level
+ * `const <name> = "<literal>";` the same way `reconstructBase` above does (see its own comment
+ * for why a name that does not resolve to exactly that shape is refused rather than guessed at);
+ * `renderRestKitFetchHelper` can only ever produce ONE such identifier here, so anything with
+ * more expressions than that is refused, not partially read.
  */
-function matchRestUrlConst(stmt: AstNode): string | undefined {
+function matchRestUrlConst(
+  stmt: AstNode,
+  statements: readonly AstNode[],
+): MatchedRestUrlConst | undefined {
   const decl = constDecl(stmt);
   if (decl?.name !== "url") return undefined;
 
@@ -554,13 +648,29 @@ function matchRestUrlConst(stmt: AstNode): string | undefined {
   if (!isIdent(c.consequent, "path")) return undefined;
 
   const alt = templateLiteral(c.alternate);
-  if (alt?.expressions.length !== 1 || !isIdent(alt.expressions[0], "path")) {
-    return undefined;
+  if (alt === undefined) return undefined;
+
+  // Literal form: `` `<base>${path}` `` — one expression, the path.
+  if (alt.expressions.length === 1) {
+    if (!isIdent(alt.expressions[0], "path")) return undefined;
+    const base = alt.quasis[0];
+    if (base === undefined || alt.quasis[1] !== "") return undefined;
+    return { base };
   }
 
-  const base = alt.quasis[0];
-  if (base === undefined || alt.quasis[1] !== "") return undefined;
-  return base;
+  // Hoisted form: `` `${baseConst}${path}` `` — two expressions, no literal text around either
+  // (every quasi empty), the second being `path`. Anything else (more expressions, a non-empty
+  // quasi) is a shape renderRestKitFetchHelper cannot write and is refused.
+  if (alt.expressions.length === 2) {
+    if (alt.quasis[0] !== "" || alt.quasis[1] !== "" || alt.quasis[2] !== "") return undefined;
+    if (!isIdent(alt.expressions[1], "path")) return undefined;
+    const name = identName(alt.expressions[0]);
+    const resolved = name === undefined ? undefined : resolveConstString(name, statements);
+    if (resolved === undefined) return undefined;
+    return { base: resolved.text, baseConst: name, constStatement: resolved.statement };
+  }
+
+  return undefined;
 }
 
 /**
@@ -741,6 +851,12 @@ function hasRestFetchHelperParams(fn: AstNode): boolean {
   );
 }
 
+/** `matchRestFetchHelperFunction`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */
+type MatchedRestFetchHelper = {
+  readonly fields: RestFetchHelperFields;
+  readonly constStatement?: AstNode;
+};
+
 /**
  * One candidate statement, tested as the rest-kit helper: a fixed six-statement body, matched
  * positionally (the same reason `recognizeFetchHelper` above walks its own body positionally
@@ -751,16 +867,22 @@ function hasRestFetchHelperParams(fn: AstNode): boolean {
  * the wrong host and byte-matches nothing, and the failure would look like a formatting problem
  * rather than what it is. Claims nothing itself: a partial match must leave the ClaimSet
  * untouched.
+ *
+ * `statements` is the module's top-level statement list, threaded through only so
+ * `matchRestUrlConst` can resolve a hoisted base identifier against it.
  */
-function matchRestFetchHelperFunction(s: AstNode): RestFetchHelperFields | undefined {
+function matchRestFetchHelperFunction(
+  s: AstNode,
+  statements: readonly AstNode[],
+): MatchedRestFetchHelper | undefined {
   if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
   if (!hasRestFetchHelperParams(s)) return undefined;
 
   const body = functionBody(s);
   if (body?.length !== 6) return undefined;
 
-  const base = matchRestUrlConst(body[0]!);
-  if (base === undefined) return undefined;
+  const url = matchRestUrlConst(body[0]!, statements);
+  if (url === undefined) return undefined;
 
   const headers = matchRestFetchStatement(body[1]!);
   if (headers === undefined) return undefined;
@@ -774,26 +896,36 @@ function matchRestFetchHelperFunction(s: AstNode): RestFetchHelperFields | undef
   if (local === undefined || local === "") return undefined;
 
   return {
-    local,
-    base,
-    ...(headers.inlineHeaders !== undefined ? { inlineHeaders: headers.inlineHeaders } : {}),
+    fields: {
+      local,
+      base: url.base,
+      ...(url.baseConst === undefined ? {} : { baseConst: url.baseConst }),
+      ...(headers.inlineHeaders !== undefined ? { inlineHeaders: headers.inlineHeaders } : {}),
+    },
+    constStatement: url.constStatement,
   };
 }
 
 /**
  * The inverse of renderRestKitFetchHelper. The shape test itself is
- * `matchRestFetchHelperFunction` above; this loop carries only the claim of the first statement
- * that matches it.
+ * `matchRestFetchHelperFunction` above; this loop carries only the claim(s) of the first
+ * statement that matches it.
  */
 export function recognizeRestFetchHelper(
   statements: readonly AstNode[],
   claims: ClaimSet,
 ): RestFetchHelperFields | undefined {
   for (const s of statements) {
-    const fields = matchRestFetchHelperFunction(s);
-    if (fields === undefined) continue;
+    const matched = matchRestFetchHelperFunction(s, statements);
+    if (matched === undefined) continue;
     claims.claim(s, "rest-fetch-helper");
-    return fields;
+    // Same reasoning as recognizeFetchHelper above: the hoisted base's own
+    // `const <name> = "…";` is a separate top-level statement and must be claimed too, or the
+    // totality rule re-blocks the connector on it.
+    if (matched.constStatement !== undefined) {
+      claims.claim(matched.constStatement, "rest-fetch-helper");
+    }
+    return matched.fields;
   }
   return undefined;
 }

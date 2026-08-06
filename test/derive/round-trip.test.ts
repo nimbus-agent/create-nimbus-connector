@@ -9,19 +9,38 @@ import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
 /**
- * Fixtures whose emitted src/server.ts + nimbus.extension.json this plan's recognizers derive,
- * and which then re-emit byte-identical output for every file the fixture produces. Confirmed
- * by running the full parseSpec -> generate -> deriveSpec -> parseSpec -> generate pipeline
- * against every fixture in fixtures/, and the "accounts for every fixture in fixtures/" test
- * below re-confirms it on every run rather than trusting a count recorded here that would go
- * stale silently as fixtures are added. newrelic/datadog/grafana/sentry are the byte-locked
- * corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are synthetic
- * "hand-rolled" fixtures that exercise the same frame from the opposite direction; zzreadonly is
- * a synthetic "read-only-kit" fixture with no search tool, proving that frame end-to-end.
- * zzstandalone is the "rest-kit" analogue: two GET tools, a literal (non-baseConst) fetch-helper
- * base, and no inline headers — recognizeRestTools and recognizeRestFetchHelper's simplest
- * in-scope shape, proving the rest-kit frame end-to-end the same way zzreadonly does for
- * read-only-kit.
+ * Fixtures whose emitted src/server.ts + nimbus.extension.json (+ src/search-filter.ts, for the
+ * search fixtures) this plan's recognizers derive, and which then re-emit byte-identical output
+ * for every file the fixture produces. Confirmed by running the full parseSpec -> generate ->
+ * deriveSpec -> parseSpec -> generate pipeline against every fixture in fixtures/, and the
+ * "accounts for every fixture in fixtures/" test below re-confirms it on every run rather than
+ * trusting a count recorded here that would go stale silently as fixtures are added.
+ * newrelic/datadog/grafana/sentry are the byte-locked corpus fixtures (all "hand-rolled" style);
+ * zzscratch and zzstandalonehand are synthetic "hand-rolled" fixtures that exercise the same
+ * frame from the opposite direction; zzreadonly is a synthetic "read-only-kit" fixture with no
+ * search tool, proving that frame end-to-end. zzstandalone is the "rest-kit" analogue: two GET
+ * tools, a literal (non-baseConst) fetch-helper base, and no inline headers — recognizeRestTools
+ * and recognizeRestFetchHelper's simplest in-scope shape, proving the rest-kit frame end-to-end
+ * the same way zzreadonly does for read-only-kit.
+ *
+ * zzextract/zzsearch/zzsearchstub are the three synthetic search fixtures Task 3 unblocks —
+ * search.ts's/search-filter.ts's own docstrings name the shapes each proves: zzsearch a search
+ * tool with `rows` (item), one without (build, which also declares its own arg and takes the
+ * inlined merged `z.object` schema form) and the keyed filter's `{ tags: true }` option;
+ * zzsearchstub the same `rows` shape plus the throwing-stub filter and its extra
+ * `type SearchFilter` import; zzextract one bespoke-extractor filter (all four shared
+ * primitives) alongside one keyed filter in the same file, proving the import list is computed
+ * per FILE, not per filter.
+ *
+ * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
+ * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
+ * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
+ * and its `trimTrailingSlashFn`/`auth: "basic"` accessors (zendesk, dependencytrack). Of these
+ * four, only mercury and zendesk also move the `reach` headline (server-identical against the
+ * REAL corpus) — netlify and dependencytrack were already excluded from `src/server.ts` in
+ * fixtures/expectations.json for reasons unrelated to env (their real corpus source diverges
+ * elsewhere), so this local round trip (this repo's own spec -> emit -> derive -> re-emit) is a
+ * weaker, and different, claim than corpus byte-identity.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -32,6 +51,13 @@ const ROUND_TRIP = [
   "zzscratch",
   "zzstandalone",
   "zzstandalonehand",
+  "zzextract",
+  "zzsearch",
+  "zzsearchstub",
+  "mercury",
+  "netlify",
+  "zendesk",
+  "dependencytrack",
 ];
 
 /**
@@ -47,31 +73,42 @@ const ROUND_TRIP = [
  * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
  * over the calls only).
  *
- * "query parameters" (`discord`, `google-meet`) is TWO independent gaps, both plan 2's
- * territory, not one: each tool's pathFn is the query branch — a block whose body contains
- * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) refuses outright; and
- * both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their fetch-helper
- * function's URL template is `` `${baseConst}${path}` ``, a second, distinct shape
- * `recognizeRestFetchHelper` (server/fetch-helper.ts) does not model either — it only recognizes
- * the literal-base form. Measured at HEAD, both fixtures report five to six unclaimed
- * statements each — the `baseConst` literal, the fetch-helper function, and every
- * `register<X>Tool(...)` call (`recognizeRestTools` claims none of them once even one fails) —
- * but never the factory (`recognizeRestRegistrar` claims it independently), never a bare
- * `no-frame` (the frame itself matches fine, as `rest-kit`), and never
- * `import-from:.../rest-tool-kit.ts` (claimed by the frame too).
+ * "query parameters" (`discord`, `google-meet`) used to be TWO independent gaps; it is down to
+ * ONE. Both fixtures set `fetchHelper.baseConst` (`DISCORD_API`/`MEET_BASE`), so their
+ * fetch-helper function's URL template is `` `${baseConst}${path}` `` — `matchRestUrlConst`
+ * (server/fetch-helper.ts) now resolves that shape against the module-scope const and claims
+ * both the function and the const's own statement, closing what used to be the second gap here.
+ * What remains: each tool's pathFn is the query branch — a block whose body contains
+ * `const u = new URL(...)` — which `recognizeOneCall` (tools-rest.ts) still refuses outright,
+ * plan 2's territory. Re-measured against HEAD (after that fetch-helper fix landed):
+ * `deriveSpec` run against each fixture's own emitted output reports ONLY `register<X>Tool(...)`
+ * calls unclaimed — `call:registerDiscordTool` for discord, `call:registerGoogleMeetTool` for
+ * google-meet (`recognizeRestTools` claims none of them once even one fails) — never the
+ * `baseConst` literal or the fetch-helper function anymore (both now claimed), never the factory
+ * (`recognizeRestRegistrar` claims it independently), never a bare `no-frame` (the frame itself
+ * matches fine, as `rest-kit`), and never `import-from:.../rest-tool-kit.ts` (claimed by the
+ * frame too).
  *
- * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
- * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
- * src/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
- * hands off to does not exist yet, so these still block, just past the frame rather than at it.
- * The label names the blocker landing the search recognizer would newly reach, not necessarily
- * the ONLY one currently reported: `zzextract`, `zzsearch` and `zzsearchstub` block on search
- * alone, but `mercury` (also `statement:VariableDeclaration`, `function:authHeader`,
- * `function:mercuryGet`), `bitrise` (`statement:VariableDeclaration`, `function:bitriseGet`),
- * `netlify` (`function:authHeader`, `function:netlifyGet`), `zendesk`
- * (`function:trimTrailingSlash`, `function:authHeader`) and `dependencytrack`
- * (`function:trimTrailingSlash`) additionally block on a fetch-helper shape this plan's
- * recognizers do not model either — landing the search recognizer will not unblock those five.
+ * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
+ * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
+ * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. `bitrise` is the only
+ * remaining `style: "read-only-kit"` fixture with a search tool that still blocks — on a
+ * DIFFERENT construct, confirmed by running `deriveSpec` directly against its own search `reg()`
+ * call in isolation (`recognizeSearchTool` recognizes it correctly, filter fields included)
+ * before checking the whole connector, so the reason below is the ACTUAL remaining blocker, not
+ * a guess at what search recognition left behind. `mercury`, `netlify`, `zendesk` and
+ * `dependencytrack` — the other four fixtures that had a search tool alongside an env gap — moved
+ * to ROUND_TRIP once Task 4 landed the split-bearer pair and the `trimTrailingSlashFn`/
+ * `auth: "basic"` accessors (see ROUND_TRIP's own docstring above):
+ *
+ * - `bitrise` — "stub tool handler". Its other two tools are `impl: "stub"`
+ *   (`async () => { throw ...; }`), a shape no recognizer in tools-hand.ts models (see
+ *   `recognizeHoistedBlock`'s own docstring: a block whose last statement is not a `return` is
+ *   refused). `recognizeTools` is all-or-nothing, so the one unrecognized stub call blocks the
+ *   whole module — including its own search tool and both search-specific imports, which
+ *   `deriveSpec` never even attempts to claim (`claimSearchImports` only runs once `toolsResult`
+ *   itself succeeds). Reported: unclaimed `call:reg` statements plus both search imports.
+ *
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.
  *
@@ -87,25 +124,21 @@ const ROUND_TRIP = [
  * `recognizeRestRegistrar`, independently of the calls) and its fetch helper (a literal,
  * non-`baseConst` base) matches `recognizeRestFetchHelper` on its own; measured at HEAD, this
  * fixture reports exactly its two `call:registerZzwriterestTool` statements unclaimed — nothing
- * else — unlike `discord`/`google-meet` above, whose blockers span three different recognizers.
+ * else — the same narrow shape `discord`/`google-meet` above now report too, now that their
+ * fetch-helper gap (the `baseConst` literal and the fetch-helper function) is closed; all three
+ * fixtures' remaining blockers come from the one recognizer, `recognizeOneCall`/
+ * `recognizeRestTools` (tools-rest.ts).
  */
 const BLOCKED: Record<string, string> = {
-  bitrise: "search tool",
-  dependencytrack: "search tool",
+  bitrise: "stub tool handler",
   discord: "query parameters",
   "google-meet": "query parameters",
-  mercury: "search tool",
-  netlify: "search tool",
-  zendesk: "search tool",
-  zzextract: "search tool",
-  zzsearch: "search tool",
-  zzsearchstub: "search tool",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
   zzwriterest: "write body",
 };
 
-function emitted(name: string): { server: string; manifest: string } {
+function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
   const spec = parseSpec(JSON.parse(readFileSync(specPath, "utf8")));
   const files = formatAll(generate(spec));
@@ -114,7 +147,10 @@ function emitted(name: string): { server: string; manifest: string } {
     if (file === undefined) throw new Error(`${name} emitted no ${path}`);
     return file.content;
   };
-  return { server: read("src/server.ts"), manifest: read("nimbus.extension.json") };
+  // Optional, like SourceFiles.filter itself: most BLOCKED fixtures below have no search tool
+  // and therefore no src/search-filter.ts at all.
+  const filter = files.find((f) => displayPath(f.path) === "src/search-filter.ts")?.content;
+  return { server: read("src/server.ts"), manifest: read("nimbus.extension.json"), filter };
 }
 
 /** Every path this fixture's own spec emits, keyed to its content — the full file set, not just server.ts. */
@@ -153,7 +189,11 @@ describe("deriveSpec round-trips this repository's own output", () => {
         throw new Error(`${name} emitted no src/server.ts or nimbus.extension.json`);
       }
 
-      const derivation = deriveSpec({ server, manifest });
+      const derivation = deriveSpec({
+        server,
+        manifest,
+        filter: files.get("src/search-filter.ts"),
+      });
       if (!derivation.ok) {
         throw new Error(
           `${name} did not derive: ${derivation.blockers.map((b) => b.kind).join(", ")}`,

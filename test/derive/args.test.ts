@@ -7,10 +7,17 @@ beforeAll(async () => {
   await initParser();
 });
 
-function argsOf(expression: string) {
+function resultOf(expression: string) {
   const statement = parseModule(`const x = ${expression};`)[0]!;
   const init = constDecl(statement)!.init!;
   return recognizeArgs(init);
+}
+
+/** Just the args record — most of this file's assertions predate `schemaStyle` and stay
+ * concerned with modifier recognition, not the inline/expanded evidence tested separately
+ * below. */
+function argsOf(expression: string) {
+  return resultOf(expression)?.args;
 }
 
 describe("recognizeArgs", () => {
@@ -68,5 +75,30 @@ describe("recognizeArgs", () => {
 
   it("returns undefined for a computed modifier (z.number()[int]()) instead of establishing .int()", () => {
     expect(argsOf("z.object({ limit: z.number()[int]() })")).toBeUndefined();
+  });
+});
+
+describe("recognizeArgs: schemaStyle", () => {
+  // The inline/expanded evidence index.ts's voteArgsSchemaStyle consumes — see that function's
+  // own docstring for why the two labels are NOT symmetric evidence.
+  it('reports "inline" when the object literal and its first property share a source line', () => {
+    expect(resultOf("z.object({ q: z.string() })")?.schemaStyle).toBe("inline");
+  });
+
+  it('reports "expanded" when the object literal and its first property are on different lines', () => {
+    expect(resultOf("z.object({\n  q: z.string(),\n})")?.schemaStyle).toBe("expanded");
+  });
+
+  it("reports no schemaStyle for an empty object — identical under both conventions", () => {
+    expect(resultOf("z.object({})")?.schemaStyle).toBeUndefined();
+  });
+
+  it("still recognizes args from an expanded, multi-field schema", () => {
+    const result = resultOf("z.object({\n  q: z.string(),\n  limit: z.number().optional(),\n})");
+    expect(result?.args).toEqual({
+      q: { type: "string" },
+      limit: { type: "number", optional: true },
+    });
+    expect(result?.schemaStyle).toBe("expanded");
   });
 });

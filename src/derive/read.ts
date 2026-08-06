@@ -68,6 +68,23 @@ function stringField(node: AstNode | undefined, key: string): string | undefined
 }
 
 // ---------------------------------------------------------------------------
+// Position
+// ---------------------------------------------------------------------------
+
+/**
+ * The 1-based source line a node starts on, or undefined when the parser omitted `loc`.
+ *
+ * `AstNode.loc` is a typed field (ast.ts), not reached through the index-signature workaround
+ * the rest of this module exists for — but the accessor still lives here rather than at a call
+ * site, so `args.ts`'s inline-vs-expanded check (comparing a `z.object(...)` argument's start
+ * line against its first property's) reads position the same disciplined way every other field
+ * is read: through read.ts, never node.loc directly.
+ */
+export function startLine(node: AstNode | undefined): number | undefined {
+  return node?.loc?.start.line;
+}
+
+// ---------------------------------------------------------------------------
 // Identifiers and literals
 // ---------------------------------------------------------------------------
 
@@ -244,6 +261,24 @@ export function constDecl(node: AstNode | undefined): ConstDecl | undefined {
 }
 
 /**
+ * `const <name>: <TypeName> = <init>;` — the type name on a `const`'s own binding, when it is a
+ * bare type reference. Needed only for search-filter.ts's throwing-stub form (`export const
+ * <export>: SearchFilter = () => {...}`) — no other emitted shape types a `const`'s own binding,
+ * so no earlier recognizer needed this. A separate accessor from `constDecl` rather than a wider
+ * `ConstDecl` return, since every other `constDecl` call site reads an untyped `const`.
+ */
+export function constDeclTypeName(node: AstNode | undefined): string | undefined {
+  if (node?.type !== "VariableDeclaration") return undefined;
+  if (raw(node)["kind"] !== "const") return undefined;
+  const declarations = childList(node, "declarations");
+  if (declarations?.length !== 1) return undefined;
+  const id = child(declarations[0], "id");
+  const typeRef = identTypeAnnotation(id);
+  if (typeRef?.type !== "TSTypeReference") return undefined;
+  return identName(child(typeRef, "typeName"));
+}
+
+/**
  * `let <name>: <anything>;` — an uninitialized `let` declarator's own name, distinct from
  * `constDecl`: renderRestKitFetchHelper declares `let json: unknown;` ahead of the try/catch
  * that assigns it (see `assignment`), the one place this deriver's emitter output declares a
@@ -284,6 +319,42 @@ export function isAsyncFunction(node: AstNode | undefined): boolean {
 }
 
 /**
+ * A FunctionDeclaration's own `): <Type> {` return-type annotation, unwrapped. Babel carries a
+ * function's return type under `returnType`, a sibling of `params`/`body` — a different key
+ * from a VALUE's own type annotation (`identTypeAnnotation` below), which is what search-filter.ts's
+ * `fieldsOf(item: unknown): readonly string[] | null` needs both of.
+ */
+export function functionReturnType(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "FunctionDeclaration") return undefined;
+  const wrapper = child(node, "returnType");
+  return wrapper === undefined ? undefined : child(wrapper, "typeAnnotation");
+}
+
+/**
+ * An Identifier's own `: <Type>` annotation — a function parameter's (`item: unknown`), or
+ * (search-filter.ts's throwing-stub form) irrelevant here since that types the `const`'s
+ * binding, not an Identifier read through this accessor; see `constDeclTypeName`.
+ */
+export function identTypeAnnotation(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "Identifier") return undefined;
+  const wrapper = child(node, "typeAnnotation");
+  return wrapper === undefined ? undefined : child(wrapper, "typeAnnotation");
+}
+
+/**
+ * Whether a node carries a leading comment — Babel attaches one to `leadingComments` when a
+ * `/** … *\/` or `// …` immediately precedes it in source. Needed only to refuse a hand-written
+ * extractor's doc comment (search-filter.ts's `fieldsOf`), which `emitSearchFilter` never
+ * writes — see docs/ROADMAP.md's "Known limitations" on why that content gap, not a formatting
+ * one, is one of the four reasons an expressible extractor still fails to byte-match.
+ */
+export function hasLeadingComment(node: AstNode | undefined): boolean {
+  if (node === undefined) return false;
+  const comments = raw(node)["leadingComments"];
+  return Array.isArray(comments) && comments.length > 0;
+}
+
+/**
  * A `type <name> = ...;` alias declaration's own name. Needed for the standalone read-only-kit
  * target's inlined `type ZodToolRegistrar = ...;` (src/emit/server/index.ts's
  * `renderRunReadOnlyGlue`) — the monorepo target imports that shape instead, so no recognizer
@@ -292,6 +363,30 @@ export function isAsyncFunction(node: AstNode | undefined): boolean {
 export function typeAliasName(node: AstNode | undefined): string | undefined {
   if (node?.type !== "TSTypeAliasDeclaration") return undefined;
   return identName(child(node, "id"));
+}
+
+/**
+ * A `type <name> = <RHS>;` alias's own right-hand side, when it is a bare type reference — the
+ * shape `emitSearchFilter` always writes (`export type <Title>SearchMatchOptions =
+ * SearchMatchOptions;`). Anything else on the right (a union, a literal) is not this shape.
+ */
+export function typeAliasRhsName(node: AstNode | undefined): string | undefined {
+  if (node?.type !== "TSTypeAliasDeclaration") return undefined;
+  const rhs = child(node, "typeAnnotation");
+  if (rhs?.type !== "TSTypeReference") return undefined;
+  return identName(child(rhs, "typeName"));
+}
+
+/**
+ * `export <declaration>;`'s inner declaration node — a VariableDeclaration, TSTypeAliasDeclaration,
+ * etc. Undefined for `export { name };` (no inline declaration) or `export default …`, neither of
+ * which `src/emit/search-filter.ts` ever writes. Needed because `search-filter.ts` is the first
+ * file this deriver reads whose every top-level binding is exported — `src/server.ts` never
+ * declares a top-level `export`, so no earlier recognizer needed this unwrap.
+ */
+export function exportedDeclaration(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "ExportNamedDeclaration") return undefined;
+  return child(node, "declaration");
 }
 
 // ---------------------------------------------------------------------------
@@ -531,15 +626,82 @@ export function unary(node: AstNode | undefined): UnaryParts | undefined {
   return { operator, argument };
 }
 
-/** `<expression> as <type>` -> the expression and the type annotation node's own `type`. */
+/**
+ * `<expression> as <type>` -> the expression, the type annotation node's own `type` (a cheap
+ * shape check most callers need nothing more than), and the type annotation node itself for a
+ * caller that needs to look inside it — search.ts's rows-narrowing matcher is the one caller
+ * that does, via `unionTypes`/`typeLiteralMembers` below.
+ */
 export function asExpression(
   node: AstNode | undefined,
-): { expression: AstNode; typeAnnotationType: string } | undefined {
+): { expression: AstNode; typeAnnotationType: string; typeAnnotation: AstNode } | undefined {
   if (node?.type !== "TSAsExpression") return undefined;
   const expression = child(node, "expression");
   const typeAnnotation = child(node, "typeAnnotation");
   if (expression === undefined || typeAnnotation === undefined) return undefined;
-  return { expression, typeAnnotationType: typeAnnotation.type };
+  return { expression, typeAnnotationType: typeAnnotation.type, typeAnnotation };
+}
+
+// ---------------------------------------------------------------------------
+// TS type shapes — needed only by server/search.ts's rows-narrowing matcher
+// (`(root as { <rows>?: unknown[] } | null)?.<rows>`) and search-filter.ts's extractor-function
+// signature (`(item: unknown): readonly string[] | null`), so this section models exactly those
+// shapes rather than the general shape of a TS type.
+// ---------------------------------------------------------------------------
+
+/** A TSUnionType's member type nodes, in source order — `{ … } | null`'s two members. */
+export function unionTypes(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "TSUnionType") return undefined;
+  return childList(node, "types");
+}
+
+/** A TSTypeLiteral's member nodes (TSPropertySignature, etc.), unfiltered — `{ rows?: … }`'s single member. */
+export function typeLiteralMembers(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "TSTypeLiteral") return undefined;
+  return childList(node, "members");
+}
+
+export type PropertySignature = {
+  readonly key: string;
+  readonly optional: boolean;
+  readonly valueType: AstNode | undefined;
+};
+
+/**
+ * One TSPropertySignature: `<key>?: <type>` — rejects a computed key, the same KEY VARIABLE
+ * hazard `objectProperty`/`memberName` guard elsewhere: `{ [k]: v }`'s `key` is an Identifier
+ * naming the key VARIABLE, not a property literally named after it.
+ */
+export function propertySignature(node: AstNode | undefined): PropertySignature | undefined {
+  if (node?.type !== "TSPropertySignature") return undefined;
+  if (raw(node)["computed"] === true) return undefined;
+  const key = identName(child(node, "key"));
+  if (key === undefined) return undefined;
+  const wrapper = child(node, "typeAnnotation");
+  const valueType = wrapper === undefined ? undefined : child(wrapper, "typeAnnotation");
+  return { key, optional: raw(node)["optional"] === true, valueType };
+}
+
+/** A TSArrayType's element type — `<elementType>[]`, e.g. `unknown[]`'s `unknown`. */
+export function arrayElementType(node: AstNode | undefined): AstNode | undefined {
+  if (node?.type !== "TSArrayType") return undefined;
+  return child(node, "elementType");
+}
+
+export type TypeOperator = { readonly operator: string; readonly typeAnnotation: AstNode };
+
+/**
+ * A TSTypeOperator's own keyword and the type it modifies — `readonly string[]`'s `"readonly"` +
+ * `string[]`. Unlike `identTypeAnnotation`/`functionReturnType`, the modified type sits directly
+ * on `typeAnnotation` with no TSTypeAnnotation wrapper around it — TSTypeOperator is itself
+ * already inside one (search-filter.ts's `fieldsOf` return type).
+ */
+export function typeOperator(node: AstNode | undefined): TypeOperator | undefined {
+  if (node?.type !== "TSTypeOperator") return undefined;
+  const operator = stringField(node, "operator");
+  const typeAnnotation = child(node, "typeAnnotation");
+  if (operator === undefined || typeAnnotation === undefined) return undefined;
+  return { operator, typeAnnotation };
 }
 
 export type TryParts = {

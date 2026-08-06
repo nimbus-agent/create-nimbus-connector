@@ -145,6 +145,17 @@ function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
 }
 
 /**
+ * One `<registrar>(...)` call's fields, plus the same two connector-wide style votes'
+ * per-tool evidence tools-hand.ts's `ToolShape` carries — see that type's docstring for why
+ * neither `staticStyle` nor `schemaShape` belongs on `ToolFields` itself.
+ */
+type ToolShape = {
+  readonly fields: ToolFields;
+  readonly staticStyle?: "quoted" | "template";
+  readonly schemaShape: { propertyCount: number; oneLine: boolean };
+};
+
+/**
  * One `<registrar>(name, description, schema, pathFn)` call — arity 4 only. Arity 5 (a 5th
  * `initFn` argument) carries a non-`GET` method (see renderTool's `initArg`) and is plan 2's
  * territory: refused here, rather than read for its first four arguments only, so a connector
@@ -163,13 +174,17 @@ function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
  * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
  * non-async form and was claimed for a shape the emitter cannot produce.
  */
-function recognizeOneCall(call: AstNode): ToolFields | undefined {
+function recognizeOneCall(call: AstNode): ToolShape | undefined {
   const parts = registrarCallParts(call);
   if (parts === undefined) return undefined;
   const { name, description, schemaNode, pathFnNode } = parts;
 
-  const toolArgs = recognizeArgs(schemaNode);
-  if (toolArgs === undefined) return undefined;
+  const argsResult = recognizeArgs(schemaNode);
+  if (argsResult === undefined) return undefined;
+  const schemaShape = {
+    propertyCount: Object.keys(argsResult.args).length,
+    oneLine: argsResult.schemaStyle === "inline",
+  };
 
   const arrow = arrowFn(pathFnNode);
   if (arrow === undefined || arrow.params.length > 1 || arrow.isAsync) return undefined;
@@ -178,8 +193,13 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
   // resolves a bare `parsed.<name>` member read without checking the receiver at all (see
   // hoists.ts's memberArgName), so neither form needs to be told which one it is.
   if (!arrow.isBlock) {
-    const path = recognizePath(arrow.body, new Map());
-    return path === undefined ? undefined : { name, description, args: toolArgs, path };
+    const recognized = recognizePath(arrow.body, new Map());
+    if (recognized === undefined) return undefined;
+    return {
+      fields: { name, description, args: argsResult.args, path: recognized.path },
+      staticStyle: recognized.staticStyle,
+      schemaShape,
+    };
   }
 
   // Form 3's block always takes exactly one parameter — renderTool's `needsParam` is forced
@@ -192,16 +212,20 @@ function recognizeOneCall(call: AstNode): ToolFields | undefined {
 
   // Unlike tools-hand.ts, what the block returns IS the path expression — there is no
   // `jsonResult(await ...)` wrapper to unwrap first.
-  const path =
+  const recognized =
     block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
-  if (path === undefined) return undefined;
+  if (recognized === undefined) return undefined;
 
   // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
   // the schema text itself, so both are only visible at the hoist statement.
-  const mergedArgs = mergeHoistedArgs(toolArgs, block.hoistMeta);
+  const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
   if (mergedArgs === undefined) return undefined;
 
-  return { name, description, args: mergedArgs, path };
+  return {
+    fields: { name, description, args: mergedArgs, path: recognized.path },
+    staticStyle: recognized.staticStyle,
+    schemaShape,
+  };
 }
 
 export type RestRegistrarFields = {
@@ -252,25 +276,35 @@ export function recognizeRestRegistrar(
  * question left open here the way there is for tools-hand.ts's sole signal. A rest-kit spec
  * with `tools: []` genuinely emits just the factory and nothing else.
  */
+export type RestToolsResult = {
+  readonly tools: ToolFields[];
+  readonly staticPathStyles: readonly ("quoted" | "template" | undefined)[];
+  readonly schemaShapes: readonly { propertyCount: number; oneLine: boolean }[];
+};
+
 export function recognizeRestTools(
   statements: readonly AstNode[],
   claims: ClaimSet,
   registrar: string,
-): ToolFields[] | undefined {
+): RestToolsResult | undefined {
   const calls = statements
     .map((statement) => ({ statement, call: isRegistrarCall(statement, registrar) }))
     .filter((entry): entry is { statement: AstNode; call: AstNode } => entry.call !== undefined);
 
-  const tools: ToolFields[] = [];
+  const shapes: ToolShape[] = [];
   for (const { call } of calls) {
-    const fields = recognizeOneCall(call);
-    if (fields === undefined) return undefined;
-    tools.push(fields);
+    const shape = recognizeOneCall(call);
+    if (shape === undefined) return undefined;
+    shapes.push(shape);
   }
 
   claims.claim(
     calls.map((entry) => entry.statement),
     "rest-tools",
   );
-  return tools;
+  return {
+    tools: shapes.map((s) => s.fields),
+    staticPathStyles: shapes.map((s) => s.staticStyle),
+    schemaShapes: shapes.map((s) => s.schemaShape),
+  };
 }

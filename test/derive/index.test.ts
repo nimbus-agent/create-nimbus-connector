@@ -1,11 +1,23 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser } from "../../src/derive/ast.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
+import { generate } from "../../src/emit/index.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
+import type { GeneratedFile } from "../../src/types.ts";
+import { displayPath } from "../../src/types.ts";
 
 beforeAll(async () => {
   await initParser();
+  await initFormatter();
 });
+
+/** One file's content out of an emitted set, by its displayed path. */
+function pick(files: readonly GeneratedFile[], path: string): string {
+  const f = files.find((x) => displayPath(x.path) === path);
+  if (f === undefined) throw new Error(`no ${path} emitted`);
+  return f.content;
+}
 
 const MANIFEST = JSON.stringify({
   id: "newrelic",
@@ -124,6 +136,89 @@ const SERVER_REST = [
   "const transport = new StdioServerTransport();",
   "await server.connect(transport);",
 ].join("\n");
+
+/**
+ * A minimal read-only-kit connector with one search tool and a non-default `title`
+ * (`capitalize("zztitle")` is `"Zztitle"`, not `"ZZTitle"`) — built by this repo's own emitter,
+ * shared by the three search-assembly tests below: the two blocker paths that sit BETWEEN
+ * `recognizeTools` succeeding and the final spec assembly (missing filter file; a filter file
+ * present but declaring the wrong export), and the title round trip neither of those exercises.
+ */
+const ZZTITLE_SPEC = {
+  name: "zztitle",
+  title: "ZZTitle",
+  displayName: "ZZ Title",
+  description: "Fixture for search-filter assembly checks.",
+  serviceLabel: "ZZ Title",
+  style: "read-only-kit",
+  network: ["api.zztitle.test"],
+  syncInterval: 600,
+  minNimbusVersion: "0.2.0",
+  env: [{ vars: ["ZZTITLE_TOKEN"], local: "headers", auth: "bearer", required: true }],
+  fetchHelper: { local: "zzGet", base: "https://api.zztitle.test", headers: "headers" },
+  tools: [
+    {
+      name: "zztitle_search",
+      description: "Search.",
+      impl: "search",
+      path: "/v1/items",
+      filter: { export: "filterZztitleItems", fields: ["a", "b"] },
+    },
+  ],
+};
+
+describe("deriveSpec, search-filter assembly checks (Trap 6 and its neighbours)", () => {
+  it("blocks a recognized search tool when no filter file was supplied, rather than deriving a spec that regenerates a different filter", () => {
+    const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));
+    const server = pick(files, "src/server.ts");
+    const manifest = pick(files, "nimbus.extension.json");
+    // filter deliberately omitted — this is the case an absent src/search-filter.ts alongside a
+    // recognized search tool must refuse, not silently pass through.
+    const result = deriveSpec({ server, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["missing-file:src/search-filter.ts"]);
+  });
+
+  it("blocks a filter file that declares a different export than the one the search tool references", () => {
+    const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));
+    const server = pick(files, "src/server.ts");
+    const manifest = pick(files, "nimbus.extension.json");
+    // The tool's reg() call still names "filterZztitleItems" — only the filter FILE's own
+    // export is renamed, so the two sides disagree the way a hand-edited or corrupted directory
+    // could.
+    const filter = pick(files, "src/search-filter.ts").replaceAll(
+      "filterZztitleItems",
+      "filterSomethingElse",
+    );
+    const result = deriveSpec({ server, manifest, filter });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["search-filter:mismatch"]);
+  });
+
+  it("recovers a non-default title from the search-filter type alias, verifying the full round trip — spec.title's two real consumers (src/search-filter.ts's type alias and README.md), plus src/server.ts and nimbus.extension.json asserted as general round-trip coverage even though neither reads spec.title at all", () => {
+    const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));
+    const server = pick(files, "src/server.ts");
+    const manifest = pick(files, "nimbus.extension.json");
+    const filter = pick(files, "src/search-filter.ts");
+
+    const result = deriveSpec({ server, manifest, filter });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec.title).toBe("ZZTitle");
+
+    const reFiles = formatAll(generate(parseSpec(result.spec)));
+    for (const path of [
+      "src/server.ts",
+      "src/search-filter.ts",
+      "nimbus.extension.json",
+      "README.md",
+    ]) {
+      expect(pick(reFiles, path)).toBe(pick(files, path));
+    }
+  });
+});
 
 describe("deriveSpec, rest-kit registrar/title and fetch-helper-name cross-checks", () => {
   it("derives a whole rest-kit connector, omitting title when the registrar is the schema default", () => {

@@ -96,6 +96,7 @@ export async function deriveFromDirectory(
 ): Promise<FromConnectorResult> {
   const serverPath = join(dir, "src", "server.ts");
   const manifestPath = join(dir, "nimbus.extension.json");
+  const filterPath = join(dir, "src", "search-filter.ts");
   const absent = [
     ...(existsSync(serverPath) ? [] : [missing("src/server.ts")]),
     ...(existsSync(manifestPath) ? [] : [missing("nimbus.extension.json")]),
@@ -104,10 +105,14 @@ export async function deriveFromDirectory(
 
   const server = await Bun.file(serverPath).text();
   const manifest = await Bun.file(manifestPath).text();
+  // Optional, unlike the two above: a connector with no search tool never has this file, and
+  // that is not by itself a blocker — deriveSpec is what decides whether its absence matters
+  // (a recognized search tool with no filter file IS one; see deriveSharedStyleSpec).
+  const filter = existsSync(filterPath) ? await Bun.file(filterPath).text() : undefined;
   // The target is a generate() option rather than a spec field, so it is reported separately.
   const target = server.includes("@nimbus-dev/sdk/connector-kit") ? "standalone" : "monorepo";
 
-  const derivation = deriveSpec({ server, manifest });
+  const derivation = deriveSpec({ server, manifest, filter });
   if (!derivation.ok) {
     if (options.partial !== true) return { ok: false, blockers: derivation.blockers };
     return partialResult(target, derivation.blockers);
