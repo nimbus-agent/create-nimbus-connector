@@ -167,6 +167,162 @@ const ZZTITLE_SPEC = {
   ],
 };
 
+/**
+ * The two facts `matchClientCredentials` (server/env.ts) and the fetch-helper recognizers recover
+ * INDEPENDENTLY and that only this module can hold against each other — the same class of guard
+ * as `rest-fetch-helper-name-mismatch` below, and both newly reachable as of task 8.
+ *
+ * A GET and a POST, so both helpers are emitted and each has to agree separately.
+ */
+const CC_SPEC = {
+  name: "zzcc",
+  displayName: "ZZ CC",
+  description: "Fixture for the client-credentials cross-checks.",
+  serviceLabel: "ZZ CC",
+  style: "hand-rolled",
+  network: ["api.zzcc.test"],
+  syncInterval: 300,
+  minNimbusVersion: "0.2.0",
+  env: [
+    {
+      vars: ["ZZCC_CLIENT_ID", "ZZCC_CLIENT_SECRET"],
+      local: "authHeaders",
+      bindings: ["id", "secret"],
+      auth: "client-credentials",
+      tokenUrl: "https://api.zzcc.test/oauth/token",
+      credentialsIn: "basic",
+    },
+  ],
+  fetchHelper: { local: "zzGet", base: "https://api.zzcc.test", headers: "authHeaders" },
+  tools: [
+    { name: "zzcc_item_list", description: "List items.", path: "/v1/items", args: {} },
+    {
+      name: "zzcc_item_create",
+      description: "Create an item.",
+      method: "POST",
+      effect: "write",
+      args: { title: { type: "string", min: 1 } },
+      path: "/v1/items",
+    },
+  ],
+};
+
+/** A bearer connector, identical in shape but for the auth mode — its accessor is synchronous. */
+const BEARER_SPEC = {
+  ...CC_SPEC,
+  name: "zzbearer",
+  displayName: "ZZ Bearer",
+  serviceLabel: "ZZ Bearer",
+  network: ["api.zzbearer.test"],
+  env: [{ vars: ["ZZBEARER_TOKEN"], local: "authHeaders", auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzbearer.test", headers: "authHeaders" },
+};
+
+function emitPair(spec: unknown): { server: string; manifest: string } {
+  const files = formatAll(generate(parseSpec(spec)));
+  return { server: pick(files, "src/server.ts"), manifest: pick(files, "nimbus.extension.json") };
+}
+
+describe("deriveSpec, client-credentials cross-checks", () => {
+  it("derives the pristine module, so every corruption below is one edit from a producible shape", () => {
+    const result = deriveSpec(emitPair(CC_SPEC));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec).toMatchObject({
+      env: [
+        {
+          vars: ["ZZCC_CLIENT_ID", "ZZCC_CLIENT_SECRET"],
+          local: "authHeaders",
+          auth: "client-credentials",
+          tokenUrl: "https://api.zzcc.test/oauth/token",
+          credentialsIn: "basic",
+        },
+      ],
+      fetchHelper: { local: "zzGet", headers: "authHeaders" },
+    });
+  });
+
+  it("leaves the wrapper UNCLAIMED when the token exchange is malformed — the plain-accessor pass must not pick it up as an env entry the module never declared", () => {
+    // The hazard is not a confusing message: it is Pass B claiming `authHeaders` as a standalone
+    // accessor after Pass A' refused the group, which derives a spec carrying a bogus plain env
+    // entry. What stops it is `recognizeOne`'s async/return-type pin (task 1) — an interaction
+    // between two tasks, which is exactly the kind of thing that survives until someone reorders
+    // them, so it is proved here rather than assumed.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt = 1;");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Reported as unclaimed, NOT silently absorbed into an env entry.
+    expect(result.blockers.some((b) => b.kind === "function:authHeaders")).toBe(true);
+    expect(result.blockers.some((b) => b.kind === "function:token")).toBe(true);
+  });
+
+  it("blocks a token exchange naming a different service than the fetch helper does", () => {
+    // One `spec.serviceLabel` writes the token function's two error messages AND the fetch
+    // helper's — recovered by two recognizers that never see each other.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server
+      .replace("ZZ CC token exchange", "Other Service token exchange")
+      .replace("ZZ CC token response missing", "Other Service token response missing");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["env:token-service-label-mismatch"]);
+  });
+
+  it("blocks a client-credentials module whose read helper does NOT await its headers accessor", () => {
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace(
+      "{ headers: await authHeaders() }",
+      "{ headers: authHeaders() }",
+    );
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+
+  it("blocks a client-credentials module whose WRITE helper does not await, though its read helper does", () => {
+    // Each helper is checked against the env separately, which is why `agreesWithReadHelper`
+    // does not compare the flag: two helpers disagreeing means at least one disagrees with the
+    // env, and it is named here rather than as a vaguer helper-vs-helper mismatch.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace(
+      'headers: { ...(await authHeaders()), "Content-Type": "application/json" }',
+      'headers: { ...authHeaders(), "Content-Type": "application/json" }',
+    );
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+
+  it("blocks a BEARER module that awaits its headers accessor — the direction the widened accessor branch newly makes reachable", () => {
+    // `headerOption` writes `await` only for the client-credentials accessor, so this module
+    // re-emits WITHOUT the await: a claimed statement it does not reproduce, and one no byte
+    // diff could see, since the recovered `fetchHelper` fields are identical either way.
+    const { server, manifest } = emitPair(BEARER_SPEC);
+    const corrupted = server
+      .replace("{ headers: authHeaders() }", "{ headers: await authHeaders() }")
+      .replace("...authHeaders()", "...(await authHeaders())");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+});
+
 describe("deriveSpec, search-filter assembly checks (Trap 6 and its neighbours)", () => {
   it("blocks a recognized search tool when no filter file was supplied, rather than deriving a spec that regenerates a different filter", () => {
     const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));

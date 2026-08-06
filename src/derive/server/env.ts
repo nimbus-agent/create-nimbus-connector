@@ -1,13 +1,18 @@
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
+  asExpression,
+  assignment,
+  awaited,
   binary,
   blockBody,
   callArgs,
   calleeOf,
+  callTo,
   computedMember,
   conditional,
   constDecl,
+  expressionOf,
   functionBody,
   functionName,
   functionParams,
@@ -15,6 +20,8 @@ import {
   ifStatement,
   isAsyncFunction,
   isIdent,
+  isNullLiteral,
+  letDecl,
   logical,
   memberName,
   memberObject,
@@ -27,13 +34,19 @@ import {
   optionalCallCallee,
   optionalMemberName,
   optionalMemberObject,
+  propertySignature,
   regExpLit,
   returnArgument,
   stringLit,
   templateLiteral,
   throwArgument,
   typeAnnotationName,
+  typeArguments,
+  typeLiteralMembers,
+  unary,
+  unionTypes,
 } from "../read.ts";
+import { isTextStatement, isThrowGuard } from "./fetch-helper.ts";
 
 export type EnvEntry = {
   vars: string[];
@@ -44,10 +57,14 @@ export type EnvEntry = {
   transform?: "stripTrailingSlash" | "trimTrailingSlashFn";
   prefix?: string;
   suffix?: string;
-  auth?: "bearer" | "basic" | "headers";
+  auth?: "bearer" | "basic" | "headers" | "client-credentials";
   headerNames?: string[];
   /** Split-bearer's raw-token accessor name — see matchSplitBearerReader/-Wrapper below. */
   tokenLocal?: string;
+  /** The three `auth: "client-credentials"` fields — see `matchClientCredentials` below. */
+  tokenUrl?: string;
+  scope?: string;
+  credentialsIn?: "basic" | "body";
 };
 
 /**
@@ -372,8 +389,10 @@ function buildPlainEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined 
 
 /**
  * One env accessor, as src/emit/server/env.ts's plain-accessor branch of `renderEnvAccessor`
- * writes it (the `auth: "basic"`, `auth: "client-credentials"` and `tokenLocal` shapes are
- * each a different function shape entirely and are not modeled here — they are left unclaimed):
+ * writes it. The `auth: "basic"`, `auth: "client-credentials"` and `tokenLocal` shapes are each a
+ * different function shape entirely and are not modeled here — `recognizeBasicAuth`,
+ * `matchClientCredentials` and `matchSplitBearerReader`/`-Wrapper` read those, and `recognizeEnv`
+ * offers this function only what none of them claimed:
  *
  *   function <local>(): <string|Record<string,string>> {
  *     const <binding> = process.env["<VAR>"]?.trim() [|| "<default>"];   // once per var
@@ -614,6 +633,502 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   };
 }
 
+// ---------------------------------------------------------------------------
+// auth: "client-credentials" — renderClientCredentials (src/emit/server/env.ts).
+//
+// The one emitted accessor that is FOUR module-scope statements rather than one or two:
+//
+//   let cachedToken: string | null = null;
+//   let tokenExpiresAt = 0;
+//   async function token(): Promise<string> { …the exchange… }
+//   async function <local>(): Promise<Record<string, string>> { …the Bearer wrapper… }
+//
+// They are claimed as ONE entry, the way the split-bearer PAIR is, and for the same reason: a
+// matcher that claimed any of them alone would leave the rest to the totality rule while having
+// already derived a spec that regenerates all four.
+//
+// Only six things in those ~30 lines carry a spec field — the two reads (and the guard's own var
+// names), the token URL, the `scope` line, WHERE the credentials go, and the wrapper's name.
+// Everything else is a constant of this emitter, and each is pinned below rather than skipped: a
+// module differing in the skew arithmetic, the cache comparison or an error message derives a
+// spec that regenerates DIFFERENT bytes, and the totality rule cannot see it, because the
+// statement was claimed.
+// ---------------------------------------------------------------------------
+
+/**
+ * `let cachedToken: string | null = null;` — the first of renderTokenFunction's two bindings.
+ *
+ * The annotation is pinned, not merely the name and the initializer: `let cachedToken: null |
+ * string = null;` typechecks identically and is bytes this emitter never writes, so reading only
+ * the two would claim it and re-emit `string | null` — a different file, invisible to the
+ * totality rule.
+ */
+function isCachedTokenBinding(stmt: AstNode): boolean {
+  const decl = letDecl(stmt);
+  if (decl?.name !== "cachedToken" || !isNullLiteral(decl.init)) return false;
+  const types = unionTypes(decl.typeAnnotation);
+  if (types?.length !== 2) return false;
+  return typeAnnotationName(types[0]) === "string" && typeAnnotationName(types[1]) === "null";
+}
+
+/**
+ * `let tokenExpiresAt = 0;` — the second binding, deliberately UNANNOTATED. Its absence of a type
+ * is as load-bearing as `cachedToken`'s presence of one: `let tokenExpiresAt: number = 0;`
+ * typechecks and is a line renderTokenFunction cannot write.
+ */
+function isTokenExpiresAtBinding(stmt: AstNode): boolean {
+  const decl = letDecl(stmt);
+  if (decl?.name !== "tokenExpiresAt") return false;
+  return decl.typeAnnotation === undefined && numberLit(decl.init) === 0;
+}
+
+/**
+ * `if (cachedToken !== null && Date.now() < tokenExpiresAt) return cachedToken;` — the cache
+ * check, whose comparison operators are the whole of the caching policy and carry no spec field.
+ * The consequent is a bare `return`, not a block: the emitter writes the statement on one line
+ * and Biome preserves that.
+ */
+function isCacheCheck(stmt: AstNode): boolean {
+  const s = ifStatement(stmt);
+  if (s === undefined || s.alternate !== undefined) return false;
+
+  const and = logical(s.test);
+  if (and?.operator !== "&&") return false;
+
+  const cached = binary(and.left);
+  if (cached?.operator !== "!==") return false;
+  if (!isIdent(cached.left, "cachedToken") || !isNullLiteral(cached.right)) return false;
+
+  const unexpired = binary(and.right);
+  if (unexpired?.operator !== "<") return false;
+  if (methodCallTo(unexpired.left, "Date", "now", 0) === undefined) return false;
+  if (!isIdent(unexpired.right, "tokenExpiresAt")) return false;
+
+  return isIdent(returnArgument(s.consequent), "cachedToken");
+}
+
+/** `const body = new URLSearchParams({ grant_type: "client_credentials" });` */
+function isTokenBodyInit(stmt: AstNode): boolean {
+  const decl = constDecl(stmt);
+  if (decl?.name !== "body") return false;
+  const args = newOf(decl.init, "URLSearchParams", 1);
+  const props = objectProps(args?.[0]);
+  if (props?.length !== 1) return false;
+  const only = props[0]!;
+  return only.key === "grant_type" && stringLit(only.value) === "client_credentials";
+}
+
+/** `body.set("<key>", <value>);` -> that value node, for one named key. */
+function bodySetValue(stmt: AstNode | undefined, key: string): AstNode | undefined {
+  const args = methodCallTo(expressionOf(stmt), "body", "set", 2);
+  return args === undefined || stringLit(args[0]) !== key ? undefined : args[1];
+}
+
+/**
+ * The `headers:` object of the token-exchange fetch — `renderTokenFunction`'s two `headerLines`
+ * forms — reporting which one it is: `true` for the `credentialsIn: "basic"` form, which appends
+ * the `encodeBasicAuthHeader(<id>, <secret>)` Authorization entry, `false` for the two-entry
+ * `"body"` form. The caller holds that against the `body.set` lines, which is the OTHER half of
+ * the same if/else.
+ */
+function matchTokenHeaders(node: AstNode, id: string, secret: string): boolean | undefined {
+  const props = objectProps(node);
+  if (props === undefined || props.length < 2) return undefined;
+  const contentType = props[0];
+  const accept = props[1];
+  if (contentType === undefined || accept === undefined) return undefined;
+  if (contentType.key !== "Content-Type") return undefined;
+  if (stringLit(contentType.value) !== "application/x-www-form-urlencoded") return undefined;
+  if (accept.key !== "Accept" || stringLit(accept.value) !== "application/json") return undefined;
+
+  if (props.length === 2) return false;
+  if (props.length !== 3) return undefined;
+
+  const authorization = props[2]!;
+  if (authorization.key !== "Authorization") return undefined;
+  const args = callArgs(authorization.value);
+  if (args?.length !== 2) return undefined;
+  if (!isIdent(calleeOf(authorization.value), "encodeBasicAuthHeader")) return undefined;
+  return isIdent(args[0], id) && isIdent(args[1], secret) ? true : undefined;
+}
+
+/**
+ * `const res = await fetch("<tokenUrl>", { method: "POST", headers: {…}, body: body.toString() });`
+ * — exactly these three options, in this order. `tokenUrl` is required to be a STRING LITERAL
+ * because that is how `renderTokenFunction` writes it (`JSON.stringify(e.tokenUrl)`); an endpoint
+ * built at runtime is one no `tokenUrl` value can regenerate.
+ */
+function matchTokenFetch(
+  stmt: AstNode,
+  id: string,
+  secret: string,
+): { readonly tokenUrl: string; readonly basicHeader: boolean } | undefined {
+  const decl = constDecl(stmt);
+  if (decl?.name !== "res") return undefined;
+  const args = callTo(awaited(decl.init), "fetch", 2);
+  if (args === undefined) return undefined;
+  const tokenUrl = stringLit(args[0]);
+  if (tokenUrl === undefined) return undefined;
+
+  const options = objectProps(args[1]);
+  if (options?.length !== 3) return undefined;
+  const [method, headers, body] = options;
+  if (method === undefined || headers === undefined || body === undefined) return undefined;
+  if (method.key !== "method" || stringLit(method.value) !== "POST") return undefined;
+  if (headers.key !== "headers" || body.key !== "body") return undefined;
+  if (methodCallTo(body.value, "body", "toString", 0) === undefined) return undefined;
+
+  const basicHeader = matchTokenHeaders(headers.value, id, secret);
+  return basicHeader === undefined ? undefined : { tokenUrl, basicHeader };
+}
+
+/**
+ * `if (!res.ok) { throw new Error(\`<serviceLabel> token exchange \${String(res.status)}:
+ * \${text.slice(0, 400)}\`); }` -> the serviceLabel.
+ *
+ * The `if (!res.ok)` shell is `isThrowGuard`, shared with the fetch helpers rather than copied
+ * (see its own docstring); everything inside the template is pinned here, including the 400-
+ * character slice, which carries no spec field.
+ */
+function tokenExchangeLabel(stmt: AstNode): string | undefined {
+  if (!isThrowGuard(stmt)) return undefined;
+  const thrown = blockBody(ifStatement(stmt)?.consequent)?.[0];
+  const args = newOf(throwArgument(thrown), "Error", 1);
+  const t = templateLiteral(args?.[0]);
+  if (t?.expressions.length !== 2) return undefined;
+
+  const SUFFIX = " token exchange ";
+  const head = t.quasis[0];
+  if (head === undefined || !head.endsWith(SUFFIX)) return undefined;
+  if (t.quasis[1] !== ": " || t.quasis[2] !== "") return undefined;
+
+  const status = callTo(t.expressions[0], "String", 1);
+  if (status === undefined || memberOn(status[0], "res") !== "status") return undefined;
+  const slice = methodCallTo(t.expressions[1], "text", "slice", 2);
+  if (slice === undefined || numberLit(slice[0]) !== 0 || numberLit(slice[1]) !== 400) {
+    return undefined;
+  }
+  return head.slice(0, -SUFFIX.length);
+}
+
+/** `parsed.<field>` — the one member expression the second half of the exchange reads. */
+function isParsedField(node: AstNode | undefined, field: string): boolean {
+  return memberOn(node, "parsed") === field;
+}
+
+/**
+ * `const parsed = JSON.parse(text) as { access_token?: unknown; expires_in?: unknown };` — the
+ * cast's two optional members pinned by name and order, because the statements below read both.
+ */
+function isParsedDecl(stmt: AstNode): boolean {
+  const decl = constDecl(stmt);
+  if (decl?.name !== "parsed") return false;
+  const cast = asExpression(decl.init);
+  if (cast === undefined) return false;
+  const args = methodCallTo(cast.expression, "JSON", "parse", 1);
+  if (args === undefined || !isIdent(args[0], "text")) return false;
+
+  const members = typeLiteralMembers(cast.typeAnnotation);
+  if (members?.length !== 2) return false;
+  return ["access_token", "expires_in"].every((name, i) => {
+    const member = propertySignature(members[i]);
+    return (
+      member?.key === name && member.optional && typeAnnotationName(member.valueType) === "unknown"
+    );
+  });
+}
+
+/**
+ * `if (typeof parsed.access_token !== "string" || parsed.access_token === "") { throw new
+ * Error("<serviceLabel> token response missing access_token"); }` — the second of the token
+ * function's two throws, whose message must name the SAME service as the first. One
+ * `spec.serviceLabel` writes both, so a module where they disagree is one no spec regenerates.
+ */
+function isMissingTokenGuard(stmt: AstNode, serviceLabel: string): boolean {
+  const s = ifStatement(stmt);
+  if (s === undefined || s.alternate !== undefined) return false;
+
+  const or = logical(s.test);
+  if (or?.operator !== "||") return false;
+  const typeCheck = binary(or.left);
+  if (typeCheck?.operator !== "!==" || stringLit(typeCheck.right) !== "string") return false;
+  const typeOf = unary(typeCheck.left);
+  if (typeOf?.operator !== "typeof" || !isParsedField(typeOf.argument, "access_token"))
+    return false;
+  const emptyCheck = binary(or.right);
+  if (emptyCheck?.operator !== "===" || stringLit(emptyCheck.right) !== "") return false;
+  if (!isParsedField(emptyCheck.left, "access_token")) return false;
+
+  const body = blockBody(s.consequent);
+  if (body?.length !== 1) return false;
+  const args = newOf(throwArgument(body[0]!), "Error", 1);
+  return stringLit(args?.[0]) === `${serviceLabel} token response missing access_token`;
+}
+
+/**
+ * `const ttl = typeof parsed.expires_in === "number" && parsed.expires_in > 0 ? parsed.expires_in
+ * - Math.min(60, Math.floor(parsed.expires_in / 2)) : undefined;`
+ *
+ * Every literal in it — the 60-second skew ceiling, the halving divisor, the `> 0` floor — is a
+ * constant of this emitter with no spec field behind it, so each is pinned. This is the statement
+ * the section header names: a module differing here re-emits with 60 and 2 restored.
+ */
+function isTtlDecl(stmt: AstNode): boolean {
+  const decl = constDecl(stmt);
+  if (decl?.name !== "ttl") return false;
+  const c = conditional(decl.init);
+  if (c === undefined) return false;
+
+  const and = logical(c.test);
+  if (and?.operator !== "&&") return false;
+  const typeCheck = binary(and.left);
+  if (typeCheck?.operator !== "===" || stringLit(typeCheck.right) !== "number") return false;
+  const typeOf = unary(typeCheck.left);
+  if (typeOf?.operator !== "typeof" || !isParsedField(typeOf.argument, "expires_in")) return false;
+  const positive = binary(and.right);
+  if (positive?.operator !== ">" || numberLit(positive.right) !== 0) return false;
+  if (!isParsedField(positive.left, "expires_in")) return false;
+
+  const minus = binary(c.consequent);
+  if (minus?.operator !== "-" || !isParsedField(minus.left, "expires_in")) return false;
+  const min = methodCallTo(minus.right, "Math", "min", 2);
+  if (min === undefined || numberLit(min[0]) !== 60) return false;
+  const floor = methodCallTo(min[1], "Math", "floor", 1);
+  const halved = floor === undefined ? undefined : binary(floor[0]);
+  if (halved?.operator !== "/" || numberLit(halved.right) !== 2) return false;
+  if (!isParsedField(halved.left, "expires_in")) return false;
+
+  return isIdent(c.alternate, "undefined");
+}
+
+/**
+ * `tokenExpiresAt = ttl === undefined ? Number.POSITIVE_INFINITY : Date.now() + ttl * 1000;` —
+ * the seconds-to-milliseconds factor and the unbounded-TTL sentinel are constants too.
+ */
+function isExpiryAssignment(stmt: AstNode): boolean {
+  const a = assignment(expressionOf(stmt));
+  if (a?.operator !== "=" || !isIdent(a.left, "tokenExpiresAt")) return false;
+  const c = conditional(a.right);
+  if (c === undefined) return false;
+
+  const test = binary(c.test);
+  if (test?.operator !== "===" || !isIdent(test.left, "ttl")) return false;
+  if (!isIdent(test.right, "undefined")) return false;
+  if (memberOn(c.consequent, "Number") !== "POSITIVE_INFINITY") return false;
+
+  const sum = binary(c.alternate);
+  if (sum?.operator !== "+" || methodCallTo(sum.left, "Date", "now", 0) === undefined) return false;
+  const millis = binary(sum.right);
+  return (
+    millis?.operator === "*" && isIdent(millis.left, "ttl") && numberLit(millis.right) === 1000
+  );
+}
+
+/** `cachedToken = parsed.access_token;` */
+function isCacheAssignment(stmt: AstNode): boolean {
+  const a = assignment(expressionOf(stmt));
+  if (a?.operator !== "=" || !isIdent(a.left, "cachedToken")) return false;
+  return isParsedField(a.right, "access_token");
+}
+
+/** Everything `matchTokenFunction` recovers — the spec fields, plus the serviceLabel evidence. */
+type TokenExchange = {
+  readonly reads: readonly ReadLine[];
+  readonly tokenUrl: string;
+  readonly credentialsIn: "basic" | "body";
+  readonly scope: string | undefined;
+  readonly defaultValue: string | undefined;
+  readonly serviceLabel: string;
+};
+
+/**
+ * `async function token(): Promise<string> { … }` — renderTokenFunction's whole body, walked
+ * positionally so every statement is accounted for. `claims.claim` covers the function's entire
+ * byte range, so a statement this walk does not reach rides along on the claim; that is the
+ * defect `matchFetchHelperBody` (server/fetch-helper.ts) was rewritten to close, and this walk
+ * follows it.
+ *
+ * The function's own name is pinned to `token` rather than recovered: `renderTokenFunction`
+ * hard-codes it (which is why `token`, `cachedToken` and `tokenExpiresAt` are all in
+ * `RESERVED_IDENTIFIERS`), so no spec field can vary it.
+ */
+function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
+  if (functionName(fn) !== "token" || !isAsyncFunction(fn)) return undefined;
+  if (functionParams(fn)?.length !== 0) return undefined;
+  const returnType = functionReturnType(fn);
+  if (typeAnnotationName(returnType) !== "Promise") return undefined;
+  const resolved = typeArguments(returnType);
+  if (resolved?.length !== 1 || typeAnnotationName(resolved[0]) !== "string") return undefined;
+
+  const body = functionBody(fn);
+  if (body === undefined || body.length === 0 || !isCacheCheck(body[0]!)) return undefined;
+  let idx = 1;
+
+  const section = collectReadLines(body.slice(idx));
+  // EnvSchema: 'auth: "client-credentials" requires exactly two "vars"'.
+  if (section === undefined || section.reads.length !== 2) return undefined;
+  idx += section.reads.length;
+  const defaultValue = section.reads[0]!.default;
+
+  // guardLines writes nothing once a `default` is present, whatever `required`/`auth` say; with
+  // no default, `auth` alone forces the combined multi-var guard.
+  if (defaultValue === undefined) {
+    if (idx >= body.length || !verifyGuard(body[idx]!, section.reads)) return undefined;
+    idx++;
+  }
+
+  if (idx >= body.length || !isTokenBodyInit(body[idx]!)) return undefined;
+  idx++;
+
+  // bodyLines' order: the `scope` line, then the two credential lines. Both optional, and their
+  // ABSENCE is the fact — `scope` is omitted when the spec sets none, the credential lines when
+  // `credentialsIn` is "basic".
+  let scope: string | undefined;
+  const scopeValue = bodySetValue(body[idx], "scope");
+  if (scopeValue !== undefined) {
+    scope = stringLit(scopeValue);
+    // `scope` reaches the emitted line through JSON.stringify, so a non-literal here is a shape
+    // no spec value produces.
+    if (scope === undefined) return undefined;
+    idx++;
+  }
+
+  const id = section.reads[0]!.binding;
+  const secret = section.reads[1]!.binding;
+  let credentialsInBody = false;
+  const idValue = bodySetValue(body[idx], "client_id");
+  if (idValue !== undefined) {
+    if (!isIdent(idValue, id)) return undefined;
+    const secretValue = bodySetValue(body[idx + 1], "client_secret");
+    if (secretValue === undefined || !isIdent(secretValue, secret)) return undefined;
+    credentialsInBody = true;
+    idx += 2;
+  }
+
+  if (idx >= body.length) return undefined;
+  const fetched = matchTokenFetch(body[idx]!, id, secret);
+  if (fetched === undefined) return undefined;
+  idx++;
+
+  // The credential lines and the Authorization header are the two arms of ONE if/else on
+  // `credentialsIn`, so exactly one of them must be present. Both (or neither) is a shape
+  // renderTokenFunction cannot write, and reading either one alone would let the other contradict
+  // it silently.
+  if (credentialsInBody === fetched.basicHeader) return undefined;
+
+  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
+  idx++;
+
+  const serviceLabel = idx < body.length ? tokenExchangeLabel(body[idx]!) : undefined;
+  if (serviceLabel === undefined) return undefined;
+  idx++;
+
+  if (idx >= body.length || !isParsedDecl(body[idx]!)) return undefined;
+  idx++;
+  if (idx >= body.length || !isMissingTokenGuard(body[idx]!, serviceLabel)) return undefined;
+  idx++;
+  if (idx >= body.length || !isCacheAssignment(body[idx]!)) return undefined;
+  idx++;
+  if (idx >= body.length || !isTtlDecl(body[idx]!)) return undefined;
+  idx++;
+  if (idx >= body.length || !isExpiryAssignment(body[idx]!)) return undefined;
+  idx++;
+
+  // Exactly one statement left: `return cachedToken;`.
+  if (body.length - idx !== 1) return undefined;
+  if (!isIdent(returnArgument(body[idx]!), "cachedToken")) return undefined;
+
+  return {
+    reads: section.reads,
+    tokenUrl: fetched.tokenUrl,
+    credentialsIn: credentialsInBody ? "body" : "basic",
+    scope,
+    defaultValue,
+    serviceLabel,
+  };
+}
+
+/**
+ * `async function <local>(): Promise<Record<string, string>> { return { Authorization: \`Bearer
+ * ${await token()}\`, Accept: "application/json" }; }` -> that local.
+ *
+ * Structurally the split-bearer wrapper with an `await` in it, but NOT shared with
+ * `matchSplitBearerWrapper`: that one is pinned non-async and `(): Record<string, string>` (task
+ * 1), which is exactly what stops the plain-accessor pass from claiming THIS function, and
+ * widening it to accept both would give that pin away.
+ */
+function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
+  if (!isAsyncFunction(fn)) return undefined;
+  const returnType = functionReturnType(fn);
+  if (typeAnnotationName(returnType) !== "Promise") return undefined;
+  const resolved = typeArguments(returnType);
+  if (resolved?.length !== 1 || typeAnnotationName(resolved[0]) !== "Record") return undefined;
+  if (functionParams(fn)?.length !== 0) return undefined;
+
+  const statements = functionBody(fn);
+  if (statements?.length !== 1) return undefined;
+  const properties = objectProps(returnArgument(statements[0]!));
+  if (properties?.length !== 2) return undefined;
+  const [authProp, acceptProp] = properties;
+  if (authProp === undefined || acceptProp === undefined) return undefined;
+  if (authProp.key !== "Authorization" || acceptProp.key !== "Accept") return undefined;
+  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+
+  const t = templateLiteral(authProp.value);
+  if (t?.expressions.length !== 1 || t.quasis[0] !== "Bearer " || t.quasis[1] !== "") {
+    return undefined;
+  }
+  // `await token()`, not `token()`: the un-awaited form interpolates a Promise and is bytes
+  // renderClientCredentials cannot write.
+  if (callTo(awaited(t.expressions[0]), "token", 0) === undefined) return undefined;
+
+  return functionName(fn);
+}
+
+/** What `matchClientCredentials` recovers: the entry, and the serviceLabel that is not one. */
+type ClientCredentials = { readonly entry: EnvEntry; readonly serviceLabel: string };
+
+/**
+ * The four-statement group starting at `statements[i]`, or undefined.
+ *
+ * All four are required to be ADJACENT and in this order, which is not a convenience: emitted
+ * accessors are joined in `spec.env` array order by `renderEnvAccessors`, and
+ * `renderClientCredentials` builds these four as ONE string, so no spec can produce a layout with
+ * anything between them — the same adjacency argument `matchSplitBearerWrapper` makes.
+ */
+function matchClientCredentials(
+  statements: readonly AstNode[],
+  i: number,
+): ClientCredentials | undefined {
+  const [cached, expiry, tokenFn, wrapper] = statements.slice(i, i + 4);
+  if (cached === undefined || expiry === undefined) return undefined;
+  if (tokenFn === undefined || wrapper === undefined) return undefined;
+  if (!isCachedTokenBinding(cached) || !isTokenExpiresAtBinding(expiry)) return undefined;
+
+  const exchange = matchTokenFunction(tokenFn);
+  if (exchange === undefined) return undefined;
+  const local = matchClientCredentialsWrapper(wrapper);
+  if (local === undefined) return undefined;
+
+  return {
+    entry: {
+      vars: exchange.reads.map((r) => r.var),
+      local,
+      bindings: exchange.reads.map((r) => r.binding),
+      // Unobservable, exactly as in buildAuthEntry: `needsGuard` is true for any entry carrying
+      // `auth`, so both values of `required` regenerate identical bytes. The schema default keeps
+      // the derived spec minimal.
+      required: false,
+      auth: "client-credentials",
+      tokenUrl: exchange.tokenUrl,
+      credentialsIn: exchange.credentialsIn,
+      ...(exchange.scope === undefined ? {} : { scope: exchange.scope }),
+      ...(exchange.defaultValue === undefined ? {} : { default: exchange.defaultValue }),
+    },
+    serviceLabel: exchange.serviceLabel,
+  };
+}
+
 /**
  * Whether a statement is exactly src/emit/server/env.ts's `TRIM_TRAILING_SLASH_FN`, mirrored as
  * TEXT here rather than imported — `src/derive/` never imports from `src/emit/` (see read.ts's
@@ -643,23 +1158,57 @@ function matchTrimTrailingSlashFn(node: AstNode): boolean {
   return isIdent(c.alternate, "s");
 }
 
+/** What `recognizeEnv` hands back: the spec entries, and the one recovered fact that is not one. */
+export type RecognizedEnv = {
+  readonly entries: EnvEntry[];
+  /**
+   * The service each recognized `auth: "client-credentials"` token function names in its own two
+   * error messages. Evidence, not an `EnvEntry` field: `spec.serviceLabel` is ONE top-level field,
+   * recovered from the fetch helper (`serviceLabelFrom`, server/fetch-helper.ts), and
+   * `renderTokenFunction` interpolates it — so a module whose token function names a different
+   * service is one no spec regenerates. `deriveSharedStyleSpec` holds these against the helper's
+   * own, the same caller-side cross-check `agreesWithReadHelper` and
+   * `rest-fetch-helper-name-mismatch` apply, and for the same reason: two recognizers producing
+   * one fact independently is how they drift.
+   */
+  readonly tokenServiceLabels: string[];
+};
+
 /**
- * Every env accessor in `statements`, in DECLARATION order — not "every pair, then every plain
+ * Every env accessor in `statements`, in DECLARATION order — not "every group, then every plain
  * entry", which would scramble the array position `renderEnvAccessors` depends on to regenerate
- * byte-identical output (it emits `spec.env` in array order, unconditionally).
+ * byte-identical output (it emits `spec.env` in array order, unconditionally). A multi-statement
+ * group sorts by its FIRST statement's index, since that is where its emitted text begins.
  *
- * The split-bearer pair is detected in a pass over the WHOLE list, BEFORE the single-statement
- * loop below ever reaches the inner reader. This ordering is the fix for the hazard
- * `matchSplitBearerReader`'s own docstring names: that shape is byte-identical to a plain
- * "required" accessor, so a walk that tried the plain branch first would claim the reader alone
- * — individually plausible, and wrong, because the wrapper right after it would then be the ONLY
- * thing standing between a wrong spec and the totality rule. Detecting the pair first and
- * claiming both statements in one `claims.claim()` call (rather than teaching the plain branch
- * to recognize and skip a shape it does not otherwise handle) keeps that decision in one place.
+ * Three sequential passes, and the ORDER of them is the point:
+ *
+ *   A.  the split-bearer PAIR, over the whole list;
+ *   A′. the client-credentials GROUP of four, over the whole list;
+ *   B.  the single-statement plain/basic accessors.
+ *
+ * Pass A is the fix for the hazard `matchSplitBearerReader`'s own docstring names: that shape is
+ * byte-identical to a plain "required" accessor, so a walk that tried the plain branch first
+ * would claim the reader alone — individually plausible, and wrong, because the wrapper right
+ * after it would then be the ONLY thing standing between a wrong spec and the totality rule.
+ *
+ * Pass A′ is a separate pass rather than an extension of A, because the two share no structure at
+ * all: A pairs two non-async functions found by shape, A′ matches a fixed four-statement run
+ * beginning with two `let` bindings. It runs BEFORE B for the same reason A does — a wrapper
+ * claimed as a standalone accessor is the wrong-claim class, and `matchClientCredentialsWrapper`
+ * refusing the group must not leave B free to pick that function up. What actually closes that
+ * today is task 1's pin: `recognizeOne` and `recognizeBasicAuth` both refuse an `async` function
+ * outright, and both halves of this group are async. The ordering is defence in depth, and a
+ * reader must not take it for the only thing standing there — nor the pin, which is why
+ * test/derive/env.test.ts asserts all four statements stay unclaimed for every refusal.
+ *
+ * A and A′ cannot compete for a statement: A's two halves are non-async `(): string` /
+ * `(): Record<string, string>` functions, A′'s are two `let`s and two `async` functions. Nothing
+ * satisfies both, so A′ needs no `consumed` check of its own.
  */
-export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): EnvEntry[] {
+export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): RecognizedEnv {
   const consumed = new Set<number>();
   const indexed: { readonly index: number; readonly entry: EnvEntry }[] = [];
+  const tokenServiceLabels: string[] = [];
 
   for (let i = 0; i < statements.length - 1; i++) {
     const reader = matchSplitBearerReader(statements[i]!);
@@ -683,6 +1232,16 @@ export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): 
     });
   }
 
+  for (let i = 0; i + 3 < statements.length; i++) {
+    const group = matchClientCredentials(statements, i);
+    if (group === undefined) continue;
+
+    claims.claim(statements.slice(i, i + 4), "env");
+    for (let k = 0; k < 4; k++) consumed.add(i + k);
+    indexed.push({ index: i, entry: group.entry });
+    tokenServiceLabels.push(group.serviceLabel);
+  }
+
   for (let i = 0; i < statements.length; i++) {
     if (consumed.has(i)) continue;
     const s = statements[i]!;
@@ -700,5 +1259,8 @@ export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): 
     if (helperIndex !== -1) claims.claim(statements[helperIndex]!, "env");
   }
 
-  return indexed.sort((a, b) => a.index - b.index).map(({ entry }) => entry);
+  return {
+    entries: indexed.sort((a, b) => a.index - b.index).map(({ entry }) => entry),
+    tokenServiceLabels,
+  };
 }

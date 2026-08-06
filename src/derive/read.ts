@@ -295,6 +295,41 @@ export function uninitializedLet(node: AstNode | undefined): string | undefined 
   return identName(child(declarator, "id"));
 }
 
+export type LetDecl = {
+  readonly name: string;
+  readonly init: AstNode;
+  /** The binding's own `: <type>` annotation, or undefined when it carries none. */
+  readonly typeAnnotation: AstNode | undefined;
+};
+
+/**
+ * `let <name>: <type> = <init>;` / `let <name> = <init>;` — the two module-scope bindings
+ * `renderTokenFunction` (src/emit/server/env.ts) writes above the token exchange. Neither
+ * existing declaration accessor fits: `constDecl` refuses these by design (its
+ * `kind === "const"` guard, added because a `let` was being claimed as the documented const
+ * frame), and `uninitializedLet` covers only the no-initializer case.
+ *
+ * The annotation is handed back rather than dropped, unlike `constDecl`'s untyped `ConstDecl`.
+ * It is the only thing separating `let cachedToken: string | null = null;` — the one form
+ * `renderTokenFunction` writes — from `let cachedToken: null | string = null;` and
+ * `let tokenExpiresAt: number = 0;`, both of which typecheck, neither of which the emitter can
+ * produce; a caller reading only the name and the initializer would claim them and re-emit
+ * something else. Its ABSENCE is equally load-bearing, which is why this returns
+ * `AstNode | undefined` rather than resolving a name: `tokenExpiresAt` is written bare.
+ */
+export function letDecl(node: AstNode | undefined): LetDecl | undefined {
+  if (node?.type !== "VariableDeclaration") return undefined;
+  if (raw(node)["kind"] !== "let") return undefined;
+  const declarations = childList(node, "declarations");
+  if (declarations?.length !== 1) return undefined;
+  const declarator = declarations[0];
+  const id = child(declarator, "id");
+  const name = identName(id);
+  const init = child(declarator, "init");
+  if (name === undefined || init === undefined) return undefined;
+  return { name, init, typeAnnotation: identTypeAnnotation(id) };
+}
+
 export function functionName(node: AstNode | undefined): string | undefined {
   if (node?.type !== "FunctionDeclaration") return undefined;
   return identName(child(node, "id"));

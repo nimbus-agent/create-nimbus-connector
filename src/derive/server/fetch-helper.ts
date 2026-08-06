@@ -254,19 +254,41 @@ function inlineHeadersObject(fetchCall: AstNode): Record<string, string> | undef
   return headerFields(objectProperty(headers)?.value);
 }
 
+/** An env accessor called for its header record, and whether the call site awaits it. */
+type AccessorCall = { readonly name: string; readonly awaited: boolean };
+
 /**
- * Extract the headers accessor name from the CallExpression form.
- * For `{ headers: headers() }` or `{ headers: authHeaders() }`, returns "headers" or "authHeaders".
+ * `<accessor>()` or `await <accessor>()` — the two forms `headerOption` (src/emit/server/
+ * fetch-helper.ts) writes for `fetchHelper.headers`, depending on the named env entry's `auth`.
+ *
+ * WHICH form appears is not a `fetchHelper` field: `headerOption` awaits exactly when that entry
+ * carries `auth: "client-credentials"`, whose accessor `renderClientCredentials` emits `async`.
+ * So `awaited` is EVIDENCE about the env, handed up to `deriveSharedStyleSpec` and cross-checked
+ * there — a module awaiting a synchronous accessor (or failing to await an async one) regenerates
+ * the other form, which is a claim this recognizer must not make on its own.
+ *
+ * Zero arguments is required, not the accessor's identity — `matchFetchHelperFunction` and
+ * `matchWriteHelperFunction` both pin `countFetchCalls(s) === 1`, which is what stops
+ * `{ ...fetch(), … }` (and now `{ ...(await fetch()), … }`, since `walk` finds the CallExpression
+ * inside the AwaitExpression just the same) from recovering `fetchHelper.headers: "fetch"`.
  */
-function headersAccessor(fetchCall: AstNode): string | undefined {
+function accessorCall(node: AstNode | undefined): AccessorCall | undefined {
+  const inner = awaited(node);
+  const call = inner ?? node;
+  if (callArgs(call)?.length !== 0) return undefined;
+  const name = identName(calleeOf(call));
+  return name === undefined ? undefined : { name, awaited: inner !== undefined };
+}
+
+/**
+ * Extract the headers accessor from the CallExpression form.
+ * For `{ headers: headers() }` or `{ headers: await authHeaders() }` — see `accessorCall`.
+ */
+function headersAccessor(fetchCall: AstNode): AccessorCall | undefined {
   const options = callArgs(fetchCall)?.[1];
   const properties = objectExpressionProperties(options) ?? [];
   const headers = findObjectProperty(properties, "headers");
-  const headersValue = objectProperty(headers)?.value;
-
-  const args = callArgs(headersValue);
-  if (args?.length !== 0) return undefined;
-  return identName(calleeOf(headersValue));
+  return accessorCall(objectProperty(headers)?.value);
 }
 
 /** The `<serviceLabel>` in `` throw new Error(`<serviceLabel> ${String(res.status)}: …`) ``. */
@@ -403,8 +425,14 @@ function matchFetchStatement(stmt: AstNode): AstNode | undefined {
  * `constDecl` carries the `kind === "const"` guard this used to check by hand — without it,
  * `let text = await res.text();` passed every check below and was claimed as the documented
  * `const` line, same gap as server/index.ts's isRegistrarConst.
+ *
+ * Exported for `server/env.ts`'s client-credentials token exchange, which writes the identical
+ * line: `renderTokenFunction` (src/emit/server/env.ts) performs its own fetch, and this is the
+ * fourth emitter function to write this statement. Shared rather than copied, the rule
+ * `hoists.ts`'s module docstring states — a copy is a place for one side to be tightened while
+ * the other keeps accepting what its twin just learned to reject.
  */
-function isTextStatement(stmt: AstNode): boolean {
+export function isTextStatement(stmt: AstNode): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "text") return false;
   const call = awaited(decl.init);
@@ -415,8 +443,14 @@ function isTextStatement(stmt: AstNode): boolean {
  * `if (!res.ok) { throw new Error(...); }` — matched positionally. The throw's message
  * (serviceLabel) is read separately, by serviceLabelFrom against the whole function: with the
  * body now fully accounted for statement by statement, this is the only throw left in it.
+ *
+ * Exported for the same reason `isTextStatement` above is: `renderTokenFunction`
+ * (src/emit/server/env.ts) writes this identical guard around its own response. That caller reads
+ * the message rather than ignoring it — its token function throws TWO messages, and they have to
+ * name the same service — so it checks the SHELL here and digs the template out itself, which is
+ * why this still returns a bare boolean.
  */
-function isThrowGuard(stmt: AstNode): boolean {
+export function isThrowGuard(stmt: AstNode): boolean {
   const s = ifStatement(stmt);
   if (s === undefined || s.alternate !== undefined) return false;
 
@@ -637,16 +671,25 @@ function hasExpectedFetchOptions(fetchCall: AstNode): boolean {
 type FetchHelperHeaders = Pick<FetchHelperFields, "inlineHeaders" | "headers">;
 
 /**
+ * The recovered headers, split the way `RecognizedFetchHelper` splits its own result: the spec
+ * fields, and the one recovered fact that is NOT one. See `accessorCall` for what `awaitedHeaders`
+ * means and why it cannot be resolved here.
+ */
+type MatchedHeaders = { readonly fields: FetchHelperHeaders; readonly awaitedHeaders: boolean };
+
+/**
  * The headers half of the fetch options object. `renderFetchHelper` writes exactly one of the
  * two forms, so both present at once (or neither) is refused rather than resolved in favour of
- * one of them.
+ * one of them. The inline form is never awaited — `headerOption`'s inline branch writes each
+ * value as a literal or a bare `${env.X}` accessor call, with no `await` anywhere.
  */
-function matchFetchHelperHeaders(fetchCall: AstNode): FetchHelperHeaders | undefined {
+function matchFetchHelperHeaders(fetchCall: AstNode): MatchedHeaders | undefined {
   const inlineHeaders = inlineHeadersObject(fetchCall);
   const headers = headersAccessor(fetchCall);
   if (inlineHeaders !== undefined && headers !== undefined) return undefined;
-  if (inlineHeaders !== undefined) return { inlineHeaders };
-  return headers === undefined ? undefined : { headers };
+  if (inlineHeaders !== undefined) return { fields: { inlineHeaders }, awaitedHeaders: false };
+  if (headers === undefined) return undefined;
+  return { fields: { headers: headers.name }, awaitedHeaders: headers.awaited };
 }
 
 /** `matchFetchHelperFunction`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */
@@ -655,18 +698,21 @@ type MatchedFetchHelper = {
   readonly constStatement?: AstNode;
   /** See `FetchHelperBody.passthrough` — evidence about the tools, not a `fetchHelper` field. */
   readonly passthrough: boolean;
+  /** See `accessorCall` — evidence about the env, not a `fetchHelper` field. */
+  readonly awaitedHeaders: boolean;
 };
 
 /**
- * What `recognizeFetchHelper` hands back: the spec fields, and the one piece of recovered
- * evidence that is NOT one. Kept beside `fields` rather than folded into `FetchHelperFields` for
- * the same reason tools-hand.ts's `ToolShape` keeps `staticStyle`/`schemaShape` beside its own
+ * What `recognizeFetchHelper` hands back: the spec fields, and the two pieces of recovered
+ * evidence that are NOT fields. Kept beside `fields` rather than folded into `FetchHelperFields`
+ * for the same reason tools-hand.ts's `ToolShape` keeps `staticStyle`/`schemaShape` beside its own
  * `fields` — `FetchHelperSchema` is a `strictObject` that would reject a `passthrough` key, and
  * `deriveSharedStyleSpec` spreads these fields straight into the derived spec.
  */
 export type RecognizedFetchHelper = {
   readonly fields: FetchHelperFields;
   readonly passthrough: boolean;
+  readonly awaitedHeaders: boolean;
 };
 
 /**
@@ -712,12 +758,13 @@ function matchFetchHelperFunction(
       base: reconstructed.base,
       ...(reconstructed.baseConst === undefined ? {} : { baseConst: reconstructed.baseConst }),
       serviceLabel,
-      ...headers,
+      ...headers.fields,
       ...(parsed.normalizeLeadingSlash && { normalizeLeadingSlash: true as const }),
       ...(parsed.jsonFallbackRaw && { jsonFallbackRaw: true as const }),
     },
     constStatement: reconstructed.constStatement,
     passthrough: parsed.passthrough,
+    awaitedHeaders: headers.awaitedHeaders,
   };
 }
 
@@ -744,7 +791,11 @@ export function recognizeFetchHelper(
     if (matched.constStatement !== undefined) {
       claims.claim(matched.constStatement, "fetch-helper");
     }
-    return { fields: matched.fields, passthrough: matched.passthrough };
+    return {
+      fields: matched.fields,
+      passthrough: matched.passthrough,
+      awaitedHeaders: matched.awaitedHeaders,
+    };
   }
   return undefined;
 }
@@ -828,12 +879,16 @@ function isConditionalBodySpread(node: AstNode): boolean {
  *
  * `headerExpr` is `headerOption(spec)` with the `headers: ` prefix stripped, so the spread's
  * argument is exactly one of the two forms the READ helper puts after `headers:` — an inline
- * object literal, or a zero-argument accessor call. The `await headers()` form a
- * client-credentials accessor produces is refused here, matching `headersAccessor` above, which
- * refuses it on the read side for the same reason: neither `recognizeEnv` nor this file models
- * that accessor, so accepting it here would claim a module the env recognizer then blocks anyway.
+ * object literal, or a (possibly awaited) zero-argument accessor call, read by the same
+ * `accessorCall` the read side uses.
+ *
+ * The `await headers()` form used to be refused here, and that refusal was correct only because
+ * `recognizeEnv` did not yet model the accessor that produces it: `auth: "client-credentials"`.
+ * Task 8 landed that recognizer, which makes the shape reachable — so the check became a cross-
+ * check rather than a refusal, and it moved to `deriveSharedStyleSpec`, the only place that can
+ * see both this helper and the env entry `fetchHelper.headers` names.
  */
-function matchWriteHelperHeaders(node: AstNode): FetchHelperHeaders | undefined {
+function matchWriteHelperHeaders(node: AstNode): MatchedHeaders | undefined {
   const properties = objectExpressionProperties(node);
   if (properties?.length !== 2) return undefined;
 
@@ -853,19 +908,21 @@ function matchWriteHelperHeaders(node: AstNode): FetchHelperHeaders | undefined 
   // not fall through to the accessor branch and be refused there for an unrelated reason.
   if (objectExpressionProperties(spread) !== undefined) {
     const inlineHeaders = headerFields(spread);
-    return inlineHeaders === undefined ? undefined : { inlineHeaders };
+    return inlineHeaders === undefined
+      ? undefined
+      : { fields: { inlineHeaders }, awaitedHeaders: false };
   }
 
-  if (callArgs(spread)?.length !== 0) return undefined;
-  const headers = identName(calleeOf(spread));
-  return headers === undefined ? undefined : { headers };
+  const headers = accessorCall(spread);
+  if (headers === undefined) return undefined;
+  return { fields: { headers: headers.name }, awaitedHeaders: headers.awaited };
 }
 
 /**
  * `{ method, headers: { … }, ...(body === undefined ? {} : { body }) }` — exactly these three
  * entries, in this order. `method` is required to be SHORTHAND for the same reason `{ body }` is.
  */
-function matchWriteHelperOptions(node: AstNode): FetchHelperHeaders | undefined {
+function matchWriteHelperOptions(node: AstNode): MatchedHeaders | undefined {
   const properties = objectExpressionProperties(node);
   if (properties?.length !== 3) return undefined;
 
@@ -886,7 +943,7 @@ function matchWriteHelperOptions(node: AstNode): FetchHelperHeaders | undefined 
 type WriteHelperBody = {
   /** The template `reconstructBase` reads the base off — see `FetchHelperBody.baseTemplate`. */
   readonly baseTemplate: AstNode;
-  readonly headers: FetchHelperHeaders;
+  readonly headers: MatchedHeaders;
   /** See `FetchHelperBody.passthrough`: evidence about the tools, not a `fetchHelper` field. */
   readonly passthrough: boolean;
 };
@@ -945,6 +1002,8 @@ type MatchedWriteHelper = {
   readonly fields: FetchHelperFields;
   readonly constStatement?: AstNode;
   readonly passthrough: boolean;
+  /** See `accessorCall` — evidence about the env, not a `fetchHelper` field. */
+  readonly awaitedHeaders: boolean;
 };
 
 /**
@@ -991,10 +1050,11 @@ function matchWriteHelperFunction(
       base: reconstructed.base,
       ...(reconstructed.baseConst === undefined ? {} : { baseConst: reconstructed.baseConst }),
       serviceLabel,
-      ...parsed.headers,
+      ...parsed.headers.fields,
     },
     constStatement: reconstructed.constStatement,
     passthrough: parsed.passthrough,
+    awaitedHeaders: parsed.headers.awaitedHeaders,
   };
 }
 
@@ -1013,6 +1073,12 @@ function matchWriteHelperFunction(
  * `inlineHeaders` is compared through `JSON.stringify` rather than key by key because ORDER is
  * part of the fact: both helpers render `headerOption(spec)`'s entries in one `Object.entries`
  * pass, so a reordering is a module neither of them wrote.
+ *
+ * `awaitedHeaders` is deliberately NOT compared here, and it is not a hole: it is evidence about
+ * the ENV rather than a `fetchHelper` field (see `accessorCall`), and `deriveSharedStyleSpec`
+ * holds EACH helper's flag against the env entry independently. Two helpers disagreeing means at
+ * least one of them disagrees with the env, so that check already blocks the module — comparing
+ * them here as well would name the same defect twice, and less precisely.
  */
 function agreesWithReadHelper(write: FetchHelperFields, read: FetchHelperFields): boolean {
   return (
@@ -1029,6 +1095,7 @@ function agreesWithReadHelper(write: FetchHelperFields, read: FetchHelperFields)
 export type RecognizedWriteHelper = {
   readonly fields: FetchHelperFields;
   readonly passthrough: boolean;
+  readonly awaitedHeaders: boolean;
 };
 
 /**
@@ -1060,7 +1127,11 @@ export function recognizeWriteHelper(
     if (matched.constStatement !== undefined) {
       claims.claim(matched.constStatement, "write-helper");
     }
-    return { fields: matched.fields, passthrough: matched.passthrough };
+    return {
+      fields: matched.fields,
+      passthrough: matched.passthrough,
+      awaitedHeaders: matched.awaitedHeaders,
+    };
   }
   return undefined;
 }

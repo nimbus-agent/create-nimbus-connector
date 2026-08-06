@@ -104,11 +104,17 @@ const TWO_FETCHES = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  // `passthrough` is recovered beside the spec fields rather than among them (see
-  // RecognizedFetchHelper) — unpacked here so every assertion below keeps comparing `fields`
-  // against exactly the object the derived spec's `fetchHelper` is spread from.
+  // `passthrough` and `awaitedHeaders` are recovered beside the spec fields rather than among
+  // them (see RecognizedFetchHelper) — unpacked here so every assertion below keeps comparing
+  // `fields` against exactly the object the derived spec's `fetchHelper` is spread from.
   const matched = recognizeFetchHelper(statements, claims);
-  return { fields: matched?.fields, passthrough: matched?.passthrough, claims, statements };
+  return {
+    fields: matched?.fields,
+    passthrough: matched?.passthrough,
+    awaitedHeaders: matched?.awaitedHeaders,
+    claims,
+    statements,
+  };
 }
 
 // Every helper recognizeFetchHelper must refuse, each with the reason it exists. One row per
@@ -512,6 +518,35 @@ describe("recognizeFetchHelper", () => {
       headers: "headers",
     });
     expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("reads `headers: await headers()` to the same fields, reporting the await as evidence", () => {
+    // `headerOption` (src/emit/server/fetch-helper.ts) writes the awaited form iff the env entry
+    // that accessor names carries `auth: "client-credentials"`. Which form it is says nothing
+    // about `fetchHelper` — hence identical `fields` — so it travels beside them and is
+    // cross-checked against the env in `deriveSharedStyleSpec`.
+    const source = SENTRY.replace("{ headers: headers() }", "{ headers: await headers() }");
+    expect(source).not.toBe(SENTRY);
+    const { fields, awaitedHeaders } = run(source);
+    expect(fields).toEqual({
+      local: "sentryGet",
+      base: "${env.apiRoot}",
+      serviceLabel: "Sentry",
+      headers: "headers",
+    });
+    expect(awaitedHeaders).toBe(true);
+    expect(run(SENTRY).awaitedHeaders).toBe(false);
+    // The inline form is never awaited — `headerOption`'s inline branch has no `await` in it.
+    expect(run(NEWRELIC).awaitedHeaders).toBe(false);
+  });
+
+  it("still refuses `headers: await fetch()` — countFetchCalls, not the accessor branch, is what closes that", () => {
+    // The read-side twin of the write helper's own `{ ...(await fetch()), … }` case: widening the
+    // accessor branch to accept `await` newly puts that hazard's awaited form in reach, and the
+    // recovered `headers: "fetch"` would re-emit IDENTICAL bytes, invisible to every byte diff.
+    const source = SENTRY.replace("{ headers: headers() }", "{ headers: await fetch() }");
+    expect(source).not.toBe(SENTRY);
+    expect(run(source).fields).toBeUndefined();
   });
 
   // mercury/netlify/bitrise spell this "BASE"/"BASE"/"BITRISE_API"; discord/google-meet spell
@@ -951,7 +986,13 @@ function runWrite(source: string, readHelper?: FetchHelperFields) {
   const statements = parseModule(source);
   const claims = createClaimSet();
   const matched = recognizeWriteHelper(statements, claims, readHelper);
-  return { fields: matched?.fields, passthrough: matched?.passthrough, claims, statements };
+  return {
+    fields: matched?.fields,
+    passthrough: matched?.passthrough,
+    awaitedHeaders: matched?.awaitedHeaders,
+    claims,
+    statements,
+  };
 }
 
 // Every write helper recognizeWriteHelper must refuse, each with the reason it exists. One row per
@@ -1117,11 +1158,29 @@ describe("recognizeWriteHelper", () => {
     });
   });
 
-  it("refuses an awaited headers accessor, exactly as the read helper's own headersAccessor does", () => {
-    // The client-credentials shape (`headerOption` awaits that accessor). recognizeEnv does not
-    // model its token function either, so accepting it here would claim a helper in a module the
-    // env recognizer then blocks anyway — zzwrite is that fixture.
+  it("reads an awaited headers accessor, reporting the await as evidence rather than refusing it", () => {
+    // The client-credentials shape (`headerOption` awaits that accessor). This used to be a flat
+    // refusal, correct only because `recognizeEnv` did not yet model the accessor that produces
+    // it — task 8 landed that recognizer, which makes the shape reachable, so the check became a
+    // cross-check in `deriveSharedStyleSpec` (the only place that can see both this helper and
+    // the env entry `fetchHelper.headers` names) rather than a refusal here. `awaitedHeaders` is
+    // what carries it there; the SPEC fields are unchanged, since which form appears is a fact
+    // about the env, not about `fetchHelper`.
     const src = ZZ_BOTH_WRITE.replace("...headers()", "...(await headers())");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    const { fields, awaitedHeaders } = runWrite(src);
+    expect(fields).toEqual(ZZ_BOTH_FIELDS);
+    expect(awaitedHeaders).toBe(true);
+    expect(runWrite(ZZ_BOTH_WRITE).awaitedHeaders).toBe(false);
+  });
+
+  it("still refuses `{ ...(await fetch()), … }` — countFetchCalls, not the accessor branch, is what closes that", () => {
+    // `accessorCall` accepts any zero-argument call, awaited or not, and `fetch()` is one — so
+    // this would recover `fetchHelper.headers: "fetch"`, a spec that re-emits the IDENTICAL bytes
+    // and is therefore invisible to every byte diff. Widening the accessor branch to accept
+    // `await` newly puts the awaited form of that hazard in reach; the two-fetch-call guard sees
+    // it because `walk` finds the CallExpression inside the AwaitExpression just the same.
+    const src = ZZ_BOTH_WRITE.replace("...headers()", "...(await fetch())");
     expect(src).not.toBe(ZZ_BOTH_WRITE);
     expect(runWrite(src).fields).toBeUndefined();
   });

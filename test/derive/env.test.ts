@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
-import { recognizeEnv } from "../../src/derive/server/env.ts";
+import { type EnvEntry, recognizeEnv } from "../../src/derive/server/env.ts";
+import { renderEnvAccessor } from "../../src/emit/server/env.ts";
+import { EnvSchema } from "../../src/spec.ts";
 
 beforeAll(async () => {
   await initParser();
@@ -27,8 +29,8 @@ const OPTIONAL = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  const entries = recognizeEnv(statements, claims);
-  return { entries, unclaimed: claims.unclaimed(statements) };
+  const { entries, tokenServiceLabels } = recognizeEnv(statements, claims);
+  return { entries, tokenServiceLabels, unclaimed: claims.unclaimed(statements) };
 }
 
 // Every source the recognizer must refuse, each with the reason it exists. One row per case:
@@ -770,4 +772,243 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
     expect(entries).toEqual([]);
     expect(unclaimed).toHaveLength(1);
   });
+});
+
+/**
+ * `auth: "client-credentials"` — the-honest-histogram's task 8, and the largest single construct
+ * in this emitter: FOUR module-scope statements (`let cachedToken`, `let tokenExpiresAt`,
+ * `async function token()`, `async function <local>()`) claimed as ONE entry, the way the
+ * split-bearer PAIR already is.
+ *
+ * The source under test is `renderEnvAccessor`'s own output rather than text copied into this
+ * file, so a change to `renderClientCredentials` that this recognizer does not follow fails here
+ * instead of silently testing a shape the emitter stopped writing. Every corruption below is
+ * guarded with `expect(corrupted).not.toBe(pristine)` for the same reason.
+ *
+ * Only SIX of the ~30 lines those two functions emit carry a spec field (the two reads, the
+ * guard's own var names, the token URL, the `scope` line, the credential placement, and the
+ * wrapper's name). Everything else is a constant, and a module differing in one of them derives a
+ * spec that regenerates different bytes while the totality rule stays silent — the statement WAS
+ * claimed. Hence a refusal case per constant.
+ */
+const CC_SPEC = {
+  vars: ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  local: "authHeaders",
+  bindings: ["id", "secret"],
+  auth: "client-credentials",
+  tokenUrl: "https://api.zzwrite.test/oauth/token",
+  scope: "items:readwrite",
+  credentialsIn: "basic",
+};
+
+/** `renderEnvAccessor`'s own text for `CC_SPEC`, with fields replaced. */
+function emitClientCredentials(overrides: Record<string, unknown> = {}): string {
+  return renderEnvAccessor(EnvSchema.parse({ ...CC_SPEC, ...overrides }), "ZZ Write");
+}
+
+const CLIENT_CREDENTIALS = emitClientCredentials();
+
+/** What `CLIENT_CREDENTIALS` must derive back to — `CC_SPEC` plus the schema defaults. */
+const CC_ENTRY = {
+  vars: ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  local: "authHeaders",
+  bindings: ["id", "secret"],
+  // `needsGuard` is true for any entry with `auth`, whatever `required` says, so the two values
+  // regenerate identical bytes — the schema default is recorded, exactly as buildAuthEntry does.
+  required: false,
+  auth: "client-credentials",
+  tokenUrl: "https://api.zzwrite.test/oauth/token",
+  scope: "items:readwrite",
+  credentialsIn: "basic",
+} satisfies EnvEntry;
+
+describe("recognizeEnv: auth: client-credentials", () => {
+  it("recovers one entry from four statements, claiming all four (credentialsIn: basic)", () => {
+    const { entries, unclaimed, tokenServiceLabels } = run(CLIENT_CREDENTIALS);
+    expect(entries).toEqual([CC_ENTRY]);
+    expect(unclaimed).toEqual([]);
+    // The label is EVIDENCE, not a field of any entry: spec.serviceLabel is recovered from the
+    // fetch helper, and deriveSpec holds the two against each other.
+    expect(tokenServiceLabels).toEqual(["ZZ Write"]);
+  });
+
+  it("recovers credentialsIn: body from the two body.set lines and the header object that loses its Authorization entry", () => {
+    const source = emitClientCredentials({ credentialsIn: "body" });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([{ ...CC_ENTRY, credentialsIn: "body" as const }]);
+  });
+
+  it('omits scope when no body.set("scope", …) line exists', () => {
+    const source = emitClientCredentials({ scope: undefined });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    const { scope, ...withoutScope } = CC_ENTRY;
+    expect(scope).toBe("items:readwrite");
+    expect(run(source).entries).toEqual([withoutScope]);
+  });
+
+  it("recovers the camel-cased default bindings when the spec declares none", () => {
+    const source = emitClientCredentials({ bindings: undefined });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([
+      { ...CC_ENTRY, bindings: ["zzwriteClientId", "zzwriteClientSecret"] },
+    ]);
+  });
+
+  it("recovers the defaulted read form, which suppresses the guard entirely", () => {
+    // guardLines writes nothing once a `default` is present, whatever `required`/`auth` say —
+    // so the group is one statement shorter, and the recognizer must not demand the guard.
+    const source = emitClientCredentials({ default: "unset" });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([{ ...CC_ENTRY, default: "unset" }]);
+  });
+
+  it("sorts the group by its FIRST statement's position, not the wrapper's", () => {
+    // recognizeEnv re-sorts into declaration order by index, and that order is what
+    // renderEnvAccessors regenerates the module's byte order from. A four-statement group keyed
+    // on its wrapper (the LAST statement) would sort behind an accessor declared between the
+    // `let cachedToken` line and it.
+    const source = [OPTIONAL, "", CLIENT_CREDENTIALS, "", REQUIRED].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries.map((e) => e.local)).toEqual(["region", "authHeaders", "apiKey"]);
+    expect(unclaimed).toEqual([]);
+  });
+});
+
+/**
+ * Each corruption changes ONE of the constants `renderTokenFunction`/`renderClientCredentials`
+ * write, and each must leave all four statements unclaimed. The assertions are identical in every
+ * row — no entry, nothing claimed — so only the source and its rationale differ.
+ */
+const REFUSED_CLIENT_CREDENTIALS: [string, string][] = [
+  [
+    "cachedToken initialized to something other than null — the cache check compares against null",
+    CLIENT_CREDENTIALS.replace(
+      "let cachedToken: string | null = null;",
+      'let cachedToken: string | null = "";',
+    ),
+  ],
+  [
+    "cachedToken annotated something other than `string | null`, which typechecks and is bytes the emitter never writes",
+    CLIENT_CREDENTIALS.replace(
+      "let cachedToken: string | null = null;",
+      "let cachedToken: null | string = null;",
+    ),
+  ],
+  [
+    "tokenExpiresAt initialized to something other than 0",
+    CLIENT_CREDENTIALS.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt = 1;"),
+  ],
+  [
+    "tokenExpiresAt given an annotation — renderTokenFunction writes it bare, and `: number` re-emits differently",
+    CLIENT_CREDENTIALS.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt: number = 0;"),
+  ],
+  [
+    "a skew constant other than 60 — the derived spec carries no field for it, so this re-emits 60",
+    CLIENT_CREDENTIALS.replace("Math.min(60,", "Math.min(30,"),
+  ],
+  [
+    "a halving divisor other than 2, the other half of the same arithmetic",
+    CLIENT_CREDENTIALS.replace("parsed.expires_in / 2", "parsed.expires_in / 3"),
+  ],
+  [
+    "a TTL unit other than 1000 — seconds is what expires_in is measured in",
+    CLIENT_CREDENTIALS.replace("Date.now() + ttl * 1000", "Date.now() + ttl * 60000"),
+  ],
+  [
+    'a body.set("scope", …) naming a non-literal — `scope` is JSON.stringify\'d into the emitted text',
+    CLIENT_CREDENTIALS.replace(
+      'body.set("scope", "items:readwrite");',
+      "body.set(\"scope\", process.env['SCOPE']);",
+    ),
+  ],
+  [
+    'credentialsIn: "basic" with the client_id/client_secret body lines ALSO present — renderTokenFunction\'s if/else writes one or the other, never both',
+    CLIENT_CREDENTIALS.replace(
+      'body.set("scope", "items:readwrite");',
+      [
+        'body.set("scope", "items:readwrite");',
+        '  body.set("client_id", id);',
+        '  body.set("client_secret", secret);',
+      ].join("\n"),
+    ),
+  ],
+  [
+    "neither credential placement — no Authorization header and no body lines, a shape no credentialsIn value produces",
+    CLIENT_CREDENTIALS.replace("      Authorization: encodeBasicAuthHeader(id, secret),\n", ""),
+  ],
+  [
+    "a token endpoint that is not a string literal — `tokenUrl` is JSON.stringify'd into the fetch call",
+    CLIENT_CREDENTIALS.replace(
+      'await fetch("https://api.zzwrite.test/oauth/token", {',
+      "await fetch(tokenEndpoint(), {",
+    ),
+  ],
+  [
+    "a response-body slice other than 400 characters",
+    CLIENT_CREDENTIALS.replace("text.slice(0, 400)", "text.slice(0, 200)"),
+  ],
+  [
+    "two error messages naming DIFFERENT services — one serviceLabel writes both",
+    CLIENT_CREDENTIALS.replace(
+      '"ZZ Write token response missing access_token"',
+      '"Other Service token response missing access_token"',
+    ),
+  ],
+  [
+    "a JSON.parse cast that does not declare expires_in — the ttl arithmetic below reads it",
+    CLIENT_CREDENTIALS.replace(
+      "as { access_token?: unknown; expires_in?: unknown }",
+      "as { access_token?: unknown }",
+    ),
+  ],
+  [
+    "a cache check that treats an already-expired token as fresh (`<=` for `<`)",
+    CLIENT_CREDENTIALS.replace("Date.now() < tokenExpiresAt", "Date.now() <= tokenExpiresAt"),
+  ],
+  [
+    "an unbounded-TTL fallback other than Number.POSITIVE_INFINITY",
+    CLIENT_CREDENTIALS.replace("Number.POSITIVE_INFINITY", "Number.MAX_SAFE_INTEGER"),
+  ],
+  [
+    "an empty-token check that accepts the empty string",
+    CLIENT_CREDENTIALS.replace(' || parsed.access_token === ""', ""),
+  ],
+  [
+    "an extra statement inside the token function — the claim covers its whole byte range, so anything the walk does not account for rides along",
+    CLIENT_CREDENTIALS.replace(
+      "  return cachedToken;\n}",
+      "  logIt(cachedToken);\n  return cachedToken;\n}",
+    ),
+  ],
+  [
+    "a wrapper whose Authorization value is not exactly `Bearer ${await token()}`",
+    CLIENT_CREDENTIALS.replace(
+      "Authorization: `Bearer ${await token()}`",
+      "Authorization: `Token ${await token()}`",
+    ),
+  ],
+  [
+    "a wrapper that calls token() WITHOUT awaiting it — token() is async, and the un-awaited form re-emits with the await",
+    CLIENT_CREDENTIALS.replace("${await token()}", "${token()}"),
+  ],
+  [
+    "a wrapper calling a function other than token()",
+    CLIENT_CREDENTIALS.replace("await token()", "await otherToken()"),
+  ],
+];
+
+describe("recognizeEnv: auth: client-credentials refusals", () => {
+  for (const [reason, corrupted] of REFUSED_CLIENT_CREDENTIALS) {
+    it(`refuses ${reason}`, () => {
+      expect(corrupted).not.toBe(CLIENT_CREDENTIALS);
+      const { entries, unclaimed, tokenServiceLabels } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(tokenServiceLabels).toEqual([]);
+      // All four statements stay unclaimed — including the WRAPPER, which is what stops the
+      // plain-accessor pass from picking it up as an env entry the module never declared. That
+      // guard is recognizeOne's async/return-type pin (task 1); this is what stops a later
+      // change from removing it silently.
+      expect(unclaimed).toHaveLength(4);
+    });
+  }
 });

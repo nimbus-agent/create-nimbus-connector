@@ -89,6 +89,15 @@ import { displayPath } from "../../src/types.ts";
  * elsewhere), so this local round trip (this repo's own spec -> emit -> derive -> re-emit) is a
  * weaker, and different, claim than corpus byte-identity.
  *
+ * zzwrite is Task 8's fixture, and the last one to move: it is the ONLY fixture with
+ * `auth: "client-credentials"`, whose four module-scope statements (`let cachedToken`,
+ * `let tokenExpiresAt`, `async function token()`, `async function authHeaders()`)
+ * `matchClientCredentials` (server/env.ts) now claims as one entry. It is also the only fixture
+ * that exercises the AWAITED headers accessor — `headerOption` writes `await authHeaders()`
+ * exactly for this auth mode — so it is the only round-trip proof of
+ * `fetch-helper:headers-await-mismatch`'s two agreeing sides, in both the read helper and the
+ * write helper, and of the token function's own `serviceLabel` agreeing with the fetch helper's.
+ *
  * `bitrise` is Task 7's fixture, unblocked by `recognizeStubShape`/`recognizeStubHandler`
  * (server/tools-hand.ts) — its two `impl: "stub"` tools were the last thing standing between it
  * and this list; see BLOCKED's own docstring, below, for the shape that used to stop it. Like
@@ -126,6 +135,7 @@ const ROUND_TRIP = [
   "zzwriteonly",
   "zzwriterest",
   "bitrise",
+  "zzwrite",
 ];
 
 /**
@@ -165,56 +175,29 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
 };
 
 /**
- * Fixtures that must derive as BLOCKED, each with the construct that stops it. Listed so the
- * gap is on screen on every run rather than implied by absence — the same reason
- * fixtures/expectations.json omits a file instead of hiding it. Every reason below was checked
- * by actually running `deriveSpec` against the fixture's emitted output, not inferred from the
- * spec or the emitter — an earlier version of this docstring claimed rest-kit's frame never
- * matched (`"rest-kit frame"`), which stopped being true the moment
- * src/derive/server/index.ts grew its rest-kit branch, and a later version claimed the
- * factory const stayed unclaimed alongside a fixture's failing calls, which stopped being true
- * the moment tools-rest.ts split into `recognizeRestRegistrar` (claims the factory
- * unconditionally, as wiring — see its module docstring) and `recognizeRestTools` (all-or-nothing
- * over the calls only).
+ * Fixtures that must derive as BLOCKED, each with the construct that stops it.
  *
- * "query parameters" no longer names any fixture's blocker — server/query.ts landed the
- * recognizer, and `discord`/`google-meet`, which blocked on the query branch alone, are in
- * ROUND_TRIP / PARTIAL_ROUND_TRIP above. Both had been down to that one gap already: `matchRestUrlConst`
- * (server/fetch-helper.ts) closed their `` `${baseConst}${path}` `` fetch-helper gap earlier,
- * and re-measuring at HEAD before this task began showed each reporting ONLY its own
- * `register<X>Tool(...)` calls unclaimed — never the `baseConst` literal, the fetch-helper
- * function, or the factory.
+ * **This list is empty.** Every fixture in `fixtures/` now derives: 20 of them round-trip every
+ * file byte-identically (ROUND_TRIP), and `google-meet` derives with one file moving for a reason
+ * PARTIAL_ROUND_TRIP records and re-checks. The list is kept rather than deleted because the
+ * "accounts for every fixture" test spans all three: a fixture added later that does NOT derive
+ * belongs here, on screen, rather than being quietly absent — the same reason
+ * fixtures/expectations.json omits a file instead of hiding it.
  *
- * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
- * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
- * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. `mercury`, `netlify`,
- * `zendesk` and `dependencytrack` — the four fixtures that had a search tool alongside an env gap
- * — moved to ROUND_TRIP once Task 4 landed the split-bearer pair and the `trimTrailingSlashFn`/
- * `auth: "basic"` accessors (see ROUND_TRIP's own docstring above). `bitrise` — the last
- * `style: "read-only-kit"` fixture with a search tool that still blocked, on a DIFFERENT
- * construct ("stub tool handler") — moved to ROUND_TRIP once Task 7 landed
- * `recognizeStubShape`/`recognizeStubHandler`; see ROUND_TRIP's own docstring for what it proves
- * now and why its `handlerStyle`/`staticPathStyle` going unrecovered is not a gap.
+ * The rule for any future entry is unchanged, and it is the reason this docstring is a rule
+ * rather than a narrative: **the reason must be measured by actually running `deriveSpec` against
+ * that fixture's emitted output**, never inferred from the spec or the emitter. Three successive
+ * versions of this comment described gaps that had already closed — a claim that rest-kit's frame
+ * never matched, which stopped being true when src/derive/server/index.ts grew its rest-kit
+ * branch; a claim that the factory const stayed unclaimed, which stopped being true when
+ * tools-rest.ts split into `recognizeRestRegistrar` and `recognizeRestTools`; and a
+ * "client-credentials auth" entry whose stated authority was a `recognizeOne` docstring that Task
+ * 8 rewrote. Each time, the task closing the gap edited the LIST and left the prose.
  *
- * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
- * without a search tool in the way.
- *
- * "client-credentials auth" (zzwrite) is a documented exclusion inside the recognizer itself:
- * server/env.ts's `recognizeOne` docstring says the `auth: "client-credentials"` function shape
- * "is left unclaimed".
- *
- * "write body" named two DIFFERENT underlying gaps that shared one description, and both are now
- * closed. The hand-rolled half: `src/derive/server/body.ts` reads the JSON body and
- * `recognizeWriteHelper` (server/fetch-helper.ts) claims the `<local>Send` function, so
- * `zzwriteonly` — whose only tool is a POST, and which therefore emits NO read helper at all — is
- * in ROUND_TRIP above. The rest-kit half — an arity-5 `<registrar>(...)` call, whose non-`GET`
- * `initFn` argument `recognizeOneCall` used to refuse outright — is closed by Task 6's
- * `recognizeInitFn`, and `zzwriterest` moved to ROUND_TRIP alongside it; see ROUND_TRIP's own
- * docstring for what that fixture proves.
+ * Which recognizer unblocked which fixture is recorded where it can go stale visibly instead —
+ * beside the fixture, in ROUND_TRIP's and PARTIAL_ROUND_TRIP's own docstrings above.
  */
-const BLOCKED: Record<string, string> = {
-  zzwrite: "client-credentials auth",
-};
+const BLOCKED: Record<string, string> = {};
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);

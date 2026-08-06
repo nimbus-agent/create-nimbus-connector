@@ -462,7 +462,7 @@ function deriveSharedStyleSpec(
   serverSource: string,
   filterSource: string | undefined,
 ): Derivation {
-  const env = recognizeEnv(frame.verifyStatements, claims);
+  const { entries: env, tokenServiceLabels } = recognizeEnv(frame.verifyStatements, claims);
   const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);
   // The write helper, held against the read helper when there is one — see `agreesWithReadHelper`
   // (server/fetch-helper.ts) for why the read helper is the authority rather than a second source.
@@ -548,6 +548,47 @@ function deriveSharedStyleSpec(
       `this module declares ${helperMismatch.present ? "a" : "no"} ${helperMismatch.role} ` +
         `helper, but ${helperMismatch.called ? "a tool is" : "no tool is"} ` +
         `${helperMismatch.wanted}`,
+    );
+  }
+
+  // One `spec.serviceLabel` writes BOTH the fetch helper's `${res.status}` error and the
+  // client-credentials token function's two — `renderEnvAccessors` passes it through to
+  // `renderTokenFunction` — and the two recognizers recover it independently, which is how they
+  // drift. Same class of guard as `rest-fetch-helper-name-mismatch` above, and the same reason it
+  // lives in the caller: `recognizeEnv` never sees the fetch helper.
+  const wrongLabel = tokenServiceLabels.find((label) => label !== fetchHelper.serviceLabel);
+  if (wrongLabel !== undefined) {
+    return blocked(
+      "env:token-service-label-mismatch",
+      `the client-credentials token exchange names service "${wrongLabel}", but this module's ` +
+        `fetch helper names "${fetchHelper.serviceLabel}"`,
+    );
+  }
+
+  // `headerOption` (src/emit/server/fetch-helper.ts) writes `await <accessor>()` exactly when the
+  // env entry that accessor names carries `auth: "client-credentials"` — the one accessor
+  // `renderEnvAccessor` emits `async` — and a bare `<accessor>()` for every other mode. So which
+  // form a helper carries is evidence about the ENV, recovered by a recognizer that cannot see
+  // the env, and held against it here. Without this, an awaited call to a synchronous accessor
+  // (or an un-awaited call to the async one) derives a spec that regenerates the OTHER form: a
+  // claimed statement the module does not reproduce, which the totality rule cannot see.
+  //
+  // This also covers the two helpers disagreeing with each other, which is why
+  // `agreesWithReadHelper` does not compare the flag: each is checked against the env separately,
+  // so a disagreement means at least one of them fails here.
+  const awaitsHeaders = env.some(
+    (e) => e.local === fetchHelper.headers && e.auth === "client-credentials",
+  );
+  const awaitMismatch = [
+    { role: "read", helper: recognizedHelper },
+    { role: "write", helper: writeHelper },
+  ].find((h) => h.helper !== undefined && h.helper.awaitedHeaders !== awaitsHeaders);
+  if (awaitMismatch !== undefined) {
+    return blocked(
+      "fetch-helper:headers-await-mismatch",
+      `the ${awaitMismatch.role} helper ${awaitsHeaders ? "does not await" : "awaits"} its ` +
+        `headers accessor, but ${awaitsHeaders ? "the" : "no"} env entry named ` +
+        `"${String(fetchHelper.headers)}" declares auth: "client-credentials"`,
     );
   }
 

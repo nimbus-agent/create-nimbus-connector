@@ -32,6 +32,7 @@ import {
   labelCallee,
   labelFirstInit,
   labelName,
+  letDecl,
   logical,
   memberName,
   memberObject,
@@ -57,6 +58,7 @@ import {
   typeArguments,
   unary,
   uninitializedLet,
+  unionTypes,
 } from "../../src/derive/read.ts";
 
 beforeAll(async () => {
@@ -529,6 +531,44 @@ describe("Task 5 accessors", () => {
     expect(uninitializedLet(only("const json = 1;"))).toBeUndefined();
     expect(uninitializedLet(only("var json;"))).toBeUndefined();
     expect(uninitializedLet(only("let json = 1;"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 8's accessor — `renderTokenFunction` (src/emit/server/env.ts) writes the only two
+ * initialized `let`s this deriver's emitter output declares, one annotated and one not, and
+ * neither `constDecl` (kind-guarded to "const") nor `uninitializedLet` (no-initializer only)
+ * can read either.
+ */
+describe("letDecl", () => {
+  it("reads the annotated form, carrying the annotation node the emitter's own text pins", () => {
+    const decl = letDecl(only("let cachedToken: string | null = null;"));
+    expect(decl?.name).toBe("cachedToken");
+    expect(isNullLiteral(decl?.init)).toBe(true);
+    // Handed back rather than dropped: `let cachedToken: null | string = null;` typechecks
+    // identically, and is bytes renderTokenFunction never writes.
+    expect(unionTypes(decl?.typeAnnotation)?.map((t) => typeAnnotationName(t))).toEqual([
+      "string",
+      "null",
+    ]);
+  });
+
+  it("reads the bare form, reporting the ABSENT annotation as undefined rather than guessing one", () => {
+    const decl = letDecl(only("let tokenExpiresAt = 0;"));
+    expect(decl?.name).toBe("tokenExpiresAt");
+    expect(numberLit(decl?.init)).toBe(0);
+    // `let tokenExpiresAt: number = 0;` is the shape a caller has to be able to refuse.
+    expect(decl?.typeAnnotation).toBeUndefined();
+    expect(letDecl(only("let tokenExpiresAt: number = 0;"))?.typeAnnotation).toBeDefined();
+  });
+
+  it("rejects const, var, an uninitialized let, and a multi-declarator or destructuring statement", () => {
+    expect(letDecl(only("const cachedToken = null;"))).toBeUndefined();
+    expect(letDecl(only("var cachedToken = null;"))).toBeUndefined();
+    expect(letDecl(only("let cachedToken: string | null;"))).toBeUndefined();
+    expect(letDecl(only("let a = 1, b = 2;"))).toBeUndefined();
+    expect(letDecl(only("let { a } = o;"))).toBeUndefined();
+    expect(letDecl(undefined)).toBeUndefined();
   });
 });
 
