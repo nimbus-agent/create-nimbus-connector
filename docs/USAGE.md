@@ -203,9 +203,14 @@ bunx create-nimbus-connector my-service --standalone
 bunx create-nimbus-connector --from-connector my-service > my-service.spec.json
 ```
 
-This is an authoring aid, not a second output format: the printed JSON round-trips back through
-`--spec` to regenerate the same package, and is meant to be read, edited and diffed like any
-other spec in this repo's `fixtures/`. [`docs/LICENSING.md`](./LICENSING.md) is the full answer
+This is an authoring aid, not a second output format: the printed JSON goes back through
+`--spec` to regenerate the package, and is meant to be read, edited and diffed like any
+other spec in this repo's `fixtures/`. **One field is recovered but not guaranteed**, and it is
+worth knowing before you trust a derived spec unread: for `style: "rest-kit"`, `title` is
+recovered by inverting the registrar name, and that sanitization is many-to-one — a title with a
+space regenerates the same `src/server.ts` and a different `README.md`. Check `title` by eye;
+[ROADMAP.md's Known limitations](./ROADMAP.md#known-limitations) has the entry.
+[`docs/LICENSING.md`](./LICENSING.md) is the full answer
 on what that is and is not — the short version is that running this against a checkout you
 already have is not vendoring, but a spec derived from a **real Nimbus connector** may never be
 committed to this project's own `fixtures/`.

@@ -35,9 +35,19 @@ src/derive/
   search-filter.ts  src/search-filter.ts -> filter entries, its own totality rule
   index.ts      deriveSpec(files) -> Derivation
   from-connector.ts  a connector DIRECTORY -> a spec, or named blockers (--from-connector)
-  server/       one recognizer module per src/emit/server/ module
+  server/       one recognizer module per src/emit/server/ module:
+                args, body, env, fetch-helper, frame, hoists, index,
+                path-template, query, search, tools-hand, tools-rest
 test/derive/*.test.ts          a test file per deriver module, plus the round trip
 ```
+
+**A recognizer may import `src/spec.ts`; it may never import `src/emit/`.** `server/body.ts`
+takes `parsePathTemplate` from `src/spec.ts` so its reconstruction of `renderBodyExpr`'s default
+body uses the same path parser the emitter does — a private copy that under-parses leaves an arg
+in the default set and produces a spurious explicit `body` that is byte-identical and invisible
+to every gate, while one that over-parses throws. Sharing removes the only direction nothing can
+see. That argument covers the spec language's **parsers** and nothing else: importing the
+emitter's **renderer** would let a renderer bug agree with itself, which is the opposite trade.
 
 **The deriver lives under `src/derive/`, and ships.** `package.json`'s `files` is
 `["src", "README.md"]`, so it reaches npm — which is the point: `--from-connector` is the same
@@ -175,25 +185,32 @@ instead of silently weakening the check.
 checked by actually running `deriveSpec` against the fixture's emitted output, never inferred
 from the spec or the emitter: two earlier versions of that docstring went stale exactly that way.
 
-## What is not built yet
+## The recognizer set is complete; the ceiling is not a recognizer problem
 
-`src/derive/server/search.ts`, `src/derive/search-filter.ts` and `src/derive/server/query.ts` now
-exist; `src/derive/server/body.ts` does not. `BLOCKED` no longer lists anything on "search tool" or
-"query parameters" — `discord` moved to `ROUND_TRIP` and `google-meet` to `PARTIAL_ROUND_TRIP` (a
-third list: it derives, and re-emits every file but `README.md`, whose `title` is not recoverable
-from `src/server.ts`). What remains is `bitrise` on a stub tool handler, `zzwrite` on
-client-credentials auth, and `zzwriteonly`/`zzwriterest` on write body.
+**`BLOCKED` is empty.** Every fixture in `fixtures/` derives, and every one re-emits
+byte-identically except `google-meet`, which sits in `PARTIAL_ROUND_TRIP` on one file
+(`README.md`) because a rest-kit `title` is recoverable from `src/server.ts` only up to
+`registrarName`'s sanitization. Every `src/emit/server/` module now has its counterpart under
+`src/derive/server/`, including `body.ts`, and `recognizeQueryBlock` reads **both** query
+branches — the rest-kit one and the hand-rolled one.
 
-`recognizeQueryBlock` reads only the rest-kit query branch so far; the hand-rolled one, which
-`renderQueryLines` writes into a different handler shape, is not wired.
+**So a new recognizer is no longer the obvious next move.** `docs/ROADMAP.md`'s
+[*The measured ceiling*](../../docs/ROADMAP.md#the-measured-ceiling) groups every blocked corpus
+connector by cause and splits each into a *spec-language gap* (a construct the spec cannot
+express — no recognizer closes it) or a *recognizer gap*. Read that split before writing a
+matcher: the largest remaining shapes are spec-language gaps, and three of them do not appear in
+the histogram at all, because the connectors carrying them are blocked earlier. A recognizer that
+reads a shape the emitter does not write moves a connector to `emits` and never to
+`server-identical` — legitimate, but say so up front.
 
-The specification for that work is
+The design documents behind the shipped work are
 [`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-— a seven-commit sequence of which only the first four have shipped (commit 4 being search and
-search-filter, both now landed). Read it, and the plan-1 /
-plan-2 boundary in
-[`docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md`](../../docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md),
-before starting a recognizer. Plan 2 has not been written.
+and
+[`docs/superpowers/specs/2026-08-05-roadmap-completion-design.md`](../../docs/superpowers/specs/2026-08-05-roadmap-completion-design.md),
+with the plans that executed them in `docs/superpowers/plans/`. They are history now, not a
+backlog — where a plan and the code disagree, the code is authoritative, and several of those
+documents' predictions were measured wrong on the way (see the ceiling's own note on reading what
+the code does rather than trusting a prediction).
 
 ## Before you claim a deriver change works
 

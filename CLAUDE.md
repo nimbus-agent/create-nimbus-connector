@@ -79,6 +79,7 @@ worth before quoting it as evidence.
 | `bunx biome check src/ test/ scripts/` | This repo lints | — |
 | `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
 | `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
+| `bun run reach --baseline --nimbus-root <path>` | No connector lost a tier against `fixtures/reach-baseline.json` | Nimbus checkout |
 | `bun run acceptance <nimbus-root>` | A generated connector survives inside the monorepo | Nimbus checkout |
 | `bun run wiring:conformance --nimbus-root <path>` | The wiring skeleton still matches Nimbus's real sync interface | Nimbus checkout |
 | `bun run standalone-acceptance <sdk-root>` | A standalone package builds and serves MCP, against an **unreleased SDK branch** | SDK checkout, built |
@@ -140,7 +141,8 @@ list in the same change. Two waves have been missed already, and both were found
 ## Layout
 
 ```
-src/spec.ts        zod schema + parseSpec — the spec language
+src/spec.ts        zod schema + parseSpec, and the spec language's own parsers
+                   (parsePathTemplate, resolveKeyedShape) that emit/ and derive/ share
 src/validate.ts    identifier collision rules, RESERVED_IDENTIFIERS
 src/emit/          one module per emitted file; emit/server/ splits by concern
 src/derive/        the spec deriver — the inverse of src/emit/
@@ -159,3 +161,8 @@ measured and rejected are its *Considered and declined*; harness behaviour is
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). Corpus measurements sit in the README next to
 the field they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a
 document repeating it goes stale silently.
+
+The **one** exception is *The measured ceiling* in `docs/ROADMAP.md`, which states the corpus
+regeneration counts on purpose. It earns it by carrying the date and the `packages/mcp-connectors`
+tree it was measured against, so a reader can tell when it was true; a number without those two
+is what the rule above forbids. If you re-measure it, move the date and the tree with it.
