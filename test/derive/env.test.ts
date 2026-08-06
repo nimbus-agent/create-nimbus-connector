@@ -575,13 +575,19 @@ describe("recognizeEnv: auth: basic", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("does not recover auth: basic from a ONE-var accessor (lever, named OUT by renderBasic's own docstring)", () => {
-    // renderSplitBearer's docstring (the one this task scopes both shapes to) names lever as
-    // OUT: "Basic over one var with an empty password". EnvSchema pins auth: "basic" to
-    // exactly two vars — a username and a password — so a single process.env read paired with
-    // a literal empty-string password (rather than a second read) is a shape the emitter can
-    // never produce; hand-written, the same way REFUSED_SOURCES hand-writes every other shape
-    // the emitter cannot produce.
+  it("does not recover auth: basic from a ONE-var accessor (lever, excluded by renderBasic's two-var requirement)", () => {
+    // lever is out of scope, but NOT via renderSplitBearer's docstring — that docstring's
+    // membership list is scoped to the split-bearer (tokenLocal) shape alone and names
+    // mendeley, intercom, readwise, dagster and pipedrive; "lever" has never appeared in
+    // src/emit/server/env.ts at all (confirmed: `git log -S"lever" -- src/emit/server/env.ts`
+    // returns no commit). It is excluded by a different mechanism entirely: renderBasic requires
+    // exactly two vars — a username and a password — enforced by EnvSchema's own refine
+    // ('auth: "basic" requires exactly two "vars"', src/spec.ts) and mirrored by
+    // recognizeBasicAuth's own `reads.length !== 2` check below. Lever's real source reads ONE
+    // var and passes a literal empty string as the second encodeBasicAuthHeader argument — a
+    // shape the emitter can never produce (renderBasic always reads and guards every var in
+    // e.vars, never fewer than two), so it is hand-written here the same way REFUSED_SOURCES
+    // hand-writes every other shape the emitter cannot produce.
     const source = [
       "function authHeader(): Record<string, string> {",
       '  const key = process.env["LEVER_API_KEY"]?.trim();',
