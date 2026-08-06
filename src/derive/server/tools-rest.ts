@@ -211,9 +211,14 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
     };
   }
 
-  // Form 3's block always takes exactly one parameter — renderTool's `needsParam` is forced
-  // true whenever a hoist is emitted, so `param` is always "(parsed)" here, never "()". A
-  // zero-param block is a shape this emitter cannot produce.
+  // Forms 3 and 4 both always take exactly one parameter, by two different clauses of the same
+  // `needsParam` expression (renderTool, src/emit/server/tools-rest.ts). Form 3: a block is
+  // emitted only when `used.size > 0`, i.e. a hoist exists, which forces `needsParam` true.
+  // Form 4: the query branch emits a block whatever the hoists do, but every `query` entry whose
+  // arg is NOT hoisted contributes `(query ?? []).some((q) => !hoisted.has(q.arg))` — and an
+  // entry whose arg IS hoisted contributes through `used` via `queryArgsUsed`, so a non-empty
+  // `query` forces `needsParam` true either way. A zero-param block is a shape this emitter
+  // cannot produce under either form.
   if (arrow.params.length !== 1) return undefined;
 
   const block = recognizeHoistedBlock(arrow.body);

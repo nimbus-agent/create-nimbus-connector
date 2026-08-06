@@ -229,16 +229,21 @@ export function recognizeQueryLines(
  * fetch helper's own fields by the caller — see `deriveRestKitSpec`, which is also where a
  * `literal` prefix's base is finally taken back OFF the path.
  *
- * `text` is the template's whole LEADING QUASI, not the base: `renderPath` splices the prefix in
- * as raw template text immediately ahead of the path's first literal segment, so the two arrive
- * fused (`https://api.x.test` + `/v1/items` -> one quasi `https://api.x.test/v1/items`) with no
- * marker between them. A base may itself carry a path component (discord's
- * `https://discord.com/api/v10`) and a query tool's path must start with "/" (ToolSchema's
- * `checkQueryPathPrefix`), so several splits of that quasi are byte-identical and THIS recognizer
- * cannot pick the right one — only the module's own fetch helper says where the base ends. The
- * quasi is handed over whole and the caller, which has that fact, does the split.
+ * The literal variant's field is named `leadingQuasi`, not `text` or `base`, and the name is
+ * load-bearing: it is the template's whole leading quasi, which CONTAINS the base but is not it.
+ * `renderPath` splices the prefix in as raw template text immediately ahead of the path's first
+ * literal segment, so the two arrive fused (`https://api.x.test` + `/v1/items` -> one quasi
+ * `https://api.x.test/v1/items`) with no marker between them. A base may itself carry a path
+ * component (discord's `https://discord.com/api/v10`) and a query tool's path must start with "/"
+ * (ToolSchema's `checkQueryPathPrefix`), so several splits of that quasi are byte-identical and
+ * THIS recognizer cannot pick the right one — only the module's own fetch helper says where the
+ * base ends. The quasi is handed over whole and the caller, which has that fact, does the split.
+ * Reading this field as though it were the base is the single mistake the split exists to
+ * prevent, so it is spelled so that the misreading does not survive being written down.
  */
-export type BasePrefix = { kind: "literal"; text: string } | { kind: "const"; name: string };
+export type BasePrefix =
+  | { kind: "literal"; leadingQuasi: string }
+  | { kind: "const"; name: string };
 
 /**
  * A recognized query block. `path` still carries a `literal` base prefix (see `BasePrefix`); a
@@ -280,9 +285,18 @@ function prefixedPath(
   if (t === undefined || head === undefined) return undefined;
 
   // The hoisted-base form, `` `${BASE}<path>` ``: `baseExpr` writes the expression as the very
-  // first thing in the template, so the leading quasi is empty — which a literal base can never
-  // produce, its own text being non-empty. An identifier already in `locals` is a path
-  // placeholder, not a base const, and is refused rather than mistaken for one.
+  // first thing in the template, so the leading quasi is empty.
+  //
+  // An empty leading quasi does NOT prove the hoisted form on its own, and the check that
+  // actually decides it is `identName` below. For rest-kit a literal base cannot produce one —
+  // `base` is non-empty and the schema's rest-kit refine forbids `${env.X}` in it, so `baseExpr`
+  // returns that literal text verbatim. Under hand-rolled wiring (not yet wired to this
+  // recognizer) `baseExpr` returns `resolveEnvRefs(base)`, and a base of `"${env.HOST}/api"`
+  // renders `` `${HOST()}/api…` `` — an empty leading quasi with a literal base behind it. That
+  // falls through correctly because its first expression is a CallExpression, not an identifier,
+  // so `identName` returns undefined and this branch refuses rather than inventing a base const.
+  // An identifier already in `locals` is a path placeholder, not a base const, and is refused for
+  // the same reason.
   if (head === "") {
     const name = identName(t.expressions[0]);
     if (name === undefined || locals.has(name)) return undefined;
@@ -291,7 +305,9 @@ function prefixedPath(
   }
 
   const path = recognizePathParts(t.quasis, t.expressions, locals);
-  return path === undefined ? undefined : { path, basePrefix: { kind: "literal", text: head } };
+  return path === undefined
+    ? undefined
+    : { path, basePrefix: { kind: "literal", leadingQuasi: head } };
 }
 
 /** `` return `${u}`; `` — one expression, two empty quasis. */

@@ -70,12 +70,23 @@ const HOISTED_BASE_SPEC = {
 };
 
 /**
- * A query tool beside a tool whose path is fully static and therefore QUOTED — the pair
- * `voteStaticPathStyle` would block on if the query tool voted. See the abstention test below.
+ * A query tool beside a tool whose path is fully static and therefore QUOTED — one of the two
+ * pairs `voteStaticPathStyle` would block on if the query tool voted. See the abstention tests.
  */
-const MIXED_SPEC = {
+const MIXED_QUOTED_SPEC = {
   ...SPEC,
   tools: [...SPEC.tools, { name: "zzqueryunit_ping", description: "Ping.", path: "/v1/ping" }],
+};
+
+/**
+ * The MIRROR of it: the same pair under `staticPathStyle: "template"`, where the static tool
+ * votes "template" and a query tool voting "quoted" would block instead. Abstention has two
+ * directions and the quoted case alone proves only one — neither `discord` nor `google-meet`
+ * covers this one, both using the schema's "quoted" default.
+ */
+const MIXED_TEMPLATE_SPEC = {
+  ...MIXED_QUOTED_SPEC,
+  fetchHelper: { ...SPEC.fetchHelper, staticPathStyle: "template" },
 };
 
 function emit(spec: unknown): Map<string, string> {
@@ -174,13 +185,15 @@ describe("recognizeQueryLines", () => {
 });
 
 describe("recognizeQueryBlock", () => {
-  it("keeps a literal base on the recovered path, and names it as the prefix", () => {
+  it("keeps a literal base on the recovered path, and hands back the whole leading quasi", () => {
     const { body, args } = queryCall(PRISTINE);
     const block = recognizeQueryBlock(body, args);
     expect(block?.path).toBe("https://api.zzqueryunit.test/v1/items");
+    // The quasi is base + the path's first literal segment, fused — NOT the base, which is
+    // exactly why the caller does the split. See BasePrefix.
     expect(block?.basePrefix).toEqual({
       kind: "literal",
-      text: "https://api.zzqueryunit.test/v1/items",
+      leadingQuasi: "https://api.zzqueryunit.test/v1/items",
     });
     expect(block?.query).toEqual([
       { name: "q", arg: "q" },
@@ -273,16 +286,34 @@ describe("the query branch inside deriveSpec", () => {
 
   /**
    * The abstention that matters: `renderPath`'s fast path is `if (!dynamic && prefix === "")`, so
-   * a query tool's non-empty prefix forces the template branch whatever `staticPathStyle` says. A
-   * query tool voting "template" beside a genuinely quoted static path would make
-   * `voteStaticPathStyle` block a module the emitter wrote correctly.
+   * a query tool's non-empty prefix forces the template branch whatever `staticPathStyle` says.
+   *
+   * Both directions, because there are two plausible wrong votes and each is INVISIBLE against
+   * one of the two static styles. A recognizer reporting the shape of the PREFIXED template votes
+   * "template" (a literal base plus a static path is a zero-expression template literal), which
+   * only disagrees with a `quoted` connector; a recognizer reporting the shape of the STRIPPED
+   * path votes "quoted" (`/v1/items` carries no placeholder), which only disagrees with a
+   * `template` one. Each was confirmed to fail exactly one of the two tests below, by forcing
+   * that vote in `recognizeOneCall` and running them.
+   *
+   * The `expectRoundTrip` in each case carries the "not blocked" half — a `deriveSpec` reporting
+   * `style:mixed-static-path` throws there.
    */
-  it("does not let a query tool vote on staticPathStyle", () => {
-    const derivation = derive(emit(MIXED_SPEC));
+  function expectQueryToolAbstains(spec: unknown, expected: string | undefined): void {
+    const derivation = derive(emit(spec));
     if (!derivation.ok) throw new Error(derivation.blockers.map((b) => b.kind).join(", "));
     const fetchHelper = derivation.spec.fetchHelper as Record<string, unknown>;
-    expect(fetchHelper.staticPathStyle).toBeUndefined();
-    expectRoundTrip(MIXED_SPEC);
+    expect(fetchHelper.staticPathStyle).toBe(expected);
+    expectRoundTrip(spec);
+  }
+
+  it("does not let a query tool vote `template` against a quoted static path", () => {
+    // Omitted, not "quoted": deriveRestKitSpec drops the value that reproduces the schema default.
+    expectQueryToolAbstains(MIXED_QUOTED_SPEC, undefined);
+  });
+
+  it("does not let a query tool vote `quoted` against a template static path", () => {
+    expectQueryToolAbstains(MIXED_TEMPLATE_SPEC, "template");
   });
 
   function expectBasePrefixMismatch(files: Map<string, string>, server: string): void {

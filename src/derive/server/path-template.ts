@@ -79,14 +79,21 @@ export function recognizePath(
  * keep silently accepting the shape its twin just learned to reject.
  *
  * Callers must slice quasis and expressions TOGETHER, preserving
- * `quasis.length === expressions.length + 1`; the final quasi has no expression after it, which
- * is what the `undefined` skip below is for.
+ * `quasis.length === expressions.length + 1` — the final quasi has no expression after it, which
+ * is what the `undefined` skip below is for. That pairing is CHECKED rather than merely stated:
+ * nothing reachable today can violate it (`templateLiteral` refuses a template whose own arrays
+ * do not pair, and both call sites slice by one from a paired start), but a stated invariant on
+ * an exported function is a place for a future caller to be wrong, and the failure would be
+ * silent — a shorter `expressions` array simply stops contributing placeholders, yielding a path
+ * missing a segment rather than a refusal.
  */
 export function recognizePathParts(
   quasis: readonly string[],
   expressions: readonly AstNode[],
   locals: ReadonlyMap<string, PathLocal>,
 ): string | undefined {
+  if (quasis.length !== expressions.length + 1) return undefined;
+
   let out = "";
   for (const [i, cooked] of quasis.entries()) {
     out += cooked;

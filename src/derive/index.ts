@@ -94,13 +94,18 @@ export function attributeEffects(
 }
 
 /**
- * `registrarName`'s sanitizing formula (src/spec.ts:745-746), mirrored rather than called: that
- * function takes a full `ConnectorSpec`, and constructing one here for a single-field read
- * would need a cast this module's accessors are built specifically to avoid (see read.ts's own
- * header). `capitalize` (src/spec.ts:740-741) IS imported rather than mirrored, deliberately —
- * it is not a full title-case (it upper-cases only the first character, e.g.
- * capitalize("google-meet") -> "Google-meet", hyphen and all), a shape non-obvious enough that
- * reimplementing it here would risk exactly the class of drift this task already found twice.
+ * `registrarName`'s sanitizing formula (src/spec.ts), mirrored rather than called: that function
+ * takes a full `ConnectorSpec`, and constructing one here for a single-field read would need a
+ * cast this module's accessors are built specifically to avoid (see read.ts's own header).
+ * `capitalize` (src/spec.ts) IS imported rather than mirrored, deliberately — it is not a full
+ * title-case (it upper-cases only the first character, e.g. capitalize("google-meet") ->
+ * "Google-meet", hyphen and all), a shape non-obvious enough that reimplementing it here would
+ * risk exactly the class of drift this task already found twice.
+ *
+ * Both are cited by SYMBOL, not by line: this docstring carried `src/spec.ts:745-746` and
+ * `740-741` for them, and both had drifted (to 779-781 and 774-776) by the time anyone checked.
+ * A line number is a citation that goes stale silently, which is the one thing a citation must
+ * not do.
  */
 function registrarNameFor(title: string): string {
   return `register${title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
@@ -245,10 +250,12 @@ function rebaseQueryTools(
       out.push(tool);
       continue;
     }
-    // `prefix.text` is the template's leading quasi, and the base must lie wholly inside it —
-    // it cannot span a `${…}`. Testing the quasi rather than the recovered path is what keeps a
-    // base longer than that quasi from matching by running on into a placeholder's text.
-    if (helper.baseConst !== undefined || !prefix.text.startsWith(helper.base)) return undefined;
+    // The base must lie wholly inside the leading quasi — it cannot span a `${…}`. Testing the
+    // quasi rather than the recovered path is what keeps a base longer than that quasi from
+    // matching by running on into a placeholder's rendered text.
+    if (helper.baseConst !== undefined || !prefix.leadingQuasi.startsWith(helper.base)) {
+      return undefined;
+    }
     out.push({ ...tool, path: tool.path.slice(helper.base.length) });
   }
   return out;

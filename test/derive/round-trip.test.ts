@@ -74,31 +74,38 @@ const ROUND_TRIP = [
 ];
 
 /**
- * Fixtures that DERIVE, and re-emit every file byte-identically except the ones named — each
- * because the spec field that file depends on is not encoded in anything `deriveSpec` reads.
+ * Fixtures that DERIVE, and re-emit every file byte-identically except the ones named.
  *
  * A third list rather than an omission from either of the other two, for the same reason
  * fixtures/expectations.json omits a file instead of hiding it: "derives, but one file moves" is
  * a real outcome, and filing it under BLOCKED (it is not blocked) or ROUND_TRIP (it does not
- * round-trip) would state something untrue. The listed files are asserted to actually DIFFER, so
- * an entry that closes fails here rather than quietly weakening the check that remains.
+ * round-trip) would state something untrue.
  *
- * `google-meet` — README.md. Its spec `title` is "Google Meet", and the only place a rest-kit
- * connector's title reaches the emitted package at all is the registrar const's own name, which
- * `registrarName` (src/spec.ts) builds by stripping every non-alphanumeric character:
- * `registerGoogleMeetTool`. `recognizeRestTitle` (src/derive/index.ts) inverts that to
- * "GoogleMeet" — the fragment it verifies reproduces the observed name, and therefore the right
- * answer for src/server.ts, which stays byte-identical. `emitReadme` (src/emit/readme.ts) then
- * interpolates `spec.title` verbatim, so the space is gone from the prose. The information is
- * destroyed by the emitter, not lost by the recognizer: every title differing only in
- * non-alphanumerics emits one identical server.ts, so no reader of that file can tell them apart.
- * Deriving `title: undefined` instead would emit `registerGooglemeetTool` and move src/server.ts,
- * which is the file the whole harness is pointed at.
+ * Checked in BOTH directions, and the second direction is the point. The listed files must
+ * actually DIFFER, so an entry that closes fails here rather than quietly weakening the check
+ * that remains. And `unrecovered` names the spec fields the deriver could not recover: the test
+ * puts them BACK, re-emits a second time, and then requires EVERY file to match. Without that
+ * pass, `reason` would be an unchecked claim — a future regression in `description`,
+ * `displayName` or the README's own License section moves the same file, and this entry would
+ * absorb it and still report green.
+ *
+ * `google-meet` — README.md, from `title`. Why is docs/ROADMAP.md's *Known limitations* entry
+ * "A recovered rest-kit `title` is verified against only one of its two consumers", including
+ * the tier consequence. Not restated here: this docstring has gone stale three times, and two
+ * copies of one explanation is how that happens.
  */
-const PARTIAL_ROUND_TRIP: Record<string, { reason: string; files: string[] }> = {
+type PartialGap = {
+  reason: string;
+  files: string[];
+  /** The fixture's OWN spec -> the fields `deriveSpec` could not recover from it. */
+  unrecovered: (spec: Record<string, unknown>) => Record<string, unknown>;
+};
+
+const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
   "google-meet": {
     reason: 'title "Google Meet" survives into src/server.ts only with its space stripped',
     files: ["README.md"],
+    unrecovered: (spec) => ({ title: spec.title }),
   },
 };
 
@@ -182,12 +189,25 @@ function emitted(name: string): { server: string; manifest: string; filter?: str
   return { server: read("src/server.ts"), manifest: read("nimbus.extension.json"), filter };
 }
 
-/** Every path this fixture's own spec emits, keyed to its content — the full file set, not just server.ts. */
-function emittedFiles(name: string): Map<string, string> {
+/**
+ * The fixture's spec as its AUTHOR wrote it — raw, not `parseSpec`'d, so a field the schema would
+ * default is absent rather than filled in. `PARTIAL_ROUND_TRIP`'s `unrecovered` reads the field
+ * it names from here rather than carrying a literal, so an entry cannot go on asserting against a
+ * value the fixture no longer holds.
+ */
+function fixtureSpec(name: string): Record<string, unknown> {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
-  const spec = parseSpec(JSON.parse(readFileSync(specPath, "utf8")));
-  const files = formatAll(generate(spec));
+  return JSON.parse(readFileSync(specPath, "utf8")) as Record<string, unknown>;
+}
+
+/** Every path a spec emits, keyed to its content — the full file set, not just server.ts. */
+function emitToMap(spec: unknown): Map<string, string> {
+  const files = formatAll(generate(parseSpec(spec)));
   return new Map(files.map((f) => [displayPath(f.path), f.content]));
+}
+
+function emittedFiles(name: string): Map<string, string> {
+  return emitToMap(fixtureSpec(name));
 }
 
 beforeAll(async () => {
@@ -196,11 +216,16 @@ beforeAll(async () => {
 });
 
 /**
- * Emit -> derive -> re-emit, asserting file-for-file. `moved` names the files this fixture is
- * known NOT to reproduce, and each one is asserted to actually differ: an entry that closes must
- * fail here rather than quietly turning into a weaker check on the files that remain.
+ * Emit -> derive -> re-emit, asserting file-for-file.
+ *
+ * With no `gap`, every file must match. With one, `gap.files` must each actually DIFFER (an entry
+ * that closes fails here rather than quietly turning into a weaker check on the files that
+ * remain) — and then the whole thing is re-emitted a SECOND time with `gap.unrecovered`'s fields
+ * put back, where every file must match. That second pass is what turns "one file moves" into
+ * "exactly these spec fields are unrecoverable, and nothing else about this fixture is wrong",
+ * which is the claim `gap.reason` actually makes.
  */
-function checkReEmission(name: string, moved: readonly string[]): void {
+function checkReEmission(name: string, gap?: PartialGap): void {
   const files = emittedFiles(name);
   const server = files.get("src/server.ts");
   const manifest = files.get("nimbus.extension.json");
@@ -213,9 +238,7 @@ function checkReEmission(name: string, moved: readonly string[]): void {
     throw new Error(`${name} did not derive: ${derivation.blockers.map((b) => b.kind).join(", ")}`);
   }
 
-  const reFiles = new Map(
-    formatAll(generate(parseSpec(derivation.spec))).map((f) => [displayPath(f.path), f.content]),
-  );
+  const reFiles = emitToMap(derivation.spec);
 
   // Byte equality per file is not enough: a recognizer that caused an extra file to be
   // emitted (or dropped one) would still pass a loop that only checks paths present in
@@ -225,11 +248,17 @@ function checkReEmission(name: string, moved: readonly string[]): void {
   expect(reEmittedPaths).toEqual(originalPaths);
 
   for (const [path, content] of files) {
-    if (moved.includes(path)) {
+    if (gap?.files.includes(path) === true) {
       expect(reFiles.get(path)).not.toBe(content);
       continue;
     }
     expect(reFiles.get(path)).toBe(content);
+  }
+
+  if (gap === undefined) return;
+  const restored = emitToMap({ ...derivation.spec, ...gap.unrecovered(fixtureSpec(name)) });
+  for (const [path, content] of files) {
+    expect(restored.get(path)).toBe(content);
   }
 }
 
@@ -252,13 +281,13 @@ describe("deriveSpec round-trips this repository's own output", () => {
 
   for (const name of ROUND_TRIP) {
     it(`re-emits byte-identical output for every file ${name} emits`, () => {
-      checkReEmission(name, []);
+      checkReEmission(name);
     });
   }
 
   for (const [name, gap] of Object.entries(PARTIAL_ROUND_TRIP)) {
     it(`re-emits every file ${name} emits but ${gap.files.join(", ")} (${gap.reason})`, () => {
-      checkReEmission(name, gap.files);
+      checkReEmission(name, gap);
     });
   }
 
