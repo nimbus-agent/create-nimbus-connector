@@ -1720,129 +1720,82 @@ git commit -m "feat(derive): read the client-credentials token exchange as one f
 
 ---
 
-## Task 9: Case 2 — the hoisted rows pluck
+## Task 9: Case 2 — the hoisted rows pluck · **RETIRED, and recorded as declined**
+
+**This task's premise was measured false before any code was written, and it is not implemented.**
+What remains is the ROADMAP entry recording why.
 
 **Files:**
-- Modify: `src/derive/server/search.ts`
-- Modify: `docs/ROADMAP.md` (*Considered and declined* — condition (a))
-- Test: `test/derive/search.test.ts`
+- Modify: `docs/ROADMAP.md` (*Considered and declined*)
+- No `src/` change. No test change.
 
-**Interfaces:**
-- Consumes: `SearchToolFields` (existing).
-- Produces: nothing new exported.
+### What was measured
 
-### This is a case-2 widening, and the measurement narrows it
+The design's §4.1 proposed recovering `rows` from a hoisted pluck helper — `dagsFrom(root)` →
+`rows: "dags"` — as a case-2 widening. A corpus sweep found 18 such helpers and, on that basis, this
+plan drew a line between two recoverable body shapes and two that carry a root fallback `rows` cannot
+express.
 
-The design's §4.1 states the application as "`dagsFrom(root)` → `rows: "dags"`". **A sweep of the
-corpus found 18 such helpers in 18 connectors, in four distinct body shapes — and only two of the
-four are recoverable.** The guard idiom is uniform: every one of the 18 ends in
-`Array.isArray(X) ? X : []`, the keyed read is always `(root as { K?: unknown } | null)?.K` with
-optional-chained dot access, and the parameter is named `root` in 18 of 18. The **binding** name is
-not uniform (`workday` binds `d`; `mlflow` binds `models` for the key `registered_models`), so the
-matcher must not key on it.
+That line was correct and irrelevant, because **the call site the widening targets does not exist**.
+The plan specified `matchesResult(<helper>(<fetchExpr>), <filter>, <param>)`. Measured against the
+corpus: **zero** of the twelve candidate connectors call `matchesResult` at all. The two populations
+are disjoint. Every one of the 22 corpus `matchesResult` call sites passes a bare identifier — a
+shape `recognizeNoRowsBody`/`recognizeRowsBody` already recognize. The pluck helpers instead feed a
+**hand-written result tail**, which `recognizeSearchTool` refuses before it ever inspects a body.
 
-| shape | body | connectors | verdict |
-| --- | --- | --- | --- |
-| **A** keyed only | `const k = (root as { K?: unknown } \| null)?.K; return Array.isArray(k) ? k : [];` | airflow, canva, databricks, figma, hubspot, miro, ramp, salesforce, mlflow, workday (10) | **accept** → `rows: "<K>"` |
-| **B** root-array only | `return Array.isArray(root) ? root : [];` | dependencytrack, prefect (2) | **accept** → no `rows` field |
-| **C** array-first prelude | `if (Array.isArray(root)) { return root; }` then A | metabase, dbt, flagsmith, flux, argocd (5) | **refuse** |
-| **D** keyed-first, root fallback | `if (Array.isArray(k)) { return k; } return Array.isArray(root) ? root : [];` | superset (1) | **refuse** |
+**The design contradicted itself, on the facing page.** Its own trap list records: *"Measured
+2026-08-05: 49 connectors carry `src/search-filter.ts` but only 22 call `matchesResult`, so 27 build
+their own envelope and are out of the recognizer's reach by construction, not by omission."* The
+twelve pluck connectors are among those 27. §4.1 and that trap could not both be true, and the trap
+is the one backed by a measurement.
 
-**Why C and D are refused, and this is the whole point of condition (b).** Case 2 licenses a
-divergence in emitted *text*, not in *behaviour*. Shapes A and B differ from the emitter's inline form
-only in coercion — `Array.isArray(x) ? x : []` versus handing the value straight to `matchesResult`,
-which guards with `Array.isArray` itself, so both produce the same matches. That is precisely the
-divergence *Considered and declined* records as "Coercing the row set before `matchesResult`". Shapes
-C and D carry a **fallback**: they return the root when the root itself is an array. The emitter's
-form does not, so a spec derived from one regenerates a connector that behaves differently on a
-response the fallback exists for. Recovering `rows` from those is not a case-2 widening, it is a wrong
-derivation — and it would be reported as `emits`, which is exactly the false `emits` the case-2 rule's
-condition (b) is written to catch.
+Three further facts, each independently fatal to the movement this task promised:
 
-**Verify this claim about `matchesResult` before relying on it.** Read
-`C:/gitrep/Nimbus/packages/mcp-connectors/shared/mcp-search-tool.ts` and confirm it guards a non-array
-input rather than throwing. Reading it is fine; copying any of it into this repo is not. If it does
-not guard, shapes A and B are **also** refused and this task ships as a refusal plus a documented
-limitation — report that outcome rather than widening anyway.
+- `mlflow` and `workday` block at `frame:no-mcp-server` and carry no `function:*From` bucket at all.
+- `recognizeTools` is all-or-nothing, and `dependencytrack`, `prefect`, `ramp` and `airflow` each
+  wrap the pluck helper in an unmodeled **list** handler (`jsonResult({ items: projectsFrom(root) })`).
+- `matchSearchKitImport` requires `matchesResult` in a clause these twelve import only
+  `searchToolInputSchema` from.
 
-- [ ] **Step 1: Record the divergence in `docs/ROADMAP.md` — condition (a) first**
+A fifth body shape was also found that this plan's table omitted: `figma`'s `projectsFrom` is a loop
+flattener returning `Array<{ id; name }>`, so `figma` keeps a `function:*From` bucket under any
+correct guard.
 
-Case-2 condition (a) requires the divergence to be recorded *before* the recognizer claims it. Find
-the *Considered and declined* entry for "Coercing the row set before `matchesResult`" and extend it,
-or add a *Known limitations* entry if it is not there. State: the corpus's hoisted pluck helper is
-recognized and recovers `rows`, the emitter writes the pluck inline, so those connectors reach `emits`
-and not `server-identical`; and that shapes C and D are refused with the reason above. **Do not
-restate live numbers** — say "shapes with an array-first prelude or a root fallback", not "6
-connectors", which goes stale silently.
+### Why re-scoping was declined rather than attempted
 
-- [ ] **Step 2: Write the failing test**
+Recognizing the hand-written tail *would* be a legitimate case-2 widening. It was declined because it
+is a much larger matcher, it drags in `matchSearchKitImport`, and — decisively — **it moves no
+connector out of `blocked`**. A hand-written result envelope is bespoke code by definition; that is
+exactly what "out of the recognizer's reach by construction" means. Building a recognizer for it
+would add surface area, add a case-2 divergence to maintain, and change no number.
 
-In `test/derive/search.test.ts`, build four synthetic modules — one per shape — each with a search
-tool whose handler is `return matchesResult(<helper>(await <local>(<path>)), <filter>, p);`. These are
-hand-synthesized, not transcribed: use the `zz` naming and a key no corpus connector uses.
+- [ ] **Step 1: Record it in `docs/ROADMAP.md`'s *Considered and declined***
 
-```ts
-  it("recovers rows from shape A, the keyed pluck helper — a case-2 widening: the emitter writes the pluck inline, so this reaches `emits` and not `server-identical` (see ROADMAP's Considered and declined)", () => { /* → rows: "widgets" */ });
+Write the entry from the measurement, not from this plan's prose. State: the hoisted rows pluck was
+proposed as a case-2 widening; the helpers do not feed `matchesResult`, so the shape the widening
+targets is not the shape the corpus writes; recognizing the hand-written tail instead was declined
+because it moves no connector out of `blocked` and a bespoke result envelope is out of reach by
+construction. **Do not restate live numbers** — name the constructs, not the counts.
 
-  it("recovers shape B, the root-array helper, as NO rows field — matchesResult guards a non-array itself, so the emitter's no-rows form is behaviourally identical", () => { /* → rows absent */ });
+Cross-reference the existing trap the design already recorded, so the two sit together rather than a
+future reader re-deriving the contradiction.
 
-  it("REFUSES shape C, the array-first prelude — it returns the root when the root is an array, behaviour the emitter's inline form does not have, so `rows` would be a wrong derivation rather than a text divergence", () => { /* → undefined */ });
-
-  it("REFUSES shape D, the keyed-first root fallback — same reason as shape C", () => { /* → undefined */ });
-```
-
-Plus condition (b)'s own test: for shape A, derive the spec and assert **every** recovered field of
-that tool — `name`, `description`, `args`, `path`, `maxLimit`, `filter.export`, `rows` — equals the
-spec that produced the fixture, not just `rows`. Condition (b) is "a test proves every spec field
-recovered from that shape is correct", and a test asserting only the new field does not meet it.
-
-- [ ] **Step 3: Run — all four must FAIL**
-
-- [ ] **Step 4: Implement**
-
-`src/derive/server/search.ts` already has `matchRowsNarrowing` for the emitter's inline form. Add a
-module-scope pluck-helper matcher and a fourth body form:
-
-```ts
-/**
- * A hoisted rows pluck: `function <name>(root: unknown): unknown[] { … }` in one of the two shapes
- * that are behaviourally identical to what `renderSearchTool` writes inline.
- *
- * Case 2 (see the case-2 rule): the emitter cannot write this text, so a connector using it reaches
- * `emits` and never `server-identical`. Accepted anyway because every recovered field is provably
- * correct — the pluck key, and nothing else. Shapes carrying a fallback to the root array are
- * REFUSED: that is a behaviour difference, not a text difference, and `rows` cannot express it.
- * Measured across the corpus 2026-08-06: one guard idiom, four body shapes, two recoverable.
- */
-function matchPluckHelper(node: AstNode): { name: string; rows?: string } | undefined {
-```
-
-The call site: `matchesResult(<helper>(<fetchExpr>), <filter>, <param>)` where `<helper>` resolves to
-a recognized pluck helper **in this module**. Claim the helper's own statement — it is a top-level
-statement and the totality rule will otherwise report it — and claim it **only** when a search tool
-actually calls it, the same scoping `claimSearchImports` uses. A pluck helper nothing calls stays
-unclaimed and blocks, correctly.
-
-- [ ] **Step 5: Run every gate and measure the corpus**
+- [ ] **Step 2: Verify nothing else changed, and commit**
 
 ```bash
-bun test && bunx tsc --noEmit && bunx biome check src/ test/ scripts/ && bun test --coverage
-bun run diff:golden --nimbus-root C:/gitrep/Nimbus
+bun test
+bunx tsc --noEmit
+bunx biome check src/ test/ scripts/
 bun run reach --verbose --nimbus-root C:/gitrep/Nimbus
 ```
-The 12 accepted connectors are `airflow, canva, databricks, figma, hubspot, miro, ramp, salesforce,
-mlflow, workday, dependencytrack, prefect`. Most carry other blockers too (`call:reg`,
-`import-from:./search-filter.ts`), so **the expected result is that their `function:<name>From`
-buckets disappear, not that they become `emits`**. Report the before/after of those buckets by name.
 
-- [ ] **Step 6: Commit**
+All exit 0, `REACH` 6/94, and the blocker histogram **byte-identical to the branch point** — this
+task changes no code, so any movement at all is a finding.
 
 ```bash
-git add src/derive/ test/derive/ docs/ROADMAP.md
-git commit -m "feat(derive): recover rows from a hoisted pluck helper, refusing the fallback shapes"
+git add docs/ROADMAP.md
+git commit -m "docs: decline the rows-pluck widening, and record why it does not apply"
 ```
-
----
 
 ## Task 10: Blocker-label honesty
 
