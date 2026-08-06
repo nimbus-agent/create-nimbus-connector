@@ -6,7 +6,11 @@ import { deriveManifest, type ManifestFields } from "./manifest.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
-import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
+import {
+  recognizeFetchHelper,
+  recognizeRestFetchHelper,
+  recognizeWriteHelper,
+} from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
 import type { BasePrefix } from "./server/query.ts";
@@ -439,12 +443,26 @@ function deriveSharedStyleSpec(
 ): Derivation {
   const env = recognizeEnv(frame.verifyStatements, claims);
   const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);
-  // recognizedHelper?.fields.local, not a non-null assertion: recognizeTools must be able to run
-  // (and refuse) even when the fetch helper itself was never recognized. Checked below, AFTER the
+  // The write helper, held against the read helper when there is one — see `agreesWithReadHelper`
+  // (server/fetch-helper.ts) for why the read helper is the authority rather than a second source.
+  const writeHelper = recognizeWriteHelper(
+    frame.verifyStatements,
+    claims,
+    recognizedHelper?.fields,
+  );
+  // The read helper first, and the write helper only as a fallback: `renderReadHelper` emits
+  // nothing for a connector whose every tool is a write (zzwriteonly), and for THAT module the
+  // write helper is the only place `local`, `base`, `serviceLabel` and the headers appear at all.
+  // Where both exist they have already been checked equal, so which one is spread into the spec
+  // below cannot matter — but taking the read helper's keeps `normalizeLeadingSlash` and
+  // `jsonFallbackRaw`, which only it can carry.
+  const fetchHelper = recognizedHelper?.fields ?? writeHelper?.fields;
+  // fetchHelper?.local, not a non-null assertion: recognizeTools must be able to run
+  // (and refuse) even when neither helper was recognized. Checked below, AFTER the
   // totality rule — see this function's own comment on that ordering — rather than
   // short-circuited here, so an unrecognized fetch helper still surfaces as a named,
   // per-statement blocker instead of the coarse "no-fetch-helper" case.
-  const toolsResult = recognizeTools(frame.toolStatements, claims, recognizedHelper?.fields.local);
+  const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
 
   // Claim the two search-specific imports only once a search tool is positively recognized —
   // the same scoping recognizeReadOnlyFrame uses for its own frame imports (server/index.ts).
@@ -464,27 +482,62 @@ function deriveSharedStyleSpec(
   if (unclaimed.length > 0) {
     return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
   }
-  if (recognizedHelper === undefined) {
-    return blocked("no-fetch-helper", "no read helper recognized");
+  if (fetchHelper === undefined) {
+    return blocked("no-fetch-helper", "neither a read nor a write helper was recognized");
   }
   if (toolsResult === undefined) {
     return blocked("unrecognized-handler", "a reg() handler was not understood");
   }
-  const fetchHelper = recognizedHelper.fields;
 
-  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides the read helper's passthrough line
-  // from the SET of tools, so the two must agree in both directions. A helper with the line and
-  // no query tool regenerates a helper without it; a query tool with no line regenerates one with
-  // it. Either way the derived spec would not reproduce this module — the wrong-claim class,
-  // caught here because neither recognizer can see the other's evidence on its own.
+  // Which HELPERS the emitter writes is decided entirely by the tools, so each one's presence is
+  // evidence to be cross-checked rather than a fact to be recorded — the same class of guard as
+  // the passthrough below, one recognizer earlier. `renderReadHelper` emits the read helper iff
+  // some tool is a non-stub GET; `renderWriteHelper` emits the write helper iff some tool is
+  // non-GET (src/emit/server/fetch-helper.ts). A module carrying a helper no tool would call
+  // re-emits without it, and one missing a helper its tools DO call re-emits with it — neither
+  // reproduces, and neither recognizer can see the other's evidence on its own. `method` is
+  // omitted from `ToolFields` for GET, so its presence is the non-GET test. Every recognized tool
+  // is non-stub by construction: no recognizer here models a stub handler.
+  const helperMismatch = [
+    {
+      role: "read",
+      wanted: "GET",
+      present: recognizedHelper !== undefined,
+      called: toolsResult.tools.some((t) => t.method === undefined),
+    },
+    {
+      role: "write",
+      wanted: "non-GET",
+      present: writeHelper !== undefined,
+      called: toolsResult.tools.some((t) => t.method !== undefined),
+    },
+  ].find((h) => h.present !== h.called);
+  if (helperMismatch !== undefined) {
+    return blocked(
+      `fetch-helper:${helperMismatch.role}-helper-mismatch`,
+      `this module declares ${helperMismatch.present ? "a" : "no"} ${helperMismatch.role} ` +
+        `helper, but ${helperMismatch.called ? "a tool is" : "no tool is"} ` +
+        `${helperMismatch.wanted}`,
+    );
+  }
+
+  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides BOTH helpers' passthrough line
+  // from the SET of tools, so each recognized helper must agree with it in both directions. A
+  // helper with the line and no query tool regenerates a helper without it; a query tool with no
+  // line regenerates one with it. Either way the derived spec would not reproduce this module —
+  // the wrong-claim class, caught here because neither recognizer can see the tools' evidence.
   // `query` is read off the union without narrowing on purpose: `SearchToolFields` extends
   // `ToolFields`, so the field is there for both, and a search tool never carries one anyway
   // (ToolSchema rejects `impl: "search"` beside `query`). Guarding it would state the opposite.
   const anyQuery = toolsResult.tools.some((t) => t.query !== undefined);
-  if (anyQuery !== recognizedHelper.passthrough) {
+  const passthroughMismatch = [
+    { role: "read", helper: recognizedHelper },
+    { role: "write", helper: writeHelper },
+  ].find((h) => h.helper !== undefined && h.helper.passthrough !== anyQuery);
+  if (passthroughMismatch !== undefined) {
     return blocked(
       "fetch-helper:query-passthrough-mismatch",
-      `the read helper ${recognizedHelper.passthrough ? "carries" : "lacks"} the absolute-URL ` +
+      `the ${passthroughMismatch.role} helper ${anyQuery ? "lacks" : "carries"} the absolute-URL ` +
         `passthrough line, but ${anyQuery ? "a tool declares" : "no tool declares"} a query array`,
     );
   }

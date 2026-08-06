@@ -103,8 +103,13 @@ function booleanHoistArg(init: AstNode): string | undefined {
  * negative (ArgSchema constrains sign on none of `min`, `max` or `default`), and `?? -1` is a
  * shape `renderHoists` can legitimately write. This is one of this retrofit's two sanctioned
  * widenings — `.min(-5)`/`.max(-5)` in args.ts is the other.
+ *
+ * Exported for server/body.ts, whose `<param>.<arg> ?? <default>` case reads the SAME right-hand
+ * side from a different statement: `fieldValue` (src/emit/server/body.ts) inlines the identical
+ * `?? ${JSON.stringify(spec.default)}` when no hoisted const is in scope. One reader, for the
+ * reason this module's own docstring gives about its once-duplicated half.
  */
-function hoistDefaultLiteral(node: AstNode): HoistDefault | undefined {
+export function hoistDefaultLiteral(node: AstNode): HoistDefault | undefined {
   const s = stringLit(node);
   if (s !== undefined) return s;
   const n = numericValue(node);

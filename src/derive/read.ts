@@ -525,6 +525,22 @@ export function isComputedProperty(node: AstNode | undefined): boolean {
 }
 
 /**
+ * Whether an ObjectProperty is written SHORTHAND (`{ scope }`) rather than longhand
+ * (`{ scope: scope }`).
+ *
+ * Babel gives the two forms identical `key` and `value` children — two Identifier nodes of the
+ * same name — so no other accessor here can tell them apart, and the choice between them is not
+ * the formatter's: `renderBodyExpr` (src/emit/server/body.ts) writes the shorthand exactly when
+ * the API field name and the value expression are the same identifier, and `renderWriteHelper`
+ * (src/emit/server/fetch-helper.ts) writes `method,` and `{ body }` shorthand unconditionally. A
+ * recognizer accepting `{ scope: scope }` for `{ scope }` would claim a module it re-emits
+ * differently — the wrong-claim class this module's header describes, not a style preference.
+ */
+export function isShorthandProperty(node: AstNode | undefined): boolean {
+  return node?.type === "ObjectProperty" && raw(node)["shorthand"] === true;
+}
+
+/**
  * Every property of an ObjectExpression, or undefined if ANY is not a plain non-computed
  * ObjectProperty — a spread, a method, or a `{ [K]: v }` computed key disqualifies the whole
  * object rather than being skipped. A shorthand `{ issueId }` reads as key "issueId" with the

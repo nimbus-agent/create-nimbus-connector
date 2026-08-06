@@ -28,6 +28,7 @@ import {
   isAsyncFunction,
   isComputedProperty,
   isNullLiteral,
+  isShorthandProperty,
   labelCallee,
   labelFirstInit,
   labelName,
@@ -527,6 +528,35 @@ describe("Task 5 accessors", () => {
     expect(uninitializedLet(only("const json = 1;"))).toBeUndefined();
     expect(uninitializedLet(only("var json;"))).toBeUndefined();
     expect(uninitializedLet(only("let json = 1;"))).toBeUndefined();
+  });
+});
+
+/**
+ * Added for the-honest-histogram's task 5: `renderBodyExpr` writes `{ scope }` and never
+ * `{ scope: scope }`, and `renderWriteHelper` writes `method,` and `{ body }` shorthand
+ * unconditionally — Babel gives the two forms identical key and value children, so no other
+ * accessor here can tell them apart. See task-5-report.md.
+ */
+describe("isShorthandProperty", () => {
+  it("distinguishes shorthand from a longhand property with the identical key and value", () => {
+    const shorthand = objectExpressionProperties(initOf("({ scope })"));
+    const longhand = objectExpressionProperties(initOf("({ scope: scope })"));
+    // The two are indistinguishable through every other accessor: same key name, same value node.
+    expect(identName(objectProperty(shorthand?.[0])?.key)).toBe("scope");
+    expect(identName(objectProperty(longhand?.[0])?.key)).toBe("scope");
+    expect(identName(objectProperty(shorthand?.[0])?.value)).toBe("scope");
+    expect(identName(objectProperty(longhand?.[0])?.value)).toBe("scope");
+
+    expect(isShorthandProperty(shorthand?.[0])).toBe(true);
+    expect(isShorthandProperty(longhand?.[0])).toBe(false);
+  });
+
+  it("is false for a plain property, a spread and a non-node", () => {
+    expect(isShorthandProperty(objectExpressionProperties(initOf("({ a: 1 })"))?.[0])).toBe(false);
+    expect(isShorthandProperty(objectExpressionProperties(initOf("({ ...rest })"))?.[0])).toBe(
+      false,
+    );
+    expect(isShorthandProperty(undefined)).toBe(false);
   });
 });
 

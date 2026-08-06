@@ -12,6 +12,7 @@ import {
   stringLit,
 } from "../read.ts";
 import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
+import { type BodyTool, recognizeBodyExpr } from "./body.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
 import { type BasePrefix, PATH_LOCAL, type QueryEntry, recognizeQueryBlock } from "./query.ts";
@@ -43,6 +44,13 @@ export type ToolFields = {
    * styles, parameterised only by the handler's parameter name.
    */
   query?: QueryEntry[];
+  /**
+   * The `arg name -> API field name` mapping, recovered ONLY when the observed JSON body differs
+   * from what `renderBodyExpr`'s default would have produced — see server/body.ts's header.
+   * Omitted otherwise, so a tool whose body IS the default is byte-unchanged by this field's
+   * existence, the same reason `method` is omitted for GET.
+   */
+  body?: Record<string, string>;
 };
 
 /**
@@ -107,7 +115,18 @@ function isRegCall(node: AstNode): AstNode | undefined {
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-type FetchCall = { path: AstNode; method?: "POST" | "PUT" | "PATCH" | "DELETE" };
+type FetchCall = {
+  path: AstNode;
+  method?: "POST" | "PUT" | "PATCH" | "DELETE";
+  /**
+   * The write helper's third argument, handed back UNREAD — `renderBodyExpr`'s output, or the
+   * literal `undefined` for a tool that sends no body. Absent for the read helper's one-argument
+   * call. Read by `readBody` below rather than here, for the same reason `QueryBlock.returned` is
+   * handed back unread: interpreting it needs the tool's merged args, path and query, none of
+   * which exist yet at this point.
+   */
+  bodyNode?: AstNode;
+};
 
 /**
  * The read helper `<local>(path)` or the write helper `<local>Send(path, "METHOD", body)`, and
@@ -125,12 +144,39 @@ function fetchCall(call: AstNode, helperLocal: string): FetchCall | undefined {
     return args.length === 1 && args[0] !== undefined ? { path: args[0] } : undefined;
   }
   if (isIdent(callee, `${helperLocal}Send`)) {
-    if (args.length !== 3 || args[0] === undefined) return undefined;
+    if (args.length !== 3 || args[0] === undefined || args[2] === undefined) return undefined;
     const method = stringLit(args[1]);
     if (method === undefined || !WRITE_METHODS.has(method)) return undefined;
-    return { path: args[0], method: method as "POST" | "PUT" | "PATCH" | "DELETE" };
+    return {
+      path: args[0],
+      method: method as "POST" | "PUT" | "PATCH" | "DELETE",
+      bodyNode: args[2],
+    };
   }
   return undefined;
+}
+
+/**
+ * The `body` half of one recognized tool: `{}` when there is nothing to record, `{ body: … }`
+ * when the observed literal differs from `renderBodyExpr`'s default, `undefined` to refuse the
+ * tool. Spread straight into `ToolFields`.
+ *
+ * `bodyNode` is absent exactly when the call went through the READ helper, which takes only a
+ * path — so a call with no body argument that nonetheless recovered a `method` is a shape
+ * `renderTool` cannot write (`callPath` picks the helper FROM the method) and is refused rather
+ * than read as a bodyless write.
+ *
+ * `hoistsInScope` is `true` for every caller here: `renderTool` (src/emit/server/tools-hand.ts)
+ * builds the body inside the same handler block as the hoists and passes the full
+ * `hoistedLocals(tool.args)` map, so a defaulted arg always reaches the body through its hoisted
+ * const. tools-rest.ts's future write path is the caller that passes `false`.
+ */
+function readBody(
+  bodyNode: AstNode | undefined,
+  tool: BodyTool,
+): { body?: Record<string, string> } | undefined {
+  if (bodyNode === undefined) return tool.method === "GET" ? {} : undefined;
+  return recognizeBodyExpr(bodyNode, tool, true);
 }
 
 function awaitedCall(node: AstNode | undefined): AstNode | undefined {
@@ -162,8 +208,8 @@ function fetchFromJsonResult(
   return helperCall === undefined ? undefined : fetchCall(helperCall, helperLocal);
 }
 
-/** The declared path, its static-path-style evidence, and method recovered from
- * `jsonResult(await <helper|helperSend>(...))`. */
+/** The declared path, its static-path-style evidence, and the method and unread body argument
+ * recovered from `jsonResult(await <helper|helperSend>(...))`. */
 function pathFromJsonResult(
   node: AstNode | undefined,
   locals: ReadonlyMap<string, PathLocal>,
@@ -173,6 +219,7 @@ function pathFromJsonResult(
       path: string;
       staticStyle?: StaticPathStyle;
       method?: "POST" | "PUT" | "PATCH" | "DELETE";
+      bodyNode?: AstNode;
     }
   | undefined {
   const fetched = fetchFromJsonResult(node, helperLocal);
@@ -183,6 +230,7 @@ function pathFromJsonResult(
     path: recognized.path,
     ...(recognized.staticStyle === undefined ? {} : { staticStyle: recognized.staticStyle }),
     ...(fetched.method === undefined ? {} : { method: fetched.method }),
+    ...(fetched.bodyNode === undefined ? {} : { bodyNode: fetched.bodyNode }),
   };
 }
 
@@ -213,9 +261,17 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   if (!arrow.isBlock) {
     const recovered = pathFromJsonResult(arrow.body, new Map(), helperLocal);
     if (recovered === undefined) return undefined;
-    const { staticStyle, ...pathFields } = recovered;
+    const { staticStyle, bodyNode, ...pathFields } = recovered;
+    // No hoists exist in this form at all, so no body field can reference one — and the emitter
+    // agrees: a body that reads a hoisted const adds it to `used`, which forces the block form.
+    const body = readBody(bodyNode, {
+      args: argsResult.args,
+      path: pathFields.path,
+      method: pathFields.method ?? "GET",
+    });
+    if (body === undefined) return undefined;
     return {
-      fields: { name, description, args: argsResult.args, ...pathFields },
+      fields: { name, description, args: argsResult.args, ...pathFields, ...body },
       isBlock: false,
       hasHoists: false,
       votesHandlerStyle: true,
@@ -255,6 +311,18 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
     const queryArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);
     if (queryArgs === undefined) return undefined;
 
+    // `query.path` still carries the fetch helper's base prefix here (rebaseQueryTools, in
+    // src/derive/index.ts, takes it off later) — harmless for the default body's exclusion set,
+    // which reads only the path's ARG placeholders, and `defaultBodyArgs` refuses rather than
+    // throws on a prefix that will not parse.
+    const body = readBody(fetched.bodyNode, {
+      args: queryArgs,
+      path: query.path,
+      query: query.query,
+      method: fetched.method ?? "GET",
+    });
+    if (body === undefined) return undefined;
+
     return {
       fields: {
         name,
@@ -263,6 +331,7 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
         path: query.path,
         ...(fetched.method === undefined ? {} : { method: fetched.method }),
         query: query.query,
+        ...body,
       },
       isBlock: true,
       hasHoists: query.hoistMeta.size > 0,
@@ -274,7 +343,7 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
 
   const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);
   if (recovered === undefined) return undefined;
-  const { staticStyle, ...pathFields } = recovered;
+  const { staticStyle, bodyNode, ...pathFields } = recovered;
 
   // Gap A / Gap B: renderZodSchema never encodes `local` or `default` in the schema text
   // itself (recognizeArgs, above, cannot see either), so both are only visible at the hoist
@@ -282,8 +351,17 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
   if (mergedArgs === undefined) return undefined;
 
+  // After the merge, deliberately: two of `fieldValue`'s three cases turn on an arg's `default`
+  // and `local`, neither of which the schema text carries.
+  const body = readBody(bodyNode, {
+    args: mergedArgs,
+    path: pathFields.path,
+    method: pathFields.method ?? "GET",
+  });
+  if (body === undefined) return undefined;
+
   return {
-    fields: { name, description, args: mergedArgs, ...pathFields },
+    fields: { name, description, args: mergedArgs, ...pathFields, ...body },
     isBlock: true,
     hasHoists: block.locals.size > 0,
     votesHandlerStyle: true,

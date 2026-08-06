@@ -4,6 +4,7 @@ import {
   asExpression,
   assignment,
   awaited,
+  binary,
   blockBody,
   callArgs,
   calleeOf,
@@ -15,12 +16,15 @@ import {
   functionBody,
   functionName,
   functionParams,
+  functionReturnType,
   identName,
+  identTypeAnnotation,
   ifStatement,
   isAsyncFunction,
   isComputedProperty,
   isIdent,
   isNullLiteral,
+  isShorthandProperty,
   logical,
   memberOn,
   methodCallTo,
@@ -34,8 +38,10 @@ import {
   stringLit,
   templateLiteral,
   tryStatement,
+  typeAnnotationName,
   unary,
   uninitializedLet,
+  unionTypes,
 } from "../read.ts";
 
 export type FetchHelperFields = {
@@ -288,14 +294,14 @@ function startsWithLiteral(node: AstNode | undefined, receiver: string, literal:
  * copy is a place for one side to be tightened while the other keeps accepting what its twin just
  * learned to reject (hoists.ts's module docstring states the rule).
  *
- * `renderWriteHelper` writes the same statement under the same gate, and is NOT read here — no
- * recognizer in this plan claims the write helper at all (see round-trip.test.ts's `zzwriteonly`
- * entry), so a spec whose query tool is non-GET blocks on that function rather than on this line.
+ * `renderWriteHelper` writes the same statement under the same gate, and `matchWriteHelperBody`
+ * below is now its third caller — the one this docstring recorded as missing. It always passes
+ * `"path"`: the write helper has no `pathPart` form to rename it to.
  *
- * `pathVar` is a parameter because the hand-style helper renames it: `renderFetchHelper` writes
- * the passthrough over `pathPart` when `normalizeLeadingSlash` also asked for that const, and
- * over `path` otherwise. All THREE of its occurrences are pinned to it — the test's receiver, the
- * consequent, and the base template's own trailing interpolation.
+ * `pathVar` is a parameter because the hand-style READ helper renames it: `renderFetchHelper`
+ * writes the passthrough over `pathPart` when `normalizeLeadingSlash` also asked for that const,
+ * and over `path` otherwise. All THREE of its occurrences are pinned to it — the test's receiver,
+ * the consequent, and the base template's own trailing interpolation.
  *
  * The third is deliberate duplication, not sole protection, and the distinction is worth stating
  * because it changed under this very fix round. It was written when `reconstructBase` required
@@ -466,13 +472,18 @@ function isRawFallbackReturn(node: AstNode): boolean {
 }
 
 /**
- * `try { return JSON.parse(text) as unknown; } catch { return { raw: text }; }` — the
- * jsonFallbackRaw: true form, pinned exactly: a bare `catch` (no binding), a one-statement
- * try block, a one-statement catch block, no finally. Anything else with a TryStatement in
- * this position (a caught binding, extra statements, a different fallback value) is not this
- * shape and is refused rather than approximated.
+ * `try { return JSON.parse(text) as unknown; } catch { <fallback> }` — the closing try/catch
+ * shell, pinned exactly: a bare `catch` (no binding), a one-statement try block, a one-statement
+ * catch block, no finally. Anything else with a TryStatement in this position (a caught binding,
+ * extra statements) is not this shape and is refused rather than approximated.
+ *
+ * `fallback` is the one clause that differs between the two emitters that write this shell:
+ * `return { raw: text };` for `renderFetchHelper`'s jsonFallbackRaw form, `return null;` for
+ * `renderWriteHelper`'s (which has no spec field and always writes it). Shared rather than
+ * copied — a copy is a place for one side to be tightened while the other keeps accepting what
+ * its twin just learned to reject, the rule hoists.ts's module docstring states.
  */
-function isJsonFallbackTry(node: AstNode): boolean {
+function isJsonTryCatch(node: AstNode, fallback: (statement: AstNode) => boolean): boolean {
   const t = tryStatement(node);
   if (t === undefined || t.finalizer !== undefined) return false;
 
@@ -484,7 +495,12 @@ function isJsonFallbackTry(node: AstNode): boolean {
   const c = catchClause(t.handler);
   if (c === undefined || c.param !== undefined) return false;
   const handlerBody = blockBody(c.body);
-  return handlerBody?.length === 1 && isRawFallbackReturn(handlerBody[0]!);
+  return handlerBody?.length === 1 && fallback(handlerBody[0]!);
+}
+
+/** The jsonFallbackRaw: true form — `renderFetchHelper`'s only alternative ending. */
+function isJsonFallbackTry(node: AstNode): boolean {
+  return isJsonTryCatch(node, isRawFallbackReturn);
 }
 
 /**
@@ -715,6 +731,318 @@ export function recognizeFetchHelper(
     // resolution was meant to unblock, on an unclaimed statement:VariableDeclaration.
     if (matched.constStatement !== undefined) {
       claims.claim(matched.constStatement, "fetch-helper");
+    }
+    return { fields: matched.fields, passthrough: matched.passthrough };
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The write helper — renderWriteHelper (src/emit/server/fetch-helper.ts), emitted IFF some tool
+// is non-GET and the style is not rest-kit. `recognizeFetchHelper` above cannot see it: that one
+// requires exactly one parameter named `path`, and this takes three.
+//
+// It carries no `fetchHelper` field of its OWN — every line is derived from `fetchHelper`,
+// `serviceLabel` and the presence of a non-GET tool — so when the read helper is also present it
+// is claimed-and-verified and recovers nothing new. But `renderReadHelper` emits nothing at all
+// for a connector whose every tool is a write (see its own docstring: a read helper nothing calls
+// is a TS6133 in the generated package), and `zzwriteonly` is exactly that shape. For those, this
+// function is the module's ONLY source of `local`, `base`, `baseConst`, `serviceLabel` and the
+// headers, so it recovers them — and `deriveSharedStyleSpec` cross-checks the two against each
+// other whenever both exist rather than letting either quietly win.
+//
+// Two `FetchHelperSchema` fields are NOT recoverable here, and their absence is byte-safe rather
+// than a gap: `normalizeLeadingSlash` and `jsonFallbackRaw` both change only the READ helper's
+// text (`renderWriteHelper` never normalizes a leading slash, and always writes the `null`
+// fallback), so a write-only connector re-emits identically whether they were set or not. They
+// are unobservable in such a module, not lost from it.
+// ---------------------------------------------------------------------------
+
+/** The suffix `renderWriteHelper` appends to `fetchHelper.local` — the write helper's whole name. */
+const WRITE_SUFFIX = "Send";
+
+/**
+ * `(path: string, method: string, body: string | undefined)`, and `): Promise<unknown>`.
+ *
+ * Pinned by TYPE as well as by name, unlike the read helper's single `path` parameter — this
+ * function claims a whole FunctionDeclaration on the strength of its name and body, and a
+ * `body: string` where the emitter writes `body: string | undefined` re-emits different bytes
+ * while every recovered field stays identical. The return type's ARGUMENT is not inspected
+ * (`typeAnnotationName` reports the head name only, so `Promise<void>` passes here), which is the
+ * one shape difference this recognizer does not see; closing it would need a type-argument
+ * accessor no other recognizer has a use for.
+ */
+function hasWriteHelperSignature(fn: AstNode): boolean {
+  const params = functionParams(fn);
+  if (params?.length !== 3) return false;
+  if (!isIdent(params[0], "path") || !isIdent(params[1], "method")) return false;
+  if (!isIdent(params[2], "body")) return false;
+  if (typeAnnotationName(identTypeAnnotation(params[0])) !== "string") return false;
+  if (typeAnnotationName(identTypeAnnotation(params[1])) !== "string") return false;
+
+  const bodyType = unionTypes(identTypeAnnotation(params[2]));
+  if (bodyType?.length !== 2) return false;
+  if (typeAnnotationName(bodyType[0]) !== "string") return false;
+  if (typeAnnotationName(bodyType[1]) !== "undefined") return false;
+
+  return typeAnnotationName(functionReturnType(fn)) === "Promise";
+}
+
+/**
+ * `...(body === undefined ? {} : { body })` — the fetch options object's fixed trailing spread,
+ * every part pinned. The alternate's `{ body }` is required to be SHORTHAND: the emitter writes
+ * it that way literally, and `{ body: body }` is a different output no spec produces.
+ */
+function isConditionalBodySpread(node: AstNode): boolean {
+  const c = conditional(spreadArgument(node));
+  if (c === undefined) return false;
+
+  const test = binary(c.test);
+  if (test?.operator !== "===") return false;
+  if (!isIdent(test.left, "body") || !isIdent(test.right, "undefined")) return false;
+
+  if (objectExpressionProperties(c.consequent)?.length !== 0) return false;
+  const alternate = objectExpressionProperties(c.alternate);
+  const only = alternate?.length === 1 ? alternate[0] : undefined;
+  if (only === undefined || isComputedProperty(only) || !isShorthandProperty(only)) return false;
+  return isIdent(objectProperty(only)?.key, "body");
+}
+
+/**
+ * `{ ...<headerExpr>, "Content-Type": "application/json" }` — the write helper's headers object,
+ * and the header fields its spread carries.
+ *
+ * `headerExpr` is `headerOption(spec)` with the `headers: ` prefix stripped, so the spread's
+ * argument is exactly one of the two forms the READ helper puts after `headers:` — an inline
+ * object literal, or a zero-argument accessor call. The `await headers()` form a
+ * client-credentials accessor produces is refused here, matching `headersAccessor` above, which
+ * refuses it on the read side for the same reason: neither `recognizeEnv` nor this file models
+ * that accessor, so accepting it here would claim a module the env recognizer then blocks anyway.
+ */
+function matchWriteHelperHeaders(node: AstNode): FetchHelperHeaders | undefined {
+  const properties = objectExpressionProperties(node);
+  if (properties?.length !== 2) return undefined;
+
+  const spread = spreadArgument(properties[0]!);
+  if (spread === undefined) return undefined;
+
+  const contentType = properties[1]!;
+  if (isComputedProperty(contentType)) return undefined;
+  const parts = objectProperty(contentType);
+  if (parts === undefined) return undefined;
+  if (stringLit(parts.key) !== "Content-Type") return undefined;
+  if (stringLit(parts.value) !== "application/json") return undefined;
+
+  // The inline form. Parsed wholesale, exactly as `inlineHeadersObject` parses the read helper's:
+  // every entry here is meant to become a header, so one this recognizer cannot resolve rejects
+  // the object rather than being skipped.
+  const entries = objectProps(spread);
+  if (entries !== undefined) {
+    if (entries.length === 0) return undefined;
+    const inlineHeaders: Record<string, string> = {};
+    for (const entry of entries) {
+      const value = headerValue(entry.value);
+      if (value === undefined) return undefined;
+      inlineHeaders[entry.key] = value;
+    }
+    return { inlineHeaders };
+  }
+
+  if (callArgs(spread)?.length !== 0) return undefined;
+  const headers = identName(calleeOf(spread));
+  return headers === undefined ? undefined : { headers };
+}
+
+/**
+ * `{ method, headers: { … }, ...(body === undefined ? {} : { body }) }` — exactly these three
+ * entries, in this order. `method` is required to be SHORTHAND for the same reason `{ body }` is.
+ */
+function matchWriteHelperOptions(node: AstNode): FetchHelperHeaders | undefined {
+  const properties = objectExpressionProperties(node);
+  if (properties?.length !== 3) return undefined;
+
+  const method = properties[0]!;
+  if (isComputedProperty(method) || !isShorthandProperty(method)) return undefined;
+  if (!isIdent(objectProperty(method)?.key, "method")) return undefined;
+
+  const headers = properties[1]!;
+  if (isComputedProperty(headers)) return undefined;
+  const headerParts = objectProperty(headers);
+  if (headerParts === undefined || !isIdent(headerParts.key, "headers")) return undefined;
+
+  if (!isConditionalBodySpread(properties[2]!)) return undefined;
+  return matchWriteHelperHeaders(headerParts.value);
+}
+
+/** What `matchWriteHelperBody` recovers from the write helper's statement sequence. */
+type WriteHelperBody = {
+  /** The template `reconstructBase` reads the base off — see `FetchHelperBody.baseTemplate`. */
+  readonly baseTemplate: AstNode;
+  readonly headers: FetchHelperHeaders;
+  /** See `FetchHelperBody.passthrough`: evidence about the tools, not a `fetchHelper` field. */
+  readonly passthrough: boolean;
+};
+
+/**
+ * The write helper's body, walked positionally for the reason `matchFetchHelperBody` documents:
+ * `claims.claim(s, …)` claims the function's whole byte range, so every statement inside it has
+ * to be accounted for here or an inserted one is silently covered along with it.
+ *
+ * The optional passthrough const always guards `path` — `renderWriteHelper` has no `pathPart`
+ * form, so unlike the read helper there is no `pathVar` to choose. It is `passthroughUrlTemplate`
+ * that reads it, shared with the read helper and the rest-kit helper: Task 4 left this caller
+ * unwritten and said so in that function's own docstring, which is why the parameter was already
+ * there.
+ */
+function matchWriteHelperBody(body: readonly AstNode[]): WriteHelperBody | undefined {
+  let idx = 0;
+
+  const passthroughTemplate =
+    idx < body.length ? passthroughUrlTemplate(body[idx]!, "path") : undefined;
+  const passthrough = passthroughTemplate !== undefined;
+  if (passthrough) idx++;
+
+  const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
+  if (fetchCall === undefined) return undefined;
+  idx++;
+
+  const args = callArgs(fetchCall);
+  const fetchUrl = args?.[0];
+  const options = args?.[1];
+  if (fetchUrl === undefined || options === undefined) return undefined;
+  // Same pin as the read helper's: with the passthrough const in front of it the emitter passes
+  // that const's own binding, so a helper fetching something else would be recorded with a base
+  // it never actually requests.
+  if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
+
+  const headers = matchWriteHelperOptions(options);
+  if (headers === undefined) return undefined;
+
+  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
+  idx++;
+
+  if (idx >= body.length || !isThrowGuard(body[idx]!)) return undefined;
+  idx++;
+
+  // Exactly one statement left, and only one shape it can be: renderWriteHelper's tail has no
+  // spec field to vary it, unlike the read helper's jsonFallbackRaw pair.
+  if (body.length - idx !== 1) return undefined;
+  if (!isJsonTryCatch(body[idx]!, (s) => isNullLiteral(returnArgument(s)))) return undefined;
+
+  return { baseTemplate: passthroughTemplate ?? fetchUrl, headers, passthrough };
+}
+
+/** `matchWriteHelperFunction`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */
+type MatchedWriteHelper = {
+  readonly fields: FetchHelperFields;
+  readonly constStatement?: AstNode;
+  readonly passthrough: boolean;
+};
+
+/**
+ * One candidate statement, tested as the write helper. Claims nothing itself: a partial match
+ * must leave the ClaimSet untouched.
+ *
+ * Recognized by NAME as well as shape, unlike the read helper — `renderWriteHelper` writes
+ * `${fh.local}Send` and nothing else, and the suffix is what the local is recovered from when
+ * there is no read helper to take it from.
+ */
+function matchWriteHelperFunction(
+  s: AstNode,
+  statements: readonly AstNode[],
+): MatchedWriteHelper | undefined {
+  if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
+
+  const name = functionName(s);
+  if (name === undefined || !name.endsWith(WRITE_SUFFIX)) return undefined;
+  const local = name.slice(0, -WRITE_SUFFIX.length);
+  // `FetchHelperSchema` keeps `local` non-empty, so a function named exactly "Send" is not a
+  // write helper any spec produces.
+  if (local === "") return undefined;
+
+  if (!hasWriteHelperSignature(s)) return undefined;
+
+  const parsed = matchWriteHelperBody(functionBody(s) ?? []);
+  if (parsed === undefined) return undefined;
+
+  const reconstructed = reconstructBase(parsed.baseTemplate, statements, "path");
+  const serviceLabel = serviceLabelFrom(s);
+  if (reconstructed === undefined || serviceLabel === undefined) return undefined;
+
+  return {
+    fields: {
+      local,
+      base: reconstructed.base,
+      ...(reconstructed.baseConst === undefined ? {} : { baseConst: reconstructed.baseConst }),
+      serviceLabel,
+      ...parsed.headers,
+    },
+    constStatement: reconstructed.constStatement,
+    passthrough: parsed.passthrough,
+  };
+}
+
+/**
+ * Every field the two helpers must agree on, held against each other.
+ *
+ * `renderWriteHelper` and `renderFetchHelper` splice in the SAME `fetchHelper.local`, base,
+ * `serviceLabel` and `headerOption(spec)`, so a module where the two disagree is one the emitter
+ * cannot have written, and claiming it would derive a spec that regenerates neither. The read
+ * helper is the authority — this compares rather than choosing — which is why
+ * `deriveSharedStyleSpec` goes on to spread the READ helper's fields into the spec even when both
+ * were recognized. Two recognizers producing one fact independently is how they drift, and this
+ * branch has already found that exact defect twice (`rest-fetch-helper-name-mismatch`, and the
+ * query base prefix).
+ *
+ * `inlineHeaders` is compared through `JSON.stringify` rather than key by key because ORDER is
+ * part of the fact: both helpers render `headerOption(spec)`'s entries in one `Object.entries`
+ * pass, so a reordering is a module neither of them wrote.
+ */
+function agreesWithReadHelper(write: FetchHelperFields, read: FetchHelperFields): boolean {
+  return (
+    write.local === read.local &&
+    write.base === read.base &&
+    write.baseConst === read.baseConst &&
+    write.serviceLabel === read.serviceLabel &&
+    write.headers === read.headers &&
+    JSON.stringify(write.inlineHeaders) === JSON.stringify(read.inlineHeaders)
+  );
+}
+
+/** What `recognizeWriteHelper` hands back — the same split `RecognizedFetchHelper` documents. */
+export type RecognizedWriteHelper = {
+  readonly fields: FetchHelperFields;
+  readonly passthrough: boolean;
+};
+
+/**
+ * The write helper, as src/emit/server/fetch-helper.ts writes it — see this section's header for
+ * what it recovers and when.
+ *
+ * `readHelper` is whatever `recognizeFetchHelper` recovered from the same module, or undefined
+ * when it recovered nothing. Present and disagreeing is a refusal rather than a preference: see
+ * `agreesWithReadHelper`. Refusing leaves the function unclaimed, so the totality rule reports it
+ * by name (`function:<local>Send`) instead of the module deriving a spec for a shape it cannot
+ * reproduce.
+ */
+export function recognizeWriteHelper(
+  statements: readonly AstNode[],
+  claims: ClaimSet,
+  readHelper: FetchHelperFields | undefined,
+): RecognizedWriteHelper | undefined {
+  for (const s of statements) {
+    const matched = matchWriteHelperFunction(s, statements);
+    if (matched === undefined) continue;
+    if (readHelper !== undefined && !agreesWithReadHelper(matched.fields, readHelper)) {
+      return undefined;
+    }
+    claims.claim(s, "write-helper");
+    // Same reasoning as recognizeFetchHelper's: the hoisted base's own `const <name> = "…";` is a
+    // separate top-level statement and must be claimed too, or the totality rule re-blocks the
+    // connector on it. Claiming it twice when the read helper already did is harmless — claims
+    // are byte ranges and coverage is containment (claims.ts), not a set of owners.
+    if (matched.constStatement !== undefined) {
+      claims.claim(matched.constStatement, "write-helper");
     }
     return { fields: matched.fields, passthrough: matched.passthrough };
   }

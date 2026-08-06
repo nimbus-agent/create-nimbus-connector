@@ -54,6 +54,16 @@ import { displayPath } from "../../src/types.ts";
  * tool voting "template" beside it would make `voteStaticPathStyle` block a connector this
  * generator emits correctly.
  *
+ * zzwriteonly is the write-body fixture, and it is the only one that exercises a connector with
+ * NO read helper: its single tool is a POST, so `renderReadHelper` emits nothing (a read helper
+ * nothing calls is a TS6133 in the generated package) and `<local>Send` is the only place
+ * `fetchHelper.local`, `base`, `serviceLabel` and the headers appear at all — see
+ * `recognizeWriteHelper`'s own section header. Its POST's body is the DEFAULT, which is what
+ * makes it a check on server/body.ts's omit-when-it-is-the-default rule and not merely on the
+ * mapping reader: an explicit `body` derived here would re-emit the identical bytes and still be
+ * wrong, so the round trip alone cannot catch it — test/derive/body.test.ts compares the derived
+ * `body` against each fixture author's own.
+ *
  * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
  * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
  * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
@@ -82,6 +92,7 @@ const ROUND_TRIP = [
   "dependencytrack",
   "discord",
   "zzquery",
+  "zzwriteonly",
 ];
 
 /**
@@ -168,21 +179,22 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * server/env.ts's `recognizeOne` docstring says the `auth: "client-credentials"` function shape
  * "is left unclaimed".
  *
- * "write body" names two DIFFERENT underlying gaps that share one description, not one gap in
- * two fixtures. `zzwriteonly` (hand-rolled/read-only-kit) has a write-effect fetch helper
- * (`zzGetSend`) no recognizer in this plan claims. `zzwriterest` (rest-kit) has an arity-5
- * `<registrar>(...)` call — a non-`GET` `initFn` argument `recognizeOneCall` refuses outright,
- * the last of that recognizer's four unread `pathFn`/arity shapes now that the query branch is
- * read. Its factory IS claimed (by `recognizeRestRegistrar`, independently of the calls) and its
- * fetch helper (a literal, non-`baseConst` base) matches `recognizeRestFetchHelper` on its own;
- * measured at HEAD, this fixture reports exactly its two `call:registerZzwriterestTool`
- * statements unclaimed — nothing else.
+ * "write body" named two DIFFERENT underlying gaps that shared one description, and only one of
+ * them is left. The hand-rolled half is closed: `src/derive/server/body.ts` reads the JSON body
+ * and `recognizeWriteHelper` (server/fetch-helper.ts) claims the `<local>Send` function, so
+ * `zzwriteonly` — whose only tool is a POST, and which therefore emits NO read helper at all — is
+ * in ROUND_TRIP above. `zzwriterest` (rest-kit) is the half that remains, and it is a different
+ * construct: an arity-5 `<registrar>(...)` call, whose non-`GET` `initFn` argument
+ * `recognizeOneCall` refuses outright — the last of that recognizer's four unread `pathFn`/arity
+ * shapes now that the query branch is read. Its factory IS claimed (by `recognizeRestRegistrar`,
+ * independently of the calls) and its fetch helper (a literal, non-`baseConst` base) matches
+ * `recognizeRestFetchHelper` on its own; re-measured at this commit, this fixture reports exactly
+ * its two `call:registerZzwriterestTool` statements unclaimed — nothing else.
  */
 const BLOCKED: Record<string, string> = {
   bitrise: "stub tool handler",
   zzwrite: "client-credentials auth",
-  zzwriteonly: "write body",
-  zzwriterest: "write body",
+  zzwriterest: "rest-kit write init",
 };
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
