@@ -128,16 +128,6 @@ describe("recognizeRestTools", () => {
     },
   );
 
-  it("refuses arity 5 — a non-GET method is plan 2's territory", () => {
-    const source = REST.replace(
-      '() => "/things",',
-      '() => "/things",\n  () => ({ method: "DELETE" }),',
-    );
-    const claims = createClaimSet();
-    expect(recognizeRestTools(parseModule(source), claims, "registerZzTool")).toBeUndefined();
-    expect(claims.claims()).toEqual([]);
-  });
-
   it("refuses an async path fn — src/emit/server/tools-rest.ts never writes async here", () => {
     const source = REST.replace('() => "/things",', 'async () => "/things",');
     const claims = createClaimSet();
@@ -235,6 +225,114 @@ describe("recognizeRestTools", () => {
       schemaShapes: [],
       basePrefixes: [],
     });
+    expect(claims.claims()).toEqual([]);
+  });
+});
+
+/** A `makeRestToolRegistrar(...)` factory plus whatever `<registrar>(...)` calls the caller supplies. */
+function restModule(calls: string): string {
+  return [
+    "const registerZzTool = makeRestToolRegistrar({",
+    "  registrar: reg,",
+    '  tokenEnv: "ZZ_TOKEN",',
+    '  serviceLabel: "Zz",',
+    "  fetch: zzFetch,",
+    "});",
+    "",
+    calls,
+  ].join("\n");
+}
+
+// The bodyless DELETE: arity 5, a zero-param init callback, `{ method: "DELETE" }` — no `body`
+// key at all, which is what `renderTool` writes when the tool's default body is empty (every arg
+// is carried by the path).
+const DELETE_CALL = [
+  "registerZzTool(",
+  '  "zz_item_delete",',
+  '  "Delete an item.",',
+  "  z.object({ itemId: z.string().min(1) }),",
+  "  (parsed) => `/things/${encodeURIComponent(parsed.itemId)}`,",
+  '  () => ({ method: "DELETE" }),',
+  ");",
+].join("\n");
+
+// The PATCH-with-body: arity 5, a one-param init callback, `{ method: "PATCH", body: … }`. Its
+// `mode` arg is hoisted (with a default) in the PATH callback but referenced INLINE in the INIT
+// callback — the same arg, two different expressions — which is what pins `hoistsInScope: false`
+// at this call site rather than merely asserting it at the recognizeBodyExpr unit level (already
+// covered by test/derive/body.test.ts's "contract for the rest-kit caller" tests). Its observed
+// body (`title`, `mode`) differs from the DEFAULT (`title` alone — `mode` is in the path) by one
+// key, so it also exercises the explicit-mapping path, not just the omit-when-default one.
+const PATCH_CALL = [
+  "registerZzTool(",
+  '  "zz_item_update",',
+  '  "Update an item.",',
+  "  z.object({ itemId: z.string().min(1), title: z.string().min(1), mode: z.string().optional() }),",
+  "  (parsed) => {",
+  '    const mode = parsed.mode ?? "merge";',
+  "    return `/things/${encodeURIComponent(parsed.itemId)}?mode=${mode}`;",
+  "  },",
+  "  (parsed) => ({",
+  '    method: "PATCH",',
+  '    body: JSON.stringify({ title: parsed.title, mode: parsed.mode ?? "merge" }),',
+  "  }),",
+  ");",
+].join("\n");
+
+const REST_WRITE = restModule([DELETE_CALL, "", PATCH_CALL].join("\n\n"));
+
+describe("recognizeRestTools reads the arity-5 initFn", () => {
+  it("recovers method and body from a bodyless DELETE and a PATCH with an explicit body", () => {
+    const statements = parseModule(REST_WRITE);
+    const claims = createClaimSet();
+    const tools = recognizeRestTools(statements, claims, "registerZzTool");
+    expect(tools?.tools.map((t) => ({ name: t.name, method: t.method, body: t.body }))).toEqual([
+      { name: "zz_item_delete", method: "DELETE", body: undefined },
+      { name: "zz_item_update", method: "PATCH", body: { title: "title", mode: "mode" } },
+    ]);
+    // Both calls claimed, same as any other successful recognizeRestTools result — the factory
+    // (statement 0) is a different recognizer's concern, so it is deliberately excluded.
+    expect(claims.covers(statements[1]!)).toBe(true);
+    expect(claims.covers(statements[2]!)).toBe(true);
+  });
+
+  /**
+   * Every shape `recognizeInitFn` must refuse, as a mutation of a module the emitter actually
+   * writes — so each row is provably one edit away from a producible shape, and each asserts it
+   * changed something before asserting the refusal (a corruption that silently no-ops proves
+   * nothing).
+   */
+  const REFUSED_INIT_FNS: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "a fifth argument that is not an arrow",
+      '  () => ({ method: "DELETE" }),',
+      "  someBespokeInitFn,",
+    ],
+    [
+      "an arrow returning an object with a third key",
+      '() => ({ method: "DELETE" }),',
+      '() => ({ method: "DELETE", extra: 1 }),',
+    ],
+    [
+      "a parameter with no body — renderTool's initParam is `()` when there is nothing to reference",
+      '() => ({ method: "DELETE" }),',
+      '(parsed) => ({ method: "DELETE" }),',
+    ],
+    [
+      "a body with no parameter — renderTool's initParam is `(parsed)` whenever body references it",
+      "  (parsed) => ({",
+      "  () => ({",
+    ],
+  ];
+
+  it.each(REFUSED_INIT_FNS)("refuses %s", (_name, from, to) => {
+    const pristine = REST_WRITE;
+    const corrupted = pristine.replace(from, to);
+    expect(corrupted).not.toBe(pristine);
+
+    const claims = createClaimSet();
+    expect(recognizeRestTools(parseModule(corrupted), claims, "registerZzTool")).toBeUndefined();
+    // All-or-nothing: the OTHER call (PATCH, still well-formed) stays unclaimed too.
     expect(claims.claims()).toEqual([]);
   });
 });

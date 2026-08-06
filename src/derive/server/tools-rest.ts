@@ -14,6 +14,7 @@ import {
   stringLit,
 } from "../read.ts";
 import { recognizeArgs, type SchemaShape } from "./args.ts";
+import { recognizeBodyExpr } from "./body.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
 import { type BasePrefix, recognizeQueryBlock } from "./query.ts";
@@ -23,9 +24,9 @@ import type { ToolFields } from "./tools-hand.ts";
  * The inverse of src/emit/server/tools-rest.ts's `renderRestKitTools` — recovers the
  * `makeRestToolRegistrar` factory's fields (`recognizeRestRegistrar`) and every
  * `<registrar>(...)` call's declared spec fields (`recognizeRestTools`), as two SEPARATE exports
- * rather than one. `ToolFields` is the same type tools-hand.ts's recognizer produces (no
- * `method`: every call this recognizer accepts is arity 4, and arity 4 is always a GET — see
- * `recognizeOneCall`).
+ * rather than one. `ToolFields` is the same type tools-hand.ts's recognizer produces: `method`
+ * and `body` are omitted for an arity-4 call (always a `GET`) and recovered from the arity-5
+ * call's own 5th argument otherwise — see `recognizeOneCall` and `recognizeInitFn`.
  *
  * The split exists because the two halves have different claiming rules, and collapsing them
  * into one function's return value would hide that. The factory is WIRING, not a registration —
@@ -113,18 +114,32 @@ type RegistrarCallParts = {
   readonly description: string;
   readonly schemaNode: AstNode;
   readonly pathFnNode: AstNode;
+  /**
+   * The 5th `initFn` argument, present exactly when the call is arity 5 — a non-`GET` method,
+   * and optionally a body (`renderTool`'s `initArg`, src/emit/server/tools-rest.ts). Undefined
+   * for arity 4, which is always a `GET`.
+   */
+  readonly initFnNode: AstNode | undefined;
 };
 
 /**
  * `<registrar>(name, description, schema, pathFn)`'s four arguments, with the two string-literal
- * ones already read — arity 4 only, for the reason `recognizeOneCall` documents.
+ * ones already read, plus the optional 5th `initFn` argument — arity 4 or arity 5 only.
+ * `renderTool` never writes a bare 3 or a padded 6, so no other arity is a shape this recognizer
+ * needs to model.
  *
- * The four per-element `undefined` checks are `noUncheckedIndexedAccess` bookkeeping, not a
- * second arity test: the length check above them already fixed the count at four.
+ * Arity 5 used to be refused wholesale here (see `recognizeOneCall`'s docstring for the history);
+ * this function only READS the 5th argument's presence, so widening it to accept arity 5 carries
+ * none of that risk itself — `recognizeOneCall` is what decides whether the 5th argument's own
+ * shape is one `recognizeInitFn` can actually interpret, and refuses the whole call when it is
+ * not.
+ *
+ * The per-element `undefined` checks are `noUncheckedIndexedAccess` bookkeeping, not a second
+ * arity test: the length check above them already fixed the count at four or five.
  */
 function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
   const args = callArgs(call);
-  if (args?.length !== 4) return undefined;
+  if (args?.length !== 4 && args?.length !== 5) return undefined;
 
   const nameNode = args[0];
   const descriptionNode = args[1];
@@ -139,11 +154,17 @@ function registrarCallParts(call: AstNode): RegistrarCallParts | undefined {
     return undefined;
   }
 
+  let initFnNode: AstNode | undefined;
+  if (args.length === 5) {
+    initFnNode = args[4];
+    if (initFnNode === undefined) return undefined;
+  }
+
   const name = stringLit(nameNode);
   const description = stringLit(descriptionNode);
   if (name === undefined || description === undefined) return undefined;
 
-  return { name, description, schemaNode, pathFnNode };
+  return { name, description, schemaNode, pathFnNode, initFnNode };
 }
 
 /**
@@ -163,12 +184,114 @@ type ToolShape = {
   readonly basePrefix?: BasePrefix;
 };
 
+/** Every `pathFn` branch's own recognized fields, before the optional `initFn` is read. */
+type BaseToolFields = Omit<ToolFields, "method" | "body">;
+
 /**
- * One `<registrar>(name, description, schema, pathFn)` call — arity 4 only. Arity 5 (a 5th
- * `initFn` argument) carries a non-`GET` method (see renderTool's `initArg`) and is plan 2's
- * territory: refused here, rather than read for its first four arguments only, so a connector
- * that needs it blocks visibly on a named blocker instead of deriving a `GET` the real
- * connector never had.
+ * Mirrors tools-hand.ts's own (unexported) `WRITE_METHODS` rather than importing it — the two
+ * recognizers otherwise share nothing, and a private name reused across files by convention alone
+ * (not by an import) is exactly the kind of coupling that drifts silently. Both sides are pinned
+ * to `ToolSchema`'s own `z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"])` (src/spec.ts) minus
+ * "GET", so a schema change would need both updated in step regardless of who owns the constant.
+ */
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The optional 5th argument — `() => ({ method: "DELETE" })` or
+ * `(parsed) => ({ method: "POST", body: JSON.stringify({ … }) })` — recovered against `tool`,
+ * the fields the `pathFn` already produced.
+ *
+ * The object literal has exactly one or two keys, `method` always first: `renderTool`'s
+ * `initArg` writes `{ method: ${JSON.stringify(tool.method)}${bodyPart} }`, where `bodyPart` is
+ * either `""` or `, body: ${bodyExpr}` — never a third key, never `body` alone, never reordered.
+ *
+ * **The parameter/body correspondence is pinned in both directions.** `renderTool`'s `initParam`
+ * is `"()"` exactly when `bodyExpr` is undefined and `"(parsed)"` exactly when it is not — forced
+ * by the generated package's `noUnusedParameters`, since an unreferenced `parsed` fails its own
+ * typecheck. So a `body` key with a zero-param arrow, or a one-param arrow with no `body` key,
+ * is a shape `renderTool` cannot write, and each is refused rather than partially read.
+ *
+ * `hoistsInScope: false` is passed to `recognizeBodyExpr`, not because nothing was hoisted in
+ * this connector, but because the init callback is a SEPARATE arrow from the path callback —
+ * `renderTool` builds it with an empty `hoisted` map, since nothing the path callback's hoists
+ * declared is in scope here. A defaulted arg is therefore ALWAYS the inlined `?? <default>` form
+ * in this callback, never the hoisted const's own name, whatever the path callback did with the
+ * same arg — see body.ts's `bodyValueArg` docstring for the two forms this distinguishes, and
+ * `recognizeBodyExpr`'s own "contract for the rest-kit caller" tests for the both-directions
+ * check that a wrong value here would fail rather than derive quietly.
+ */
+function recognizeInitFn(
+  node: AstNode,
+  tool: BaseToolFields,
+): { method: "POST" | "PUT" | "PATCH" | "DELETE"; body?: Record<string, string> } | undefined {
+  const arrow = arrowFn(node);
+  if (arrow === undefined || arrow.isBlock || arrow.isAsync || arrow.params.length > 1) {
+    return undefined;
+  }
+
+  const props = objectProps(arrow.body);
+  if (props === undefined || (props.length !== 1 && props.length !== 2)) return undefined;
+
+  const methodProp = props[0];
+  if (methodProp === undefined || methodProp.key !== "method") return undefined;
+  const method = stringLit(methodProp.value);
+  if (method === undefined || !WRITE_METHODS.has(method)) return undefined;
+  const typedMethod = method as "POST" | "PUT" | "PATCH" | "DELETE";
+
+  if (props.length === 1) {
+    // No `body` key — `initParam` is `"()"` here, so a parameter is a shape the emitter cannot
+    // write: `(parsed) => ({ method: "DELETE" })` is refused, not read as a bodyless write.
+    return arrow.params.length === 0 ? { method: typedMethod } : undefined;
+  }
+
+  // A `body` key — `initParam` is `"(parsed)"` here: `() => ({ method: "POST", body: … })` is
+  // refused the same way, from the other side.
+  if (arrow.params.length !== 1) return undefined;
+  const bodyProp = props[1];
+  if (bodyProp === undefined || bodyProp.key !== "body") return undefined;
+
+  const body = recognizeBodyExpr(
+    bodyProp.value,
+    { args: tool.args, path: tool.path, query: tool.query, method: typedMethod },
+    false,
+  );
+  if (body === undefined) return undefined;
+
+  return { method: typedMethod, ...body };
+}
+
+/**
+ * The step every `pathFn` branch in `recognizeOneCall` funnels through: attaches `method`/`body`
+ * when the call is arity 5 (`initFnNode` set), and leaves both unset — a `GET`, via
+ * `ToolSchema`'s `.default("GET")` — when it is arity 4. Centralised here rather than repeated in
+ * each branch, so the three `pathFn` forms and the one `initFn` form stay independent axes: any
+ * of the three path shapes can pair with either arity, and this is the only place that pairing
+ * happens.
+ */
+function withInitFn(
+  fields: BaseToolFields,
+  staticStyle: StaticPathStyle | undefined,
+  schemaShape: SchemaShape,
+  basePrefix: BasePrefix | undefined,
+  initFnNode: AstNode | undefined,
+): ToolShape | undefined {
+  if (initFnNode === undefined) {
+    return { fields, staticStyle, schemaShape, basePrefix };
+  }
+  const init = recognizeInitFn(initFnNode, fields);
+  if (init === undefined) return undefined;
+  return { fields: { ...fields, ...init }, staticStyle, schemaShape, basePrefix };
+}
+
+/**
+ * One `<registrar>(name, description, schema, pathFn[, initFn])` call — arity 4 (always a `GET`)
+ * or arity 5 (a non-`GET` method, and optionally a body). Arity 5 used to be refused wholesale:
+ * "refused here, rather than read for its first four arguments only, so a connector that needs
+ * it blocks visibly on a named blocker instead of deriving a `GET` the real connector never
+ * had" — correct only while nothing could read the 5th argument. `recognizeInitFn` now can, so
+ * the widening changes nothing about the four `pathFn` shapes below: each still recognizes (or
+ * refuses) exactly as before, and `withInitFn` is the one new step layered on top, refusing the
+ * whole call when the 5th argument does not match what `recognizeInitFn` accepts.
  *
  * `pathFn` has four in-scope forms — `() => <pathExpr>`, `(parsed) => <pathExpr>`,
  * `(parsed) => { <hoists> return <pathExpr>; }` and the query branch
@@ -186,7 +309,7 @@ type ToolShape = {
 function recognizeOneCall(call: AstNode): ToolShape | undefined {
   const parts = registrarCallParts(call);
   if (parts === undefined) return undefined;
-  const { name, description, schemaNode, pathFnNode } = parts;
+  const { name, description, schemaNode, pathFnNode, initFnNode } = parts;
 
   const argsResult = recognizeArgs(schemaNode);
   if (argsResult === undefined) return undefined;
@@ -204,11 +327,13 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
   if (!arrow.isBlock) {
     const recognized = recognizePath(arrow.body, new Map());
     if (recognized === undefined) return undefined;
-    return {
-      fields: { name, description, args: argsResult.args, path: recognized.path },
-      staticStyle: recognized.staticStyle,
+    return withInitFn(
+      { name, description, args: argsResult.args, path: recognized.path },
+      recognized.staticStyle,
       schemaShape,
-    };
+      undefined,
+      initFnNode,
+    );
   }
 
   // Forms 3 and 4 both always take exactly one parameter, by two different clauses of the same
@@ -234,11 +359,13 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
     const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
     if (mergedArgs === undefined) return undefined;
 
-    return {
-      fields: { name, description, args: mergedArgs, path: recognized.path },
-      staticStyle: recognized.staticStyle,
+    return withInitFn(
+      { name, description, args: mergedArgs, path: recognized.path },
+      recognized.staticStyle,
       schemaShape,
-    };
+      undefined,
+      initFnNode,
+    );
   }
 
   // The query branch — src/emit/server/tools-rest.ts's `if (query !== undefined)` block. Tried
@@ -254,11 +381,13 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
   const mergedArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);
   if (mergedArgs === undefined) return undefined;
 
-  return {
-    fields: { name, description, args: mergedArgs, path: query.path, query: query.query },
+  return withInitFn(
+    { name, description, args: mergedArgs, path: query.path, query: query.query },
+    undefined,
     schemaShape,
-    basePrefix: query.basePrefix,
-  };
+    query.basePrefix,
+    initFnNode,
+  );
 }
 
 export type RestRegistrarFields = {

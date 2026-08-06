@@ -64,6 +64,21 @@ import { displayPath } from "../../src/types.ts";
  * wrong, so the round trip alone cannot catch it — test/derive/body.test.ts compares the derived
  * `body` against each fixture author's own.
  *
+ * zzwriterest is the rest-kit half of the write-body fixture pair — zzwriteonly's GET-less
+ * connector is the hand-rolled half, above. Its single write tool (`zzwriterest_item_update`, a
+ * PATCH) is the arity-5 `<registrar>(...)` call `recognizeInitFn` now reads (Task 6): the
+ * bodyless `zzwriterest_item_list` stays arity 4 (a GET), so this fixture also proves the two
+ * arities coexist in one module. The PATCH's `mode` arg is hoisted (with a default) in the PATH
+ * callback but referenced inline (`parsed.mode ?? "merge"`) in the INIT callback — the same arg,
+ * two different expressions, because the init callback is a separate arrow with nothing the path
+ * callback declared in scope — which is what pins `recognizeInitFn`'s `hoistsInScope: false` at
+ * this call site rather than merely asserting it as a `recognizeBodyExpr` unit-level contract
+ * (test/derive/body.test.ts's own "contract for the rest-kit caller" tests). Its `body` mapping
+ * (`title`, `mode`, `notify`) also differs from the DEFAULT (`title`, `notify` — `mode` rides the
+ * path) by one key, so this fixture is the only round-trip proof that the explicit-mapping path,
+ * not just the omit-when-default one, survives a real emit -> derive -> re-emit cycle for the
+ * rest-kit `initFn`.
+ *
  * mercury/netlify/zendesk/dependencytrack are Task 4's env-recognizer fixtures, unblocked by
  * server/env.ts's split-bearer pair (mercury, netlify — `recognizeEnv` now detects the
  * reader+wrapper pair as a unit, before the plain-accessor branch ever reaches the reader alone)
@@ -93,6 +108,7 @@ const ROUND_TRIP = [
   "discord",
   "zzquery",
   "zzwriteonly",
+  "zzwriterest",
 ];
 
 /**
@@ -179,22 +195,18 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * server/env.ts's `recognizeOne` docstring says the `auth: "client-credentials"` function shape
  * "is left unclaimed".
  *
- * "write body" named two DIFFERENT underlying gaps that shared one description, and only one of
- * them is left. The hand-rolled half is closed: `src/derive/server/body.ts` reads the JSON body
- * and `recognizeWriteHelper` (server/fetch-helper.ts) claims the `<local>Send` function, so
+ * "write body" named two DIFFERENT underlying gaps that shared one description, and both are now
+ * closed. The hand-rolled half: `src/derive/server/body.ts` reads the JSON body and
+ * `recognizeWriteHelper` (server/fetch-helper.ts) claims the `<local>Send` function, so
  * `zzwriteonly` — whose only tool is a POST, and which therefore emits NO read helper at all — is
- * in ROUND_TRIP above. `zzwriterest` (rest-kit) is the half that remains, and it is a different
- * construct: an arity-5 `<registrar>(...)` call, whose non-`GET` `initFn` argument
- * `recognizeOneCall` refuses outright — the last of that recognizer's four unread `pathFn`/arity
- * shapes now that the query branch is read. Its factory IS claimed (by `recognizeRestRegistrar`,
- * independently of the calls) and its fetch helper (a literal, non-`baseConst` base) matches
- * `recognizeRestFetchHelper` on its own; re-measured at this commit, this fixture reports exactly
- * its two `call:registerZzwriterestTool` statements unclaimed — nothing else.
+ * in ROUND_TRIP above. The rest-kit half — an arity-5 `<registrar>(...)` call, whose non-`GET`
+ * `initFn` argument `recognizeOneCall` used to refuse outright — is closed by Task 6's
+ * `recognizeInitFn`, and `zzwriterest` moved to ROUND_TRIP alongside it; see ROUND_TRIP's own
+ * docstring for what that fixture proves.
  */
 const BLOCKED: Record<string, string> = {
   bitrise: "stub tool handler",
   zzwrite: "client-credentials auth",
-  zzwriterest: "rest-kit write init",
 };
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
