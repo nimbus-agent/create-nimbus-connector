@@ -13,6 +13,13 @@ left here read as unreleased long after they shipped, which is exactly what happ
 
 *Nothing pending.*
 
+## [0.9.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.8.0...create-nimbus-connector-v0.9.0) (2026-08-06)
+
+
+### Features
+
+* **derive:** recover the style fields, hoisted base, search and env accessors ([#64](https://github.com/nimbus-agent/create-nimbus-connector/issues/64)) ([45e7c82](https://github.com/nimbus-agent/create-nimbus-connector/commit/45e7c82c1052f02ab4e50db6bfa4fa0ce5a9652d))
+
 ## [0.8.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.7.0...create-nimbus-connector-v0.8.0) (2026-08-06)
 
 
