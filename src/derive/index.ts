@@ -304,6 +304,9 @@ function deriveRestKitSpec(
       fetchHelper: {
         local: restFetchHelper.local,
         base: restFetchHelper.base,
+        ...(restFetchHelper.baseConst === undefined
+          ? {}
+          : { baseConst: restFetchHelper.baseConst }),
         ...(restFetchHelper.inlineHeaders === undefined
           ? {}
           : { inlineHeaders: restFetchHelper.inlineHeaders }),
