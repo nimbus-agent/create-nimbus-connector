@@ -2091,9 +2091,26 @@ currently-recognized module changes meaning.
 
 Delete the now-unreachable near-miss branches from `frameFailureKind` — `isBareIdentifierRegistrar`
 and `isInlinedTransportConnect` exist to label shapes that are about to be *recognized*, so keeping
-them would leave two labels that can never fire. Retire `isNamedReadOnlyCallback` and
-`frame:readonly-callback-not-inline` for the same reason. Check with `grep` that nothing else
-references them.
+them would leave two labels that can never fire.
+
+**`frame:readonly-callback-not-inline` is already dead, and two places still assert it fires on ten
+connectors.** Task 9 measured this while confirming something else; verified independently: the
+bucket appears **zero** times in the histogram. Retire it, and correct both claims:
+
+- `docs/ROADMAP.md`'s *A read-only-kit callback that is a named function reference* says those ten
+  are "Reported as `frame:readonly-callback-not-inline`". They are reported as
+  `frame:no-mcp-server`. **The limitation's substance is still true — only its promised label is
+  wrong**, so correct the label, do not delete the entry.
+- `src/derive/server/index.ts`'s `withTopLevelIfBodies` docstring says those ten "gate their call
+  behind `if (import.meta.main) { await runReadOnlyMcpConnector(...) }`". They do not. Each writes
+  `async function startConnector() { await runReadOnlyMcpConnector("nimbus-X", registerXTools); }`
+  and then `if (import.meta.main) await startConnector();` — so the `if` consequent is a bare
+  `ExpressionStatement` naming `startConnector`, `withTopLevelIfBodies` splices nothing, and
+  `isNamedReadOnlyCallback` never sees the wrapper. **Both functions are dead against the corpus and
+  that diagnostic has never once printed.**
+
+That second point is also the shape you are about to recognize, so read it as a description of axis 3
+rather than only as a correction. Check with `grep` that nothing else references either name.
 
 - [ ] **Step 5: Implement axis 3 in `recognizeReadOnlyFrame`**
 
