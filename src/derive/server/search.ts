@@ -356,6 +356,11 @@ function matchLocalFilterImport(node: AstNode, exportNames: readonly string[]): 
  * other. An import this cannot match stays unclaimed and is reported by the ordinary totality
  * rule (`import-from:<source>`), the same way a mismatched src/search-filter.ts import is
  * reported by that file's own totality rule — no separate named blocker is needed for either.
+ *
+ * This models only the monorepo import shape; the standalone barrel form is
+ * `search-filter.ts`'s own `matchStandaloneImports`' job, so a standalone search connector's
+ * server.ts always blocks here, unclaimed, before its filter file is ever read — a branch
+ * exercised only by that function's own unit test, not by any fixture in this repository.
  */
 export function claimSearchImports(
   statements: readonly AstNode[],

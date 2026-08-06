@@ -461,7 +461,13 @@ function matchSplitBearerReader(
  * reader BY NAME with no arguments. `readerLocal` is the reader's own function name, matched here
  * rather than assumed: a wrapper calling any OTHER function is not this pair (mendeley's inline
  * `` `Bearer ${accessToken()}` `` has no wrapper at all — criterion 1 of renderSplitBearer's
- * docstring, OUT).
+ * docstring, OUT). Shape is not the only membership test: `recognizeEnv` only ever offers this
+ * function the statement immediately following a matched reader, so figma/salesforce/
+ * stackoverflow/vercel — whose reader and wrapper each satisfy every shape criterion above but
+ * have a third accessor (`teamId`/`instanceUrl`/`teamSlug`) sitting between the two — are refused
+ * on adjacency instead, correctly rather than conservatively: `renderSplitBearer` emits both
+ * functions as one joined string and `renderEnvAccessors` joins `spec.env` in array order, so no
+ * spec can produce a layout with a statement between them.
  */
 function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
   const statements = functionBody(fn);
