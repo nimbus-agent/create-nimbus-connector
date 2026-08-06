@@ -665,9 +665,17 @@ The last thing `mercury` and `zendesk` need. `function:authHeader` is 23 connect
 sed -n '/renderSplitBearer/,/^}/p' src/emit/server/env.ts
 ```
 
-That docstring **is the membership list** — it enumerates which corpus connectors are out of
-scope. Scope this task to what it says the emitter writes. `intercom` (a third header) and `lever`
-(Basic over one var with an empty password) are named as OUT; do not widen to catch them.
+That docstring **is the membership list** for the split-bearer shape — it enumerates which corpus
+connectors are out of scope, clause by clause: `mendeley` (clause 1, no wrapper at all),
+`intercom` (clause 3, a third header), and `readwise` / `dagster` / `pipedrive` (clause 4, wrong
+prefix or wrong destination). Scope this task to what it says the emitter writes.
+
+**`lever` is out of scope too, but by a different mechanism — do not cite this docstring for it.**
+It uses Basic over one var with an empty password, and what excludes it is `renderBasic`'s
+two-var requirement. An earlier revision of this plan attributed both exclusions to
+`renderSplitBearer`'s docstring; `lever` has never appeared in `src/emit/server/env.ts` at all
+(`git log -S"lever"` over that path returns nothing), and the false citation propagated into a
+shipped test comment before it was caught. Cite the mechanism that actually does the excluding.
 
 - [ ] **Step 2: Confirm the wrongly-claimed hazard, then write the failing test**
 
@@ -764,8 +772,10 @@ structurally blind to.
 The trimTrailingSlash claim is gated on an entry actually carrying transform:
 \"trimTrailingSlashFn\" and matches the emitted constant rather than the function name.
 
-Scoped to renderSplitBearer's own docstring, which is the membership list: intercom (a third
-header) and lever (Basic over one var with an empty password) stay out.
+Scoped to renderSplitBearer's own docstring, which is the membership list for the split-bearer
+shape: mendeley (no wrapper), intercom (a third header) and readwise/dagster/pipedrive (wrong
+prefix or destination) stay out. lever stays out too, by renderBasic's two-var requirement
+rather than by that docstring — it is named nowhere in src/emit/server/env.ts.
 
 REACH 4/94 -> 6/94 (mercury, zendesk)"
 ```
