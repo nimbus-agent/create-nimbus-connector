@@ -55,8 +55,13 @@ describe("parseSpec", () => {
     // required field is present here too — a throw can only be the strict-object rejection of
     // PARTIAL_MARKER itself, not some unrelated missing field masking it. That distinction is
     // the whole point of the marker being the mechanism: see src/derive/from-connector.ts.
+    // toThrow(string) is substring containment, not a pattern — so the marker is matched
+    // literally and needs no regex escaping. The escaped-RegExp form this replaced used
+    // `.replace("$", "\\$")`, which escapes only the FIRST "$"; correct for today's one-dollar
+    // marker and silently wrong the day it gains a second. CodeQL flagged it (js/incomplete-
+    // sanitization) on PR #62.
     const draft = { ...MINIMAL, [PARTIAL_MARKER]: { note: "x", blockers: ["stub"] } };
-    expect(() => parseSpec(draft)).toThrow(new RegExp(PARTIAL_MARKER.replace("$", "\\$")));
+    expect(() => parseSpec(draft)).toThrow(PARTIAL_MARKER);
   });
 
   it("accepts a non-GET method on a tool now that method/effect are in scope", () => {
