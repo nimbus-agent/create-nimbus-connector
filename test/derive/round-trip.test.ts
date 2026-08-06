@@ -88,6 +88,22 @@ import { displayPath } from "../../src/types.ts";
  * fixtures/expectations.json for reasons unrelated to env (their real corpus source diverges
  * elsewhere), so this local round trip (this repo's own spec -> emit -> derive -> re-emit) is a
  * weaker, and different, claim than corpus byte-identity.
+ *
+ * `bitrise` is Task 7's fixture, unblocked by `recognizeStubShape`/`recognizeStubHandler`
+ * (server/tools-hand.ts) — its two `impl: "stub"` tools were the last thing standing between it
+ * and this list; see BLOCKED's own docstring, below, for the shape that used to stop it. Like
+ * `mercury`/`netlify`/`zendesk`/`dependencytrack` above, this is a LOCAL claim, not a corpus one
+ * — fixtures/expectations.json still lists bitrise as `4/7` against the real connector, whose
+ * `bitrise_list`/`bitrise_get` are hand-written conditionals this spec language cannot express
+ * (see that fixture's own header comment); `impl: "stub"` here is a deliberate placeholder for
+ * functionality outside the DSL's reach, not an attempt at a fifth matching file. The fixture's
+ * own `handlerStyle: "block"` and `fetchHelper.staticPathStyle: "template"` both go unrecovered
+ * without being GAPS: both stub tools abstain from the handlerStyle vote (see `ToolShape`'s own
+ * docstring) and the connector's only OTHER tool is the search one, which never votes either;
+ * and the search tool's own path (`/v0.1/apps/${arg.appSlug}/builds?limit=50`) is dynamic, so no
+ * tool in this connector carries any staticPathStyle evidence at all. Neither setting is
+ * observable in a single byte this connector emits, so their absence from the derived spec is
+ * the correct minimal spec, not a recovery this deriver failed at.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -109,6 +125,7 @@ const ROUND_TRIP = [
   "zzquery",
   "zzwriteonly",
   "zzwriterest",
+  "bitrise",
 ];
 
 /**
@@ -170,23 +187,14 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  *
  * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
  * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
- * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. `bitrise` is the only
- * remaining `style: "read-only-kit"` fixture with a search tool that still blocks — on a
- * DIFFERENT construct, confirmed by running `deriveSpec` directly against its own search `reg()`
- * call in isolation (`recognizeSearchTool` recognizes it correctly, filter fields included)
- * before checking the whole connector, so the reason below is the ACTUAL remaining blocker, not
- * a guess at what search recognition left behind. `mercury`, `netlify`, `zendesk` and
- * `dependencytrack` — the other four fixtures that had a search tool alongside an env gap — moved
- * to ROUND_TRIP once Task 4 landed the split-bearer pair and the `trimTrailingSlashFn`/
- * `auth: "basic"` accessors (see ROUND_TRIP's own docstring above):
- *
- * - `bitrise` — "stub tool handler". Its other two tools are `impl: "stub"`
- *   (`async () => { throw ...; }`), a shape no recognizer in tools-hand.ts models (see
- *   `recognizeHoistedBlock`'s own docstring: a block whose last statement is not a `return` is
- *   refused). `recognizeTools` is all-or-nothing, so the one unrecognized stub call blocks the
- *   whole module — including its own search tool and both search-specific imports, which
- *   `deriveSpec` never even attempts to claim (`claimSearchImports` only runs once `toolsResult`
- *   itself succeeds). Reported: unclaimed `call:reg` statements plus both search imports.
+ * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. `mercury`, `netlify`,
+ * `zendesk` and `dependencytrack` — the four fixtures that had a search tool alongside an env gap
+ * — moved to ROUND_TRIP once Task 4 landed the split-bearer pair and the `trimTrailingSlashFn`/
+ * `auth: "basic"` accessors (see ROUND_TRIP's own docstring above). `bitrise` — the last
+ * `style: "read-only-kit"` fixture with a search tool that still blocked, on a DIFFERENT
+ * construct ("stub tool handler") — moved to ROUND_TRIP once Task 7 landed
+ * `recognizeStubShape`/`recognizeStubHandler`; see ROUND_TRIP's own docstring for what it proves
+ * now and why its `handlerStyle`/`staticPathStyle` going unrecovered is not a gap.
  *
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.
@@ -205,7 +213,6 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * docstring for what that fixture proves.
  */
 const BLOCKED: Record<string, string> = {
-  bitrise: "stub tool handler",
   zzwrite: "client-credentials auth",
 };
 

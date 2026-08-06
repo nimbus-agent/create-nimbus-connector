@@ -4,12 +4,15 @@ import type { ClaimSet } from "../claims.ts";
 import {
   arrowFn,
   awaited,
+  blockBody,
   callArgs,
   calleeOf,
   callTo,
   expressionOf,
   isIdent,
+  newOf,
   stringLit,
+  throwArgument,
 } from "../read.ts";
 import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { type BodyTool, recognizeBodyExpr } from "./body.ts";
@@ -29,11 +32,25 @@ export type ToolFields = {
   name: string;
   description: string;
   args: Record<string, ArgFields>;
-  path: string;
+  /**
+   * Omitted only for a stub (`impl: "stub"`) — `ToolSchema`'s own refine pins that pairing both
+   * ways: `(t.impl === "stub") === (t.path === undefined)` (src/spec.ts). Every other shape this
+   * deriver recognizes always sets it.
+   */
+  path?: string;
+  /**
+   * "stub" when the handler is the throwing placeholder `renderTool`'s stub branch writes
+   * (src/emit/server/tools-hand.ts:53-65, tools-rest.ts:62-67) — `recognizeStubShape` below (and
+   * tools-rest.ts's own use of `recognizeStubHandler`) is its only source. Omitted for every
+   * other tool kind, the same omit-the-default discipline `method` already uses below, so a
+   * non-stub tool's derived spec is byte-unchanged by this field's existence.
+   */
+  impl?: "stub";
   /**
    * Omitted for GET, so ToolSchema's `.default("GET")` applies and a read connector's derived
    * spec is byte-unchanged by this field's existence. Present only when the emitter wrote the
-   * write helper, which is the only place a method literal appears.
+   * write helper, which is the only place a method literal appears. Always omitted for a stub —
+   * ToolSchema's refine pins one to `method: "GET"`, so there is nothing non-default to record.
    */
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
   /**
@@ -66,16 +83,19 @@ export type ToolFields = {
  * both are `ConnectorSpecSchema`/`FetchHelperSchema` fields, and `ToolSchema` is a
  * `strictObject` that would reject them.
  *
- * `votesHandlerStyle` is false for the two shapes whose handler form the emitter FORCES,
+ * `votesHandlerStyle` is false for the three shapes whose handler form the emitter FORCES,
  * independently of `spec.handlerStyle`, and which therefore carry no evidence for the vote below
- * — counting either would force `handlerStyle: "block"` on connectors that never declared it,
- * regardless of what their OTHER tools show:
+ * — counting any of them would force `handlerStyle: "block"` on connectors that never declared
+ * it, regardless of what their OTHER tools show:
  *
  *   - a search tool: `renderSearchTool` always writes a hoist-free block;
  *   - a query tool: `renderTool`'s `if (query !== undefined)` branch returns its block form
  *     BEFORE the `used.size === 0 && spec.handlerStyle === "concise"` test is ever reached
  *     (src/emit/server/tools-hand.ts), so a query tool with no hoists is a block a "concise"
- *     connector emits too.
+ *     connector emits too;
+ *   - a stub tool: `renderTool`'s `if (tool.impl === "stub")` branch returns its block form even
+ *     earlier still — before the schema-and-path machinery both the query branch and the plain
+ *     form share is ever reached — so a stub is a block every connector emits, "concise" or not.
  *
  * `basePrefix` is set only for a query tool, whose `new URL(...)` was rendered with the fetch
  * helper's base spliced in ahead of the path. It is not a spec field — it is a fact about this
@@ -281,11 +301,14 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   }
 
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
-  // A tool whose block contains anything else (a stub's `throw`, say) is a shape this recognizer
+  // A tool whose block contains anything else (a stub's `throw`, say) is a shape THIS recognizer
   // does not model, and is refused rather than partially read — hoists.ts's
   // `recognizeHoistedBlock` is where that refusal happens, shared with tools-rest.ts, which reads
   // the identical hoist statements behind a different registrar. The query branch's `new URL(...)`
-  // trio is the one shape that refusal hands on rather than ends at; see below.
+  // trio is the one shape that refusal hands on rather than ends at; see below. A stub's throw is
+  // the other: `recognizeTools`'s loop falls on to `recognizeStubShape` once `recognizeOne`
+  // (i.e. this whole function) refuses, rather than teaching this reader a shape with no hoists
+  // and no `jsonResult` at all.
   const block = recognizeHoistedBlock(arrow.body);
   if (block === undefined) {
     // The query branch — `renderTool`'s `if (query !== undefined)` block (src/emit/server/
@@ -395,6 +418,76 @@ function recognizeSearchShape(call: AstNode, helperLocal: string): ToolShape | u
 }
 
 /**
+ * `{ throw new Error("<name> is not implemented"); }` — the ONE statement `renderTool`'s stub
+ * branch ever writes, in EITHER registration style (this file's own `reg(...)` stub,
+ * src/emit/server/tools-hand.ts:53-65; tools-rest.ts's registrar stub, tools-rest.ts:62-67). The
+ * two differ only in whether the wrapping arrow is `async` — this file's own stub always is,
+ * tools-rest.ts's never is — so `requireAsync` is supplied by the caller rather than fixed here;
+ * it is the one thing that differs between the two shapes, and exported so tools-rest.ts reads
+ * the identical block rather than growing a second copy of this check (the drift `hoists.ts` was
+ * extracted to stop, restated for a third shape).
+ *
+ * The thrown message is DERIVED from `name` — the tool's own declared name, already read by the
+ * caller — not an author-supplied string: `renderTool` always writes exactly
+ * `` `${tool.name} is not implemented` ``, so anything else (even a similar message) is a
+ * hand-written stub this generator was never asked to produce, and is refused. A statement before
+ * the throw, a thrown value that is not `new Error(...)`, or a parameter on the arrow are each
+ * refused for the same reason: none is a shape `renderTool` can write.
+ */
+export function recognizeStubHandler(node: AstNode, name: string, requireAsync: boolean): boolean {
+  const arrow = arrowFn(node);
+  if (arrow === undefined || !arrow.isBlock || arrow.isAsync !== requireAsync) return false;
+  if (arrow.params.length !== 0) return false;
+  const statements = blockBody(arrow.body);
+  if (statements?.length !== 1) return false;
+  const errArgs = newOf(throwArgument(statements[0]), "Error", 1);
+  if (errArgs === undefined) return false;
+  return stringLit(errArgs[0]) === `${name} is not implemented`;
+}
+
+/**
+ * The fallback tried when neither `recognizeOne` nor `recognizeSearchShape` recognizes a
+ * `reg(...)` call — `renderTool`'s stub branch (src/emit/server/tools-hand.ts:53-65), the same
+ * four-argument call shape `recognizeOne` reads, but a handler that throws rather than fetches.
+ * `recognizeStubHandler` above does the actual shape check, requiring `async` — this file's own
+ * stub always writes it, unlike tools-rest.ts's.
+ *
+ * `isBlock: true, hasHoists: false` report what the emitter actually writes — the same discipline
+ * `recognizeSearchShape`'s docstring states for its own two fields — and `votesHandlerStyle:
+ * false` is what excludes this shape from the connector-wide vote: see `ToolShape`'s own
+ * docstring for why (the identical reasoning that renamed `isSearch` to `votesHandlerStyle` in
+ * the first place, restated for a third shape rather than re-derived here).
+ */
+function recognizeStubShape(call: AstNode): ToolShape | undefined {
+  const args = callArgs(call);
+  if (args?.length !== 4) return undefined;
+  const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
+    AstNode,
+    AstNode,
+    AstNode,
+    AstNode,
+  ];
+  const name = stringLit(nameNode);
+  const description = stringLit(descriptionNode);
+  if (name === undefined || description === undefined) return undefined;
+  if (!recognizeStubHandler(handlerNode, name, true)) return undefined;
+
+  const argsResult = recognizeArgs(schemaNode);
+  if (argsResult === undefined) return undefined;
+
+  return {
+    fields: { name, description, args: argsResult.args, impl: "stub" },
+    isBlock: true,
+    hasHoists: false,
+    votesHandlerStyle: false,
+    schemaShape: {
+      propertyCount: Object.keys(argsResult.args).length,
+      oneLine: argsResult.schemaStyle === "inline",
+    },
+  };
+}
+
+/**
  * Every `reg(...)` call in the module, or undefined if any one of them is not understood.
  *
  * All-or-nothing on purpose: a connector with nine recognized tools and one bespoke handler is
@@ -444,14 +537,18 @@ export function recognizeTools(
 
   const shapes: ToolShape[] = [];
   for (const { call } of regs) {
-    const shape = recognizeOne(call, helperLocal) ?? recognizeSearchShape(call, helperLocal);
+    const shape =
+      recognizeOne(call, helperLocal) ??
+      recognizeSearchShape(call, helperLocal) ??
+      recognizeStubShape(call);
     if (shape === undefined) return undefined;
     shapes.push(shape);
   }
 
-  // Search and query shapes carry no handlerStyle evidence either way — see ToolShape's own
-  // docstring — so the vote runs over the subset that does. A connector whose every tool is one
-  // of those two correctly abstains entirely (both booleans false), leaving handlerStyle unset.
+  // Search, query and stub shapes carry no handlerStyle evidence either way — see ToolShape's
+  // own docstring — so the vote runs over the subset that does. A connector whose every tool is
+  // one of those three correctly abstains entirely (both booleans false), leaving handlerStyle
+  // unset.
   const votingShapes = shapes.filter((s) => s.votesHandlerStyle);
   const hasBlockWithoutHoists = votingShapes.some((s) => s.isBlock && !s.hasHoists);
   const hasConcise = votingShapes.some((s) => !s.isBlock);

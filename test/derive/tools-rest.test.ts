@@ -359,3 +359,105 @@ describe("recognizeRestTools reads the arity-5 initFn", () => {
     expect(claims.claims()).toEqual([]);
   });
 });
+
+// The block `renderTool`'s rest-kit stub branch writes — never `async`, unlike tools-hand.ts's
+// own reg() stub (src/emit/server/tools-rest.ts:62-67, tools-hand.ts:53-65). Always arity 4: a
+// stub issues no request, so ToolSchema's refine forbids the 5th `initFn` argument entirely.
+const STUB_CALL = [
+  "registerZzTool(",
+  '  "zz_stub_tool",',
+  '  "Not yet implemented.",',
+  "  z.object({}),",
+  "  () => {",
+  '    throw new Error("zz_stub_tool is not implemented");',
+  "  },",
+  ");",
+].join("\n");
+
+const REAL_CALL = [
+  "registerZzTool(",
+  '  "zz_item_get",',
+  '  "Get an item.",',
+  "  z.object({}),",
+  '  () => "/things",',
+  ");",
+].join("\n");
+
+describe("recognizeRestTools reads the stub tool handler", () => {
+  it("recovers a stub as { name, description, args, impl: 'stub' } — no path, no method", () => {
+    const source = restModule(STUB_CALL);
+    const tools = recognizeRestTools(parseModule(source), createClaimSet(), "registerZzTool");
+    expect(tools?.tools).toEqual([
+      { name: "zz_stub_tool", description: "Not yet implemented.", args: {}, impl: "stub" },
+    ]);
+  });
+
+  it("recovers a stub beside a real tool, claiming both calls", () => {
+    const source = restModule([STUB_CALL, "", REAL_CALL].join("\n\n"));
+    const statements = parseModule(source);
+    const claims = createClaimSet();
+    const tools = recognizeRestTools(statements, claims, "registerZzTool");
+    expect(tools?.tools.map((t) => t.name)).toEqual(["zz_stub_tool", "zz_item_get"]);
+    expect(claims.covers(statements[1]!)).toBe(true);
+    expect(claims.covers(statements[2]!)).toBe(true);
+  });
+
+  it("refuses a throw-shaped pathFn paired with an initFn (arity 5) — a stub never carries one", () => {
+    // Without the `initFnNode === undefined` gate, this would match as a stub and silently
+    // discard the initFn's "DELETE" method — a shape renderTool never actually writes (a stub
+    // is always arity 4), so refusing it is correct, not merely conservative.
+    const source = restModule(
+      [
+        "registerZzTool(",
+        '  "zz_stub_tool",',
+        '  "Not yet implemented.",',
+        "  z.object({}),",
+        "  () => {",
+        '    throw new Error("zz_stub_tool is not implemented");',
+        "  },",
+        '  () => ({ method: "DELETE" }),',
+        ");",
+      ].join("\n"),
+    );
+    const claims = createClaimSet();
+    expect(recognizeRestTools(parseModule(source), claims, "registerZzTool")).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  /**
+   * Every shape `recognizeStubHandler` must refuse here, as a mutation of a module the emitter
+   * actually writes — same discipline as `REFUSED_INIT_FNS` above. The async row is the one that
+   * matters most: without `requireAsync: false` at this call site, an async stub arrow would read
+   * identically to tools-hand.ts's OWN stub, silently accepting a shape src/emit/server/
+   * tools-rest.ts never writes.
+   */
+  const REFUSED_STUBS: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "a throw message that does not match `${name} is not implemented` exactly",
+      'throw new Error("zz_stub_tool is not implemented");',
+      'throw new Error("something else went wrong");',
+    ],
+    [
+      "a thrown value that is not new Error(...)",
+      'throw new Error("zz_stub_tool is not implemented");',
+      'throw "zz_stub_tool is not implemented";',
+    ],
+    [
+      "a block with a statement before the throw",
+      '  () => {\n    throw new Error("zz_stub_tool is not implemented");',
+      '  () => {\n    const x = 1;\n    throw new Error("zz_stub_tool is not implemented");',
+    ],
+    ["a parameter on the stub arrow — renderTool writes () always", "  () => {", "  (parsed) => {"],
+    ["an async stub arrow — renderTool never writes async here", "  () => {", "  async () => {"],
+  ];
+
+  it.each(REFUSED_STUBS)("refuses %s", (_name, from, to) => {
+    const pristine = restModule(STUB_CALL);
+    const corrupted = pristine.replace(from, to);
+    expect(corrupted).not.toBe(pristine);
+
+    const claims = createClaimSet();
+    expect(recognizeRestTools(parseModule(corrupted), claims, "registerZzTool")).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+});

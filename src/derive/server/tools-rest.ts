@@ -18,7 +18,7 @@ import { recognizeBodyExpr } from "./body.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
 import { type BasePrefix, recognizeQueryBlock } from "./query.ts";
-import type { ToolFields } from "./tools-hand.ts";
+import { recognizeStubHandler, type ToolFields } from "./tools-hand.ts";
 
 /**
  * The inverse of src/emit/server/tools-rest.ts's `renderRestKitTools` — recovers the
@@ -184,8 +184,14 @@ type ToolShape = {
   readonly basePrefix?: BasePrefix;
 };
 
-/** Every `pathFn` branch's own recognized fields, before the optional `initFn` is read. */
-type BaseToolFields = Omit<ToolFields, "method" | "body">;
+/**
+ * Every `pathFn` branch's own recognized fields, before the optional `initFn` is read. `path` is
+ * re-required here (Task 7 made `ToolFields.path` optional, for the stub shape alone): every one
+ * of the four `pathFn` forms below always recovers a real path string — none of them is the stub
+ * branch, which `recognizeOneCall` reads through a completely separate arm before ever reaching
+ * these — so widening `ToolFields.path` must not widen this type along with it.
+ */
+type BaseToolFields = Omit<ToolFields, "method" | "body" | "path"> & { path: string };
 
 /**
  * Mirrors tools-hand.ts's own (unexported) `WRITE_METHODS` rather than importing it — the two
@@ -305,6 +311,12 @@ function withInitFn(
  * the same pin `read.ts`'s `isAsync` documents and `readOnlyWrapper` (server/index.ts) already
  * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
  * non-async form and was claimed for a shape the emitter cannot produce.
+ *
+ * A stub (`renderTool`'s `if (tool.impl === "stub")` branch, tools-rest.ts:62-67) is a FIFTH
+ * shape, checked before any of the four `pathFn` forms below: it is arity 4 always — a stub
+ * issues no request, so ToolSchema's refine forbids the 5th `initFn` argument entirely — and its
+ * "pathFn" position is the identical throw-block tools-hand.ts's own `reg()` stub writes, just
+ * never `async` (`recognizeStubHandler`'s `requireAsync: false` is what tells the two apart).
  */
 function recognizeOneCall(call: AstNode): ToolShape | undefined {
   const parts = registrarCallParts(call);
@@ -317,6 +329,15 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
     propertyCount: Object.keys(argsResult.args).length,
     oneLine: argsResult.schemaStyle === "inline",
   };
+
+  // Checked before the pathFn forms below because none of THEM is a zero-parameter block —
+  // recognizeStubHandler is the only reader for that shape, and `initFnNode === undefined` is
+  // the arity-4 gate: a stub-shaped throw block paired with a 5th argument is not a shape
+  // `renderTool` can write, so it is left to fall through and be refused there instead of
+  // silently discarding the initFn's method/body.
+  if (initFnNode === undefined && recognizeStubHandler(pathFnNode, name, false)) {
+    return { fields: { name, description, args: argsResult.args, impl: "stub" }, schemaShape };
+  }
 
   const arrow = arrowFn(pathFnNode);
   if (arrow === undefined || arrow.params.length > 1 || arrow.isAsync) return undefined;

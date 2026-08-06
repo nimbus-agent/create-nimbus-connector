@@ -575,3 +575,163 @@ describe("recognizeTools recovers the HTTP method", () => {
     expect(recognizeTools(body, createClaimSet(), undefined)).toBeUndefined();
   });
 });
+
+// The block `renderTool`'s stub branch writes, whatever the connector's style — the shape
+// `recognizeStubShape` reads (src/emit/server/tools-hand.ts:53-65). "newrelic_" prefix and
+// "nrGet" helper match CONCISE/BLOCK/BLOCK_NO_HOIST above, so this composes with them directly.
+const STUB_CALL = [
+  "reg(",
+  '  "newrelic_stub_tool",',
+  '  "Not yet implemented.",',
+  "  z.object({}),",
+  "  async () => {",
+  '    throw new Error("newrelic_stub_tool is not implemented");',
+  "  },",
+  ");",
+].join("\n");
+
+const STUB_SPEC = {
+  name: "zzstub",
+  displayName: "Zz Stub",
+  description: "Fixture for stub tool recovery.",
+  serviceLabel: "ZzStub",
+  style: "hand-rolled",
+  env: [{ vars: ["ZZSTUB_TOKEN"], local: "headers", auth: "bearer", required: true }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzstub.test", headers: "headers" },
+  tools: [
+    {
+      name: "zzstub_list",
+      description: "List items (not yet implemented).",
+      impl: "stub",
+      args: { scope: { type: "string", optional: true } },
+    },
+    {
+      name: "zzstub_get",
+      description: "Get an item.",
+      path: "/v1/items",
+    },
+  ],
+};
+
+describe("recognizeTools recognizes the stub tool handler", () => {
+  it("recovers a stub tool as { name, description, args, impl: 'stub' } — no path, no method — beside a real tool", () => {
+    const body = parseModule(emittedServer(STUB_SPEC));
+    const result = recognizeTools(body, createClaimSet(), "zzGet");
+    expect(result?.tools).toEqual([
+      {
+        name: "zzstub_list",
+        description: "List items (not yet implemented).",
+        args: { scope: { type: "string", optional: true } },
+        impl: "stub",
+      },
+      {
+        name: "zzstub_get",
+        description: "Get an item.",
+        args: {},
+        path: "/v1/items",
+      },
+    ]);
+  });
+
+  it("does not let a stub tool vote 'block' against a concise tool", () => {
+    // renderTool's stub branch writes the block form unconditionally (see ToolShape's own
+    // docstring), so without votesHandlerStyle: false this pair would be refused outright — a
+    // block with no hoists beside a concise handler matches neither connector-wide handlerStyle
+    // (recognizeTools' own mixed-shape rule, exercised directly by the test just above it).
+    const { result } = run(`${CONCISE}\n${STUB_CALL}`);
+    expect(result?.handlerStyle).toBeUndefined();
+    expect(result?.tools.map((t) => t.name)).toEqual([
+      "newrelic_application_list",
+      "newrelic_stub_tool",
+    ]);
+  });
+
+  // Every source the recognizer must refuse outright — the brief's own four cases, plus the
+  // async guard: renderTool's hand-rolled stub always writes `async`, so a non-async one is a
+  // shape it cannot have written either. Each is provably one edit away from STUB_CALL, so
+  // whichever guard catches it is load-bearing for THAT edit, not merely plausible.
+  const REFUSED_STUBS: ReadonlyArray<readonly [string, string]> = [
+    [
+      "a throw message that does not match `${name} is not implemented` exactly",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({}),",
+        "  async () => {",
+        '    throw new Error("something else went wrong");',
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "a thrown value that is not new Error(...)",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({}),",
+        "  async () => {",
+        '    throw "t is not implemented";',
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "a block with a statement before the throw",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({}),",
+        "  async () => {",
+        "    const x = 1;",
+        '    throw new Error("t is not implemented");',
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "a stub handler taking a parameter — renderTool writes async () always",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({}),",
+        "  async (p) => {",
+        '    throw new Error("t is not implemented");',
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+    [
+      "a non-async stub handler — renderTool's hand-rolled stub is always async",
+      [
+        "reg(",
+        '  "t",',
+        '  "d",',
+        "  z.object({}),",
+        "  () => {",
+        '    throw new Error("t is not implemented");',
+        "  },",
+        ");",
+      ].join("\n"),
+    ],
+  ];
+
+  it.each(REFUSED_STUBS)("refuses %s", (_name, source) => {
+    const { result, claims } = run(source);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a corrupted throw message on a REAL emitted stub — not just a hand-typed one", () => {
+    const pristine = emittedServer(STUB_SPEC);
+    const corrupted = pristine.replace(
+      'throw new Error("zzstub_list is not implemented");',
+      'throw new Error("zzstub_list is broken");',
+    );
+    expect(corrupted).not.toBe(pristine);
+    expect(recognizeTools(parseModule(corrupted), createClaimSet(), "zzGet")).toBeUndefined();
+  });
+});

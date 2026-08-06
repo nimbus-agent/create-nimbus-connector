@@ -33,9 +33,17 @@ import type { ToolFields } from "./tools-hand.ts";
  * call's declared spec fields. `ToolFields` (name/description/args/path) is reused as-is;
  * `method` never appears (ToolSchema pins a search tool to GET, see src/spec.ts's refine), so
  * this type never sets it.
+ *
+ * `Omit<ToolFields, "impl" | "path">` rather than a bare `ToolFields &`: `ToolFields.impl` is
+ * `"stub" | undefined` (Task 7), and intersecting that with a fresh `impl: "search"` here would
+ * compute `("stub" | undefined) & "search"`, which TypeScript reduces to `never` — silently
+ * making this field un-assignable rather than raising an error at this declaration. `path` is
+ * re-declared required for the same reason `impl` is: a search tool always has one (`renderSearchTool`
+ * never writes the stub branch), so widening `ToolFields.path` to optional must not widen this too.
  */
-export type SearchToolFields = ToolFields & {
+export type SearchToolFields = Omit<ToolFields, "impl" | "path"> & {
   impl: "search";
+  path: string;
   rows?: string;
   maxLimit: number;
   filter: { export: string };

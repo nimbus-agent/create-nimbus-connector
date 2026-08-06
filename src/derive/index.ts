@@ -256,7 +256,7 @@ export function voteArgsSchemaStyle(
  * base template may contain rather than anything this function decides. Recorded rather than
  * fixed, so the refusal above is not read as covering more than it does.
  */
-function rebaseQueryTools<T extends { readonly path: string }>(
+function rebaseQueryTools<T extends { readonly path?: string }>(
   tools: readonly T[],
   prefixes: readonly (BasePrefix | undefined)[],
   helper: { readonly base: string; readonly baseConst?: string },
@@ -273,6 +273,13 @@ function rebaseQueryTools<T extends { readonly path: string }>(
       out.push(tool);
       continue;
     }
+    // `tool.path === undefined` is unreachable for any tool this ever actually fires on — a
+    // `prefix` exists only for a query tool (see `basePrefixes`' own docstring), and a stub can
+    // never be one (ToolSchema's refine rejects `impl: "stub"` beside `query`) — but `path` is
+    // optional on the SHARED `T` bound (Task 7 widened it so a stub's fields could flow through
+    // this same array), so the type no longer proves that on its own; this is what keeps
+    // `tool.path.slice(...)` below from a possibly-undefined access.
+    if (tool.path === undefined) return undefined;
     // The base must lie wholly inside the leading quasi — it cannot span a `${…}`. Testing the
     // quasi rather than the recovered path is what keeps a base longer than that quasi from
     // matching by running on into a placeholder's rendered text.
@@ -496,20 +503,29 @@ function deriveSharedStyleSpec(
   // non-GET (src/emit/server/fetch-helper.ts). A module carrying a helper no tool would call
   // re-emits without it, and one missing a helper its tools DO call re-emits with it — neither
   // reproduces, and neither recognizer can see the other's evidence on its own. `method` is
-  // omitted from `ToolFields` for GET, so its presence is the non-GET test. Every recognized tool
-  // is non-stub by construction: no recognizer here models a stub handler.
+  // omitted from `ToolFields` for GET, so its presence is the non-GET test.
+  //
+  // A stub calls NEITHER helper — it never issues a request at all — so it must not count as
+  // "read called" evidence even though its own `method` is also undefined (ToolSchema pins one
+  // to GET, but `renderTool`'s stub branch returns before ever reaching the read helper). Without
+  // this exclusion a connector whose every non-stub, non-search tool is a WRITE, plus a stub,
+  // would derive `read called: true` from the stub alone while `recognizedHelper` is correctly
+  // undefined (no tool actually calls it) — a false `fetch-helper:read-helper-mismatch` block on
+  // a connector this generator can regenerate. `bitrise`'s own read helper is called by its
+  // SEARCH tool, not either stub, so this exclusion does not change what bitrise derives to.
+  const nonStubTools = toolsResult.tools.filter((t) => t.impl !== "stub");
   const helperMismatch = [
     {
       role: "read",
       wanted: "GET",
       present: recognizedHelper !== undefined,
-      called: toolsResult.tools.some((t) => t.method === undefined),
+      called: nonStubTools.some((t) => t.method === undefined),
     },
     {
       role: "write",
       wanted: "non-GET",
       present: writeHelper !== undefined,
-      called: toolsResult.tools.some((t) => t.method !== undefined),
+      called: nonStubTools.some((t) => t.method !== undefined),
     },
   ].find((h) => h.present !== h.called);
   if (helperMismatch !== undefined) {
@@ -526,9 +542,10 @@ function deriveSharedStyleSpec(
   // helper with the line and no query tool regenerates a helper without it; a query tool with no
   // line regenerates one with it. Either way the derived spec would not reproduce this module —
   // the wrong-claim class, caught here because neither recognizer can see the tools' evidence.
-  // `query` is read off the union without narrowing on purpose: `SearchToolFields` extends
-  // `ToolFields`, so the field is there for both, and a search tool never carries one anyway
-  // (ToolSchema rejects `impl: "search"` beside `query`). Guarding it would state the opposite.
+  // `query` is read off the union without narrowing on purpose: `SearchToolFields` is built
+  // from `ToolFields` (`Omit<ToolFields, "impl" | "path"> & {...}`), so the field is there for
+  // both, and a search tool never carries one anyway (ToolSchema rejects `impl: "search"` beside
+  // `query`). Guarding it would state the opposite.
   const anyQuery = toolsResult.tools.some((t) => t.query !== undefined);
   const passthroughMismatch = [
     { role: "read", helper: recognizedHelper },
