@@ -2257,6 +2257,28 @@ which any task on this branch touches. Record it in the ceiling as a known `--fr
 with its precedent named, so whoever picks it up starts from `$effectAmbiguity` rather than
 rediscovering the shape.
 
+**A second follow-up, this one a layering wrinkle rather than a gap.** Task 5 introduced the
+codebase's first `derive → emit` import: `src/derive/server/body.ts` imports `parsePathTemplate` from
+`src/emit/server/path-template.ts`, so the deriver's reconstruction of `renderBodyExpr`'s *default*
+body uses the same path parser the emitter does. The import was upheld on a sharp argument — a
+private copy that under-parses leaves an arg in the default set and produces a spurious explicit
+`body` that is byte-identical and therefore invisible to `diff:golden`, to the round trip, and to
+every other gate, while a copy that over-parses fails loudly. Sharing eliminates the only direction
+nothing can see.
+
+But `parsePathTemplate` parses the **spec's** path-template DSL, not emitted source, so by the
+`resolveKeyedShape` precedent its home is `src/spec.ts` — or a neutral module both layers already
+depend on — rather than `src/emit/`. Task 5's brief forbade touching `src/emit/`, so it could not be
+relocated there.
+
+**If this task has room, do the relocation** — it is a move plus import updates, with `tsc` as the
+gate and no behaviour change; confirm `bun test` reports the same count before and after, and that
+`diff:golden` output is byte-identical. If it does not have room, record it in the ceiling as a
+known layering wrinkle with the reason it is safe today, so nobody reads the import as precedent for
+the deriver reaching into the emitter generally. It is not: the emitter's *renderer* must never be
+imported, because comparing rendered text against observed source would make a renderer bug
+self-consistent and invisible.
+
 - [ ] **Step 4: Close Stage E**
 
 Mark Stage E `[x]` and each of its bullets to its true state. Two of its bullets are directly affected
