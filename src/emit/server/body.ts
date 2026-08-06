@@ -1,5 +1,5 @@
-import type { ToolSpec } from "../../spec.ts";
-import { parsePathTemplate, type RenderContext } from "./path-template.ts";
+import { parsePathTemplate, type ToolSpec } from "../../spec.ts";
+import type { RenderContext } from "./path-template.ts";
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 

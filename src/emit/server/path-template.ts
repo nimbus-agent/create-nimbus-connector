@@ -1,11 +1,12 @@
-import type { StaticPathStyle } from "../../spec.ts";
+import type { ArgMode, PathSegment, StaticPathStyle } from "../../spec.ts";
 
-export type ArgMode = "raw" | "enc" | "num" | "bool";
-
-export type PathSegment =
-  | { kind: "literal"; text: string }
-  | { kind: "env"; name: string }
-  | { kind: "arg"; name: string; mode: ArgMode };
+/**
+ * The RENDERER half of the path-template DSL. The parser — `parsePathTemplate`, `PathSegment`
+ * and `ArgMode` — lives in `src/spec.ts`, because `tool.path` is a spec field and three layers
+ * need to agree on what its placeholders mean; that module's own section header has the full
+ * reasoning, including why `src/derive/` may import the parser and must never import what is
+ * below.
+ */
 
 export type RenderContext = {
   /** Handler parameter name, "p" for hand-rolled and "parsed" for rest-kit. */
@@ -27,87 +28,6 @@ export type RenderContext = {
    */
   readonly prefix?: string;
 };
-
-const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
-const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
-
-/**
- * The two placeholder conventions a user is most likely to reach for by habit — OpenAPI's
- * `{id}` and Express's `/:id` — neither of which this generator interpolates.
- *
- * They are caught rather than passed through because passing them through is silent and
- * wrong: `"/items/{id}"` emits `vcGet("/items/{id}")`, which compiles, typechecks, passes
- * every gate, and requests a URL containing the literal characters `{id}`. Nothing fails
- * until the connector is pointed at a real API.
- *
- * The Express arm requires the colon to follow a slash. A bare `:name` would false-positive
- * on query values that legitimately contain one — sentry's fixture path carries
- * `?query=is:unresolved`, and `is:unresolved` is not a placeholder.
- */
-const FOREIGN_PLACEHOLDER = /\{([A-Za-z_]\w*)\}|\/:([A-Za-z_]\w*)/;
-
-/** One matched `${ns.name|mode}` placeholder, as the segment it denotes. */
-function toPlaceholderSegment(
-  whole: string,
-  ns: string | undefined,
-  name: string,
-  mode: string | undefined,
-): PathSegment {
-  if (ns === "env") {
-    if (mode !== undefined) throw new Error(`env placeholder "${whole}" cannot take a mode`);
-    return { kind: "env", name };
-  }
-  if (ns !== "arg") {
-    throw new Error(`Unknown placeholder namespace "${ns}" in "${whole}"`);
-  }
-  const m2 = mode ?? "raw";
-  if (!MODES.has(m2)) throw new Error(`Unknown placeholder mode "${m2}" in "${whole}"`);
-  return { kind: "arg", name, mode: m2 as ArgMode };
-}
-
-/**
- * Reject anything left in a literal segment that only *looks* like a placeholder: a `${`
- * this parser did not consume (wrong case, wrong shape), or one of the two foreign
- * conventions FOREIGN_PLACEHOLDER describes.
- */
-function assertNoUnparsedPlaceholders(segments: readonly PathSegment[]): void {
-  for (const seg of segments) {
-    if (seg.kind !== "literal") continue;
-    if (seg.text.includes("${")) {
-      throw new Error(
-        `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
-          "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
-          "namespace and mode must be lowercase.",
-      );
-    }
-    const foreign = FOREIGN_PLACEHOLDER.exec(seg.text);
-    if (foreign !== null) {
-      throw new Error(
-        `Path template uses ${foreign[0]}, which this generator does not interpolate: ` +
-          `${JSON.stringify(seg.text)}. It would be emitted as a literal path segment, and ` +
-          `the connector would request the characters "${foreign[0]}" instead of a value. ` +
-          `Use \${arg.${foreign[1] ?? foreign[2]}|enc} instead.`,
-      );
-    }
-  }
-}
-
-export function parsePathTemplate(tpl: string): PathSegment[] {
-  const out: PathSegment[] = [];
-  let last = 0;
-  for (const m of tpl.matchAll(PLACEHOLDER)) {
-    const [whole, ns, name, mode] = m;
-    const at = m.index;
-    if (at > last) out.push({ kind: "literal", text: tpl.slice(last, at) });
-    out.push(toPlaceholderSegment(whole, ns, name!, mode));
-    last = at + whole.length;
-  }
-  if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
-
-  assertNoUnparsedPlaceholders(out);
-
-  return out;
-}
 
 function argExpression(seg: { name: string; mode: ArgMode }, ctx: RenderContext): string {
   const base = ctx.hoisted.get(seg.name) ?? `${ctx.param}.${seg.name}`;

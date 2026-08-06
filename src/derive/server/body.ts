@@ -1,4 +1,4 @@
-import { type PathSegment, parsePathTemplate } from "../../emit/server/path-template.ts";
+import { type PathSegment, parsePathTemplate } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import {
   identName,
@@ -37,11 +37,12 @@ import type { QueryEntry } from "./query.ts";
 
 /**
  * `renderBodyExpr`'s own `IDENT`, copied rather than imported — the one duplication this module's
- * header argues against and cannot avoid: sharing it means exporting it from
- * `src/emit/server/body.ts`, and this task's brief forbids touching `src/emit/`. (The
- * `parsePathTemplate` import above needed no such change, which is why THAT one is shared.)
+ * header argues against and does not close: sharing it would mean importing from
+ * `src/emit/server/body.ts`, and a deriver module may not reach into the emitter. (The
+ * `parsePathTemplate` import above is not that: it resolves to `src/spec.ts`, the spec language
+ * both layers already depend on, which is why THAT one is shared.)
  *
- * The asymmetry is what makes the copy tolerable meanwhile. This constant decides only how a
+ * The asymmetry is what makes the copy tolerable. This constant decides only how a
  * field name is SPELLED, and `fieldName` below rejects a quoted key this regex accepts — so a
  * copy that drifts LOOSER refuses a producible module (a visible blocker) and one that drifts
  * TIGHTER refuses it too. Neither direction can produce a wrong claim, unlike the path parser,

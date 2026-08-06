@@ -22,6 +22,117 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const identifierField = () => z.string().regex(IDENTIFIER_RE, "must be a valid JS identifier");
 
+/* ------------------------------------------------------------------------------------------ *
+ * The path-template DSL: `${env.X}`, `${arg.X}`, `${arg.X|enc|num|bool|raw}`
+ *
+ * This is the PARSER, and it lives here — beside `resolveKeyedShape` and `needsExtractor` —
+ * because `tool.path` is a field of the SPEC, so what its placeholders mean is the spec
+ * language's question, not the emitter's. Three layers need the answer and none of them owns
+ * it: `src/validate.ts` reads the segments to check that every `${arg.X}` names a declared
+ * argument, `src/emit/server/path-template.ts` renders them, and `src/derive/server/body.ts`
+ * reconstructs the default write body from the same set of path-referenced args the emitter
+ * excluded.
+ *
+ * That deriver import is the reason this is a parser and not a copy. A private copy that
+ * UNDER-parses leaves an arg in the default body set and emits a spurious explicit `body` that
+ * is byte-identical to the correct output — invisible to `diff:golden`, to the round trip and
+ * to every other gate — while one that over-parses throws. Sharing removes the only direction
+ * nothing can see.
+ *
+ * The boundary that makes that safe: `src/derive/` may share the spec language's **parser**,
+ * never the emitter's **renderer**. `renderPath` stays in `src/emit/server/path-template.ts`,
+ * because comparing rendered text against observed source would let a renderer bug agree with
+ * itself and disappear.
+ * ------------------------------------------------------------------------------------------ */
+
+export type ArgMode = "raw" | "enc" | "num" | "bool";
+
+export type PathSegment =
+  | { kind: "literal"; text: string }
+  | { kind: "env"; name: string }
+  | { kind: "arg"; name: string; mode: ArgMode };
+
+const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
+const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
+
+/**
+ * The two placeholder conventions a user is most likely to reach for by habit — OpenAPI's
+ * `{id}` and Express's `/:id` — neither of which this generator interpolates.
+ *
+ * They are caught rather than passed through because passing them through is silent and
+ * wrong: `"/items/{id}"` emits `vcGet("/items/{id}")`, which compiles, typechecks, passes
+ * every gate, and requests a URL containing the literal characters `{id}`. Nothing fails
+ * until the connector is pointed at a real API.
+ *
+ * The Express arm requires the colon to follow a slash. A bare `:name` would false-positive
+ * on query values that legitimately contain one — sentry's fixture path carries
+ * `?query=is:unresolved`, and `is:unresolved` is not a placeholder.
+ */
+const FOREIGN_PLACEHOLDER = /\{([A-Za-z_]\w*)\}|\/:([A-Za-z_]\w*)/;
+
+/** One matched `${ns.name|mode}` placeholder, as the segment it denotes. */
+function toPlaceholderSegment(
+  whole: string,
+  ns: string | undefined,
+  name: string,
+  mode: string | undefined,
+): PathSegment {
+  if (ns === "env") {
+    if (mode !== undefined) throw new Error(`env placeholder "${whole}" cannot take a mode`);
+    return { kind: "env", name };
+  }
+  if (ns !== "arg") {
+    throw new Error(`Unknown placeholder namespace "${ns}" in "${whole}"`);
+  }
+  const m2 = mode ?? "raw";
+  if (!MODES.has(m2)) throw new Error(`Unknown placeholder mode "${m2}" in "${whole}"`);
+  return { kind: "arg", name, mode: m2 as ArgMode };
+}
+
+/**
+ * Reject anything left in a literal segment that only *looks* like a placeholder: a `${`
+ * this parser did not consume (wrong case, wrong shape), or one of the two foreign
+ * conventions FOREIGN_PLACEHOLDER describes.
+ */
+function assertNoUnparsedPlaceholders(segments: readonly PathSegment[]): void {
+  for (const seg of segments) {
+    if (seg.kind !== "literal") continue;
+    if (seg.text.includes("${")) {
+      throw new Error(
+        `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
+          "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
+          "namespace and mode must be lowercase.",
+      );
+    }
+    const foreign = FOREIGN_PLACEHOLDER.exec(seg.text);
+    if (foreign !== null) {
+      throw new Error(
+        `Path template uses ${foreign[0]}, which this generator does not interpolate: ` +
+          `${JSON.stringify(seg.text)}. It would be emitted as a literal path segment, and ` +
+          `the connector would request the characters "${foreign[0]}" instead of a value. ` +
+          `Use \${arg.${foreign[1] ?? foreign[2]}|enc} instead.`,
+      );
+    }
+  }
+}
+
+export function parsePathTemplate(tpl: string): PathSegment[] {
+  const out: PathSegment[] = [];
+  let last = 0;
+  for (const m of tpl.matchAll(PLACEHOLDER)) {
+    const [whole, ns, name, mode] = m;
+    const at = m.index;
+    if (at > last) out.push({ kind: "literal", text: tpl.slice(last, at) });
+    out.push(toPlaceholderSegment(whole, ns, name!, mode));
+    last = at + whole.length;
+  }
+  if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+
+  assertNoUnparsedPlaceholders(out);
+
+  return out;
+}
+
 export const ArgSchema = z
   .strictObject({
     type: z.enum(["string", "number", "boolean"]),

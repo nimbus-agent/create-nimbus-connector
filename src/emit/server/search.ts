@@ -1,6 +1,6 @@
-import type { ConnectorSpec, ToolSpec } from "../../spec.ts";
+import { type ConnectorSpec, parsePathTemplate, type ToolSpec } from "../../spec.ts";
 import { renderZodFieldList } from "./args.ts";
-import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { renderPath } from "./path-template.ts";
 
 const PARAM = "p";
 
