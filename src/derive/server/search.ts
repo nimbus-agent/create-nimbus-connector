@@ -30,9 +30,10 @@ import type { ToolFields } from "./tools-hand.ts";
 
 /**
  * The inverse of src/emit/server/search.ts's `renderSearchTool` — recovers one search `reg(...)`
- * call's declared spec fields. `ToolFields` (name/description/args/path) is reused as-is;
- * `method` never appears (ToolSchema pins a search tool to GET, see src/spec.ts's refine), so
- * this type never sets it.
+ * call's declared spec fields. It builds on `ToolFields` (name/description/args) rather than
+ * restating it, with `impl` and `path` re-declared — see below for why neither can simply be
+ * inherited. `method` never appears (ToolSchema pins a search tool to GET, see src/spec.ts's
+ * refine), so this type never sets it.
  *
  * `Omit<ToolFields, "impl" | "path">` rather than a bare `ToolFields &`: `ToolFields.impl` is
  * `"stub" | undefined` (Task 7), and intersecting that with a fresh `impl: "search"` here would

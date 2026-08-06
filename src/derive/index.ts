@@ -209,7 +209,8 @@ export function voteStaticPathStyle(
  * is multi-line" is consistent with either "expanded", or "inline" where every schema happened
  * to be too long to stay on one line. Voting "expanded" in that case is nonetheless byte-safe —
  * measured, not assumed: `test/derive/style-recovery.test.ts`'s Step 6b check forces this vote's
- * output back onto every one of the 21 fixtures and requires byte-identical re-emission. Forcing
+ * output back onto every fixture in `fixtures/` — the list is read from the directory, so no
+ * count is restated here — and requires byte-identical re-emission. Forcing
  * `argsSchemaStyle: "expanded"` on an inline connector whose schemas are all wrapped (zzsearch,
  * zzwriterest) reproduces the original bytes; discord and google-meet carry a short schema that
  * stayed a one-liner, so the decisive rule above catches those before the multi-line fallback
@@ -552,9 +553,11 @@ function deriveSharedStyleSpec(
   }
 
   // The totality rule walks frame.verifyStatements, NOT the module's own statement list. For
-  // read-only-kit those differ by exactly one statement — the wrapper, replaced by its callback
-  // body — which is what stops the registrations inside it from inheriting coverage from a claim
-  // on the wrapper.
+  // read-only-kit those differ by exactly one statement, whichever of the style's two entry
+  // shapes the module writes: the inline wrapper, replaced by its callback body, or the exported
+  // `register<X>Tools` declaration, replaced by its own body (server/index.ts's
+  // `namedRegistrarBody`). Either way the container is spliced out rather than claimed, which is
+  // what stops the registrations inside it from inheriting coverage from a claim on it.
   const unclaimed = claims.unclaimed(frame.verifyStatements);
   if (unclaimed.length > 0) {
     return { ok: false, blockers: collapseSecondFileBlockers(unclaimed, serverSource) };

@@ -159,8 +159,8 @@ describe("recognizePath", () => {
   // Over-claiming defect: for a computed member `p[key]`, the `property` node is an Identifier
   // named "key" — the KEY VARIABLE's name, not a property name. Reading it unguarded named the
   // placeholder after whatever local happened to be the index (`${arg.key}`), an arg the
-  // connector never declared. args.ts:53's recognizeArgs already guards the exact same hazard
-  // on object keys; this is the read-side counterpart.
+  // connector never declared. `recognizeArgs` (src/derive/server/args.ts) already guards the exact
+  // same hazard on object keys; this is the read-side counterpart.
   it("returns undefined for a computed member expression, e.g. p[key]", () => {
     expect(pathOf("`/a/${p[key]}`")).toBeUndefined();
   });

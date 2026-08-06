@@ -525,11 +525,17 @@ describe("the hand-rolled query branch inside deriveSpec", () => {
   });
 
   it("recovers a non-GET query tool's method through the same reader a plain tool uses", () => {
-    // Not a full deriveSpec round trip: a non-GET tool also emits `zzGetSend`, a write helper no
-    // recognizer in this plan claims (see round-trip.test.ts's zzwriteonly entry), so the module
-    // blocks on that statement. recognizeTools is run directly instead, over the whole emitted
-    // module — it reads only the top-level `reg(...)` statements, so the unclaimed write helper
-    // does not stand in the way of checking what the query branch recovered.
+    // Not a full deriveSpec round trip — but no longer because it COULDN'T be one. This used to
+    // say the emitted `zzGetSend` was "a write helper no recognizer in this plan claims", so the
+    // module blocked on that statement. `recognizeWriteHelper` has since landed, and this exact
+    // module now derives and re-emits byte-identically (verified directly; `zzwriteonly` is the
+    // fixture that holds the same path in the round-trip suite).
+    //
+    // recognizeTools is still run directly, because the assertion is narrow on purpose: that the
+    // query branch recovers `method` through the same reader a plain tool uses. Reading it off
+    // recognizeTools' own result names that reader; a whole-spec comparison would prove the same
+    // byte equality every round-trip fixture already proves, and would go green even if `method`
+    // arrived by some other route.
     const source = emittedServer({
       ...HAND_SPEC,
       tools: [{ ...HAND_SPEC.tools[0]!, method: "POST" }],

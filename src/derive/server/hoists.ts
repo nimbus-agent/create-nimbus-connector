@@ -61,8 +61,9 @@ export type HoistMeta = { local: string; default?: HoistDefault };
  * not a property name. Reading it unguarded would name an arg after whatever local happens to be
  * used as the index (`p[key]` -> arg "key"), an arg the connector never declared.
  * path-template.ts's `argNameFromExpr` guards this identical hazard on the read side (citing
- * args.ts:53); this function had the same shape and the same gap, just unnoticed until the
- * computed-member sweep that added server/index.ts's isConnect guard.
+ * `recognizeArgs` in server/args.ts, which guards it on object keys); this function had the same
+ * shape and the same gap, just unnoticed until the computed-member sweep that added
+ * server/index.ts's isConnect guard.
  */
 function memberArgName(node: AstNode | undefined): string | undefined {
   if (identName(memberObject(node)) === undefined) return undefined;

@@ -342,8 +342,10 @@ function startsWithLiteral(node: AstNode | undefined, receiver: string, literal:
  * that last expression to be *an* identifier without saying WHICH — so a helper guarding
  * `pathPart` and then interpolating the un-normalized `path` recovered byte-identical fields and
  * re-emitted a helper fetching a different URL. `reconstructBase` now pins `pathVar` itself, and
- * `matchRestUrlConst` has always pinned the literal `"path"` for rest-kit, so both of this
- * function's callers are now covered downstream too. The check stays because a recognizer that
+ * `matchRestUrlConst` has always pinned the literal `"path"` for rest-kit, so all THREE of this
+ * function's callers are now covered downstream: the hand-rolled read helper by `reconstructBase`,
+ * rest-kit by `matchRestUrlConst`, and `matchWriteHelperBody` by construction, since it can only
+ * ever pass the literal `"path"`. The check stays because a recognizer that
  * validates part of a construct and claims the whole of it is this module's recurring defect, and
  * the two sides being able to drift apart is the reason `hoists.ts` exists — but it is defence in
  * depth now, and a reader must not take it for the only thing standing between the two shapes.

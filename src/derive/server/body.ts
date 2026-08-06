@@ -160,9 +160,12 @@ function bodyValueArg(value: AstNode, tool: BodyTool, hoistsInScope: boolean): s
 
   // Case 2b: the same value, inlined, because no hoist was in scope to reference. The default is
   // VERIFIED against the arg rather than recovered from here: for hand-rolled the hoist statement
-  // is already its source (Gap B), and the rest-kit caller that will reach this branch does not
-  // exist yet, so recovering a default nothing can cross-check would be a field invented by the
-  // only reader of it.
+  // is already its source (Gap B), and the rest-kit caller — `recognizeInitFn`
+  // (server/tools-rest.ts), which passes `hoistsInScope: false` and is the only caller that
+  // reaches this branch — has no second source to cross-check a recovered default against, so
+  // recovering one would be a field invented by the only reader of it. (This said the rest-kit
+  // caller "does not exist yet"; it does, and test/derive/body.test.ts exercises this branch
+  // through it.)
   const l = logical(value);
   if (l?.operator !== "??" || hoistsInScope) return undefined;
   const name = memberArgName(l.left);

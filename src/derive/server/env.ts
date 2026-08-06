@@ -670,9 +670,19 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
 // and the expected ABSENCE of one on every other statement in the construct.
 //
 // What stays unchecked, deliberately and deriver-wide: a comment attached to a NON-statement node
-// inside a claimed range (inside the fetch options object, say). Every recognizer in this deriver
-// has that property — `newrelic`'s fetch helper drops one too — and it is not something this
-// construct introduces; what IS new here is an emitter that writes a comment at all.
+// inside a claimed range (inside the fetch options object, say). The reason is structural, not
+// empirical — every claim is a byte range and `leadingCommentTexts` reads statements, so any
+// recognizer in this deriver drops such a comment. It is not something this construct introduces;
+// what IS new here is an emitter that writes a comment at all.
+//
+// NO CORPUS INSTANCE IS KNOWN, and the citation that used to stand here was false: `newrelic`'s
+// fetch helper does not drop a comment, because `newrelic/src/server.ts` contains no comments at
+// all — nor do `datadog`, `grafana` or `sentry`, nor in fact any of the six connectors this
+// deriver currently claims anything in. The SHAPE does occur in the corpus (`apple` writes three
+// comments on object-literal properties, `protonmail` one), but both are `frame:no-registrar`
+// connectors, so no range in either is ever claimed. Scoping this as pre-existing rests on the
+// structural argument above; it never rested on an instance, and should not be written as though
+// it did.
 // ---------------------------------------------------------------------------
 
 /**

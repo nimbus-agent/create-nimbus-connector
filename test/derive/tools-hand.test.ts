@@ -420,7 +420,7 @@ describe("recognizeTools", () => {
     ],
 
     // Computed-member sweep: memberArgName reads `p.<name>` off a hoist's test/init — same hazard
-    // as path-template.ts's argNameFromExpr (which cites args.ts:53 for it) and server/index.ts's
+    // as path-template.ts's argNameFromExpr (which cites `recognizeArgs`) and server/index.ts's
     // isConnect. A computed member (`p[only_open]`) has an Identifier `property` too — the KEY
     // variable's name, not a property name — and must not be read as naming the arg "only_open".
     [
@@ -577,7 +577,8 @@ describe("recognizeTools recovers the HTTP method", () => {
 });
 
 // The block `renderTool`'s stub branch writes, whatever the connector's style — the shape
-// `recognizeStubShape` reads (src/emit/server/tools-hand.ts:53-65). "newrelic_" prefix and
+// `recognizeStubShape` reads (`renderTool`'s `impl === "stub"` branch,
+// src/emit/server/tools-hand.ts). "newrelic_" prefix and
 // "nrGet" helper match CONCISE/BLOCK/BLOCK_NO_HOIST above, so this composes with them directly.
 const STUB_CALL = [
   "reg(",

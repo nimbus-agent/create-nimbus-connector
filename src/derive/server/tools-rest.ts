@@ -312,8 +312,8 @@ function withInitFn(
  * applies to its own arrow. Without it, `async (parsed) => <pathExpr>` read exactly like the
  * non-async form and was claimed for a shape the emitter cannot produce.
  *
- * A stub (`renderTool`'s `if (tool.impl === "stub")` branch, tools-rest.ts:62-67) is a FIFTH
- * shape, checked before any of the four `pathFn` forms below: it is arity 4 always — a stub
+ * A stub (`renderTool`'s `if (tool.impl === "stub")` branch, src/emit/server/tools-rest.ts) is a
+ * FIFTH shape, checked before any of the four `pathFn` forms below: it is arity 4 always — a stub
  * issues no request, so ToolSchema's refine forbids the 5th `initFn` argument entirely — and its
  * "pathFn" position is the identical throw-block tools-hand.ts's own `reg()` stub writes, just
  * never `async` (`recognizeStubHandler`'s `requireAsync: false` is what tells the two apart).

@@ -193,9 +193,11 @@ export function memberOn(node: AstNode | undefined, receiver: string): string | 
  * `<anything>?.<name>`, rejecting computed — the optional-chain analogue of `memberName`.
  *
  * `x?.trim()` parses its `?.trim` step as an OptionalMemberExpression, a node type distinct from
- * the plain MemberExpression `memberName` reads; `env.ts`'s `process.env[...]?.trim()` is the one
- * shape in the corpus that needs it. Callers compose this with `memberName` (the two node types
- * are mutually exclusive) rather than widening `memberName` itself onto every other call site.
+ * the plain MemberExpression `memberName` reads. Three emitted shapes need it, one per caller:
+ * env.ts's `process.env[...]?.trim()` (the shape it was added for), fetch-helper.ts's
+ * `...(init?.headers as …)` spread, and search.ts's `(root as …)?.<rows>` narrowing. Callers
+ * compose this with `memberName` (the two node types are mutually exclusive) rather than widening
+ * `memberName` itself onto every other call site.
  */
 export function optionalMemberName(node: AstNode | undefined): string | undefined {
   if (node?.type !== "OptionalMemberExpression") return undefined;
@@ -470,9 +472,15 @@ export function typeAliasRhsName(node: AstNode | undefined): string | undefined 
 /**
  * `export <declaration>;`'s inner declaration node — a VariableDeclaration, TSTypeAliasDeclaration,
  * etc. Undefined for `export { name };` (no inline declaration) or `export default …`, neither of
- * which `src/emit/search-filter.ts` ever writes. Needed because `search-filter.ts` is the first
- * file this deriver reads whose every top-level binding is exported — `src/server.ts` never
- * declares a top-level `export`, so no earlier recognizer needed this unwrap.
+ * which `src/emit/search-filter.ts` ever writes.
+ *
+ * Added for `search-filter.ts`, the first file this deriver reads whose every top-level binding is
+ * exported. It is no longer the only one: the corpus's named read-only registrar writes an
+ * exported `register<X>Tools` and an exported `async startConnector()` at the top level of
+ * `src/server.ts`, and `namedReadOnlyStarter` and `namedRegistrarBody` (server/index.ts) unwrap
+ * exactly that. What stays true is the narrower statement this docstring used to make too broadly:
+ * no EMITTED `src/server.ts` declares a top-level `export` — which is why both of those readers
+ * are case-2 recognizers, reading a shape `src/emit/server/index.ts` never writes.
  */
 export function exportedDeclaration(node: AstNode | undefined): AstNode | undefined {
   if (node?.type !== "ExportNamedDeclaration") return undefined;
@@ -735,8 +743,14 @@ export function unary(node: AstNode | undefined): UnaryParts | undefined {
 /**
  * `<expression> as <type>` -> the expression, the type annotation node's own `type` (a cheap
  * shape check most callers need nothing more than), and the type annotation node itself for a
- * caller that needs to look inside it — search.ts's rows-narrowing matcher is the one caller
- * that does, via `unionTypes`/`typeLiteralMembers` below.
+ * caller that needs to look inside it.
+ *
+ * Four callers, and the split between them is the reason both are returned. Two need only the
+ * cheap `type` check: fetch-helper.ts's `isJsonParseTextAsUnknown` (`TSUnknownKeyword`) and its
+ * `isInitHeadersSpread` (`TSUnionType`). Two look inside the node — server/search.ts's
+ * rows-narrowing matcher, via `unionTypes` below, and server/env.ts's `isParsedDecl`, via
+ * `typeLiteralMembers`. The second of those arrived with the client-credentials token function;
+ * this docstring named search.ts as "the one caller that does" and stopped being true then.
  */
 export function asExpression(
   node: AstNode | undefined,
@@ -749,11 +763,18 @@ export function asExpression(
 }
 
 // ---------------------------------------------------------------------------
-// TS type shapes — needed only by server/search.ts's rows-narrowing matcher
-// (`(root as { <rows>?: unknown[] } | null)?.<rows>`), search-filter.ts's extractor-function
-// signature (`(item: unknown): readonly string[] | null`), and server/env.ts's four accessor
-// matchers (a return-type annotation, e.g. `(): string` vs `(): Record<string, string>`), so
-// this section models exactly those shapes rather than the general shape of a TS type.
+// TS type shapes — this section models exactly the annotations the deriver has to read, not the
+// general shape of a TS type. Five modules consume it, and the list is worth keeping current
+// because it is what bounds the section:
+//
+//   - server/search.ts     the rows narrowing, `(root as { <rows>?: unknown[] } | null)?.<rows>`
+//   - search-filter.ts     the extractor signature, `(item: unknown): readonly string[] | null`
+//   - server/env.ts        the four accessor matchers' return types (`(): string` vs
+//                          `(): Record<string, string>`), the `string | null` env union, and the
+//                          token function's `JSON.parse(text) as { access_token?: unknown; … }`
+//   - server/fetch-helper.ts  the helper's own parameter and return annotations
+//                          (`string`, `string | undefined`, `Promise<unknown>`)
+//   - server/index.ts      the read-only registrar's `(reg: ZodToolRegistrar)` parameter
 // ---------------------------------------------------------------------------
 
 /** A TSUnionType's member type nodes, in source order — `{ … } | null`'s two members. */

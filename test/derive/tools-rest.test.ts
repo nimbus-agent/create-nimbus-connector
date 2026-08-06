@@ -361,7 +361,8 @@ describe("recognizeRestTools reads the arity-5 initFn", () => {
 });
 
 // The block `renderTool`'s rest-kit stub branch writes — never `async`, unlike tools-hand.ts's
-// own reg() stub (src/emit/server/tools-rest.ts:62-67, tools-hand.ts:53-65). Always arity 4: a
+// own reg() stub (the `impl === "stub"` branch of `renderTool` in src/emit/server/tools-rest.ts
+// and src/emit/server/tools-hand.ts respectively). Always arity 4: a
 // stub issues no request, so ToolSchema's refine forbids the 5th `initFn` argument entirely.
 const STUB_CALL = [
   "registerZzTool(",

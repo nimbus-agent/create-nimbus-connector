@@ -127,16 +127,24 @@ Containment is also the hazard the frame contract below exists to contain.
 - `toolStatements` — what the tool recognizers scan.
 - `verifyStatements` — what the totality rule walks.
 
-They differ for `read-only-kit` only. That style nests its registrations inside
-`await runReadOnlyMcpConnector("nimbus-x", (reg) => { ... })`, so *claiming* that wrapper would
-cover every registration transitively: the totality rule would find nothing unclaimed and a
-connector whose tools were never recognized would derive successfully — a false `emits` produced
-by the very mechanism the rule exists to remove.
+They differ for `read-only-kit` only. That style nests its registrations inside a container, so
+*claiming* that container would cover every registration transitively: the totality rule would
+find nothing unclaimed and a connector whose tools were never recognized would derive
+successfully — a false `emits` produced by the very mechanism the rule exists to remove.
 
-So the read-only-kit branch removes **exactly one** statement — the wrapper — from
-`verifyStatements`, splices its callback body in, and **never claims the wrapper**. It is still
-fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a single-parameter
-`(reg) =>` block arrow, not async); it is simply never granted coverage.
+`recognizeReadOnlyFrame` reads **two entry shapes**, and the rule is the same for both:
+
+- the inline wrapper, `await runReadOnlyMcpConnector("nimbus-x", (reg) => { ... })` — what this
+  generator emits;
+- the **named registrar**, an exported `register<X>Tools(reg: ZodToolRegistrar)` declaration
+  passed by bare reference from an exported `startConnector()` — what ten corpus connectors
+  write, and a case-2 shape the emitter never produces.
+
+Either way the branch removes **exactly one** statement — the container — from
+`verifyStatements`, splices its body in, and **never claims the container**. It is still fully
+verified (for the wrapper: the await, the callee, arity 2, the `"nimbus-<name>"` literal, a
+single-parameter `(reg) =>` block arrow, not async; for the named form the equivalent pins in
+`namedReadOnlyStarter` / `namedRegistrarBody`); it is simply never granted coverage.
 
 **If you add a frame style that nests registrations, it inherits this rule.**
 
@@ -145,7 +153,9 @@ fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a
 `src/derive/server/*` mirrors `src/emit/server/*`. A recognizer reads what its
 counterpart writes, and the round-trip test is what keeps the pair honest — including the
 places where the two must agree on a literal the other side chose (`tools-rest.ts` mirrors the
-emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`).
+emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`). The mirror is not one-to-one in
+both directions: `frame.ts` and `hoists.ts` model constructs no single emitter module owns, so
+they have no counterpart.
 
 Match only what the emitter can actually produce. Widening a matcher to accept a shape the
 emitter never writes only widens what gets claimed — see the deliberate leading slash in

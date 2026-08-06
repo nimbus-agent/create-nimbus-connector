@@ -775,8 +775,8 @@ describe("Stage C tool fields", () => {
 /**
  * Final fix wave, IMPORTANT 4. These five refines had zero coverage: replacing any of them
  * with `.refine((_e) => true)` left 374 tests passing. Two of them are load-bearing beyond
- * schema tidiness — `env.ts:87` does `e.credentialsIn!` and `env.ts:121` does
- * `JSON.stringify(e.tokenUrl)`, so without them a spec omitting either emits
+ * schema tidiness — `renderTokenFunction` (src/emit/server/env.ts) does both `e.credentialsIn!`
+ * and `JSON.stringify(e.tokenUrl)`, so without them a spec omitting either emits
  * `const res = await fetch(undefined, {...})`. One test per refine, each written so that
  * only its own refine can produce the asserted message.
  */

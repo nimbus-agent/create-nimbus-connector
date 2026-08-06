@@ -230,11 +230,16 @@ function namedRegistrarForm(source: string): string {
  * `powerbi`, `snowflake`, `tableau`, `workday`.
  *
  * Case 2 under docs/ROADMAP.md's *Shape variance the emitter models one way*: `renderTools` writes
- * the inline `(reg) => { … }` arrow, so a connector in this shape re-emits as the canonical one
- * and reaches `emits`, never `server-identical`. `diff:golden` therefore cannot check this
- * widening at all, and these assertions are the whole of what stands between a correct one and a
- * wrong one — which is why the recovery test is deep equality against the canonical derivation
- * rather than a hand-listed set of fields.
+ * the inline `(reg) => { … }` arrow, so `emits` — never `server-identical` — is the best a
+ * connector in this shape could reach. None of the ten reaches it: recognizing the frame carries
+ * them PAST the frame, and they then block on statement-level constructs behind it. That is the
+ * measured outcome, and it is what this widening was for.
+ *
+ * Which is exactly why these assertions carry the whole weight. `diff:golden` cannot check this
+ * widening — no fixture byte-matches through it — and neither can the corpus tiers, since nothing
+ * moves. These tests are the only thing standing between a correct recognizer and a wrong one,
+ * which is why the recovery test is deep equality against the canonical derivation rather than a
+ * hand-listed set of fields.
  */
 describe("recognizeFrame, the named read-only registrar", () => {
   it("recovers the name and style", () => {

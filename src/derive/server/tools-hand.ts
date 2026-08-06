@@ -39,18 +39,22 @@ export type ToolFields = {
    */
   path?: string;
   /**
-   * "stub" when the handler is the throwing placeholder `renderTool`'s stub branch writes
-   * (src/emit/server/tools-hand.ts:53-65, tools-rest.ts:62-67) — `recognizeStubShape` below (and
-   * tools-rest.ts's own use of `recognizeStubHandler`) is its only source. Omitted for every
+   * "stub" when the handler is the throwing placeholder `renderTool`'s `impl === "stub"` branch
+   * writes, in either emitter (src/emit/server/tools-hand.ts, tools-rest.ts) —
+   * `recognizeStubShape` below (and tools-rest.ts's own use of `recognizeStubHandler`) is its
+   * only source. Omitted for every
    * other tool kind, the same omit-the-default discipline `method` already uses below, so a
    * non-stub tool's derived spec is byte-unchanged by this field's existence.
    */
   impl?: "stub";
   /**
    * Omitted for GET, so ToolSchema's `.default("GET")` applies and a read connector's derived
-   * spec is byte-unchanged by this field's existence. Present only when the emitter wrote the
-   * write helper, which is the only place a method literal appears. Always omitted for a stub —
-   * ToolSchema's refine pins one to `method: "GET"`, so there is nothing non-default to record.
+   * spec is byte-unchanged by this field's existence. Two emitted shapes carry a method literal
+   * and each has its own reader: the hand-rolled write helper's call site, read by this file, and
+   * the rest-kit registrar's arity-5 init callback `{ method: "POST", … }`, read by
+   * `recognizeInitFn` (server/tools-rest.ts). This docstring named only the first, which was true
+   * until that callback was recognized. Always omitted for a stub — ToolSchema's refine pins one
+   * to `method: "GET"`, so there is nothing non-default to record.
    */
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
   /**
@@ -189,7 +193,8 @@ function fetchCall(call: AstNode, helperLocal: string): FetchCall | undefined {
  * `hoistsInScope` is `true` for every caller here: `renderTool` (src/emit/server/tools-hand.ts)
  * builds the body inside the same handler block as the hoists and passes the full
  * `hoistedLocals(tool.args)` map, so a defaulted arg always reaches the body through its hoisted
- * const. tools-rest.ts's future write path is the caller that passes `false`.
+ * const. The caller that passes `false` is `recognizeInitFn` (server/tools-rest.ts), reading the
+ * rest-kit registrar's arity-5 init callback, whose body is built outside any hoist block.
  */
 function readBody(
   bodyNode: AstNode | undefined,
@@ -440,9 +445,10 @@ function recognizeSearchShape(call: AstNode, helperLocal: string): ToolShape | u
 }
 
 /**
- * `{ throw new Error("<name> is not implemented"); }` — the ONE statement `renderTool`'s stub
- * branch ever writes, in EITHER registration style (this file's own `reg(...)` stub,
- * src/emit/server/tools-hand.ts:53-65; tools-rest.ts's registrar stub, tools-rest.ts:62-67). The
+ * `{ throw new Error("<name> is not implemented"); }` — the ONE statement `renderTool`'s
+ * `impl === "stub"` branch ever writes, in EITHER registration style — that branch exists in both
+ * src/emit/server/tools-hand.ts, as this file's own `reg(...)` stub, and in
+ * src/emit/server/tools-rest.ts, as the registrar stub. The
  * two differ only in whether the wrapping arrow is `async` — this file's own stub always is,
  * tools-rest.ts's never is — so `requireAsync` is supplied by the caller rather than fixed here;
  * it is the one thing that differs between the two shapes, and exported so tools-rest.ts reads
@@ -469,9 +475,9 @@ export function recognizeStubHandler(node: AstNode, name: string, requireAsync: 
 
 /**
  * The fallback tried when neither `recognizeOne` nor `recognizeSearchShape` recognizes a
- * `reg(...)` call — `renderTool`'s stub branch (src/emit/server/tools-hand.ts:53-65), the same
- * four-argument call shape `recognizeOne` reads (`regCallParts`, shared with it), but a handler
- * that throws rather than fetches. `recognizeStubHandler` above does the actual shape check,
+ * `reg(...)` call — `renderTool`'s `impl === "stub"` branch (src/emit/server/tools-hand.ts), the
+ * same four-argument call shape `recognizeOne` reads (`regCallParts`, shared with it), but a
+ * handler that throws rather than fetches. `recognizeStubHandler` above does the actual check,
  * requiring `async` — this file's own stub always writes it, unlike tools-rest.ts's.
  *
  * `isBlock: true, hasHoists: false` report what the emitter actually writes — the same discipline

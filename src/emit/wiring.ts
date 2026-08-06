@@ -41,10 +41,17 @@ function otherListTools(spec: ConnectorSpec, chosen: ToolSpec): ToolSpec[] {
 /**
  * Fix round 1, CRITICAL 1: this used to emit a WORKING body — a find/replace over
  * monte-carlo-sync.ts / bigeye-sync.ts's exact control flow (the `t0`/`raw`/`now`/`upserted`
- * loop draining `listConnectorItems`). The reviewer measured that assembly against the full
- * corpus: it exists in exactly 2 of ~98 connector files. Reproducing it — including
- * whitespace and comment placement — for every generated connector was a find/replace over
- * two specific AGPL files landing in an MIT repository, not "how the corpus does it".
+ * loop draining `listConnectorItems`). Reproducing it — including whitespace and comment
+ * placement — for every generated connector was a find/replace over two specific AGPL files
+ * landing in an MIT repository, not "how the corpus does it".
+ *
+ * That last clause used to cite "exactly 2 of ~98 connector files", which was the count of files
+ * the shape was COPIED FROM, not the count carrying it. Re-measured against
+ * packages/gateway/src/connectors: 6 of the 98 `*-sync.ts` files import `listConnectorItems`
+ * from warehouse-sync-transport.ts and drain it through that same assembly — `bigeye`, `looker`,
+ * `monte-carlo`, `powerbi`, `snowflake`, `tableau`. Still a minority, and the licensing half of
+ * the reason never depended on the count at all. Nothing this function EMITS changes with the
+ * correction; only the sentence justifying it.
  *
  * This now emits only what the Gateway's own `Syncable` type dictates (the shape, not
  * anyone's implementation choices) plus a to-do note written in this project's own words. The

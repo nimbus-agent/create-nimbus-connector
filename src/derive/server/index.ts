@@ -490,26 +490,39 @@ function splitRegistrarConsts(
  * `await <mcpVar>.connect(new StdioServerTransport());` — the INLINED transport tail, the file's
  * last statement with no transport const anywhere.
  *
- * **SIX corpus connectors write this shape, not four**, and the difference between the two numbers
- * is precedence rather than measurement. `gmail`, `google-drive`, `onedrive` and `outlook` were the
- * whole of the `frame:tail-inlined-transport` BUCKET, because `frameFailureKind` checks the
- * registrar element before the transport one and `google-meet` and `google-photos` — which write
- * the split registrar too — were reported on that earlier axis instead. Both still write this tail,
- * and now that both axes are recognized, this matcher is what carries them past element 5: they
- * have no transport const for `isConnect` to find. Four is a bucket size; six is the shape count,
- * and only the second is a fact about this function.
+ * **Three different numbers are true of this shape, and each answers a different question.** Say
+ * which one you mean; two rewrites of this docstring have now narrowed it by not saying.
  *
- * Recorded at this length because the distinction was already established once and then lost: the
- * label-era docstring this replaced had the six right, and noted it was found "by reading the
- * source, not by assuming the original three-axis count was complete" — and the first rewrite of it
- * quietly restated the bucket's four. docs/ROADMAP.md's *Shape variance the emitter models one way*
- * states the "a connector may write both" relationship that makes the two numbers differ.
+ *   - **TEN corpus connectors WRITE it** — `apple`, `fastmail`, `gmail`, `google-drive`,
+ *     `google-meet`, `google-photos`, `imap`, `onedrive`, `outlook`, `protonmail`. Each declares
+ *     `const server = new McpServer({ … })` and ends the file on this exact statement. That is the
+ *     shape count, and the only one of the three that is a fact about the CORPUS.
+ *   - **SIX REACH this matcher.** `apple`, `fastmail`, `imap` and `protonmail` call no
+ *     `createZodToolRegistrar` at all, so `recognizeFrame` refuses them at element 3 and element 5
+ *     is never tried — they are the `frame:no-registrar` four. Six is the count this function can
+ *     ever be asked about.
+ *   - **FOUR were the `frame:tail-inlined-transport` BUCKET**, back when this was a label: `gmail`,
+ *     `google-drive`, `onedrive` and `outlook`. `frameFailureKind` checks the registrar element
+ *     before the transport one, so `google-meet` and `google-photos` — which write the split
+ *     registrar too — were reported on that earlier axis instead. Four is precedence, not
+ *     measurement, and it is a fact about the histogram rather than about this function.
  *
- * Five of the six are rest-kit (`gmail`, `onedrive`, `outlook`, `google-meet`, `google-photos`);
- * `google-drive` is hand-rolled, declaring its own local `registerDriveTool` rather than importing
- * `makeRestToolRegistrar`. So the axis spans both styles, which is why `mcpVar` is a PARAMETER
- * here — `wiring()` binds `mcp` for hand-rolled and `server` for rest-kit — and why
- * test/derive/frame.test.ts proves this axis on `zzscratch` and `zzstandalone` both.
+ * Recorded at this length because the distinction has been established and lost twice. The
+ * label-era docstring had six and noted it was found "by reading the source, not by assuming the
+ * original three-axis count was complete"; the first rewrite quietly restated the bucket's four;
+ * the restoration put six back and thereby lost the ten. docs/ROADMAP.md's *Shape variance the
+ * emitter models one way* states the "a connector may write both" relationship behind the six/four
+ * gap. If you re-measure: `grep -rl "connect(new StdioServerTransport())" --include=server.ts` over
+ * `packages/mcp-connectors` is the ten; intersecting that with a `createZodToolRegistrar` grep is
+ * the six.
+ *
+ * The axis spans both styles either way, which is why `mcpVar` is a PARAMETER here — `wiring()`
+ * binds `mcp` for hand-rolled and `server` for rest-kit — and why test/derive/frame.test.ts proves
+ * this axis on `zzscratch` and `zzstandalone` both. Of the SIX that reach here, five are rest-kit
+ * (`gmail`, `onedrive`, `outlook`, `google-meet`, `google-photos`) and `google-drive` is
+ * hand-rolled, declaring its own local `registerDriveTool` rather than importing
+ * `makeRestToolRegistrar`. Across all TEN the split is even, five and five: the four that never
+ * reach here are hand-rolled too.
  *
  * Accepted only once the strict two-statement form is absent (see `recognizeFrame`, elements 4
  * and 5), so no module that already recognized changes meaning. `tail()` (src/emit/server/
