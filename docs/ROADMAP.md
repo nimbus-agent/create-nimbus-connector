@@ -171,11 +171,16 @@ its denominator and which of those causes are permanent.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file. Carrying the file and being *blocked by* it are different questions, and the answer
-      is now the sharper of the two: `recognizeFrame` names this shape directly, so `bun run
-      reach --verbose` reports these connectors as `frame:tools-in-second-file` rather than as
-      an `import-from:./tools.ts` statement blocker. They stop at the frame, before any tool
-      recognizer runs — which is why the bucket is a frame bucket and why nothing downstream of
-      it appears for them at all.
+      is now the sharper of the two: eleven of them are pure shims, and `bun run reach --verbose`
+      reports those as `frame:tools-in-second-file` rather than as an `import-from:./tools.ts`
+      statement blocker plus a per-connector `call:register<X>Tools` one. The label does **not**
+      come from `recognizeFrame`, which *succeeds* for all eleven — they are a well-formed
+      read-only-kit frame. It comes from `collapseSecondFileBlockers` (`src/derive/index.ts`),
+      called from `deriveSharedStyleSpec` at the totality rule, after the env, fetch-helper and
+      tool recognizers have already run. Those recognizers find nothing to do, because a shim's
+      `src/server.ts` is nothing but the frame plus those two statements — so the unclaimed set
+      is exactly the pair, and the label collapses it into the one thing the pair shares. The
+      `frame:` prefix names the ceiling, not the stage that detected it.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
       sent only when an optional argument is present or non-empty. See the README for the
@@ -207,9 +212,11 @@ its denominator and which of those causes are permanent.
 
 - [ ] **Spec authoring from an OpenAPI document.** The largest reduction in effort available:
       most of a spec is endpoints, arguments and descriptions that an OpenAPI file already has.
-- [ ] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
+- [x] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
       make regeneration coverage measurable in bulk rather than one hand-written fixture at a
-      time.
+      time. Shipped, with `--partial` for a draft from a module that blocks; `bun run reach` is
+      the bulk half, running the same deriver over a whole checkout. See
+      [Known limitations](#known-limitations) for what its report does and does not carry.
 - [ ] **Better validation errors**, pointing at the JSON path rather than naming the field.
 - [ ] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
       file.
@@ -329,8 +336,12 @@ Four groups are worth naming precisely, because each is a *different* kind of ga
   because the emitter cannot write what it would be reading.
 - **The named argument-schema const is the largest single closable-looking shape, and it is
   not one recognizer.** Twenty connectors hoist `const <name>Schema = z.object({ … })` to module
-  scope — 109 such declarations — and pass it to `reg` by name; four of them compose with
-  `.extend`. That produces both their `method-call:.object` buckets *and* their `call:reg` ones,
+  scope — 109 such declarations — and pass it to `reg` by name. **Five** connectors compose with
+  `.extend` (`bitbucket`, `circleci`, `github`, `github-actions`, `gitlab`), and only four of them
+  produce a bucket for it: the other four hoist the composed schema into a module-scope const,
+  while `circleci` writes `.extend` only inside its registrar call's arguments, where it is part
+  of a registration nothing claimed rather than a hoisted declaration of its own.
+  That produces both their `method-call:.object` buckets *and* their `call:reg` ones,
   since a registration whose third argument is an identifier is not a shape any tool recognizer
   reads. Closing it is a spec-language gap **plus** an emitter change: `argsSchemaStyle` chooses
   between inline forms only, and a recognizer that read the hoisted form without the emitter
@@ -350,9 +361,10 @@ Four groups are worth naming precisely, because each is a *different* kind of ga
   first.
 
 The two largest import buckets — `./search-filter.ts` (43) and `../../shared/mcp-search-tool.ts`
-(39) — are downstream in the same way: `recognizeSearchTools` claims both imports, and it never
-ran for these connectors because their search registration was not recognized. No connector in
-the corpus is blocked by imports alone.
+(39) — are downstream in the same way: `claimSearchImports` (`src/derive/server/search.ts`) claims
+both imports, and it never ran for these connectors because their search registration was not
+recognized — it is called only once at least one search tool has been positively recognized. No
+connector in the corpus is blocked by imports alone.
 
 #### Three constructs the histogram cannot show
 
@@ -516,13 +528,18 @@ cost of closing each is named; none is proposed.**
   two recognizers had to land together, since `frameFailureKind` checks the registrar element
   before the transport one and such a connector stays blocked while either is missing. Reading a
   form is not emitting it: `wiring()` and `tail()` (`src/emit/server/index.ts`) still write the
-  one-line registrar and the named transport const, so a connector in either form derives a spec
-  and re-emits in **this generator's** form. It reaches `emits`, never `server-identical`. No
-  cosmetic spec field is added to close that gap — the operative bar is "no cosmetic field
-  without a fixture that byte-matches *because of* it", and no such fixture can exist until what
-  sits behind those frames has itself been measured, which reading them is what makes possible.
-  There is no majority to converge on, so the emitter picks one form per axis and the other
-  differs.
+  one-line registrar and the named transport const. What recognizing these forms buys is that a
+  connector writing one **gets past the frame** — and it then blocks on whatever is behind it.
+  That is the measured result, not a prediction: every connector on these axes is `blocked`
+  today, on statement-level blockers the frame used to hide. **None reaches `emits`; the tier is
+  empty corpus-wide.** The frame widening reveals rather than clears, which is what it was for.
+  The `emits` ceiling stated here is what these axes would impose *if* everything behind them
+  were recognized — a connector in either form would then re-emit in **this generator's** form,
+  reaching `emits` and never `server-identical`. No cosmetic spec field is added to close that
+  gap — the operative bar is "no cosmetic field without a fixture that byte-matches *because of*
+  it", and no such fixture can exist until what sits behind those frames has itself been
+  measured, which reading them is what makes possible. There is no majority to converge on, so
+  the emitter picks one form per axis and the other differs.
 - **A read-only-kit callback that is a named function reference, not an inline arrow.**
   `argocd`, `bigeye`, `flux`, `looker`, `mlflow`, `monte-carlo`, `powerbi`, `snowflake`,
   `tableau` and `workday` write three top-level statements where the emitter writes one: an
@@ -533,8 +550,10 @@ cost of closing each is named; none is proposed.**
   `register<X>Tools`' **body** into `verifyStatements` rather than claiming the declaration —
   see `src/derive/server/frame.ts` on why claiming it would cover every registration by
   containment. As with the wiring and tail idioms above, `renderTools` still writes the inline
-  `(reg) => { … }` arrow at the call site, so these derive a spec, re-emit in the generator's own
-  form, and reach `emits` rather than `server-identical`. This entry used to promise a
+  `(reg) => { … }` arrow at the call site, so `emits` rather than `server-identical` is the best
+  any of these ten could reach — and none reaches it: all ten get past the frame and block on
+  statements behind it, which is the whole of what recognizing the shape changed. This entry used
+  to promise a
   `frame:readonly-callback-not-inline` histogram bucket, which upstream commit `b3a6f159`
   emptied when it refactored these ten into the shape above; until this recognizer existed they
   were reported as `frame:no-mcp-server`, that shape having no top-level `McpServer` const at
@@ -624,14 +643,20 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
 
   Recognizing the **hand-written result tail** instead would be a legitimate case-2 widening —
   `matchesResult`'s own docstring calls it the verbatim equivalent of that tail — and is declined
-  because it moves no connector out of `blocked`. Three separate things stop it, each sufficient
-  alone: the connectors whose read-only-kit callback is a named function reference never reach a
-  statement-level blocker at all, failing earlier at `frame:no-mcp-server`; `recognizeTools` is
-  all-or-nothing, and several of these connectors also call the pluck helper from an unmodeled
-  *list* handler (`jsonResult({ items: <pluck>(root) })`), so nothing in those modules would be
-  claimed; and `matchSearchKitImport` requires `matchesResult` in a clause these connectors
-  import only `searchToolInputSchema` from. A bespoke result envelope is bespoke code — a matcher
-  for it would add surface area and a case-2 divergence to maintain, and change no number.
+  because it moves no connector out of `blocked`. Two separate things stop it, each sufficient
+  alone: `recognizeTools` is all-or-nothing, and several of these connectors also call the pluck
+  helper from an unmodeled *list* handler (`jsonResult({ items: <pluck>(root) })`), so nothing in
+  those modules would be claimed; and `matchSearchKitImport` requires `matchesResult` in a clause
+  these connectors import only `searchToolInputSchema` from. A bespoke result envelope is bespoke
+  code — a matcher for it would add surface area and a case-2 divergence to maintain, and change
+  no number.
+
+  A **third** reason was recorded here and has since died: that the connectors whose read-only-kit
+  callback is a named function reference never reach a statement-level blocker at all, failing
+  earlier at `frame:no-mcp-server`. `recognizeReadOnlyFrame` now reads exactly that shape — see
+  *A read-only-kit callback that is a named function reference* above — so all ten do reach
+  statement-level blockers. It is struck rather than deleted because the conclusion did not
+  depend on it, and a reason that expires is worth showing as expired.
 
   The sweep behind the proposal also under-counted the helper's own body shapes, and a table that
   claims to be exhaustive and is not is worth recording as such: beside the keyed pluck, the
@@ -646,8 +671,11 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   would train authors to lower a number that is not the problem.
 - **Making the URL/body treatment of an unset optional boolean consistent.** Both halves are
   right for their medium and one is byte-locked by the corpus. See the README.
-- **Generating a working Gateway `sync()`.** The shape it would assume fits 2 of ~98 real sync
-  files, and producing it would mean reproducing AGPL source nearly verbatim in an MIT repo.
+- **Generating a working Gateway `sync()`.** The shape it would assume fits 6 of the 98 real
+  `*-sync.ts` files, and producing it would mean reproducing AGPL source nearly verbatim in an
+  MIT repo. (The 6 is a re-measurement: this said 2, which was the two files the shape was
+  find/replaced from rather than the number carrying it. The licensing half of the reason does
+  not depend on the count.)
 - **Growing the spec with purely cosmetic fields.** `local` and `bindings` are permitted
   everywhere; beyond those, a field that changes only appearance is refused and the difference
   is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a

@@ -124,7 +124,8 @@ manifest.ts        nimbus.extension.json -> spec fields
 search-filter.ts   src/search-filter.ts -> filter entries
 index.ts           deriveSpec(files) -> Derivation
 from-connector.ts  a connector DIRECTORY -> a spec, or a blocker report
-server/            one recognizer module per src/emit/server/ module
+server/            mirrors src/emit/server/ — one recognizer per emitter module, plus
+                   frame.ts and hoists.ts, which have no emitter counterpart
 ```
 
 Three properties hold it honest, and each exists because its absence produced a false pass:
