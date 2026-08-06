@@ -455,6 +455,23 @@ re-parsing. In the expression loop, before requiring a call:
 - only if that fails, fall through to the existing zero-argument-call path
 - if neither matches, refuse as today
 
+**Exactly ONE identifier, and it must be the only non-final expression.** This is not a judgment
+call — it is what the emitter can produce. `renderBaseConst` writes
+`const ${baseConst} = ${JSON.stringify(base)};`: a single const holding the **entire** base as a
+string literal. And `src/spec.ts:609` refines that `baseConst` requires a fully static base, so a
+`${env.X}` reference cannot coexist with it. Therefore:
+
+- `` `${BASE}${path}` `` → recognized, `baseConst: "BASE"`.
+- `` `${API_HOST}${API_VERSION}${path}` `` → **refuse.** Two consts is a shape `renderBaseConst`
+  cannot write, and `FetchHelperFields.baseConst` is a single name with nowhere to put the second.
+- `` `${BASE}${apiVersion()}${path}` `` (a const mixed with an env accessor) → **refuse.** The
+  schema refinement forbids that combination, so no spec can produce it.
+
+Concretely: allow the identifier branch only when there is exactly one non-final expression. If a
+second non-final expression is an Identifier, refuse rather than resolving it — recovering a
+partial base would invent a URL, and a connector requesting the wrong host is worse than a visible
+blocker. Say that in a comment; it is the reasoning, not the rule, that a later reader needs.
+
 **Claim the const's statement.** The `const ZZ_API = "…"` declaration is a top-level statement, so
 the totality rule will report it as unclaimed unless the fetch helper claims it — and an
 unclaimed-statement blocker on a connector this task is meant to unblock would waste the whole
@@ -662,11 +679,43 @@ If it does: the recognizer must consume **both** functions into **one** entry. C
 one separately while also claiming the pair would be a double claim; claiming only the pair while
 the inner stays separately claimed is the wrongly-claimed class the totality rule cannot see.
 
+**Order matters, and the pair must win.** `recognizeEnv` walks the statement list, so if the inner
+reader is reached first it gets claimed as a standalone plain accessor before the pair recognizer
+ever sees it — and the resulting spec has one entry too many, each individually plausible. Two
+ways to get this right; pick one and say which in your report:
+
+- **Detect the pair first**, over the whole statement list, and claim both statements in one call
+  before the plain-accessor loop runs. `claims.claim()` already accepts several statements at once
+  — that is exactly what it is for.
+- Or **make the plain-accessor branch skip a function that a pair claims**, by identifying pair
+  members up front.
+
+The first is preferable: it keeps the decision in one place rather than teaching the plain branch
+about a shape it does not handle. Whichever you choose, add a test asserting the derived spec has
+**one** env entry rather than two — a test that only checks `tokenLocal` is present would pass
+with the spurious extra entry sitting beside it.
+
 - [ ] **Step 3: Implement, and gate the `trimTrailingSlash` claim**
 
 Claim the emitted `trimTrailingSlash` helper **only when an env entry actually carries
 `transform: "trimTrailingSlashFn"`**, and match the emitted constant's text rather than the
 function's name — a connector with a same-named helper doing something else must not be claimed.
+
+To be unambiguous about what "the emitted constant" means: `src/emit/server/env.ts:17-21` exports
+
+```ts
+export const TRIM_TRAILING_SLASH_FN = [
+  "function trimTrailingSlash(s: string): string {",
+  '  return s.endsWith("/") ? s.slice(0, -1) : s;',
+  "}",
+].join("\n");
+```
+
+That constant is the helper's **entire source**, body included — so comparing against it *is* body
+verification, not a name check. Note the body is `s.endsWith("/") ? s.slice(0, -1) : s`, **not**
+a `.replace(/\/$/, "")`; a recognizer written against the regex form would match nothing this
+emitter produces. Import the constant rather than re-typing it, so the recognizer cannot drift
+from the emitter the way a copied string would.
 
 - [ ] **Step 4: Run the gates — this is where the headline moves**
 
@@ -730,6 +779,64 @@ bun run wiring:conformance --nimbus-root C:/gitrep/Nimbus;  echo "wiring_exit=$?
 - `reach --baseline` still exits 2 — **that is correct here.** Re-baselining is phase 2b's item 14.
 
 ---
+
+## Review Responses
+
+[`2026-08-06-recognizers-that-move-the-headline-review.md`](./2026-08-06-recognizers-that-move-the-headline-review.md)
+raised four items. One was already fixed before the review arrived, and the other three are
+accepted — two of them answered from the emitter rather than by judgment.
+
+**R1 — `argsSchemaStyle` false disagreement from Biome re-wrapping · already fixed, by a different
+mechanism.** The review read the plan's first draft, which used one `unanimous` helper for both
+style fields — its *Strengths* §2 praises that helper and its §1 identifies the flaw in it, which
+is a fair reading of a document that was wrong. The diagnosis is exactly right: Biome re-wraps an
+over-long inline schema, so a connector with one short and one long schema votes both ways and
+unanimity blocks it.
+
+The fix (commit `f66c5c2`) is **not** the suggested threshold, and deliberately so. A threshold on
+property count or character length would have to replicate Biome's wrapping decision, which
+depends on the indentation depth at the call site — it would be a second, drifting copy of the
+formatter's line-width logic. The asymmetric rule sidesteps that entirely: **any one-line non-empty
+`z.object` proves `"inline"`**, because the expanded branch cannot produce a one-liner for a
+non-empty object; otherwise any multi-line one votes `"expanded"`, which is byte-safe precisely
+because every schema was too long to stay inline.
+
+Measured in both directions rather than argued: forcing `"expanded"` on `zzsearch` and
+`zzwriterest` — inline connectors whose schemas are all wrapped — reproduces byte-identical
+`src/server.ts`; forcing it on `discord` and `google-meet` does **not**, and those are exactly the
+connectors carrying a short schema, so the one-liner rule catches them first. The rule and its
+escape hatch are complementary, which is why no threshold is needed. Step 6b requires the
+implementer to re-prove it across all 21 fixtures rather than trust this paragraph.
+
+`staticPathStyle` keeps unanimity, and the review's concern does not transfer: quoted and template
+are unambiguous and Biome never rewrites one into the other, so disagreement there really is a
+module the emitter cannot have written.
+
+**R2 — multiple hoisted identifiers in `reconstructBase` · accepted, and the answer is the
+emitter's.** The review asks what happens for `` `${API_HOST}${API_VERSION}${path}` `` or a
+const/env-accessor mix. Neither is a shape this generator can produce: `renderBaseConst` writes a
+single const holding the **entire** base as a string literal, and `src/spec.ts:609` refines that
+`baseConst` requires a fully static base, so `${env.X}` cannot coexist with it. So the rule is
+refuse-both, not "take the first" — recovering a partial base would invent a URL. Written into
+Task 2 Step 3 with the reasoning, since the *why* is what stops a later reader "improving" it into
+a concatenation.
+
+**R3 — the split-bearer double-claim ordering hazard · accepted, and it sharpened the step.** The
+plan said to consume both functions into one entry but never said what happens if the walk reaches
+the inner reader first — which is the failure it was warning about. Task 4 Step 2 now names two
+correct implementations, recommends detecting the pair first (`claims.claim()` already takes
+several statements at once), and requires a test asserting the derived spec has **one** env entry.
+That last part matters: a test checking only that `tokenLocal` is present passes happily with a
+spurious second entry beside it.
+
+**R4 — verify `trimTrailingSlash`'s body, not its name · accepted, with a correction to the
+suggestion.** The plan already said to match the emitted constant rather than the name, but did
+not make clear that `TRIM_TRAILING_SLASH_FN` (`src/emit/server/env.ts:17-21`) **is** the helper's
+entire source, body included — so comparing against it already is body verification. Task 4 Step 3
+now quotes it, and flags that the body is `s.endsWith("/") ? s.slice(0, -1) : s`, **not** the
+`.replace(/\/$/, "")` the review assumed: a recognizer written against the regex form would match
+nothing this emitter produces. It also says to import the constant rather than re-type it, so the
+recognizer cannot drift from the emitter the way a copied string would.
 
 ## Self-Review
 
