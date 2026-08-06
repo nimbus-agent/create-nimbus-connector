@@ -9,19 +9,28 @@ import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
 /**
- * Fixtures whose emitted src/server.ts + nimbus.extension.json this plan's recognizers derive,
- * and which then re-emit byte-identical output for every file the fixture produces. Confirmed
- * by running the full parseSpec -> generate -> deriveSpec -> parseSpec -> generate pipeline
- * against every fixture in fixtures/, and the "accounts for every fixture in fixtures/" test
- * below re-confirms it on every run rather than trusting a count recorded here that would go
- * stale silently as fixtures are added. newrelic/datadog/grafana/sentry are the byte-locked
- * corpus fixtures (all "hand-rolled" style); zzscratch and zzstandalonehand are synthetic
- * "hand-rolled" fixtures that exercise the same frame from the opposite direction; zzreadonly is
- * a synthetic "read-only-kit" fixture with no search tool, proving that frame end-to-end.
- * zzstandalone is the "rest-kit" analogue: two GET tools, a literal (non-baseConst) fetch-helper
- * base, and no inline headers — recognizeRestTools and recognizeRestFetchHelper's simplest
- * in-scope shape, proving the rest-kit frame end-to-end the same way zzreadonly does for
- * read-only-kit.
+ * Fixtures whose emitted src/server.ts + nimbus.extension.json (+ src/search-filter.ts, for the
+ * three search fixtures) this plan's recognizers derive, and which then re-emit byte-identical
+ * output for every file the fixture produces. Confirmed by running the full parseSpec ->
+ * generate -> deriveSpec -> parseSpec -> generate pipeline against every fixture in fixtures/,
+ * and the "accounts for every fixture in fixtures/" test below re-confirms it on every run
+ * rather than trusting a count recorded here that would go stale silently as fixtures are added.
+ * newrelic/datadog/grafana/sentry are the byte-locked corpus fixtures (all "hand-rolled" style);
+ * zzscratch and zzstandalonehand are synthetic "hand-rolled" fixtures that exercise the same
+ * frame from the opposite direction; zzreadonly is a synthetic "read-only-kit" fixture with no
+ * search tool, proving that frame end-to-end. zzstandalone is the "rest-kit" analogue: two GET
+ * tools, a literal (non-baseConst) fetch-helper base, and no inline headers — recognizeRestTools
+ * and recognizeRestFetchHelper's simplest in-scope shape, proving the rest-kit frame end-to-end
+ * the same way zzreadonly does for read-only-kit.
+ *
+ * zzextract/zzsearch/zzsearchstub are the three synthetic search fixtures Task 3 unblocks —
+ * search.ts's/search-filter.ts's own docstrings name the shapes each proves: zzsearch a search
+ * tool with `rows` (item), one without (build, which also declares its own arg and takes the
+ * inlined merged `z.object` schema form) and the keyed filter's `{ tags: true }` option;
+ * zzsearchstub the same `rows` shape plus the throwing-stub filter and its extra
+ * `type SearchFilter` import; zzextract one bespoke-extractor filter (all four shared
+ * primitives) alongside one keyed filter in the same file, proving the import list is computed
+ * per FILE, not per filter.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -32,6 +41,9 @@ const ROUND_TRIP = [
   "zzscratch",
   "zzstandalone",
   "zzstandalonehand",
+  "zzextract",
+  "zzsearch",
+  "zzsearchstub",
 ];
 
 /**
@@ -63,18 +75,35 @@ const ROUND_TRIP = [
  * matches fine, as `rest-kit`), and never `import-from:.../rest-tool-kit.ts` (claimed by the
  * frame too).
  *
- * "search tool" is every `style: "read-only-kit"` fixture that declares an `impl: "search"`
- * tool. recognizeFrame's read-only-kit branch now reads the frame itself — see
- * src/derive/server/index.ts's `recognizeReadOnlyFrame` — but the search recognizer it
- * hands off to does not exist yet, so these still block, just past the frame rather than at it.
- * The label names the blocker landing the search recognizer would newly reach, not necessarily
- * the ONLY one currently reported: `zzextract`, `zzsearch` and `zzsearchstub` block on search
- * alone, but `mercury` (also `statement:VariableDeclaration`, `function:authHeader`,
- * `function:mercuryGet`), `bitrise` (`statement:VariableDeclaration`, `function:bitriseGet`),
- * `netlify` (`function:authHeader`, `function:netlifyGet`), `zendesk`
- * (`function:trimTrailingSlash`, `function:authHeader`) and `dependencytrack`
- * (`function:trimTrailingSlash`) additionally block on a fetch-helper shape this plan's
- * recognizers do not model either — landing the search recognizer will not unblock those five.
+ * "search tool" no longer names any fixture's blocker — Task 3 (`src/derive/server/search.ts`,
+ * `src/derive/search-filter.ts`) landed the recognizer, and `zzextract`/`zzsearch`/
+ * `zzsearchstub`, which blocked on search alone, are in ROUND_TRIP above. The other five
+ * `style: "read-only-kit"` fixtures with a search tool block on a DIFFERENT construct each —
+ * confirmed by running `deriveSpec` directly against each one's own search `reg()` call in
+ * isolation (`recognizeSearchTool` recognizes all five correctly, filter fields included) before
+ * checking the whole connector, so each reason below is the ACTUAL remaining blocker, not a
+ * guess at what search recognition left behind:
+ *
+ * - `bitrise` — "stub tool handler". Its other two tools are `impl: "stub"`
+ *   (`async () => { throw ...; }`), a shape no recognizer in tools-hand.ts models (see
+ *   `recognizeHoistedBlock`'s own docstring: a block whose last statement is not a `return` is
+ *   refused). `recognizeTools` is all-or-nothing, so the one unrecognized stub call blocks the
+ *   whole module — including its own search tool and both search-specific imports, which
+ *   `deriveSpec` never even attempts to claim (`claimSearchImports` only runs once `toolsResult`
+ *   itself succeeds). Reported: three unclaimed `call:reg` statements plus both search imports.
+ * - `mercury`, `netlify` — "split-bearer env accessor". Both set `env[0].tokenLocal`
+ *   (`apiToken`), the two-function split-bearer shape `server/env.ts`'s `recognizeOne` does not
+ *   model (Task 4's territory, per the phase plan). Reported: `function:authHeader` (the
+ *   accessor's own `local` name in both fixtures, not a generic label).
+ * - `zendesk` — "trimTrailingSlash + basic-auth env accessors". `ZENDESK_URL` needs
+ *   `trimTrailingSlashFn`, and the credential pair uses `auth: "basic"` — both are Task 4's
+ *   territory too, and env recognition failing on the first blocks the totality rule from ever
+ *   reaching the second's own name. Reported: `function:trimTrailingSlash` and
+ *   `function:authHeader`.
+ * - `dependencytrack` — "trimTrailingSlash env accessor". Same gap as zendesk's URL accessor,
+ *   alone this time — its own credential accessor (`auth: "headers"`, a single var) IS a shape
+ *   `recognizeOne` already models. Reported: `function:trimTrailingSlash`.
+ *
  * zzreadonly, in ROUND_TRIP above, is the read-only-kit fixture that proves the frame end-to-end
  * without a search tool in the way.
  *
@@ -96,22 +125,19 @@ const ROUND_TRIP = [
  * `recognizeRestTools` (tools-rest.ts).
  */
 const BLOCKED: Record<string, string> = {
-  bitrise: "search tool",
-  dependencytrack: "search tool",
+  bitrise: "stub tool handler",
+  dependencytrack: "trimTrailingSlash env accessor",
   discord: "query parameters",
   "google-meet": "query parameters",
-  mercury: "search tool",
-  netlify: "search tool",
-  zendesk: "search tool",
-  zzextract: "search tool",
-  zzsearch: "search tool",
-  zzsearchstub: "search tool",
+  mercury: "split-bearer env accessor",
+  netlify: "split-bearer env accessor",
+  zendesk: "trimTrailingSlash + basic-auth env accessors",
   zzwrite: "client-credentials auth",
   zzwriteonly: "write body",
   zzwriterest: "write body",
 };
 
-function emitted(name: string): { server: string; manifest: string } {
+function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
   const spec = parseSpec(JSON.parse(readFileSync(specPath, "utf8")));
   const files = formatAll(generate(spec));
@@ -120,7 +146,10 @@ function emitted(name: string): { server: string; manifest: string } {
     if (file === undefined) throw new Error(`${name} emitted no ${path}`);
     return file.content;
   };
-  return { server: read("src/server.ts"), manifest: read("nimbus.extension.json") };
+  // Optional, like SourceFiles.filter itself: most BLOCKED fixtures below have no search tool
+  // and therefore no src/search-filter.ts at all.
+  const filter = files.find((f) => displayPath(f.path) === "src/search-filter.ts")?.content;
+  return { server: read("src/server.ts"), manifest: read("nimbus.extension.json"), filter };
 }
 
 /** Every path this fixture's own spec emits, keyed to its content — the full file set, not just server.ts. */
@@ -159,7 +188,11 @@ describe("deriveSpec round-trips this repository's own output", () => {
         throw new Error(`${name} emitted no src/server.ts or nimbus.extension.json`);
       }
 
-      const derivation = deriveSpec({ server, manifest });
+      const derivation = deriveSpec({
+        server,
+        manifest,
+        filter: files.get("src/search-filter.ts"),
+      });
       if (!derivation.ok) {
         throw new Error(
           `${name} did not derive: ${derivation.blockers.map((b) => b.kind).join(", ")}`,

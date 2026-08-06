@@ -13,6 +13,7 @@ import {
 import { type ArgFields, recognizeArgs } from "./args.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
+import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
 
 /**
  * The inverse of src/emit/server/tools-hand.ts's renderTool — recovers one `reg(...)` call's
@@ -46,11 +47,17 @@ export type ToolFields = {
  * here rather than folded into `fields`, because neither belongs on a TOOL in the derived spec:
  * both are `ConnectorSpecSchema`/`FetchHelperSchema` fields, and `ToolSchema` is a
  * `strictObject` that would reject them.
+ *
+ * `isSearch` marks a shape recovered by `recognizeSearchTool` rather than `recognizeOne` — see
+ * the handlerStyle vote below for why it must be excluded rather than counted: `renderSearchTool`
+ * always writes a hoist-free block, so counting it would force `handlerStyle: "block"` on every
+ * connector that declares a search tool, regardless of what its OTHER tools actually show.
  */
 type ToolShape = {
-  fields: ToolFields;
+  fields: ToolFields | SearchToolFields;
   isBlock: boolean;
   hasHoists: boolean;
+  isSearch?: true;
   staticStyle?: "quoted" | "template";
   schemaShape: { propertyCount: number; oneLine: boolean };
 };
@@ -58,7 +65,7 @@ type ToolShape = {
 /** `handlerStyle` omitted lets ConnectorSpecSchema's `.default("concise")` apply. `staticPathStyles`/
  * `schemaShapes` are the per-tool style evidence index.ts's two votes consume. */
 export type ToolsResult = {
-  tools: ToolFields[];
+  tools: (ToolFields | SearchToolFields)[];
   handlerStyle?: "block";
   staticPathStyles: readonly ("quoted" | "template" | undefined)[];
   schemaShapes: readonly { propertyCount: number; oneLine: boolean }[];
@@ -199,6 +206,30 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
 }
 
 /**
+ * The fallback tried when `recognizeOne` does not recognize a `reg(...)` call — a search tool's
+ * handler is shaped entirely differently (`renderSearchTool` never writes `jsonResult`, so
+ * `recognizeOne`'s block-form reader always and safely refuses it; see `search.ts`'s own module
+ * docstring). Wraps `recognizeSearchTool`'s result into the same `ToolShape` shape `recognizeOne`
+ * produces so the caller's loop, claim and votes do not need to know which recognizer fired.
+ *
+ * `isBlock`/`hasHoists` are reported as what `renderSearchTool` actually writes (a block with no
+ * hoists) rather than a value chosen to influence the vote — `isSearch: true` is what excludes
+ * this shape from the vote outright, so these two stay honest.
+ */
+function recognizeSearchShape(call: AstNode, helperLocal: string): ToolShape | undefined {
+  const result = recognizeSearchTool(call, helperLocal);
+  if (result === undefined) return undefined;
+  return {
+    fields: result.fields,
+    isBlock: true,
+    hasHoists: false,
+    isSearch: true,
+    staticStyle: result.staticStyle,
+    schemaShape: result.schemaShape,
+  };
+}
+
+/**
  * Every `reg(...)` call in the module, or undefined if any one of them is not understood.
  *
  * All-or-nothing on purpose: a connector with nine recognized tools and one bespoke handler is
@@ -248,13 +279,17 @@ export function recognizeTools(
 
   const shapes: ToolShape[] = [];
   for (const { call } of regs) {
-    const shape = recognizeOne(call, helperLocal);
+    const shape = recognizeOne(call, helperLocal) ?? recognizeSearchShape(call, helperLocal);
     if (shape === undefined) return undefined;
     shapes.push(shape);
   }
 
-  const hasBlockWithoutHoists = shapes.some((s) => s.isBlock && !s.hasHoists);
-  const hasConcise = shapes.some((s) => !s.isBlock);
+  // Search shapes carry no handlerStyle evidence either way — see ToolShape's own docstring —
+  // so the vote runs over the non-search subset only. A connector whose every tool is a search
+  // tool correctly abstains entirely (both booleans false), leaving handlerStyle unset.
+  const votingShapes = shapes.filter((s) => s.isSearch !== true);
+  const hasBlockWithoutHoists = votingShapes.some((s) => s.isBlock && !s.hasHoists);
+  const hasConcise = votingShapes.some((s) => !s.isBlock);
   if (hasBlockWithoutHoists && hasConcise) return undefined;
 
   claims.claim(

@@ -3,14 +3,28 @@ import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields } from "./manifest.ts";
+import { recognizeSearchFilter } from "./search-filter.ts";
 import { recognizeEnv } from "./server/env.ts";
 import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
-import { recognizeTools } from "./server/tools-hand.ts";
+import { claimSearchImports, type SearchToolFields } from "./server/search.ts";
+import { recognizeTools, type ToolFields } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
 
-export type SourceFiles = { server: string; manifest: string };
+/**
+ * `filter` is `src/search-filter.ts`'s text, supplied whenever the directory being read has one
+ * — `undefined` for a connector that never declares a search tool. An absent filter file
+ * alongside a RECOGNIZED search tool is a blocker (see `deriveSharedStyleSpec`), not a silent
+ * omission: a search tool whose filter cannot be read must not derive a spec that regenerates a
+ * connector with a different filter.
+ */
+export type SourceFiles = { server: string; manifest: string; filter?: string };
+
+/** A shape recognized by `recognizeSearchTool` rather than `recognizeOne` — see `SearchToolFields`'s own docstring for why `impl` is the discriminant. */
+function isSearchTool(t: ToolFields | SearchToolFields): t is SearchToolFields {
+  return (t as SearchToolFields).impl === "search";
+}
 
 export type Derivation =
   | { ok: true; spec: Record<string, unknown>; $effectAmbiguity?: string[] }
@@ -332,6 +346,7 @@ function deriveSharedStyleSpec(
   claims: ClaimSet,
   manifest: ManifestFields,
   serverSource: string,
+  filterSource: string | undefined,
 ): Derivation {
   const env = recognizeEnv(frame.verifyStatements, claims);
   const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
@@ -341,6 +356,16 @@ function deriveSharedStyleSpec(
   // so an unrecognized fetch helper still surfaces as a named, per-statement blocker instead of
   // the coarse "no-fetch-helper" case.
   const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
+
+  // Claim the two search-specific imports only once a search tool is positively recognized —
+  // the same scoping recognizeReadOnlyFrame uses for its own frame imports (server/index.ts).
+  // Unconditional claiming would let a non-search module have an unrelated import claimed; an
+  // import this cannot then match stays unclaimed and is reported by the totality rule below,
+  // exactly like any other unrecognized statement.
+  const searchTools = (toolsResult?.tools ?? []).filter(isSearchTool);
+  if (searchTools.length > 0) {
+    claimSearchImports(frame.verifyStatements, claims, searchTools);
+  }
 
   // The totality rule walks frame.verifyStatements, NOT the module's own statement list. For
   // read-only-kit those differ by exactly one statement — the wrapper, replaced by its callback
@@ -355,6 +380,59 @@ function deriveSharedStyleSpec(
   }
   if (toolsResult === undefined) {
     return blocked("unrecognized-handler", "a reg() handler was not understood");
+  }
+
+  // A search tool whose filter file cannot be read must not derive a spec that regenerates a
+  // connector with a different filter — an absent file alongside a recognized search tool is a
+  // blocker, not a silent omission. `title` is folded in here too: the type alias
+  // (`export type <Title>SearchMatchOptions = SearchMatchOptions;`) is the only place this
+  // style's `spec.title` is recoverable at all (rest-kit recovers it from the registrar name
+  // instead, in deriveRestKitSpec below) — so it stays unset for every connector with no search
+  // tool, unchanged from before this task.
+  let tools: (ToolFields | SearchToolFields)[] = toolsResult.tools;
+  let title: string | undefined;
+  if (searchTools.length > 0) {
+    if (filterSource === undefined) {
+      return blocked(
+        "missing-file:src/search-filter.ts",
+        "a search tool was recognized but no filter file was supplied",
+      );
+    }
+    const filterDerivation = recognizeSearchFilter(filterSource);
+    if (!filterDerivation.ok) return { ok: false, blockers: filterDerivation.blockers };
+
+    const wanted = new Set(searchTools.map((t) => t.filter.export));
+    const available = new Set(filterDerivation.result.filters.map((f) => f.export));
+    const sameSet = wanted.size === available.size && [...wanted].every((e) => available.has(e));
+    if (!sameSet) {
+      return blocked(
+        "search-filter:mismatch",
+        `search tools declare filter exports ${JSON.stringify([...wanted])}, but ` +
+          `src/search-filter.ts declares ${JSON.stringify([...available])}`,
+      );
+    }
+
+    const filterByExport = new Map(filterDerivation.result.filters.map((f) => [f.export, f]));
+    tools = toolsResult.tools.map((t) => {
+      if (!isSearchTool(t)) return t;
+      const recovered = filterByExport.get(t.filter.export);
+      return {
+        ...t,
+        filter: {
+          export: t.filter.export,
+          ...(recovered?.fields === undefined ? {} : { fields: recovered.fields }),
+        },
+      };
+    });
+
+    // Omitted when it reproduces ConnectorSpecSchema's own default (`capitalize(name)`), so a
+    // connector whose author never set a custom `title` stays byte-comparable with the
+    // hand-written fixtures — same reasoning as recognizeRestTitle's Step 1 below.
+    const defaultTitle = capitalize(frame.name);
+    title =
+      filterDerivation.result.titleFragment === defaultTitle
+        ? undefined
+        : filterDerivation.result.titleFragment;
   }
 
   // Tools disagreeing on a connector-wide convention their own emitter can only have written
@@ -372,7 +450,7 @@ function deriveSharedStyleSpec(
   // Last, because it is a different kind of refusal from everything above — every earlier
   // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
   // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(toolsResult.tools, manifest.hitlRequired);
+  const attribution = attributeEffects(tools, manifest.hitlRequired);
   if (attribution === undefined) {
     return blocked(
       "manifest:unattributable-hitl",
@@ -386,6 +464,7 @@ function deriveSharedStyleSpec(
     ok: true,
     spec: {
       name: frame.name,
+      ...(title === undefined ? {} : { title }),
       displayName: manifest.displayName,
       description: manifest.description,
       serviceLabel,
@@ -453,5 +532,5 @@ export function deriveSpec(files: SourceFiles): Derivation {
 
   return frame.style === "rest-kit"
     ? deriveRestKitSpec(frame, claims, manifest, files.server)
-    : deriveSharedStyleSpec(frame, claims, manifest, files.server);
+    : deriveSharedStyleSpec(frame, claims, manifest, files.server, files.filter);
 }

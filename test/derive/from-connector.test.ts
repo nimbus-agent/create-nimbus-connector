@@ -37,6 +37,16 @@ describe("deriveFromDirectory", () => {
     if (result.ok) expect(result.spec.name).toBe("zzscratch");
   });
 
+  it("reads src/search-filter.ts alongside src/server.ts for a connector with a search tool", async () => {
+    const dir = tmp.make("from-connector-");
+    await emitInto("zzsearch", dir);
+    // writeFiles wrote src/search-filter.ts into the directory too — deriveFromDirectory must
+    // read it, or the search tools inside would derive as a blocker instead of round-tripping.
+    const result = await deriveFromDirectory(dir);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.spec.name).toBe("zzsearch");
+  });
+
   it("reports blockers by name rather than throwing", async () => {
     const dir = tmp.make("from-connector-");
     await emitInto("zzscratch", dir);
