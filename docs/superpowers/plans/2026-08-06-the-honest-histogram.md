@@ -881,12 +881,76 @@ three kinds of remaining statement — the `new URL` const, the query lines, and
 tail is ``return `${u}`;`` (a template literal with one expression and two empty quasis). Verify it
 precisely; `templateLiteral` is already in `read.ts`.
 
+### The base prefix — recover it, cross-check it in the assembly, and do not thread it
+
 The `pathExpr` inside `new URL(...)` was built **with the base spliced in as a prefix**
-(`renderPath`'s `prefix: baseExpr(spec)`), so `recognizePath` will see a leading base segment that a
-non-query tool never has. Recover the path by stripping it and **verify the stripped prefix equals the
-fetch helper's own base** — a mismatch is a module the emitter cannot have written. If `recognizePath`
-cannot express that, extend it with an optional expected-prefix parameter rather than post-processing
-its output string, and say why in a comment.
+(`renderPath`'s `prefix: baseExpr(spec)`), so `recognizePath` sees a leading base segment a non-query
+tool never has. `baseExpr` (`src/emit/server/fetch-helper.ts:35-38`) has exactly two branches:
+
+```ts
+  return baseConst === undefined ? resolveEnvRefs(base) : `\${${baseConst}}`;
+```
+
+so the prefix is either literal text in the template's leading quasi, or a `${IDENT}` expression
+naming the hoisted base const.
+
+**Recover it into a normalized shape and let the assembly function compare it** — do not reorder the
+recognizers and do not thread a `helperBase` parameter into `recognizeRestTools`. Both would couple
+tool recognition to helper recognition for a fact the assembly already holds, and the assembly is
+where this codebase already puts exactly this kind of check: `deriveRestKitSpec`'s
+`rest-fetch-helper-name-mismatch` guard exists because "two separate recognizers that never
+cross-check each other's output" is the defect, and the fix was a comparison in the caller, not a
+parameter. Threading the base would also force this recognizer to resolve a `baseConst` against
+module scope a second time, duplicating `reconstructBase`.
+
+So `recognizeQueryBlock` returns:
+
+```ts
+/** The `new URL(...)` prefix, in the two forms `baseExpr` can write. Compared against the
+ *  recognized fetch helper's own fields by the caller — see deriveRestKitSpec. */
+export type BasePrefix = { kind: "literal"; text: string } | { kind: "const"; name: string };
+```
+
+and `deriveRestKitSpec` adds, after both recognizers have run:
+
+```ts
+  // Every query tool's path was rendered with baseExpr(spec) spliced in as a prefix, so each one
+  // must agree with the fetch helper this same module declares. Two recognizers producing the base
+  // independently is how they drift; comparing them here is the same guard the fetch-helper name
+  // mismatch above applies, for the same reason.
+  for (const p of tools.basePrefixes) {
+    const agrees =
+      p.kind === "const"
+        ? p.name === restFetchHelper.baseConst
+        : restFetchHelper.baseConst === undefined && p.text === restFetchHelper.base;
+    if (!agrees) {
+      return blocked(
+        "query:base-prefix-mismatch",
+        "a query tool's new URL(...) prefix is not the base this module's fetch helper declares",
+      );
+    }
+  }
+```
+
+`resolveEnvRefs` means a literal base may itself contain `${accessor()}` interpolations — check what
+`restFetchHelper.base` holds (the raw spec text or the resolved form) and compare like with like. If
+they are not directly comparable, normalize through the **same** function `baseExpr` uses rather than
+writing a second normalizer.
+
+### A query tool abstains from the `staticPathStyle` vote
+
+`renderPath`'s fast path is `if (!dynamic && prefix === "")` — so **a non-empty prefix forces the
+template branch regardless of `ctx.staticStyle`**, exactly as a dynamic segment does. A query tool's
+path therefore carries no evidence of the connector's `staticPathStyle`, and reporting `"template"`
+for one would be reading the prefix as if it were the convention.
+
+This is not cosmetic: `voteStaticPathStyle` **blocks** on disagreement. A connector whose other tools
+render `quoted` plus one query tool voting `template` would report `style:mixed-static-path` — a
+refusal manufactured by the recognizer, on a module the emitter wrote correctly.
+
+`recognizeQueryBlock` must report `staticStyle: undefined`. Add a test that pins it: a connector with
+one `quoted` static-path tool and one query tool must derive with `staticPathStyle` omitted, not
+blocked.
 
 - [ ] **Step 7: Verify the `String(...)` wrapper against each arg's type**
 
@@ -1117,6 +1181,18 @@ In `src/derive/index.ts`'s `deriveSharedStyleSpec`, after tools are recognized:
 Write the cast without `as` if `ToolFields` can carry `query` as a typed optional field — prefer
 extending `ToolFields` with `query?: readonly QueryEntry[]` over casting, since `read.ts`'s whole
 discipline is about not casting to reach a field.
+
+**Add the base-prefix cross-check here too**, in the same place and the same form Task 3 added it to
+`deriveRestKitSpec` — `deriveSharedStyleSpec` already has `fetchHelper` in scope, so it is a direct
+port. Do not thread the base into `recognizeTools`.
+
+**And the `staticPathStyle` abstention applies identically.** `renderPath`'s `!dynamic && prefix ===
+""` fast path is shared by both styles, so a hand-rolled query tool carries no evidence either.
+Confirm `zzquery` derives with `staticPathStyle` omitted rather than blocking on
+`style:mixed-static-path` — its second tool (`zzquery_item_get`) has a dynamic path and abstains too,
+so add a third, fully static tool to the fixture if that leaves the vote with no decisive evidence at
+all. Read the derived spec and check, rather than assuming the round trip passing means the vote was
+right: an abstain-everywhere connector and a correctly-voting one both round-trip.
 
 - [ ] **Step 6: Add the hand-rolled query branch to `recognizeOne`**
 
@@ -1537,6 +1613,36 @@ which and why in the docstring). Claim all four statements in one call.
 `recognizeEnv` re-sorts its entries into declaration order by index — that sort is load-bearing for
 `zendesk`'s byte order. Make sure a four-statement group sorts by its **first** statement's position.
 
+**Pin what happens when the group is only partly well-formed.** The hazard is not a confusing error
+message; it is Pass B claiming the wrapper as a standalone plain accessor after Pass A′ has refused
+the group, which derives a spec carrying a bogus plain env entry — the wrong-claim class again.
+
+Task 1's return-type and async pins are what actually close this: the wrapper is
+`async function <local>(): Promise<Record<string, string>>`, and a `recognizeOne` that requires
+non-async and a bare `Record<string, string>` refuses it. **That is an interaction between two tasks,
+which is exactly the kind of thing that survives until someone reorders them**, so prove it here:
+
+```ts
+  it("leaves the wrapper UNCLAIMED when the token exchange is malformed — Pass B must not pick it up as a plain accessor, which would derive an env entry the module never declared. The guard is recognizeOne's async/return-type pin (Task 1); this test is what stops a later change from removing it silently.", () => {
+    const source = CLIENT_CREDENTIALS_MODULE.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt = 1;");
+    expect(source).not.toBe(CLIENT_CREDENTIALS_MODULE);
+    const result = deriveSpec({ server: source, manifest: MANIFEST });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // the wrapper is reported as unclaimed, NOT silently absorbed into an env entry
+      expect(result.blockers.some((b) => b.kind === "function:authHeaders")).toBe(true);
+    }
+  });
+```
+
+**Deferred, deliberately:** the review also suggested a descriptive near-miss blocker
+(`client-credentials:…`) for a partly-matching group. Declined for now. The four statements already
+report as `statement:VariableDeclaration`, `function:token` and `function:<local>`, which names each
+unclaimed construct precisely, and a near-miss label needs a definition of "partly" — the thing
+`frameFailureKind` needed a whole precedence order to get right. A label that guesses wrong is a
+worse diagnostic than four accurate ones. Record it as a possible follow-up in your report; do not
+build it in this task.
+
 - [ ] **Step 5: Move `zzwrite` to `ROUND_TRIP` — and empty `BLOCKED`**
 
 `BLOCKED` becomes `{}`. The `accounts for every fixture in fixtures/` test requires every fixture to
@@ -1914,6 +2020,36 @@ exactly the false `emits` the contract exists to prevent. So:
 That is the same treatment `recognizeReadOnlyFrame` already gives its inline wrapper, with one more
 statement. Say so in the docstring and cite `frame.ts`.
 
+**Do not "mark the function declaration claimed once its body statements are claimed."** It is the
+obvious-looking alternative and it is the precise anti-pattern `frame.ts` exists to document: claims
+are byte ranges and coverage is **containment**, so claiming the declaration covers every registration
+inside it transitively. The totality rule would then find nothing unclaimed and a connector whose
+tools were never recognized would derive successfully — a false `emits` produced by the very mechanism
+the rule exists to remove. Removing the declaration from `verifyStatements` is the whole point; there
+is no second step.
+
+There is no overlapping-claim hazard in the correct design, and it is worth being precise about why:
+`startConnector`'s range contains the `runReadOnlyMcpConnector` call but **not** `register<X>Tools`'
+body, so claiming it covers nothing a tool recognizer needs to claim. The body statements lie inside
+the declaration's range, and the declaration is never claimed, so they stay uncovered until a tool
+recognizer claims them individually — which is exactly the behaviour wanted.
+
+**Prove it rather than reasoning about it.** Add this test alongside the three round-trip ones:
+
+```ts
+  it("does NOT derive when the spliced registrations are not recognized — the register<X>Tools declaration is removed from verifyStatements and never claimed, so an unrecognizable registration inside it still blocks. Claiming that declaration instead would cover every registration by containment and produce a false `emits`, which is the hazard frame.ts documents.", () => {
+    // the axis-3 frame, with one registration replaced by a call no recognizer models
+    const source = AXIS_3_MODULE.replace("reg(", "somethingElse(");
+    expect(source).not.toBe(AXIS_3_MODULE);
+    const result = deriveSpec({ server: source, manifest: MANIFEST });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers.some((b) => b.kind === "call:somethingElse")).toBe(true);
+  });
+```
+
+The assertion that matters is `ok: false`. If it ever returns `ok: true`, the declaration is being
+claimed and the frame is producing false derivations — stop and fix the claim, not the test.
+
 ### Why all three are case 2
 
 Every one of them recovers exactly the same fields the canonical shape does — the connector `name`
@@ -2163,3 +2299,66 @@ what they say, and a ceiling with a denominator and a named cause for every conn
 design's §8 predicted item 10 would raise `emits` "considerably". The per-construct sweep above shows
 it will not. The prediction was made from bucket counts; this is from reading the constructs. Task 12
 writes the real number down either way — that is what the design asked for.
+
+---
+
+## Review responses
+
+[`2026-08-06-the-honest-histogram-review.md`](./2026-08-06-the-honest-histogram-review.md) raised
+three items. Two are accepted, one is accepted with its suggested remedy rejected, and one half of a
+third is deferred. Checking the first surfaced a defect neither the plan nor the review had.
+
+### R1 — the fetch helper's base is not available where Task 3 needed it · **accepted, third option taken**
+
+The premise is correct and verified: `deriveRestKitSpec` calls `recognizeRestTools` **before**
+`recognizeRestFetchHelper` (`src/derive/index.ts:222-230`), and neither `recognizeRestTools` nor
+`recognizeOneCall` takes any helper metadata. Task 3's original instruction — "verify the stripped
+prefix equals the fetch helper's own base" — could not be carried out where it was written.
+
+Of the review's three options, the third is taken: **recover the prefix, compare it in the assembly
+function.** Reordering makes two independent recognizers order-dependent for no gain, and threading a
+`helperBase` parameter would make the tool recognizer resolve a `baseConst` against module scope a
+second time, duplicating `reconstructBase`. The assembly is also where this codebase already puts
+this exact class of check — `rest-fetch-helper-name-mismatch` exists because two recognizers were
+producing the same fact independently, and the fix was a comparison in the caller. Task 3 now
+specifies `BasePrefix`, the comparison, and its blocker; Task 4 ports the same guard to
+`deriveSharedStyleSpec`.
+
+### R1a — a query tool must abstain from the `staticPathStyle` vote · **found while checking R1, added**
+
+Neither the plan nor the review had this. `renderPath`'s fast path is `if (!dynamic && prefix ===
+"")`, so a **non-empty prefix forces the template branch regardless of `ctx.staticStyle`** — a query
+tool's path carries no evidence of the connector's convention, exactly like a dynamic path.
+
+It is not cosmetic, because `voteStaticPathStyle` *blocks* on disagreement: a connector whose other
+tools render `quoted` plus one query tool voting `template` would report `style:mixed-static-path`, a
+refusal manufactured by the recognizer against a module the emitter wrote correctly. Both query tasks
+now require `staticStyle: undefined` and a test that pins it.
+
+### R2 — claim ranges when splicing axis 3's registrar body · **concern already handled; the suggested alternative rejected**
+
+The plan already removes `register<X>Tools`' declaration from `verifyStatements` and splices its body
+in, which is the review's first suggestion. Its second — "or mark the function declaration claimed
+once its nested body statements are claimed" — is **the precise anti-pattern `frame.ts` documents**:
+claims are byte ranges and coverage is containment, so claiming the declaration covers every
+registration transitively, the totality rule finds nothing unclaimed, and a connector whose tools were
+never recognized derives successfully. That is the false `emits` the two-list contract exists to
+prevent, and it is why `recognizeReadOnlyFrame` verifies its wrapper without ever claiming it.
+
+There is no overlapping-claim hazard in the correct design — `startConnector`'s range contains the
+call but not the registrations — but Task 11 now proves that by test rather than by argument: a module
+in the axis-3 shape with one unrecognizable registration must still report `ok: false`.
+
+### R3 — a partially malformed client-credentials group · **test accepted, descriptive blocker deferred**
+
+The real hazard is not the error message; it is Pass B claiming the wrapper as a standalone plain
+accessor once Pass A′ has refused the group, deriving an env entry the module never declared. Task 1's
+async and return-type pins are what close it — the wrapper is `async` and returns
+`Promise<Record<string, string>>`. That is a cross-task interaction, so Task 8 now pins it with a
+test rather than leaving it to hold by luck of ordering.
+
+The descriptive near-miss blocker is deferred with a reason: the four statements already report as
+`statement:VariableDeclaration`, `function:token` and `function:<local>`, which names each unclaimed
+construct precisely, and a near-miss label needs a definition of "partly matching" — the thing
+`frameFailureKind` needed a whole precedence order to get right, and got wrong twice. Four accurate
+labels beat one that guesses.
