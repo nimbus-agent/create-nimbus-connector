@@ -714,8 +714,21 @@ export const TRIM_TRAILING_SLASH_FN = [
 That constant is the helper's **entire source**, body included — so comparing against it *is* body
 verification, not a name check. Note the body is `s.endsWith("/") ? s.slice(0, -1) : s`, **not**
 a `.replace(/\/$/, "")`; a recognizer written against the regex form would match nothing this
-emitter produces. Import the constant rather than re-typing it, so the recognizer cannot drift
-from the emitter the way a copied string would.
+emitter produces.
+
+**Mirror the text; do NOT import the constant from `src/emit/`.** An earlier revision of this plan
+said to import it. That was wrong for this codebase: `src/derive/` imports from `../ast.ts`,
+`../claims.ts`, `../read.ts`, `../spec.ts`, `../validate.ts` and `../optional-dep.ts` and **never
+from `src/emit/`**, and the convention is deliberate — `.claude/commands/cnc-reach-deriver.md`
+states that a recognizer reads what its counterpart writes and *"the round-trip test is what keeps
+the pair honest — including the places where the two must agree on a literal the other side chose
+(`tools-rest.ts` mirrors the emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`)."*
+
+The guard is already in place for this exact literal: `fixtures/zendesk.spec.json` and
+`fixtures/dependencytrack.spec.json` both set `transform: "trimTrailingSlashFn"`, and `zendesk` is
+one of the two connectors this task must move into `ROUND_TRIP`. If the emitter's helper text ever
+changes without the recognizer following, that round trip fails. Adding a cross-layer import to
+solve a problem the round-trip test already solves would buy nothing and cost the layering.
 
 - [ ] **Step 4: Run the gates — this is where the headline moves**
 
