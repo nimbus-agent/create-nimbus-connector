@@ -601,6 +601,65 @@ describe("deriveSpec", () => {
     ],
   };
 
+  describe("the tools-in-a-second-file shim shape (Task 10)", () => {
+    // The exact six-line shape all eleven shim connectors write (athena, bigquery,
+    // cloud-logging, cloudwatch, dataprofile, elasticsearch, great-expectations, localdb,
+    // sagemaker, storybook, vertex-ai): a read-only-kit frame that already matches, wrapping
+    // nothing but an import of ./tools.ts and one call to the name it imports.
+    const SHIM_SERVER = [
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      'import { registerZzshimTools } from "./tools.ts";',
+      "",
+      'await runReadOnlyMcpConnector("nimbus-zzshim", (reg) => {',
+      "  registerZzshimTools(reg);",
+      "});",
+    ].join("\n");
+
+    it("collapses the import and the call into one frame:tools-in-second-file blocker", () => {
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual(["frame:tools-in-second-file"]);
+    });
+
+    it("does NOT collapse when the call names something the import does not bind — a label may be permissive, never arbitrary", () => {
+      const server = SHIM_SERVER.replace("registerZzshimTools(reg);", "somethingElse(reg);");
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:./tools.ts",
+        "call:somethingElse",
+      ]);
+    });
+
+    it("does NOT collapse when the import is not relative — a package import beside an unrelated call stays two ordinary blockers", () => {
+      const server = SHIM_SERVER.replace('"./tools.ts"', '"some-package"');
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:some-package",
+        "call:registerZzshimTools",
+      ]);
+    });
+
+    it("does NOT collapse three unclaimed statements — the shape is pinned to exactly two", () => {
+      const server = SHIM_SERVER.replace(
+        "  registerZzshimTools(reg);",
+        "  registerZzshimTools(reg);\n  extraCall();",
+      );
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:./tools.ts",
+        "call:registerZzshimTools",
+        "call:extraCall",
+      ]);
+    });
+  });
+
   it("attaches $effectAmbiguity when a stub sits beside a write tool competing for the same declared effect", () => {
     const files = formatAll(generate(parseSpec(STUB_AMBIGUITY_SPEC)));
     const server = pick(files, "src/server.ts");

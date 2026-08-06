@@ -2,7 +2,8 @@ import { capitalize, type StaticPathStyle } from "../spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";
-import { deriveManifest, type ManifestFields } from "./manifest.ts";
+import { deriveManifest, type ManifestFields, MissingManifestKey } from "./manifest.ts";
+import { calleeOf, expressionOf, identName, importNames, importSource, startLine } from "./read.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
@@ -451,6 +452,61 @@ function deriveRestKitSpec(
 }
 
 /**
+ * The unclaimed set collapses to ONE blocker, `frame:tools-in-second-file`, when it is EXACTLY
+ * two statements — an import from a relative `./…` module, and one call to a name that import's
+ * own specifiers bind — rather than the ordinary per-statement blockers `blockerFor` would
+ * otherwise report.
+ *
+ * This is the eleven-connector shim shape (`athena`, `bigquery`, `cloud-logging`, `cloudwatch`,
+ * `dataprofile`, `elasticsearch`, `great-expectations`, `localdb`, `sagemaker`, `storybook`,
+ * `vertex-ai`): a read-only-kit frame that already matches, whose `src/server.ts` is nothing but
+ * that frame plus an import of `./tools.ts` and one `register<X>Tools(reg)` call. Left alone, the
+ * two statements land in unrelated buckets (`import-from:./tools.ts`, one `call:register<X>Tools`
+ * PER connector) that never say the thing they share: every tool lives in another file.
+ *
+ * A LABEL, not a claim (see this file's own header on the totality rule): the module still
+ * reports `ok: false`, and neither statement is claimed here — this only changes what
+ * `blockerFor` would otherwise have said about the same two statements.
+ *
+ * Both halves of the shape are pinned, not assumed from the pair's size alone. The import's
+ * source must be a RELATIVE `./…` module — `frame:no-registrar`'s four (`apple`, `fastmail`,
+ * `imap`, `protonmail`) also delegate to `./tools.ts`, but fail frame recognition itself
+ * (`recognizeFrame` returns `undefined` before `deriveSharedStyleSpec` ever runs), so they cannot
+ * reach this function at all. And the call's own callee must be a name that import's specifiers
+ * actually bind (`importNames`'s `local`), not merely "some call happened to be the other
+ * statement" — a connector importing one name and calling a different one falls through to the
+ * ordinary blockers instead of a label that asserts a relationship that is not there.
+ */
+function collapseSecondFileBlockers(
+  unclaimed: readonly AstNode[],
+  serverSource: string,
+): Blocker[] {
+  const ordinary = unclaimed.map((n) => blockerFor(n, serverSource));
+  if (unclaimed.length !== 2) return ordinary;
+  const [first, second] = unclaimed;
+
+  for (const [imp, call] of [
+    [first, second],
+    [second, first],
+  ] as const) {
+    const source = importSource(imp);
+    if (source === undefined || !source.startsWith("./")) continue;
+    const names = importNames(imp);
+    const calleeName = identName(calleeOf(expressionOf(call)));
+    if (names === undefined || calleeName === undefined) continue;
+    if (!names.some((n) => n.local === calleeName)) continue;
+    return [
+      {
+        kind: "frame:tools-in-second-file",
+        detail: `every tool is registered from "${source}", a second file this generator does not read`,
+        line: startLine(imp) ?? 0,
+      },
+    ];
+  }
+  return ordinary;
+}
+
+/**
  * The hand-rolled and read-only-kit assembly — one path, because the two styles differ only in
  * the frame that got them here (see `Frame`'s two statement lists), not in the env accessors,
  * fetch helper or `reg()` handlers those recognizers then read.
@@ -501,7 +557,7 @@ function deriveSharedStyleSpec(
   // on the wrapper.
   const unclaimed = claims.unclaimed(frame.verifyStatements);
   if (unclaimed.length > 0) {
-    return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
+    return { ok: false, blockers: collapseSecondFileBlockers(unclaimed, serverSource) };
   }
   if (fetchHelper === undefined) {
     return blocked("no-fetch-helper", "neither a read nor a write helper was recognized");
@@ -758,6 +814,13 @@ export function deriveSpec(files: SourceFiles): Derivation {
   try {
     manifest = deriveManifest(files.manifest);
   } catch (err) {
+    // A well-formed manifest missing one key the emitter always writes (iac: no syncInterval)
+    // is a different failure from a file that is absent or unparseable — see
+    // MissingManifestKey's own docstring. Anything else (JSON.parse throwing, reqString's
+    // wrong-type TypeError) stays the coarse no-manifest bucket.
+    if (err instanceof MissingManifestKey) {
+      return blocked(`manifest:missing-${err.key}`, err.message);
+    }
     return blocked("no-manifest", err instanceof Error ? err.message : String(err));
   }
 
