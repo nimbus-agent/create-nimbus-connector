@@ -2219,6 +2219,21 @@ and their divergence never surfaces as a bucket. All three were measured 2026-08
 Say for each whether closing it would need a new spec field, a case-2 widening, or a change to what
 the emitter writes — and do not propose the change here. Naming the cost is the deliverable.
 
+**One follow-up to record, deliberately not built on this branch.** Task 3 measured that a rest-kit
+`title` is recoverable only up to `registrarName`'s sanitization — `"Google Meet"` and `"GoogleMeet"`
+produce identical `src/server.ts` and different `README.md`. `docs/ROADMAP.md` already documents the
+limitation by name, so nothing is hidden; what is missing is the **per-run note**. The deriver has a
+precedent for exactly this — `$effectAmbiguity` (`src/derive/index.ts`) reports an attribution that
+is byte-identical but not forced, on the stated grounds that "semantically wrong is a real cost even
+when byte-identical" — and the title case is stronger, because the recovered value is byte-*visible*
+and byte-*wrong* in a file the deriver never sees.
+
+It was deferred rather than built because widening `Derivation` is a contract change across three
+consumers (`from-connector.ts`, `scripts/_lib/reach.ts`, `test/derive/round-trip.test.ts`), none of
+which any task on this branch touches. Record it in the ceiling as a known `--from-connector` gap
+with its precedent named, so whoever picks it up starts from `$effectAmbiguity` rather than
+rediscovering the shape.
+
 - [ ] **Step 4: Close Stage E**
 
 Mark Stage E `[x]` and each of its bullets to its true state. Two of its bullets are directly affected
