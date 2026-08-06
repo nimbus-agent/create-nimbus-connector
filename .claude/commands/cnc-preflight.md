@@ -36,7 +36,7 @@ root is absent** — a silently-skipping gate reads as coverage while asserting 
 
 ```bash
 bun run diff:golden --nimbus-root C:/gitrep/Nimbus
-bun run reach --baseline --nimbus-root C:/gitrep/Nimbus     # if src/ or scripts/_lib/derive/ changed
+bun run reach --baseline --nimbus-root C:/gitrep/Nimbus     # if src/ changed
 bun run acceptance C:/gitrep/Nimbus            # if emission changed
 bun run wiring:conformance --nimbus-root C:/gitrep/Nimbus   # if wiring changed
 ```

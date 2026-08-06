@@ -1,7 +1,24 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import { recognizeTools } from "../../scripts/_lib/derive/server/tools-hand.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
+import { recognizeTools } from "../../src/derive/server/tools-hand.ts";
+import { generate } from "../../src/emit/index.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
+import { parseSpec } from "../../src/spec.ts";
+import { displayPath } from "../../src/types.ts";
+
+beforeAll(async () => {
+  await initFormatter();
+  await initParser();
+});
+
+/** The emitted src/server.ts for a spec, so the test input is bytes this repo produced. */
+function emittedServer(spec: unknown): string {
+  const files = formatAll(generate(parseSpec(spec)));
+  const f = files.find((x) => displayPath(x.path) === "src/server.ts");
+  if (f === undefined) throw new Error("no src/server.ts emitted");
+  return f.content;
+}
 
 const CONCISE = [
   'reg("newrelic_application_list", "List APM applications.", z.object({}), async () =>',
@@ -38,11 +55,11 @@ const BLOCK_NO_HOIST = [
   ");",
 ].join("\n");
 
-function run(source: string) {
+function run(source: string, helperLocal = "nrGet") {
   const statements = parseModule(source);
   const claims = createClaimSet();
   return {
-    result: recognizeTools(statements, claims),
+    result: recognizeTools(statements, claims, helperLocal),
     unclaimed: claims.unclaimed(statements),
     claims,
   };
@@ -132,7 +149,7 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    const { result } = run(source);
+    const { result } = run(source, "write");
     // The hoist's own const name is "scope", same as the arg's key, so no `local` is fed
     // back (Gap A only applies when the two differ) — but the `??` right-hand side "all" is
     // otherwise unrecoverable (renderZodSchema never encodes it), so `default` always is.
@@ -143,6 +160,7 @@ describe("recognizeTools", () => {
           description: "Create item.",
           args: { scope: { type: "string", optional: true, default: "all" } },
           path: "/v1/items?scope=${arg.scope}",
+          method: "POST",
         },
       ],
     });
@@ -160,7 +178,7 @@ describe("recognizeTools", () => {
       "  },",
       ");",
     ].join("\n");
-    const { result } = run(source);
+    const { result } = run(source, "ddGet");
     expect(result).toEqual({
       tools: [
         {
@@ -407,6 +425,27 @@ describe("recognizeTools", () => {
     expect(claims.claims()).toEqual([]);
   });
 
+  // M1 (final whole-branch review): fetchCall's arity checks were unpinned — mutation-verified
+  // that relaxing `args.length === 1` to `>= 1` (read helper) and `args.length !== 3` to `< 2`
+  // (write helper) left every test/derive/ test green. Callee identity was well covered; arity
+  // was not. These two close it, one per relaxed check.
+  it("refuses a read-helper call with a second argument, rather than reading only the first as the path", () => {
+    // Under the `>= 1` mutant this would wrongly succeed with path "/x" (args[0]), silently
+    // dropping the second argument instead of refusing the whole shape.
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await nrGet("/x", "extra")));';
+    expect(run(source).result).toBeUndefined();
+  });
+
+  it("refuses a write-helper call missing its body argument (path, method only)", () => {
+    // Under the `< 2` mutant, 2 arguments (2 < 2 is false) would skip the arity guard entirely
+    // and succeed on the strength of a valid method literal at args[1], never checking that a
+    // body argument was even passed.
+    const source =
+      'reg("t", "d", z.object({}), async () => jsonResult(await writeSend("/x", "POST")));';
+    expect(run(source, "write").result).toBeUndefined();
+  });
+
   // --- Connector-level handlerStyle recovery (see recognizeTools's docstring for the rule).
 
   it("derives handlerStyle: block from a single block-with-no-hoists tool", () => {
@@ -449,5 +488,67 @@ describe("recognizeTools", () => {
       "newrelic_alert_violations",
       "newrelic_ping",
     ]);
+  });
+});
+
+const WRITE_SPEC = {
+  name: "zzmethod",
+  displayName: "Zz Method",
+  description: "Fixture for method recovery.",
+  serviceLabel: "ZzMethod",
+  style: "hand-rolled",
+  env: [{ vars: ["ZZMETHOD_TOKEN"], local: "headers", auth: "bearer", required: true }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzmethod.test", headers: "headers" },
+  tools: [
+    {
+      name: "zzmethod_item_create",
+      description: "Create an item.",
+      impl: "rest",
+      method: "POST",
+      effect: "write",
+      path: "/v1/items",
+      args: { title: { type: "string", min: 1 } },
+    },
+  ],
+};
+
+describe("recognizeTools recovers the HTTP method", () => {
+  it("reads POST from the write helper's second argument", () => {
+    const body = parseModule(emittedServer(WRITE_SPEC));
+    const result = recognizeTools(body, createClaimSet(), "zzGet");
+    expect(result?.tools[0]?.method).toBe("POST");
+    expect(result?.tools[0]?.path).toBe("/v1/items");
+  });
+
+  it("omits `method` entirely for a GET tool, so the schema default applies", () => {
+    const readSpec = {
+      ...WRITE_SPEC,
+      tools: [
+        {
+          name: "zzmethod_item_list",
+          description: "List items.",
+          impl: "rest",
+          path: "/v1/items",
+          args: {},
+        },
+      ],
+    };
+    const body = parseModule(emittedServer(readSpec));
+    const result = recognizeTools(body, createClaimSet(), "zzGet");
+    expect(result?.tools[0]).not.toHaveProperty("method");
+  });
+
+  it("refuses a fetch call whose callee is not the recognized helper", () => {
+    // The landmine this task removes: args[0] was read as the path with no check that the
+    // function producing it was the connector's own fetch helper.
+    const body = parseModule(emittedServer(WRITE_SPEC));
+    expect(recognizeTools(body, createClaimSet(), "somethingElse")).toBeUndefined();
+  });
+
+  it("refuses every reg() call when no fetch helper was recognized at all", () => {
+    // The ordering hazard: recognizeTools is handed fetchHelper?.local, which is undefined
+    // whenever recognizeFetchHelper itself found nothing. It must refuse rather than guess.
+    const body = parseModule(emittedServer(WRITE_SPEC));
+    expect(recognizeTools(body, createClaimSet(), undefined)).toBeUndefined();
   });
 });

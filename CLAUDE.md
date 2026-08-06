@@ -39,6 +39,11 @@ exception to the rule above. It is bounded strictly to these description strings
 not extend to connector code, `shared/` source, or filter-file bodies, all of which stay
 hand-written.
 
+**`--from-connector` reads a connector directory and prints the spec that would regenerate
+it — an authoring aid, not a vendoring path.** [`docs/LICENSING.md`](./docs/LICENSING.md) is
+the full answer: why deriving a spec locally is not vendoring, and the one thing that stays
+forbidden — a spec derived from a real Nimbus connector may never be committed to `fixtures/`.
+
 This shapes the whole test strategy and explains things that otherwise look like
 over-engineering:
 
@@ -138,6 +143,7 @@ list in the same change. Two waves have been missed already, and both were found
 src/spec.ts        zod schema + parseSpec — the spec language
 src/validate.ts    identifier collision rules, RESERVED_IDENTIFIERS
 src/emit/          one module per emitted file; emit/server/ splits by concern
+src/derive/        the spec deriver — the inverse of src/emit/
 src/format.ts      the Biome integration
 src/golden/        fixture resolution, expectations, snapshots
 src/cli.ts         arg parsing, prompts, writeFiles

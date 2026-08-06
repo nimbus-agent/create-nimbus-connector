@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import { frameFailureKind, recognizeFrame } from "../../scripts/_lib/derive/server/index.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
+import { frameFailureKind, recognizeFrame } from "../../src/derive/server/index.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 const FRAME = [
   'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',

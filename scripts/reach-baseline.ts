@@ -9,6 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { initParser, parserAvailable, parserUnavailableReason } from "../src/derive/ast.ts";
 import { formatterAvailable, formatterUnavailableReason, initFormatter } from "../src/format.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { selectConnectors } from "./_lib/reach.ts";
@@ -32,6 +33,14 @@ async function main(argv: readonly string[]): Promise<void> {
     throw new Error(
       "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
         `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
+    );
+  }
+  // Same rationale as scripts/reach.ts: without this, every connector would derive as
+  // blocked:parse-error, and a re-baseline run would silently record a false 0/94.
+  await initParser();
+  if (!parserAvailable()) {
+    throw new Error(
+      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
     );
   }
 

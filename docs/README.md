@@ -36,7 +36,7 @@ reasons, and the difference matters before you start work.
 - [Completing the deriver's recognizer set](./superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
   specifies a seven-commit sequence of which only the first three have shipped. The search,
   query, body and search-filter recognizers it describes do not exist yet, which is why
-  `test/scripts/derive-round-trip.test.ts` still lists 13 fixtures as blocked.
+  `test/derive/round-trip.test.ts` still lists 13 fixtures as blocked.
   [Its review](./superpowers/specs/2026-08-04-completing-the-recognizer-set-review.md) leaves
   two questions open against that unbuilt work.
 - [Guarded accessors and the two missing frames](./superpowers/plans/2026-08-04-guarded-accessors-and-frames.md)

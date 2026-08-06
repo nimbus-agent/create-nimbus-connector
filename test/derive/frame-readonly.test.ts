@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import { recognizeFrame } from "../../scripts/_lib/derive/server/index.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
+import { recognizeFrame } from "../../src/derive/server/index.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 /** A read-only-kit module: no McpServer, no transport, tools inside the wrapper callback. */
 const READ_ONLY = [
@@ -15,7 +19,7 @@ const READ_ONLY = [
 
 /**
  * A refused module must claim NOTHING — see recognizeReadOnlyFrame's docstring in
- * scripts/_lib/derive/server/index.ts. A recognizer that partially claims a module it ultimately
+ * src/derive/server/index.ts. A recognizer that partially claims a module it ultimately
  * refuses would leave the totality rule reporting blockers for statements a DIFFERENT recognizer
  * would have claimed, which reads as a spec-language gap when it is a wrong-recognizer gap. Every
  * rejection case below is routed through this so that property is checked on each pin, not just

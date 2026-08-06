@@ -4,9 +4,9 @@ description: >
   The corpus-reach harness and its spec deriver — `bun run reach`, the four
   tiers, the totality rule, guarded AST accessors, byte-range claims, the
   two-list frame contract, and the baseline keyed on `connectorsTree`. Use when
-  writing or changing anything under `scripts/_lib/derive/` or `scripts/reach*`,
+  writing or changing anything under `src/derive/` or `scripts/reach*`,
   adding a recognizer, reading a blocker histogram, or asking why a connector is
-  `blocked` / why a fixture must appear in `derive-round-trip.test.ts`.
+  `blocked` / why a fixture must appear in `test/derive/round-trip.test.ts`.
 ---
 
 # The reach harness and its deriver
@@ -17,7 +17,7 @@ AGPL monorepo at runtime — never vendors it — so it cannot run in CI, and no
 the root is absent.
 
 It is the inverse of the rest of the repo: `src/emit/` turns a spec into source, and
-`scripts/_lib/derive/` turns source back into a spec. The round trip is the proof.
+`src/derive/` turns source back into a spec. The round trip is the proof.
 
 ## Layout
 
@@ -26,7 +26,7 @@ scripts/reach.ts               the CLI: measure, histogram, --baseline compariso
 scripts/reach-baseline.ts      records fixtures/reach-baseline.json (full corpus, always)
 scripts/_lib/reach.ts          measure(), tiering, histogram, summary lines
 scripts/_lib/reach-baseline.ts assertComparable, compareBaseline, connectorsTreeRefusal
-scripts/_lib/derive/
+src/derive/
   ast.ts        the Babel boundary — parseModule, the AstNode type
   read.ts       THE ONLY module that reads a node's fields
   claims.ts     byte-range claims and containment coverage
@@ -34,13 +34,18 @@ scripts/_lib/derive/
   manifest.ts   nimbus.extension.json -> spec fields
   index.ts      deriveSpec(files) -> Derivation
   server/       one recognizer module per src/emit/server/ module
-test/scripts/derive-*.test.ts  a test file per deriver module, plus the round trip
+test/derive/*.test.ts          a test file per deriver module, plus the round trip
 ```
 
-**The deriver lives under `scripts/`, not `src/`, and must stay there.** `package.json`'s
-`files` is `["src", "README.md"]`, so anything under `src/` ships to npm — a dev-only deriver
-there would put unreachable code and an unresolvable `@babel/parser` import into every published
-tarball.
+**The deriver lives under `src/derive/`, and ships.** `package.json`'s `files` is
+`["src", "README.md"]`, so it reaches npm — which is the point: `--from-connector` is the same
+code pointed at a user's directory rather than at the corpus. `@babel/parser` is an
+`optionalDependency`, following `@biomejs/js-api`, and `src/derive/ast.ts` imports it dynamically
+so a consumer without it loses `--from-connector` and nothing else.
+
+It lived under `scripts/` until the flag existed, because shipping unreachable code and an
+unresolvable import in every tarball would have been the wrong trade. That reasoning expired when
+the code stopped being unreachable.
 
 ## The four tiers
 
@@ -125,7 +130,7 @@ fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a
 
 ### One recognizer module per emitter module
 
-`scripts/_lib/derive/server/*` mirrors `src/emit/server/*`. A recognizer reads what its
+`src/derive/server/*` mirrors `src/emit/server/*`. A recognizer reads what its
 counterpart writes, and the round-trip test is what keeps the pair honest — including the
 places where the two must agree on a literal the other side chose (`tools-rest.ts` mirrors the
 emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`).
@@ -156,7 +161,7 @@ section records the deviation, and the code is authoritative.
 
 ### Every fixture appears in exactly one of `ROUND_TRIP` / `BLOCKED`
 
-`test/scripts/derive-round-trip.test.ts` holds both lists, and its
+`test/derive/round-trip.test.ts` holds both lists, and its
 `accounts for every fixture in fixtures/` test fails when a fixture is in neither or in both.
 `BLOCKED` records the construct that stops each one, so the gap is on screen on every run rather
 than implied by absence — the same reason `expectations.json` omits a file instead of hiding it.
@@ -167,7 +172,7 @@ from the spec or the emitter: two earlier versions of that docstring went stale 
 
 ## What is not built yet
 
-`scripts/_lib/derive/server/{search,query,body}.ts` and `scripts/_lib/derive/search-filter.ts` do
+`src/derive/server/{search,query,body}.ts` and `src/derive/search-filter.ts` do
 not exist. That is why `BLOCKED` still lists fixtures on "search tool", "query parameters",
 "write body" and "client-credentials auth".
 
@@ -181,7 +186,7 @@ before starting a recognizer. Plan 2 has not been written.
 ## Before you claim a deriver change works
 
 ```bash
-bun test test/scripts/                                   # per-module + round trip
+bun test test/derive/                                     # per-module + round trip
 bunx tsc --noEmit                                        # the read.ts guard is a TYPE rule
 bun run reach --baseline --nimbus-root C:/gitrep/Nimbus  # tier regression, needs the monorepo
 ```

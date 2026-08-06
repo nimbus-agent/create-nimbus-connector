@@ -1,10 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { parseModule } from "../../scripts/_lib/derive/ast.ts";
-import { createClaimSet } from "../../scripts/_lib/derive/claims.ts";
-import {
-  recognizeRestRegistrar,
-  recognizeRestTools,
-} from "../../scripts/_lib/derive/server/tools-rest.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
+import { createClaimSet } from "../../src/derive/claims.ts";
+import { recognizeRestRegistrar, recognizeRestTools } from "../../src/derive/server/tools-rest.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
 
 const REST = [
   "const registerZzTool = makeRestToolRegistrar({",
@@ -24,7 +25,7 @@ const REST = [
 
 /**
  * A refused module must claim NOTHING — the same "wrong-recognizer gap" property
- * test/scripts/derive-frame-readonly.test.ts's `expectRejected` checks: a recognizer that
+ * test/derive/frame-readonly.test.ts's `expectRejected` checks: a recognizer that
  * partially claims a module it ultimately refuses leaves the totality rule reporting blockers
  * for statements a DIFFERENT recognizer would have claimed, which reads as a spec-language gap
  * when it is really this recognizer over-claiming. Applies to `recognizeRestRegistrar` in full

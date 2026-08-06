@@ -34,12 +34,12 @@
     "zod": "^4.4.2"
   },
   "optionalDependencies": {
+    "@babel/parser": "^8.0.4",
+    "@babel/types": "^8.0.4",
     "@biomejs/js-api": "^6.0.0",
     "@biomejs/wasm-nodejs": "^2.5.7"
   },
   "devDependencies": {
-    "@babel/parser": "^8.0.4",
-    "@babel/types": "^8.0.4",
     "@biomejs/biome": "^2.5.7",
     "@types/bun": "latest",
     "typescript": "^7.0.2"
