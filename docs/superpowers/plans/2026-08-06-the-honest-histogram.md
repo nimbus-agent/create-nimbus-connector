@@ -1508,9 +1508,15 @@ A third fallback in `recognizeTools`' loop, after `recognizeOne` and `recognizeS
 `recognizeStubShape` reports `isBlock: true, hasHoists: false` **and must be excluded from the
 `handlerStyle` vote**, for exactly the reason `renderSearchTool`'s shape is: `renderTool`'s stub
 branch writes a block regardless of `spec.handlerStyle`, so counting it would force
-`handlerStyle: "block"` onto every connector with a stub. Reuse the `isSearch` exclusion mechanism —
-rename that field to something that names the concept (`votesOnStyle: false`, say) rather than adding
-a second boolean, and update `ToolShape`'s docstring.
+`handlerStyle: "block"` onto every connector with a stub.
+
+**The mechanism you need already exists — Task 4 built it.** That task found the same problem on a
+third shape: `renderTool`'s query branch also returns its block *before* the `concise` test, so a
+hoistless query tool beside a concise tool was being refused outright. It renamed `ToolShape.isSearch`
+to `votesHandlerStyle` and generalised the exclusion. **Set `votesHandlerStyle: false` on the stub
+shape; do not add a second boolean and do not rename anything.** Read that field's docstring first —
+it already states the rule, and your job is to add the third member to an existing set, not to
+re-derive it.
 
 Do the same for the rest-kit stub in `tools-rest.ts` — it is three lines and the fixture `bitrise` is
 hand-rolled, but leaving one style able to read a shape the other cannot is how the two files drifted
