@@ -34,9 +34,20 @@ src/derive/
   manifest.ts   nimbus.extension.json -> spec fields
   search-filter.ts  src/search-filter.ts -> filter entries, its own totality rule
   index.ts      deriveSpec(files) -> Derivation
-  server/       one recognizer module per src/emit/server/ module
+  from-connector.ts  a connector DIRECTORY -> a spec, or named blockers (--from-connector)
+  server/       one recognizer module per src/emit/server/ module:
+                args, body, env, fetch-helper, frame, hoists, index,
+                path-template, query, search, tools-hand, tools-rest
 test/derive/*.test.ts          a test file per deriver module, plus the round trip
 ```
+
+**A recognizer may import `src/spec.ts`; it may never import `src/emit/`.** `server/body.ts`
+takes `parsePathTemplate` from `src/spec.ts` so its reconstruction of `renderBodyExpr`'s default
+body uses the same path parser the emitter does — a private copy that under-parses leaves an arg
+in the default set and produces a spurious explicit `body` that is byte-identical and invisible
+to every gate, while one that over-parses throws. Sharing removes the only direction nothing can
+see. That argument covers the spec language's **parsers** and nothing else: importing the
+emitter's **renderer** would let a renderer bug agree with itself, which is the opposite trade.
 
 **The deriver lives under `src/derive/`, and ships.** `package.json`'s `files` is
 `["src", "README.md"]`, so it reaches npm — which is the point: `--from-connector` is the same
@@ -116,16 +127,24 @@ Containment is also the hazard the frame contract below exists to contain.
 - `toolStatements` — what the tool recognizers scan.
 - `verifyStatements` — what the totality rule walks.
 
-They differ for `read-only-kit` only. That style nests its registrations inside
-`await runReadOnlyMcpConnector("nimbus-x", (reg) => { ... })`, so *claiming* that wrapper would
-cover every registration transitively: the totality rule would find nothing unclaimed and a
-connector whose tools were never recognized would derive successfully — a false `emits` produced
-by the very mechanism the rule exists to remove.
+They differ for `read-only-kit` only. That style nests its registrations inside a container, so
+*claiming* that container would cover every registration transitively: the totality rule would
+find nothing unclaimed and a connector whose tools were never recognized would derive
+successfully — a false `emits` produced by the very mechanism the rule exists to remove.
 
-So the read-only-kit branch removes **exactly one** statement — the wrapper — from
-`verifyStatements`, splices its callback body in, and **never claims the wrapper**. It is still
-fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a single-parameter
-`(reg) =>` block arrow, not async); it is simply never granted coverage.
+`recognizeReadOnlyFrame` reads **two entry shapes**, and the rule is the same for both:
+
+- the inline wrapper, `await runReadOnlyMcpConnector("nimbus-x", (reg) => { ... })` — what this
+  generator emits;
+- the **named registrar**, an exported `register<X>Tools(reg: ZodToolRegistrar)` declaration
+  passed by bare reference from an exported `startConnector()` — what ten corpus connectors
+  write, and a case-2 shape the emitter never produces.
+
+Either way the branch removes **exactly one** statement — the container — from
+`verifyStatements`, splices its body in, and **never claims the container**. It is still fully
+verified (for the wrapper: the await, the callee, arity 2, the `"nimbus-<name>"` literal, a
+single-parameter `(reg) =>` block arrow, not async; for the named form the equivalent pins in
+`namedReadOnlyStarter` / `namedRegistrarBody`); it is simply never granted coverage.
 
 **If you add a frame style that nests registrations, it inherits this rule.**
 
@@ -134,7 +153,9 @@ fully verified (the await, the callee, arity 2, the `"nimbus-<name>"` literal, a
 `src/derive/server/*` mirrors `src/emit/server/*`. A recognizer reads what its
 counterpart writes, and the round-trip test is what keeps the pair honest — including the
 places where the two must agree on a literal the other side chose (`tools-rest.ts` mirrors the
-emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`).
+emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`). The mirror is not one-to-one in
+both directions: `frame.ts` and `hoists.ts` model constructs no single emitter module owns, so
+they have no counterpart.
 
 Match only what the emitter can actually produce. Widening a matcher to accept a shape the
 emitter never writes only widens what gets claimed — see the deliberate leading slash in
@@ -160,31 +181,46 @@ which is also what lets a derived spec that trips `RESERVED_IDENTIFIERS` be *cou
 thrown. The reach design still writes `spec: ConnectorSpec`; the plan's *Refinement of the spec*
 section records the deviation, and the code is authoritative.
 
-### Every fixture appears in exactly one of `ROUND_TRIP` / `BLOCKED`
+### Every fixture appears in exactly one of `ROUND_TRIP` / `PARTIAL_ROUND_TRIP` / `BLOCKED`
 
-`test/derive/round-trip.test.ts` holds both lists, and its
-`accounts for every fixture in fixtures/` test fails when a fixture is in neither or in both.
-`BLOCKED` records the construct that stops each one, so the gap is on screen on every run rather
+`test/derive/round-trip.test.ts` holds all three lists, and its
+`accounts for every fixture in fixtures/` test fails when a fixture is in none or in more than one.
+`BLOCKED` records the construct that stops each one, and `PARTIAL_ROUND_TRIP` the FILES a fixture
+that does derive still fails to reproduce (and why), so the gap is on screen on every run rather
 than implied by absence — the same reason `expectations.json` omits a file instead of hiding it.
+A `PARTIAL_ROUND_TRIP` file is asserted to actually differ, so an entry that closes fails loudly
+instead of silently weakening the check.
 
-**Adding a fixture means adding it to one of those two lists.** A `BLOCKED` reason must be
+**Adding a fixture means adding it to one of those lists.** A `BLOCKED` reason must be
 checked by actually running `deriveSpec` against the fixture's emitted output, never inferred
 from the spec or the emitter: two earlier versions of that docstring went stale exactly that way.
 
-## What is not built yet
+## The recognizer set is complete; the ceiling is not a recognizer problem
 
-`src/derive/server/search.ts` and `src/derive/search-filter.ts` now exist; `src/derive/server/query.ts`
-and `src/derive/server/body.ts` do not. `BLOCKED` no longer lists anything on "search tool" — what
-remains is `bitrise` on a stub tool handler, `discord`/`google-meet` on query parameters, `zzwrite`
-on client-credentials auth, and `zzwriteonly`/`zzwriterest` on write body.
+**`BLOCKED` is empty.** Every fixture in `fixtures/` derives, and every one re-emits
+byte-identically except `google-meet`, which sits in `PARTIAL_ROUND_TRIP` on one file
+(`README.md`) because a rest-kit `title` is recoverable from `src/server.ts` only up to
+`registrarName`'s sanitization. Every `src/emit/server/` module now has its counterpart under
+`src/derive/server/`, including `body.ts`, and `recognizeQueryBlock` reads **both** query
+branches — the rest-kit one and the hand-rolled one.
 
-The specification for that work is
+**So a new recognizer is no longer the obvious next move.** `docs/ROADMAP.md`'s
+[*The measured ceiling*](../../docs/ROADMAP.md#the-measured-ceiling) groups every blocked corpus
+connector by cause and splits each into a *spec-language gap* (a construct the spec cannot
+express — no recognizer closes it) or a *recognizer gap*. Read that split before writing a
+matcher: the largest remaining shapes are spec-language gaps, and three of them do not appear in
+the histogram at all, because the connectors carrying them are blocked earlier. A recognizer that
+reads a shape the emitter does not write moves a connector to `emits` and never to
+`server-identical` — legitimate, but say so up front.
+
+The design documents behind the shipped work are
 [`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-— a seven-commit sequence of which only the first four have shipped (commit 4 being search and
-search-filter, both now landed). Read it, and the plan-1 /
-plan-2 boundary in
-[`docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md`](../../docs/superpowers/plans/2026-08-04-guarded-accessors-and-frames.md),
-before starting a recognizer. Plan 2 has not been written.
+and
+[`docs/superpowers/specs/2026-08-05-roadmap-completion-design.md`](../../docs/superpowers/specs/2026-08-05-roadmap-completion-design.md),
+with the plans that executed them in `docs/superpowers/plans/`. They are history now, not a
+backlog — where a plan and the code disagree, the code is authoritative, and several of those
+documents' predictions were measured wrong on the way (see the ceiling's own note on reading what
+the code does rather than trusting a prediction).
 
 ## Before you claim a deriver change works
 

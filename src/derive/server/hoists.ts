@@ -61,8 +61,9 @@ export type HoistMeta = { local: string; default?: HoistDefault };
  * not a property name. Reading it unguarded would name an arg after whatever local happens to be
  * used as the index (`p[key]` -> arg "key"), an arg the connector never declared.
  * path-template.ts's `argNameFromExpr` guards this identical hazard on the read side (citing
- * args.ts:53); this function had the same shape and the same gap, just unnoticed until the
- * computed-member sweep that added server/index.ts's isConnect guard.
+ * `recognizeArgs` in server/args.ts, which guards it on object keys); this function had the same
+ * shape and the same gap, just unnoticed until the computed-member sweep that added
+ * server/index.ts's isConnect guard.
  */
 function memberArgName(node: AstNode | undefined): string | undefined {
   if (identName(memberObject(node)) === undefined) return undefined;
@@ -103,8 +104,13 @@ function booleanHoistArg(init: AstNode): string | undefined {
  * negative (ArgSchema constrains sign on none of `min`, `max` or `default`), and `?? -1` is a
  * shape `renderHoists` can legitimately write. This is one of this retrofit's two sanctioned
  * widenings — `.min(-5)`/`.max(-5)` in args.ts is the other.
+ *
+ * Exported for server/body.ts, whose `<param>.<arg> ?? <default>` case reads the SAME right-hand
+ * side from a different statement: `fieldValue` (src/emit/server/body.ts) inlines the identical
+ * `?? ${JSON.stringify(spec.default)}` when no hoisted const is in scope. One reader, for the
+ * reason this module's own docstring gives about its once-duplicated half.
  */
-function hoistDefaultLiteral(node: AstNode): HoistDefault | undefined {
+export function hoistDefaultLiteral(node: AstNode): HoistDefault | undefined {
   const s = stringLit(node);
   if (s !== undefined) return s;
   const n = numericValue(node);
@@ -173,6 +179,33 @@ function hoistedLocal(
 }
 
 /**
+ * The leading run of hoisted-argument consts in a handler block, and everything after it.
+ *
+ * Split out so the query branch (server/query.ts) reads the SAME hoist statements
+ * `recognizeHoistedBlock` does without a second copy of the loop — the copy this module's own
+ * docstring exists to have removed once already. The two callers differ only in what they demand
+ * of `rest`: a single `return` here, the `new URL` trio there.
+ */
+export type HoistSection = {
+  readonly locals: ReadonlyMap<string, PathLocal>;
+  readonly hoistMeta: ReadonlyMap<string, HoistMeta>;
+  readonly rest: readonly AstNode[];
+};
+
+export function splitHoists(statements: readonly AstNode[]): HoistSection {
+  const locals = new Map<string, PathLocal>();
+  const hoistMeta = new Map<string, HoistMeta>();
+  let i = 0;
+  for (; i < statements.length; i++) {
+    const hoist = hoistedLocal(statements[i]!);
+    if (hoist === undefined) break;
+    locals.set(hoist.local, hoist.pathLocal);
+    hoistMeta.set(hoist.pathLocal.arg, { local: hoist.local, default: hoist.default });
+  }
+  return { locals, hoistMeta, rest: statements.slice(i) };
+}
+
+/**
  * A recognized block-bodied handler: the hoists it declared, and the expression its final
  * `return` returned — left unread, because what a returned expression means is the caller's
  * concern (a `jsonResult(await ...)` call for tools-hand.ts, a bare path expression for
@@ -192,26 +225,25 @@ export type HoistedBlock = {
  * A handler block: zero or more hoisted-argument consts, then a single `return`.
  *
  * A block containing anything else — the query branch's `const u = new URL(...)` trio, a stub's
- * `throw` — is a shape neither recognizer models, and is refused rather than partially read. No
- * special case is needed for any of them: a statement that is not a hoist fails `hoistedLocal`
- * like any other unmodeled statement, and the whole block is refused.
+ * `throw` — is a shape THIS recognizer does not model, and is refused rather than partially read.
+ * No special case is needed for any of them: a statement that is not a hoist ends `splitHoists`'
+ * run like any other unmodeled statement, and `rest` is then longer than the single `return`
+ * required below. (server/query.ts models the query branch by taking a different tail off the
+ * same split; both tools-rest.ts and tools-hand.ts try this reader first and that one only once
+ * this has refused.)
  */
 export function recognizeHoistedBlock(body: AstNode): HoistedBlock | undefined {
   const statements = blockBody(body);
   if (statements === undefined || statements.length === 0) return undefined;
 
-  const locals = new Map<string, PathLocal>();
-  const hoistMeta = new Map<string, HoistMeta>();
-  for (const statement of statements.slice(0, -1)) {
-    const hoist = hoistedLocal(statement);
-    if (hoist === undefined) return undefined;
-    locals.set(hoist.local, hoist.pathLocal);
-    hoistMeta.set(hoist.pathLocal.arg, { local: hoist.local, default: hoist.default });
-  }
-
-  const last = statements.at(-1)!;
+  const section = splitHoists(statements);
+  // Unchanged from the slice(0, -1) form this replaced: everything before the last statement must
+  // be a hoist, and the last must be a `return`. `splitHoists` stops at the first non-hoist, so
+  // "exactly one statement left, and it returns" is the same condition stated positively.
+  if (section.rest.length !== 1) return undefined;
+  const last = section.rest[0]!;
   if (last.type !== "ReturnStatement") return undefined;
-  return { locals, hoistMeta, returned: returnArgument(last) };
+  return { locals: section.locals, hoistMeta: section.hoistMeta, returned: returnArgument(last) };
 }
 
 /**

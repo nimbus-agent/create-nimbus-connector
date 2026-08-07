@@ -188,6 +188,17 @@ describe("recognizeSearchFilter", () => {
     }
   });
 
+  it("rejects a quoted `tags` key in the keyed form's options object — emitSearchFilter writes it bare", () => {
+    // `emitSearchFilter` hardcodes `, { tags: true }`. The objectProps parse resolves
+    // `{ "tags": true }` to the same `key`, so the quoted spelling recovered the identical
+    // trailing `{ tags: "text" }` FieldEntry and re-emitted the bare form — different bytes, an
+    // unchanged spec, and no gate able to see it. `bareKeyedProps` (src/derive/read.ts) is the pin.
+    const corrupted = MONOREPO_SOURCE.replace("{ tags: true }", '{ "tags": true }');
+    expect(corrupted).not.toBe(MONOREPO_SOURCE);
+    const result = recognizeSearchFilter(corrupted);
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects a trailing statement the totality rule cannot account for", () => {
     const corrupted = `${MONOREPO_SOURCE}\nconst extra = 1;\n`;
     const result = recognizeSearchFilter(corrupted);
@@ -237,5 +248,48 @@ describe("recognizeSearchFilter", () => {
     ].join("\n");
     const result = recognizeSearchFilter(source);
     expect(result.ok).toBe(false);
+  });
+
+  it("refuses an extractor whose entries are all plain keys — emitSearchFilter writes the KEYED form for that field list (resolveKeyedShape returns a shape), so this file is one the emitter cannot have produced", () => {
+    const source = [
+      'import { asObjectish, makeQueryFilter, type SearchMatchOptions, stringField } from "../../shared/search-filter.ts";',
+      "",
+      "export type XSearchMatchOptions = SearchMatchOptions;",
+      "",
+      "function fieldsOf(item: unknown): readonly string[] | null {",
+      "  const row = asObjectish(item);",
+      "  if (row === undefined) {",
+      "    return null;",
+      "  }",
+      '  return [stringField(row, "a"), stringField(row, "b")];',
+      "}",
+      "",
+      "export const filterX = makeQueryFilter(fieldsOf);",
+    ].join("\n");
+    const result = recognizeSearchFilter(source);
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts an extractor that is NOT keys-expressible — one nestedString entry is enough to make the extractor form the only one emitSearchFilter can write", () => {
+    const source = [
+      'import { asObjectish, makeQueryFilter, nestedString, type SearchMatchOptions, stringField } from "../../shared/search-filter.ts";',
+      "",
+      "export type XSearchMatchOptions = SearchMatchOptions;",
+      "",
+      "function fieldsOf(item: unknown): readonly string[] | null {",
+      "  const row = asObjectish(item);",
+      "  if (row === undefined) {",
+      "    return null;",
+      "  }",
+      '  return [stringField(row, "a"), nestedString(row, ["b", "c"])];',
+      "}",
+      "",
+      "export const filterX = makeQueryFilter(fieldsOf);",
+    ].join("\n");
+    const result = recognizeSearchFilter(source);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.filters[0]?.fields).toEqual(["a", { path: ["b", "c"] }]);
+    }
   });
 });

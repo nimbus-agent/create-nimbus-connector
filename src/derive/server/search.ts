@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
@@ -23,18 +24,27 @@ import {
   typeLiteralMembers,
   unionTypes,
 } from "../read.ts";
-import { type ArgFields, recognizeArgs } from "./args.ts";
+import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { recognizePath } from "./path-template.ts";
 import type { ToolFields } from "./tools-hand.ts";
 
 /**
  * The inverse of src/emit/server/search.ts's `renderSearchTool` — recovers one search `reg(...)`
- * call's declared spec fields. `ToolFields` (name/description/args/path) is reused as-is;
- * `method` never appears (ToolSchema pins a search tool to GET, see src/spec.ts's refine), so
- * this type never sets it.
+ * call's declared spec fields. It builds on `ToolFields` (name/description/args) rather than
+ * restating it, with `impl` and `path` re-declared — see below for why neither can simply be
+ * inherited. `method` never appears (ToolSchema pins a search tool to GET, see src/spec.ts's
+ * refine), so this type never sets it.
+ *
+ * `Omit<ToolFields, "impl" | "path">` rather than a bare `ToolFields &`: `ToolFields.impl` is
+ * `"stub" | undefined` (Task 7), and intersecting that with a fresh `impl: "search"` here would
+ * compute `("stub" | undefined) & "search"`, which TypeScript reduces to `never` — silently
+ * making this field un-assignable rather than raising an error at this declaration. `path` is
+ * re-declared required for the same reason `impl` is: a search tool always has one (`renderSearchTool`
+ * never writes the stub branch), so widening `ToolFields.path` to optional must not widen this too.
  */
-export type SearchToolFields = ToolFields & {
+export type SearchToolFields = Omit<ToolFields, "impl" | "path"> & {
   impl: "search";
+  path: string;
   rows?: string;
   maxLimit: number;
   filter: { export: string };
@@ -49,8 +59,8 @@ export type SearchToolFields = ToolFields & {
  */
 export type SearchToolResult = {
   fields: SearchToolFields;
-  staticStyle?: "quoted" | "template";
-  schemaShape: { propertyCount: number; oneLine: boolean };
+  staticStyle?: StaticPathStyle;
+  schemaShape: SchemaShape;
 };
 
 /** `z.string().min(1)` — the search schema's fixed `query` field, exactly. */
@@ -70,7 +80,7 @@ function fieldsEqual(a: ArgFields, b: ArgFields): boolean {
 type SchemaRecovery = {
   args: Record<string, ArgFields>;
   maxLimit: number;
-  schemaShape: { propertyCount: number; oneLine: boolean };
+  schemaShape: SchemaShape;
 };
 
 /**

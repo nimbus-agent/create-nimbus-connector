@@ -193,9 +193,11 @@ export function memberOn(node: AstNode | undefined, receiver: string): string | 
  * `<anything>?.<name>`, rejecting computed — the optional-chain analogue of `memberName`.
  *
  * `x?.trim()` parses its `?.trim` step as an OptionalMemberExpression, a node type distinct from
- * the plain MemberExpression `memberName` reads; `env.ts`'s `process.env[...]?.trim()` is the one
- * shape in the corpus that needs it. Callers compose this with `memberName` (the two node types
- * are mutually exclusive) rather than widening `memberName` itself onto every other call site.
+ * the plain MemberExpression `memberName` reads. Three emitted shapes need it, one per caller:
+ * env.ts's `process.env[...]?.trim()` (the shape it was added for), fetch-helper.ts's
+ * `...(init?.headers as …)` spread, and search.ts's `(root as …)?.<rows>` narrowing. Callers
+ * compose this with `memberName` (the two node types are mutually exclusive) rather than widening
+ * `memberName` itself onto every other call site.
  */
 export function optionalMemberName(node: AstNode | undefined): string | undefined {
   if (node?.type !== "OptionalMemberExpression") return undefined;
@@ -208,6 +210,29 @@ export function optionalMemberObject(node: AstNode | undefined): AstNode | undef
   if (node?.type !== "OptionalMemberExpression") return undefined;
   if (raw(node)["computed"] === true) return undefined;
   return child(node, "object");
+}
+
+/**
+ * `import.meta`'s two halves — `{ meta: "import", property: "meta" }`.
+ *
+ * A MetaProperty is not a MemberExpression and carries no `object`, so `memberObject` cannot
+ * reach it; `import.meta.main` is a MemberExpression whose OBJECT is one of these. Needed by
+ * `server/index.ts`'s named read-only registrar, whose `if (import.meta.main) await
+ * startConnector();` entrypoint guard is CLAIMED — an earlier, label-only version of that
+ * matcher deliberately left the test unchecked ("a label may be more permissive than a
+ * recognizer"), which stops being true the moment the statement is granted coverage: claiming
+ * `if (<anything>) await startConnector();` would cover a condition this frame never verified.
+ * Both halves are returned rather than a bare boolean, so the caller pins `import` and `meta`
+ * separately instead of trusting one composite check.
+ */
+export function metaPropertyNames(
+  node: AstNode | undefined,
+): { meta: string; property: string } | undefined {
+  if (node?.type !== "MetaProperty") return undefined;
+  const meta = identName(child(node, "meta"));
+  const property = identName(child(node, "property"));
+  if (meta === undefined || property === undefined) return undefined;
+  return { meta, property };
 }
 
 /**
@@ -295,6 +320,41 @@ export function uninitializedLet(node: AstNode | undefined): string | undefined 
   return identName(child(declarator, "id"));
 }
 
+export type LetDecl = {
+  readonly name: string;
+  readonly init: AstNode;
+  /** The binding's own `: <type>` annotation, or undefined when it carries none. */
+  readonly typeAnnotation: AstNode | undefined;
+};
+
+/**
+ * `let <name>: <type> = <init>;` / `let <name> = <init>;` — the two module-scope bindings
+ * `renderTokenFunction` (src/emit/server/env.ts) writes above the token exchange. Neither
+ * existing declaration accessor fits: `constDecl` refuses these by design (its
+ * `kind === "const"` guard, added because a `let` was being claimed as the documented const
+ * frame), and `uninitializedLet` covers only the no-initializer case.
+ *
+ * The annotation is handed back rather than dropped, unlike `constDecl`'s untyped `ConstDecl`.
+ * It is the only thing separating `let cachedToken: string | null = null;` — the one form
+ * `renderTokenFunction` writes — from `let cachedToken: null | string = null;` and
+ * `let tokenExpiresAt: number = 0;`, both of which typecheck, neither of which the emitter can
+ * produce; a caller reading only the name and the initializer would claim them and re-emit
+ * something else. Its ABSENCE is equally load-bearing, which is why this returns
+ * `AstNode | undefined` rather than resolving a name: `tokenExpiresAt` is written bare.
+ */
+export function letDecl(node: AstNode | undefined): LetDecl | undefined {
+  if (node?.type !== "VariableDeclaration") return undefined;
+  if (raw(node)["kind"] !== "let") return undefined;
+  const declarations = childList(node, "declarations");
+  if (declarations?.length !== 1) return undefined;
+  const declarator = declarations[0];
+  const id = child(declarator, "id");
+  const name = identName(id);
+  const init = child(declarator, "init");
+  if (name === undefined || init === undefined) return undefined;
+  return { name, init, typeAnnotation: identTypeAnnotation(id) };
+}
+
 export function functionName(node: AstNode | undefined): string | undefined {
   if (node?.type !== "FunctionDeclaration") return undefined;
   return identName(child(node, "id"));
@@ -355,6 +415,38 @@ export function hasLeadingComment(node: AstNode | undefined): boolean {
 }
 
 /**
+ * Every leading comment's own TEXT, in source order — `// x` reads as `" x"`, the slashes and the
+ * newline being the parser's rather than the comment's. `[]` when the node carries none, so ONE
+ * comparison against an expected list settles both presence and content.
+ *
+ * `hasLeadingComment` above answers only "is there one", which is all `search-filter.ts` needs:
+ * `emitSearchFilter` never writes a comment, so ANY comment there is unproducible and the text is
+ * irrelevant. `server/env.ts`'s token exchange is the mirror image and needs this instead —
+ * `renderTokenFunction` is the ONE place in all of `src/emit/` that writes a comment into
+ * `src/server.ts`, so presence alone would accept an ALTERED comment and silently re-emit the
+ * original wording. The text is the fact there, not the presence.
+ *
+ * A comment node carrying no string `value` refuses the whole list rather than being skipped —
+ * the all-or-nothing rule `childList` follows, and for the same reason: dropping one silently
+ * would shorten the list and could make it equal an expected one it does not match. Babel gives
+ * every CommentLine/CommentBlock a string `value`, so that branch guards a shape this parser does
+ * not produce, exactly as `templateLiteral`'s own cooked-string guard does.
+ */
+export function leadingCommentTexts(node: AstNode | undefined): string[] | undefined {
+  if (node === undefined) return [];
+  const comments = raw(node)["leadingComments"];
+  if (!Array.isArray(comments)) return [];
+
+  const out: string[] = [];
+  for (const comment of comments) {
+    const value = (comment as { value?: unknown }).value;
+    if (typeof value !== "string") return undefined;
+    out.push(value);
+  }
+  return out;
+}
+
+/**
  * A `type <name> = ...;` alias declaration's own name. Needed for the standalone read-only-kit
  * target's inlined `type ZodToolRegistrar = ...;` (src/emit/server/index.ts's
  * `renderRunReadOnlyGlue`) — the monorepo target imports that shape instead, so no recognizer
@@ -380,9 +472,15 @@ export function typeAliasRhsName(node: AstNode | undefined): string | undefined 
 /**
  * `export <declaration>;`'s inner declaration node — a VariableDeclaration, TSTypeAliasDeclaration,
  * etc. Undefined for `export { name };` (no inline declaration) or `export default …`, neither of
- * which `src/emit/search-filter.ts` ever writes. Needed because `search-filter.ts` is the first
- * file this deriver reads whose every top-level binding is exported — `src/server.ts` never
- * declares a top-level `export`, so no earlier recognizer needed this unwrap.
+ * which `src/emit/search-filter.ts` ever writes.
+ *
+ * Added for `search-filter.ts`, the first file this deriver reads whose every top-level binding is
+ * exported. It is no longer the only one: the corpus's named read-only registrar writes an
+ * exported `register<X>Tools` and an exported `async startConnector()` at the top level of
+ * `src/server.ts`, and `namedReadOnlyStarter` and `namedRegistrarBody` (server/index.ts) unwrap
+ * exactly that. What stays true is the narrower statement this docstring used to make too broadly:
+ * no EMITTED `src/server.ts` declares a top-level `export` — which is why both of those readers
+ * are case-2 recognizers, reading a shape `src/emit/server/index.ts` never writes.
  */
 export function exportedDeclaration(node: AstNode | undefined): AstNode | undefined {
   if (node?.type !== "ExportNamedDeclaration") return undefined;
@@ -473,7 +571,25 @@ export function newOf(
 // Objects
 // ---------------------------------------------------------------------------
 
-export type Prop = { readonly key: string; readonly value: AstNode };
+export type Prop = {
+  readonly key: string;
+  readonly value: AstNode;
+  /**
+   * Whether the key was written as a bare identifier (`{ method: … }`) rather than as a quoted
+   * string (`{ "method": … }`) — the one thing `key` itself cannot say, since `objectProps`
+   * resolves both spellings to the same name.
+   *
+   * Not read at a call site: the two rules an emitted literal can follow are `bareKeyedProps` and
+   * `quoteMinimalProps` below, and picking between them is the whole decision. This field is what
+   * those two are built from, kept on `Prop` so the distinction is visible where `key` is.
+   *
+   * Formatting settles nothing: Biome preserves a needlessly quoted key verbatim — verified
+   * 2026-08-07 by running `{ "method": "DELETE" }` through `formatAll` — so the spelling reaches
+   * the byte comparison unchanged, and a recognizer that accepts the wrong one derives a spec
+   * that re-emits different bytes while every recovered field stays identical.
+   */
+  readonly bareKey: boolean;
+};
 
 /**
  * Every property of an ObjectExpression, unfiltered — a SpreadElement, a computed key or any
@@ -525,12 +641,34 @@ export function isComputedProperty(node: AstNode | undefined): boolean {
 }
 
 /**
+ * Whether an ObjectProperty is written SHORTHAND (`{ scope }`) rather than longhand
+ * (`{ scope: scope }`).
+ *
+ * Babel gives the two forms identical `key` and `value` children — two Identifier nodes of the
+ * same name — so no other accessor here can tell them apart, and the choice between them is not
+ * the formatter's: `renderBodyExpr` (src/emit/server/body.ts) writes the shorthand exactly when
+ * the API field name and the value expression are the same identifier, and `renderWriteHelper`
+ * (src/emit/server/fetch-helper.ts) writes `method,` and `{ body }` shorthand unconditionally. A
+ * recognizer accepting `{ scope: scope }` for `{ scope }` would claim a module it re-emits
+ * differently — the wrong-claim class this module's header describes, not a style preference.
+ */
+export function isShorthandProperty(node: AstNode | undefined): boolean {
+  return node?.type === "ObjectProperty" && raw(node)["shorthand"] === true;
+}
+
+/**
  * Every property of an ObjectExpression, or undefined if ANY is not a plain non-computed
  * ObjectProperty — a spread, a method, or a `{ [K]: v }` computed key disqualifies the whole
  * object rather than being skipped. A shorthand `{ issueId }` reads as key "issueId" with the
  * Identifier as its value, which is the shape `renderBodyExpr` emits.
+ *
+ * `key` deliberately merges the bare and quoted spellings, and `Prop.bareKey` carries the
+ * distinction alongside it. That merge is why this function is MODULE-PRIVATE: reading `key`
+ * without judging its spelling is never right for an emitted literal, so the two judgements are
+ * the exported entry points (`bareKeyedProps` and `quoteMinimalProps` below) and the unjudged
+ * parse is not reachable from a recognizer at all. A call site cannot forget a pin it cannot skip.
  */
-export function objectProps(node: AstNode | undefined): Prop[] | undefined {
+function objectProps(node: AstNode | undefined): Prop[] | undefined {
   if (node?.type !== "ObjectExpression") return undefined;
   const properties = childList(node, "properties");
   if (properties === undefined) return undefined;
@@ -540,12 +678,78 @@ export function objectProps(node: AstNode | undefined): Prop[] | undefined {
     if (property.type !== "ObjectProperty") return undefined;
     if (raw(property)["computed"] === true) return undefined;
     const keyNode = child(property, "key");
-    const key = identName(keyNode) ?? stringLit(keyNode);
+    const bare = identName(keyNode);
+    const key = bare ?? stringLit(keyNode);
     const value = child(property, "value");
     if (key === undefined || value === undefined) return undefined;
-    out.push({ key, value });
+    out.push({ key, value, bareKey: bare !== undefined });
   }
   return out;
+}
+
+/**
+ * The emitter's own rule for whether an object key needs quoting. `IDENTIFIER_RE`
+ * (src/emit/server/env.ts), `IDENT` (src/emit/server/body.ts) and the two inline copies in
+ * src/emit/server/fetch-helper.ts are all this pattern.
+ *
+ * Copied rather than imported, and this is the deriver's SINGLE copy —
+ * `src/derive/server/body.ts`'s `fieldName` reads it from here rather than holding its own, so the
+ * two derive-side readers of the rule cannot drift apart from each other even if they drift from
+ * the emitter. Sharing one definition with the emitter would mean a deriver module importing from
+ * `src/emit/`, which this layer may not do; `src/spec.ts`, the layer both sides do share, holds
+ * the pattern only as a zod refinement over spec field NAMES, not as a spelling rule over emitted
+ * keys, so routing through it would assert a relationship that is coincidence.
+ *
+ * The asymmetry is what makes a copy tolerable, and it is `fieldName`'s own long-standing
+ * argument: this constant decides only how a key is SPELLED, and every consumer REFUSES on a
+ * mismatch rather than recovering a different field. A copy that drifts LOOSER refuses a
+ * producible module, and one that drifts TIGHTER refuses it too — a visible blocker in both
+ * directions, never a wrong claim, unlike a shared parser whose under-parsing direction is silent.
+ * Fold it back into one definition when a task may edit `src/emit/`.
+ */
+export const IDENTIFIER_KEY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * `objectProps` with the FIXED-key spelling pinned: every key must be written bare, or the whole
+ * object is refused.
+ *
+ * The reading for a literal whose keys the emitter always writes bare — either because it
+ * hardcodes them (`renderTool`'s `{ method, body }`, `wiring()`'s `{ name, version }`,
+ * `renderRestKitTools`' factory) or because the spec constrains them to valid identifiers and the
+ * emitter interpolates them unquoted (`renderZodFieldList`, over `ToolSchema.args`' key regex).
+ *
+ * A quoted spelling in that position recovers the identical fields and re-emits the bare form:
+ * different bytes with an unchanged spec, invisible to `diff:golden`, to the round trip and to the
+ * totality rule alike, because every one of them emits what it just read. Refusing it is what puts
+ * the construct in the blocker histogram instead.
+ */
+export function bareKeyedProps(node: AstNode | undefined): Prop[] | undefined {
+  const props = objectProps(node);
+  if (props === undefined) return undefined;
+  return props.every((p) => p.bareKey) ? props : undefined;
+}
+
+/**
+ * `objectProps` with the VARIABLE-key spelling pinned: each key must be quoted exactly when
+ * `IDENTIFIER_KEY_RE` rejects it, and bare exactly when it accepts it.
+ *
+ * The reading for a literal whose key NAMES come from a spec field — `returnLines`' `headerNames`
+ * and `headerOption`'s `inlineHeaders`, both of which the emitter writes as
+ * `IDENTIFIER_RE.test(name) ? name : JSON.stringify(name)`. Both spellings are producible there,
+ * so `bareKeyedProps` would refuse `"DD-API-KEY"` and `"X-Api-Key"`, headers real corpus
+ * connectors carry, while pinning nothing accepts `"Accept"`, which no emitter writes. The two
+ * mistakes are the same wrong claim pointed in opposite directions, which is why this rule is
+ * stated once here rather than per call site.
+ *
+ * It also serves a HARDCODED literal whose fixed spelling is mixed: `renderTokenFunction`'s
+ * headers object writes `"Content-Type"` quoted beside a bare `Accept` and `Authorization`, which
+ * is exactly what this rule dictates for those three names — so the mixed case needs no third
+ * variant, and `bareKeyedProps` would have refused the emitter's own output there.
+ */
+export function quoteMinimalProps(node: AstNode | undefined): Prop[] | undefined {
+  const props = objectProps(node);
+  if (props === undefined) return undefined;
+  return props.every((p) => p.bareKey === IDENTIFIER_KEY_RE.test(p.key)) ? props : undefined;
 }
 
 /** Every element of an ArrayExpression, or undefined if any element is a hole or a spread. */
@@ -629,8 +833,14 @@ export function unary(node: AstNode | undefined): UnaryParts | undefined {
 /**
  * `<expression> as <type>` -> the expression, the type annotation node's own `type` (a cheap
  * shape check most callers need nothing more than), and the type annotation node itself for a
- * caller that needs to look inside it — search.ts's rows-narrowing matcher is the one caller
- * that does, via `unionTypes`/`typeLiteralMembers` below.
+ * caller that needs to look inside it.
+ *
+ * Four callers, and the split between them is the reason both are returned. Two need only the
+ * cheap `type` check: fetch-helper.ts's `isJsonParseTextAsUnknown` (`TSUnknownKeyword`) and its
+ * `isInitHeadersSpread` (`TSUnionType`). Two look inside the node — server/search.ts's
+ * rows-narrowing matcher, via `unionTypes` below, and server/env.ts's `isParsedDecl`, via
+ * `typeLiteralMembers`. The second of those arrived with the client-credentials token function;
+ * this docstring named search.ts as "the one caller that does" and stopped being true then.
  */
 export function asExpression(
   node: AstNode | undefined,
@@ -643,10 +853,18 @@ export function asExpression(
 }
 
 // ---------------------------------------------------------------------------
-// TS type shapes — needed only by server/search.ts's rows-narrowing matcher
-// (`(root as { <rows>?: unknown[] } | null)?.<rows>`) and search-filter.ts's extractor-function
-// signature (`(item: unknown): readonly string[] | null`), so this section models exactly those
-// shapes rather than the general shape of a TS type.
+// TS type shapes — this section models exactly the annotations the deriver has to read, not the
+// general shape of a TS type. Five modules consume it, and the list is worth keeping current
+// because it is what bounds the section:
+//
+//   - server/search.ts     the rows narrowing, `(root as { <rows>?: unknown[] } | null)?.<rows>`
+//   - search-filter.ts     the extractor signature, `(item: unknown): readonly string[] | null`
+//   - server/env.ts        the four accessor matchers' return types (`(): string` vs
+//                          `(): Record<string, string>`), the `string | null` env union, and the
+//                          token function's `JSON.parse(text) as { access_token?: unknown; … }`
+//   - server/fetch-helper.ts  the helper's own parameter and return annotations
+//                          (`string`, `string | undefined`, `Promise<unknown>`)
+//   - server/index.ts      the read-only registrar's `(reg: ZodToolRegistrar)` parameter
 // ---------------------------------------------------------------------------
 
 /** A TSUnionType's member type nodes, in source order — `{ … } | null`'s two members. */
@@ -702,6 +920,64 @@ export function typeOperator(node: AstNode | undefined): TypeOperator | undefine
   const typeAnnotation = child(node, "typeAnnotation");
   if (operator === undefined || typeAnnotation === undefined) return undefined;
   return { operator, typeAnnotation };
+}
+
+/**
+ * A return-type annotation that is exactly the keyword or type reference `name` — `string`,
+ * `unknown`, `Record`, and so on. Returns the HEAD NAME only; a generic's type arguments are not
+ * inspected here. Needed by server/env.ts's four accessor matchers, which previously read the body
+ * and the name and ignored the annotation entirely — so `(): unknown` read exactly like
+ * `(): string`.
+ *
+ * **The head name alone is never sufficient for a generic, and this docstring used to argue that it
+ * was.** It reasoned that because `renderBasic`/`renderSplitBearer`/`renderEnvAccessor` write
+ * exactly `Record<string, string>` and no other instantiation, the head name distinguishes them —
+ * which confuses what the EMITTER writes with what the READER accepts. `Record<string, number>`
+ * shares the head name, recovers identical `EnvEntry` fields, and re-emits `Record<string, string>`.
+ * A caller matching a generic composes this with `typeArguments` below (server/env.ts's
+ * `isStringRecord`, server/fetch-helper.ts's `hasWriteHelperSignature`); a caller matching a
+ * keyword or a bare reference needs nothing more.
+ *
+ * A keyword type (`TSStringKeyword`, `TSUnknownKeyword`, …) carries no name field of its own —
+ * Babel spells the keyword INTO the node's `type`, so the name is recovered from it rather than
+ * read off a child. `TSTypeReference` (`Record<...>`) is the one shape that does carry a name
+ * child, `typeName`, and its type arguments are deliberately not walked — see above.
+ */
+export function typeAnnotationName(node: AstNode | undefined): string | undefined {
+  if (node === undefined) return undefined;
+  if (node.type === "TSTypeReference") return identName(child(node, "typeName"));
+  const KEYWORD_SUFFIX = "Keyword";
+  if (node.type.startsWith("TS") && node.type.endsWith(KEYWORD_SUFFIX)) {
+    return node.type.slice("TS".length, -KEYWORD_SUFFIX.length).toLowerCase();
+  }
+  return undefined;
+}
+
+/**
+ * A type reference's own type arguments — `Promise<unknown>`'s single `unknown` — or undefined
+ * when the node is not a reference or carries none (`Promise`, `RequestInit`).
+ *
+ * `typeAnnotationName` above reports a reference's HEAD NAME only, so every caller matching a
+ * GENERIC has to compose the two. `renderWriteHelper`'s `): Promise<unknown>` was the first place
+ * the argument was recognized as load-bearing — `Promise<void>` shares the head name and is a
+ * return type the emitter never writes, so accepting it would claim a whole FunctionDeclaration
+ * this generator re-emits differently.
+ *
+ * It was not the only place, and treating it as one was a defect: server/env.ts's four accessor
+ * matchers pinned `Record` by head name for two rounds after this accessor existed, accepting
+ * `Record<string, number>` for the `Record<string, string>` every one of them re-emits.
+ * `isStringRecord` (server/env.ts) is that composition, shared across all four rather than
+ * repeated — the asymmetry with `hasWriteHelperSignature` is what surfaced it.
+ *
+ * Babel spells the list `typeArguments` on a type REFERENCE, wrapped in a
+ * `TSTypeParameterInstantiation` whose `params` hold the types. That is a different key and a
+ * different wrapper from `typeParameters`/`TSTypeParameterDeclaration`, which is a generic
+ * DECLARATION's own `<T>` — nothing here reads that, and the two must not be confused.
+ */
+export function typeArguments(node: AstNode | undefined): AstNode[] | undefined {
+  if (node?.type !== "TSTypeReference") return undefined;
+  const wrapper = child(node, "typeArguments");
+  return wrapper === undefined ? undefined : childList(wrapper, "params");
 }
 
 export type TryParts = {

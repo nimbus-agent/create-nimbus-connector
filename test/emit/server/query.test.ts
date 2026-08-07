@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { parsePathTemplate, renderPath } from "../../../src/emit/server/path-template.ts";
+import { renderPath } from "../../../src/emit/server/path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "../../../src/emit/server/query.ts";
-import type { ArgSpec } from "../../../src/spec.ts";
+import { type ArgSpec, parsePathTemplate } from "../../../src/spec.ts";
 
 const NO_HOISTS = new Map<string, string>();
 

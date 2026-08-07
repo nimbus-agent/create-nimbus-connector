@@ -1,3 +1,4 @@
+import type { StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import {
   callArgs,
@@ -32,7 +33,7 @@ export type RecognizedPath = {
    * `RenderContext.staticStyle` docstring: it "has no effect on a path with any dynamic
    * segment"), so it is not evidence of either convention and is left unset.
    */
-  staticStyle?: "quoted" | "template";
+  staticStyle?: StaticPathStyle;
 };
 
 /**
@@ -60,18 +61,51 @@ export function recognizePath(
   const t = templateLiteral(node);
   if (t === undefined) return undefined;
 
+  const out = recognizePathParts(t.quasis, t.expressions, locals);
+  if (out === undefined) return undefined;
+  return { path: out, ...(t.expressions.length === 0 ? { staticStyle: "template" as const } : {}) };
+}
+
+/**
+ * `recognizePath`'s template walk, over already-destructured quasis and expressions.
+ *
+ * Exported for server/query.ts, whose `new URL(<pathExpr>)` argument is a path `renderPath`
+ * built with the fetch helper's base spliced in ahead of it (`prefix`, see this file's emitter
+ * counterpart at src/emit/server/path-template.ts's `renderPath`). For the hoisted-base form
+ * that prefix IS the template's first expression, so the base const has to be dropped — one
+ * quasi and one expression — before what remains reads as a path. Handing that caller the parts
+ * rather than letting it copy this loop is the rule hoists.ts's module docstring states about
+ * its own once-duplicated half: a copy is a place for one side to be tightened and the other to
+ * keep silently accepting the shape its twin just learned to reject.
+ *
+ * Callers must slice quasis and expressions TOGETHER, preserving
+ * `quasis.length === expressions.length + 1` — the final quasi has no expression after it, which
+ * is what the `undefined` skip below is for. That pairing is CHECKED rather than merely stated:
+ * nothing reachable today can violate it (`templateLiteral` refuses a template whose own arrays
+ * do not pair, and both call sites slice by one from a paired start), but a stated invariant on
+ * an exported function is a place for a future caller to be wrong, and the failure would be
+ * silent — a shorter `expressions` array simply stops contributing placeholders, yielding a path
+ * missing a segment rather than a refusal.
+ */
+export function recognizePathParts(
+  quasis: readonly string[],
+  expressions: readonly AstNode[],
+  locals: ReadonlyMap<string, PathLocal>,
+): string | undefined {
+  if (quasis.length !== expressions.length + 1) return undefined;
+
   let out = "";
-  for (const [i, cooked] of t.quasis.entries()) {
+  for (const [i, cooked] of quasis.entries()) {
     out += cooked;
 
-    const expression = t.expressions[i];
+    const expression = expressions[i];
     if (expression === undefined) continue;
 
     const placeholder = placeholderFor(expression, locals);
     if (placeholder === undefined) return undefined;
     out += placeholder;
   }
-  return { path: out, ...(t.expressions.length === 0 ? { staticStyle: "template" as const } : {}) };
+  return out;
 }
 
 /** The two modes whose forward rendering wraps the bare reference in a named call. */

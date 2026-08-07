@@ -1,0 +1,42 @@
+{
+  "name": "zzquery",
+  "displayName": "ZZ Query",
+  "description": "Synthetic fixture: the hand-rolled query branch and the fetch helper's passthrough form.",
+  "serviceLabel": "ZZ Query",
+  "style": "hand-rolled",
+  "network": ["api.zzquery.test"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [{ "vars": ["ZZQUERY_TOKEN"], "local": "headers", "auth": "bearer", "required": true }],
+  "fetchHelper": { "local": "zzGet", "base": "https://api.zzquery.test", "headers": "headers" },
+  "tools": [
+    {
+      "name": "zzquery_item_list",
+      "description": "List items, filtered.",
+      "path": "/v1/items",
+      "args": {
+        "q": { "type": "string" },
+        "after": { "type": "string", "optional": true },
+        "filter": { "type": "string", "optional": true },
+        "limit": { "type": "number", "optional": true, "default": 50 }
+      },
+      "query": [
+        { "name": "q", "arg": "q" },
+        { "name": "after", "arg": "after", "omitWhen": "absent" },
+        { "name": "filter", "arg": "filter", "omitWhen": "empty" },
+        { "name": "limit", "arg": "limit" }
+      ]
+    },
+    {
+      "name": "zzquery_item_get",
+      "description": "Fetch a single item.",
+      "path": "/v1/items/${arg.itemId|enc}",
+      "args": { "itemId": { "type": "string" } }
+    },
+    {
+      "name": "zzquery_health",
+      "description": "Report service health.",
+      "path": "/v1/health"
+    }
+  ]
+}

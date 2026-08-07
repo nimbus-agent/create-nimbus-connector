@@ -2,9 +2,12 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
+import { functionName } from "../../src/derive/read.ts";
 import {
+  type FetchHelperFields,
   recognizeFetchHelper,
   recognizeRestFetchHelper,
+  recognizeWriteHelper,
 } from "../../src/derive/server/fetch-helper.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
@@ -101,7 +104,17 @@ const TWO_FETCHES = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  return { fields: recognizeFetchHelper(statements, claims), claims, statements };
+  // `passthrough` and `awaitedHeaders` are recovered beside the spec fields rather than among
+  // them (see RecognizedFetchHelper) — unpacked here so every assertion below keeps comparing
+  // `fields` against exactly the object the derived spec's `fetchHelper` is spread from.
+  const matched = recognizeFetchHelper(statements, claims);
+  return {
+    fields: matched?.fields,
+    passthrough: matched?.passthrough,
+    awaitedHeaders: matched?.awaitedHeaders,
+    claims,
+    statements,
+  };
 }
 
 // Every helper recognizeFetchHelper must refuse, each with the reason it exists. One row per
@@ -458,10 +471,27 @@ const REFUSED_HELPERS = [
       "}",
     ].join("\n"),
   ],
+
+  // Key SPELLING inside the inline headers object. `headerOption` (src/emit/server/fetch-helper.ts)
+  // writes each header name as `IDENTIFIER_RE.test(k) ? k : JSON.stringify(k)`, so a quoted
+  // `"Accept"` is a spelling it cannot produce — and one whose recovered `inlineHeaders` record is
+  // IDENTICAL to the bare form's, so the derived spec re-emits different bytes while diff:golden
+  // (it emits what it read), the round trip and the totality rule all stay silent.
+  // `quoteMinimalProps` (src/derive/read.ts) is the pin; the other direction — `"X-Api-Key"`
+  // STAYING quoted — is pinned by the newrelic recognition test below, which a `bareKey === true`
+  // rule would break.
+  [
+    "rejects a needlessly quoted Accept in the inline headers object",
+    NEWRELIC.replace('Accept: "application/json"', '"Accept": "application/json"'),
+  ],
 ];
 
 describe("recognizeFetchHelper", () => {
   it("recognizes newrelic (inline headers, static base)", () => {
+    // Also the direction-B pin for the inline headers object's key spelling: `"X-Api-Key"` is a
+    // name `IDENTIFIER_RE` rejects, so `headerOption` can only write it QUOTED — a `bareKey ===
+    // true` rule would refuse one of the four byte-locked fixtures outright.
+    expect(NEWRELIC).toContain('{ "X-Api-Key": apiKey(), Accept: "application/json" }');
     const { fields, claims, statements } = run(NEWRELIC);
     expect(fields).toEqual({
       local: "nrGet",
@@ -470,6 +500,18 @@ describe("recognizeFetchHelper", () => {
       inlineHeaders: { "X-Api-Key": "${env.apiKey}", Accept: "application/json" },
     });
     expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("still recognizes an identifier-shaped header name written BARE — the rule's other half", () => {
+    // The mirror of the assertion above: a spec whose inlineHeaders names are all valid
+    // identifiers emits them bare, and that must keep deriving. Together the two rule out both
+    // ways of getting `quoteMinimalProps` backwards.
+    const source = NEWRELIC.replace('"X-Api-Key": apiKey()', "xApiKey: apiKey()");
+    expect(source).not.toBe(NEWRELIC);
+    expect(run(source).fields?.inlineHeaders).toEqual({
+      xApiKey: "${env.apiKey}",
+      Accept: "application/json",
+    });
   });
 
   it("recognizes datadog (accessor headers, env base)", () => {
@@ -505,6 +547,35 @@ describe("recognizeFetchHelper", () => {
       headers: "headers",
     });
     expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("reads `headers: await headers()` to the same fields, reporting the await as evidence", () => {
+    // `headerOption` (src/emit/server/fetch-helper.ts) writes the awaited form iff the env entry
+    // that accessor names carries `auth: "client-credentials"`. Which form it is says nothing
+    // about `fetchHelper` — hence identical `fields` — so it travels beside them and is
+    // cross-checked against the env in `deriveSharedStyleSpec`.
+    const source = SENTRY.replace("{ headers: headers() }", "{ headers: await headers() }");
+    expect(source).not.toBe(SENTRY);
+    const { fields, awaitedHeaders } = run(source);
+    expect(fields).toEqual({
+      local: "sentryGet",
+      base: "${env.apiRoot}",
+      serviceLabel: "Sentry",
+      headers: "headers",
+    });
+    expect(awaitedHeaders).toBe(true);
+    expect(run(SENTRY).awaitedHeaders).toBe(false);
+    // The inline form is never awaited — `headerOption`'s inline branch has no `await` in it.
+    expect(run(NEWRELIC).awaitedHeaders).toBe(false);
+  });
+
+  it("still refuses `headers: await fetch()` — countFetchCalls, not the accessor branch, is what closes that", () => {
+    // The read-side twin of the write helper's own `{ ...(await fetch()), … }` case: widening the
+    // accessor branch to accept `await` newly puts that hazard's awaited form in reach, and the
+    // recovered `headers: "fetch"` would re-emit IDENTICAL bytes, invisible to every byte diff.
+    const source = SENTRY.replace("{ headers: headers() }", "{ headers: await fetch() }");
+    expect(source).not.toBe(SENTRY);
+    expect(run(source).fields).toBeUndefined();
   });
 
   // mercury/netlify/bitrise spell this "BASE"/"BASE"/"BITRISE_API"; discord/google-meet spell
@@ -697,6 +768,608 @@ describe("recognizeFetchHelper", () => {
       expect(claims.claims()).toEqual([]);
     });
   });
+
+  // --- The base template's own path interpolation, pinned to the variable this helper declares.
+  // `reconstructBase` used to require only that the last expression be SOME identifier, which
+  // recovers byte-identical fields from a helper interpolating something else and re-emits a URL
+  // it never requested — the wrong-claim class. Both cases below reproduce with ZERO query tools,
+  // on the byte-locked grafana and sentry shapes, so this laxity is not the passthrough's.
+
+  it("refuses a base template interpolating `path` where the helper normalized it into `pathPart`", () => {
+    // GRAFANA's own helper, with the fetch template reaching past its `pathPart` const to the raw
+    // `path`. Every recovered field is unchanged, so nothing but this pin can reject it.
+    const src = GRAFANA.replace("`${baseUrl()}${pathPart}`", "`${baseUrl()}${path}`");
+    expect(src).not.toBe(GRAFANA);
+    const { fields, claims } = run(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a base template interpolating a variable that is not the path at all", () => {
+    const src = SENTRY.replace("`${apiRoot()}${path}`", "`${apiRoot()}${bogusVar}`");
+    expect(src).not.toBe(SENTRY);
+    expect(run(src).fields).toBeUndefined();
+  });
+
+  // --- The absolute-URL passthrough, emitted IFF the spec declares a query tool (hasQueryTool,
+  // src/emit/server/fetch-helper.ts). Recovered as EVIDENCE about the tools, not as a
+  // `fetchHelper` field: `deriveSharedStyleSpec` cross-checks it against the recognized tools,
+  // and test/derive/query.test.ts drives both directions of that check end to end.
+
+  describe("the query-tool passthrough const", () => {
+    /** The zzquery-shaped read helper: no normalizeLeadingSlash, so the passthrough reads `path`. */
+    const PASSTHROUGH = [
+      "async function zzGet(path: string): Promise<unknown> {",
+      '  const url = path.startsWith("http") ? path : `https://api.zzquery.test${path}`;',
+      "  const res = await fetch(url, { headers: headers() });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`ZZ Query ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+
+    /**
+     * The same helper with `normalizeLeadingSlash` as well — the only combination in which the
+     * passthrough reads `pathPart` rather than `path`, and the only one in which the leading-slash
+     * guard is widened. `renderFetchHelper` orders the two so the absolute-URL test runs BEFORE
+     * the leading-slash rule; a URL forced through `` `/${path}` `` would emit "/https://…".
+     */
+    const NORMALIZED_PASSTHROUGH = [
+      "async function zzGet(path: string): Promise<unknown> {",
+      '  const pathPart = path.startsWith("http") || path.startsWith("/") ? path : `/${path}`;',
+      '  const url = pathPart.startsWith("http") ? pathPart : `${baseUrl()}${pathPart}`;',
+      "  const res = await fetch(url, {",
+      "    headers: authHeaders(),",
+      "  });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`ZZ Query ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+    ].join("\n");
+
+    it("recovers the base from the passthrough const, not from the fetch call's own argument", () => {
+      // The fetch call now receives the bare identifier `url`, so a recognizer still reading its
+      // first argument as the base template would refuse the helper outright.
+      const { fields, passthrough, claims, statements } = run(PASSTHROUGH);
+      expect(fields).toEqual({
+        local: "zzGet",
+        base: "https://api.zzquery.test",
+        serviceLabel: "ZZ Query",
+        headers: "headers",
+      });
+      expect(passthrough).toBe(true);
+      expect(claims.unclaimed(statements)).toEqual([]);
+    });
+
+    it("reads the passthrough over `pathPart` when normalizeLeadingSlash also asked for that const", () => {
+      const { fields, passthrough } = run(NORMALIZED_PASSTHROUGH);
+      expect(fields).toEqual({
+        local: "zzGet",
+        base: "${env.baseUrl}",
+        serviceLabel: "ZZ Query",
+        headers: "authHeaders",
+        normalizeLeadingSlash: true,
+      });
+      expect(passthrough).toBe(true);
+    });
+
+    it("reports passthrough: false for a helper with no query tool behind it", () => {
+      // NEWRELIC is byte-locked and declares no query tool, so this is the negative half of the
+      // cross-check's input, taken from a shape that cannot drift without failing diff:golden.
+      expect(run(NEWRELIC).passthrough).toBe(false);
+    });
+
+    it("refuses the widened leading-slash guard without the passthrough const it comes with", () => {
+      // Both are written from the same `hasQueryTool(spec)` call, so one alone is a shape
+      // renderFetchHelper cannot produce — GRAFANA's own guard, widened and nothing else.
+      const src = GRAFANA.replace(
+        'path.startsWith("/") ? path',
+        'path.startsWith("http") || path.startsWith("/") ? path',
+      );
+      expect(src).not.toBe(GRAFANA);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses the passthrough const beside an un-widened leading-slash guard", () => {
+      // The mirror: the passthrough is present, but the guard ahead of it was never widened, so
+      // an absolute URL would already have been mangled into "/https://…" one statement earlier.
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        'path.startsWith("http") || path.startsWith("/") ? path',
+        'path.startsWith("/") ? path',
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses a passthrough const guarding `path` where the helper normalized it into `pathPart`", () => {
+      // Both halves of the ternary are rewritten, so they still AGREE with each other — the fault
+      // is that they name the wrong variable, one the leading-slash rule above has already
+      // superseded. Caught by the httpArm/passthrough cross-check: the widened guard is still
+      // there, but no passthrough const over `pathPart` is found beside it.
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        'const url = pathPart.startsWith("http") ? pathPart',
+        'const url = path.startsWith("http") ? path',
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
+    });
+
+    it("refuses a passthrough template interpolating a variable other than the one it guards", () => {
+      // The wrong-claim hole this closes: the ternary's test and consequent agree on `pathPart`,
+      // but the base template interpolates the UN-NORMALIZED `path`, so every field recovers
+      // byte-identically and the derived spec re-emits a helper that fetches a different URL —
+      // accepted, not rejected, until `passthroughUrlTemplate` pinned the template's own
+      // interpolation too. Two checks now refuse it: that pin, and `reconstructBase`'s own, which
+      // stopped accepting any identifier in the same fix round. Kept as a pair on purpose — this
+      // test names the shape, and either side losing its pin should still fail something.
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        "`${baseUrl()}${pathPart}`",
+        "`${baseUrl()}${path}`",
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      const { fields, claims } = run(src);
+      expect(fields).toBeUndefined();
+      expect(claims.claims()).toEqual([]);
+    });
+
+    it("refuses a passthrough template interpolating a variable that is not a path at all", () => {
+      const src = NORMALIZED_PASSTHROUGH.replace(
+        "`${baseUrl()}${pathPart}`",
+        "`${baseUrl()}${bogusVar}`",
+      );
+      expect(src).not.toBe(NORMALIZED_PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
+    });
+
+    it("refuses a helper that declares the passthrough const and then fetches something else", () => {
+      const src = PASSTHROUGH.replace("await fetch(url,", "await fetch(`https://elsewhere.test`,");
+      expect(src).not.toBe(PASSTHROUGH);
+      expect(run(src).fields).toBeUndefined();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The write helper — renderWriteHelper. Emitted IFF some tool is non-GET, and carrying no spec
+// field of its own: every line is derived from `fetchHelper`, `serviceLabel` and that fact. So it
+// is claimed-and-verified whenever a read helper stands beside it, and is the module's ONLY
+// source of those fields when one does not (a connector whose every tool is a write emits no read
+// helper at all — see renderReadHelper).
+// ---------------------------------------------------------------------------
+
+/**
+ * The two helpers a spec with one GET and one POST emits, hand-written here and PINNED against
+ * real emitter output by the first test below — so a formatting or shape change in
+ * renderWriteHelper fails loudly rather than leaving these constants quietly describing a shape
+ * the emitter stopped writing.
+ */
+const ZZ_BOTH_READ = [
+  "async function zzGet(path: string): Promise<unknown> {",
+  "  const res = await fetch(`https://api.zzboth.test${path}`, { headers: headers() });",
+  "  const text = await res.text();",
+  "  if (!res.ok) {",
+  "    throw new Error(`ZZ Both ${String(res.status)}: ${text.slice(0, 400)}`);",
+  "  }",
+  "  return JSON.parse(text) as unknown;",
+  "}",
+].join("\n");
+
+const ZZ_BOTH_WRITE = [
+  "async function zzGetSend(path: string, method: string, body: string | undefined): Promise<unknown> {",
+  "  const res = await fetch(`https://api.zzboth.test${path}`, {",
+  "    method,",
+  '    headers: { ...headers(), "Content-Type": "application/json" },',
+  "    ...(body === undefined ? {} : { body }),",
+  "  });",
+  "  const text = await res.text();",
+  "  if (!res.ok) {",
+  "    throw new Error(`ZZ Both ${String(res.status)}: ${text.slice(0, 400)}`);",
+  "  }",
+  "  try {",
+  "    return JSON.parse(text) as unknown;",
+  "  } catch {",
+  "    return null;",
+  "  }",
+  "}",
+].join("\n");
+
+/** The fields `recognizeFetchHelper` recovers from ZZ_BOTH_READ — the write helper's cross-check. */
+const ZZ_BOTH_FIELDS: FetchHelperFields = {
+  local: "zzGet",
+  base: "https://api.zzboth.test",
+  serviceLabel: "ZZ Both",
+  headers: "headers",
+};
+
+/** One GET and one POST, so renderReadHelper and renderWriteHelper both fire. */
+const ZZ_BOTH_SPEC = {
+  name: "zzboth",
+  displayName: "ZZ Both",
+  description: "Fixture for a module carrying both fetch helpers.",
+  serviceLabel: "ZZ Both",
+  style: "hand-rolled",
+  env: [{ vars: ["ZZBOTH_TOKEN"], local: "headers", auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzboth.test", headers: "headers" },
+  tools: [
+    { name: "zzboth_item_list", description: "List items.", path: "/v1/items", args: {} },
+    {
+      name: "zzboth_item_create",
+      description: "Create an item.",
+      method: "POST",
+      effect: "write",
+      args: { title: { type: "string", min: 1 } },
+      path: "/v1/items",
+    },
+  ],
+};
+
+function runWrite(source: string, readHelper?: FetchHelperFields) {
+  const statements = parseModule(source);
+  const claims = createClaimSet();
+  const matched = recognizeWriteHelper(statements, claims, readHelper);
+  return {
+    fields: matched?.fields,
+    passthrough: matched?.passthrough,
+    awaitedHeaders: matched?.awaitedHeaders,
+    claims,
+    statements,
+  };
+}
+
+// Every write helper recognizeWriteHelper must refuse, each with the reason it exists. One row per
+// case: the assertions are identical in all of them — no fields recovered, and nothing claimed.
+// Each is one edit away from ZZ_BOTH_WRITE, which the first test pins to real emitter output, so
+// a row that stops being a mutation of a producible shape fails there rather than here.
+const REFUSED_WRITE_HELPERS: ReadonlyArray<readonly [string, string]> = [
+  [
+    "refuses `body: string` where the emitter writes `body: string | undefined`",
+    ZZ_BOTH_WRITE.replace("body: string | undefined", "body: string"),
+  ],
+  [
+    "refuses a third parameter that is not named `body`",
+    ZZ_BOTH_WRITE.replace("body: string | undefined", "payload: string | undefined"),
+  ],
+  [
+    "refuses a catch arm returning { raw: text } — that is the READ helper's jsonFallbackRaw form",
+    ZZ_BOTH_WRITE.replace("    return null;", "    return { raw: text };"),
+  ],
+  [
+    "refuses a missing `...(body === undefined ? {} : { body })` spread",
+    ZZ_BOTH_WRITE.replace("    ...(body === undefined ? {} : { body }),\n", ""),
+  ],
+  [
+    "refuses a body spread whose guard tests something other than `body === undefined`",
+    ZZ_BOTH_WRITE.replace("body === undefined ?", "method === undefined ?"),
+  ],
+  [
+    "refuses `{ body: body }` where the emitter writes the shorthand `{ body }`",
+    ZZ_BOTH_WRITE.replace("{} : { body })", "{} : { body: body })"),
+  ],
+  [
+    "refuses `method: method` where the emitter writes the shorthand `method,`",
+    ZZ_BOTH_WRITE.replace("    method,", "    method: method,"),
+  ],
+  [
+    "refuses `): Promise<void>`, which shares the head name typeAnnotationName reports",
+    ZZ_BOTH_WRITE.replace("): Promise<unknown> {", "): Promise<void> {"),
+  ],
+  [
+    // countFetchCalls, and a real hole rather than defence in depth: the accessor branch of
+    // `matchWriteHelperHeaders` accepts ANY zero-argument call, and `fetch()` is one — so without
+    // that guard this recovers `fetchHelper.headers: "fetch"`, a spec that re-emits the identical
+    // bytes and which therefore no byte-diff could ever catch.
+    "refuses a second fetch() call smuggled in as the headers accessor",
+    ZZ_BOTH_WRITE.replace("...headers()", "...fetch()"),
+  ],
+  [
+    "refuses a missing Content-Type header",
+    ZZ_BOTH_WRITE.replace(
+      '{ ...headers(), "Content-Type": "application/json" }',
+      "{ ...headers() }",
+    ),
+  ],
+  [
+    "refuses an extra statement inserted mid-body, which the whole-function claim would otherwise cover",
+    ZZ_BOTH_WRITE.replace(
+      "  const text = await res.text();",
+      "  const retries = 3;\n  const text = await res.text();",
+    ),
+  ],
+  [
+    "refuses a function whose name is exactly `Send` — fetchHelper.local is never empty",
+    ZZ_BOTH_WRITE.replaceAll("zzGetSend", "Send"),
+  ],
+  [
+    "refuses a function whose name does not end in Send at all",
+    ZZ_BOTH_WRITE.replaceAll("zzGetSend", "zzGetPost"),
+  ],
+  // No row drops the `async` keyword: the body awaits `fetch` and `res.text()`, so a non-async
+  // version of this function is not parseable JavaScript at all. `matchWriteHelperFunction`'s
+  // `isAsyncFunction` guard therefore has no reachable near miss to pin — the same reason
+  // `recognizeFetchHelper`'s own table has none.
+  [
+    "refuses a fetch URL template with text after the path expression",
+    ZZ_BOTH_WRITE.replace("${path}`, {", "${path}.json`, {"),
+  ],
+];
+
+describe("recognizeWriteHelper", () => {
+  it("recognizes and claims the write helper `<local>Send`, which carries no spec field of its own — every line of renderWriteHelper is derived from fetchHelper, serviceLabel and the presence of a non-GET tool", () => {
+    // Real emitter output, not a transcription: the two constants above are pinned against it
+    // here so every refusal row below is provably one edit away from a shape renderWriteHelper
+    // actually writes.
+    const { server } = emitted(ZZ_BOTH_SPEC);
+    expect(server).toContain(ZZ_BOTH_READ);
+    expect(server).toContain(ZZ_BOTH_WRITE);
+
+    const statements = parseModule(server);
+    const claims = createClaimSet();
+    const read = recognizeFetchHelper(statements, claims);
+    expect(read?.fields).toEqual(ZZ_BOTH_FIELDS);
+
+    const write = recognizeWriteHelper(statements, claims, read?.fields);
+    // It recovers the same fields the read helper does — that is what makes it a cross-check
+    // rather than a second source. `deriveSharedStyleSpec` spreads the READ helper's into the
+    // spec; these are asserted only to show the two genuinely agree.
+    expect(write?.fields).toEqual(ZZ_BOTH_FIELDS);
+    expect(write?.passthrough).toBe(false);
+
+    const fn = statements.find((s) => functionName(s) === "zzGetSend");
+    expect(fn).toBeDefined();
+    expect(claims.covers(fn!)).toBe(true);
+  });
+
+  it("recovers the fetch-helper fields on its own when the module has no read helper at all", () => {
+    // zzwriteonly's shape: renderReadHelper emits nothing for a connector whose every tool is a
+    // write, so `<local>Send` is the only place `local`, `base`, `serviceLabel` and the headers
+    // appear. `local` comes off the function's own name, minus the `Send` suffix.
+    const { fields, claims, statements } = runWrite(ZZ_BOTH_WRITE);
+    expect(fields).toEqual(ZZ_BOTH_FIELDS);
+    expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("refuses a `<local>Send` whose error message names a different serviceLabel than the read helper's", () => {
+    // Both helpers interpolate spec.serviceLabel, so a module where they disagree is one the
+    // emitter cannot have written, and claiming it would derive a spec that regenerates neither.
+    // On its own the mutated helper is perfectly well-formed — it recovers "ZZ Other" — which is
+    // why only the cross-check can reject it.
+    const src = ZZ_BOTH_WRITE.replace("`ZZ Both ${String", "`ZZ Other ${String");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src).fields?.serviceLabel).toBe("ZZ Other");
+
+    const { fields, claims } = runWrite(src, ZZ_BOTH_FIELDS);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a `<local>Send` whose base disagrees with the read helper's", () => {
+    const src = ZZ_BOTH_WRITE.replace("https://api.zzboth.test", "https://elsewhere.test");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    const { fields, claims } = runWrite(src, ZZ_BOTH_FIELDS);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a `<local>Send` whose local does not match the read helper's", () => {
+    // `${fh.local}Send` and the read helper's own name come from one spec field, so a module
+    // where they disagree names a read helper the derived spec would not regenerate.
+    const src = ZZ_BOTH_WRITE.replaceAll("zzGetSend", "otherGetSend");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src).fields?.local).toBe("otherGet");
+    expect(runWrite(src, ZZ_BOTH_FIELDS).fields).toBeUndefined();
+  });
+
+  it("refuses a `<local>Send` whose headers disagree with the read helper's", () => {
+    const src = ZZ_BOTH_WRITE.replace("...headers()", "...otherHeaders()");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src, ZZ_BOTH_FIELDS).fields).toBeUndefined();
+  });
+
+  it("reads inline headers out of the spread, matching what the read helper carries", () => {
+    const src = ZZ_BOTH_WRITE.replace(
+      "...headers()",
+      '...{ "X-Api-Key": apiKey(), Accept: "application/json" }',
+    );
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src).fields).toEqual({
+      local: "zzGet",
+      base: "https://api.zzboth.test",
+      serviceLabel: "ZZ Both",
+      inlineHeaders: { "X-Api-Key": "${env.apiKey}", Accept: "application/json" },
+    });
+  });
+
+  it("reads an awaited headers accessor, reporting the await as evidence rather than refusing it", () => {
+    // The client-credentials shape (`headerOption` awaits that accessor). This used to be a flat
+    // refusal, correct only because `recognizeEnv` did not yet model the accessor that produces
+    // it — task 8 landed that recognizer, which makes the shape reachable, so the check became a
+    // cross-check in `deriveSharedStyleSpec` (the only place that can see both this helper and
+    // the env entry `fetchHelper.headers` names) rather than a refusal here. `awaitedHeaders` is
+    // what carries it there; the SPEC fields are unchanged, since which form appears is a fact
+    // about the env, not about `fetchHelper`.
+    const src = ZZ_BOTH_WRITE.replace("...headers()", "...(await headers())");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    const { fields, awaitedHeaders } = runWrite(src);
+    expect(fields).toEqual(ZZ_BOTH_FIELDS);
+    expect(awaitedHeaders).toBe(true);
+    expect(runWrite(ZZ_BOTH_WRITE).awaitedHeaders).toBe(false);
+  });
+
+  it("still refuses `{ ...(await fetch()), … }` — countFetchCalls, not the accessor branch, is what closes that", () => {
+    // `accessorCall` accepts any zero-argument call, awaited or not, and `fetch()` is one — so
+    // this would recover `fetchHelper.headers: "fetch"`, a spec that re-emits the IDENTICAL bytes
+    // and is therefore invisible to every byte diff. Widening the accessor branch to accept
+    // `await` newly puts the awaited form of that hazard in reach; the two-fetch-call guard sees
+    // it because `walk` finds the CallExpression inside the AwaitExpression just the same.
+    const src = ZZ_BOTH_WRITE.replace("...headers()", "...(await fetch())");
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src).fields).toBeUndefined();
+  });
+
+  it("reads the absolute-URL passthrough const, which a query tool's presence puts in both helpers", () => {
+    // renderWriteHelper writes the same statement renderFetchHelper does, under the same
+    // hasQueryTool gate, and always over `path` — it has no pathPart form. Reused rather than
+    // re-implemented: passthroughUrlTemplate already took pathVar as a parameter for this caller.
+    const src = ZZ_BOTH_WRITE.replace(
+      "  const res = await fetch(`https://api.zzboth.test${path}`, {",
+      [
+        '  const url = path.startsWith("http") ? path : `https://api.zzboth.test${path}`;',
+        "  const res = await fetch(url, {",
+      ].join("\n"),
+    );
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    const { fields, passthrough, claims, statements } = runWrite(src);
+    expect(fields).toEqual(ZZ_BOTH_FIELDS);
+    expect(passthrough).toBe(true);
+    expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("refuses a write helper that declares the passthrough const and then fetches something else", () => {
+    const src = ZZ_BOTH_WRITE.replace(
+      "  const res = await fetch(`https://api.zzboth.test${path}`, {",
+      [
+        '  const url = path.startsWith("http") ? path : `https://api.zzboth.test${path}`;',
+        "  const res = await fetch(`https://elsewhere.test`, {",
+      ].join("\n"),
+    );
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    expect(runWrite(src).fields).toBeUndefined();
+  });
+
+  it("recognizes a hoisted base const and claims its module-scope const", () => {
+    const src = [
+      'const ZZ_API = "https://api.zzboth.test";',
+      ZZ_BOTH_WRITE.replace("`https://api.zzboth.test${path}`", "`${ZZ_API}${path}`"),
+    ].join("\n");
+    const { fields, claims, statements } = runWrite(src);
+    expect(fields).toEqual({ ...ZZ_BOTH_FIELDS, baseConst: "ZZ_API" });
+    // The same trap recognizeFetchHelper's hoisted-base test closes: without claiming the const's
+    // own statement the totality rule re-blocks the connector on a statement:VariableDeclaration.
+    expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("returns undefined for a module with no `Send` function at all", () => {
+    expect(runWrite(ZZ_BOTH_READ).fields).toBeUndefined();
+  });
+
+  // Every REFUSED_WRITE_HELPERS row: no fields recovered, and nothing claimed. See that table for
+  // each case's own rationale. Each row asserts it actually mutated ZZ_BOTH_WRITE first — a
+  // `replace` whose needle stopped matching would otherwise assert the pristine shape is refused,
+  // which is the opposite of what the row claims.
+  it.each(REFUSED_WRITE_HELPERS)("%s", (_name, src) => {
+    expect(src).not.toBe(ZZ_BOTH_WRITE);
+    const { fields, claims } = runWrite(src);
+    expect(fields).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+});
+
+/**
+ * Which HELPERS a module carries is decided entirely by its tools (`renderReadHelper` /
+ * `renderWriteHelper`), so each one's presence is evidence to be held against the recognized
+ * tools — the same class of cross-check `fetch-helper:query-passthrough-mismatch` already applies
+ * one recognizer later. Neither recognizer can see the other's evidence, so `deriveSharedStyleSpec`
+ * is where both are checked.
+ *
+ * The check is symmetric (`h.present !== h.called`) and so are the tests: four cases, one per
+ * role per direction. The PRESENT-but-uncalled pair adds a whole valid, agreeing helper to a
+ * module that would not have one; the CALLED-but-absent pair removes one from the module that
+ * has both. Either way every remaining helper matches, every tool recognizes, and nothing is left
+ * unclaimed — so only the cross-check can reject them, which is the point of building them this
+ * way rather than by corrupting a helper.
+ *
+ * The absent-helper direction is the one that matters most, and it is not hypothetical: nothing
+ * in `fetchCall` (tools-hand.ts) checks that the function a `reg()` handler calls actually EXISTS,
+ * so without this half a module with a GET tool and no read helper would derive and re-emit one.
+ */
+describe("the fetch helpers' presence is cross-checked against the tools' methods", () => {
+  /** `source` with `helper` spliced in ahead of the wiring, where the emitter puts its helpers. */
+  function withExtraHelper(source: string, helper: string): string {
+    const anchor = "const mcp = new McpServer(";
+    expect(source).toContain(anchor);
+    return source.replace(anchor, `${helper}\n\n${anchor}`);
+  }
+
+  /** `source` with one of its helper functions deleted, the tools that call it left in place. */
+  function withoutHelper(source: string, helper: string): string {
+    expect(source).toContain(helper);
+    return source.replace(helper, "");
+  }
+
+  function blockerKinds(spec: unknown, mutate: (server: string) => string): string[] {
+    const { server, manifest } = emitted(spec);
+    const derivation = deriveSpec({ server: mutate(server), manifest });
+    expect(derivation.ok).toBe(false);
+    return derivation.ok ? [] : derivation.blockers.map((b) => b.kind);
+  }
+
+  const WRITE_ONLY = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[1]] };
+  const READ_ONLY = { ...ZZ_BOTH_SPEC, tools: [ZZ_BOTH_SPEC.tools[0]] };
+
+  it("refuses a read helper no tool would call — renderReadHelper emits none for a write-only spec", () => {
+    // Sanity: on its own this spec derives, and emits no read helper at all.
+    expect(emitted(WRITE_ONLY).server).not.toContain("async function zzGet(");
+    expect(deriveSpec(emitted(WRITE_ONLY)).ok).toBe(true);
+    expect(blockerKinds(WRITE_ONLY, (s) => withExtraHelper(s, ZZ_BOTH_READ))).toEqual([
+      "fetch-helper:read-helper-mismatch",
+    ]);
+  });
+
+  /**
+   * A regression test for a gap Task 7 opened and closed in the same change: a stub carries no
+   * `method`, and before this file's own `deriveSharedStyleSpec` fix, `toolsResult.tools.some((t)
+   * => t.method === undefined)` counted that `undefined` as "a tool calls the read helper" —
+   * exactly what a genuine GET tool's `undefined` method means too, so the two were
+   * indistinguishable to that check. Reverting the fix (excluding `impl: "stub"` tools from the
+   * "called" evidence) makes this fail with `fetch-helper:read-helper-mismatch`: the read helper
+   * stays correctly ABSENT (nothing calls it — the stub throws, it never fetches), but the old
+   * check would have reported it as wrongly called anyway, blocking a connector this generator
+   * can regenerate byte-for-byte.
+   */
+  it("does not let a stub's undefined method read as read-helper evidence — the helper stays correctly absent", () => {
+    const writeOnlyWithStub = {
+      ...WRITE_ONLY,
+      tools: [
+        ...WRITE_ONLY.tools,
+        { name: "zzboth_stub", description: "Not yet implemented.", impl: "stub" },
+      ],
+    };
+    expect(emitted(writeOnlyWithStub).server).not.toContain("async function zzGet(");
+    expect(deriveSpec(emitted(writeOnlyWithStub)).ok).toBe(true);
+  });
+
+  it("refuses a write helper no tool would call — renderWriteHelper emits none for an all-GET spec", () => {
+    expect(emitted(READ_ONLY).server).not.toContain("zzGetSend");
+    expect(deriveSpec(emitted(READ_ONLY)).ok).toBe(true);
+    expect(blockerKinds(READ_ONLY, (s) => withExtraHelper(s, ZZ_BOTH_WRITE))).toEqual([
+      "fetch-helper:write-helper-mismatch",
+    ]);
+  });
+
+  it("refuses a GET tool whose read helper is missing — the half nothing else would catch", () => {
+    // The module has both tools and only `zzGetSend`. `recognizeTools` takes its `helperLocal`
+    // from the write helper (`zzGetSend` -> `zzGet`) and happily recognizes the GET call, because
+    // no recognizer verifies the callee exists — so the derived spec would re-emit a read helper
+    // this module never had. Both helpers are otherwise untouched and everything is claimed.
+    expect(deriveSpec(emitted(ZZ_BOTH_SPEC)).ok).toBe(true);
+    expect(blockerKinds(ZZ_BOTH_SPEC, (s) => withoutHelper(s, ZZ_BOTH_READ))).toEqual([
+      "fetch-helper:read-helper-mismatch",
+    ]);
+  });
+
+  it("refuses a non-GET tool whose write helper is missing", () => {
+    expect(blockerKinds(ZZ_BOTH_SPEC, (s) => withoutHelper(s, ZZ_BOTH_WRITE))).toEqual([
+      "fetch-helper:write-helper-mismatch",
+    ]);
+  });
 });
 
 function runRest(source: string) {
@@ -793,6 +1466,31 @@ const REFUSED_REST_HELPERS = [
     "rejects a `let json` that carries an initializer — the emitter always leaves it bare",
     ZZ_FETCH.replace("let json: unknown;", "let json: unknown = null;"),
   ],
+
+  // Key SPELLING in the return envelope. All four keys are hardcoded bare by
+  // renderRestKitFetchHelper and none of them carries a spec field at all — `isRestReturnStatement`
+  // returns a boolean — so a quoted spelling recovered exactly the same nothing and re-emitted the
+  // bare form. `bareKeyedProps` (src/derive/read.ts) is the pin.
+  [
+    "rejects a quoted `ok` key in the return envelope",
+    ZZ_FETCH.replace("return { ok: res.ok,", 'return { "ok": res.ok,'),
+  ],
+  [
+    "rejects a quoted `text` key in the return envelope — the shorthand entry, which reads as bare",
+    ZZ_FETCH.replace("json, text };", 'json, "text": text };'),
+  ],
+
+  // The rest-kit helper's own inline extra headers, read by `restInlineHeaderEntries` rather than
+  // by `headerFields` (the surrounding list carries the fixed Authorization entry and the
+  // `...init?.headers` spread, which objectProps refuses). Same rule, applied per key there:
+  // renderRestKitFetchHelper writes `IDENTIFIER_RE.test(k) ? k : JSON.stringify(k)`.
+  [
+    "rejects a needlessly quoted inline extra header name",
+    ZZ_FETCH.replace(
+      "      Authorization: `Bearer ${token}`,",
+      '      Authorization: `Bearer ${token}`,\n      "xApiVersion": "2",',
+    ),
+  ],
   ["returns undefined for a module with no matching function at all", "const x = 1;"],
 ];
 
@@ -804,6 +1502,9 @@ describe("recognizeRestFetchHelper", () => {
   });
 
   it("recognizes an inline extra header", () => {
+    // `"X-Api-Version"` is a name IDENTIFIER_RE rejects, so the emitter can only write it QUOTED
+    // — the direction-B half of `restInlineHeaderEntries`' spelling rule, whose direction-A half
+    // (a needlessly quoted `"xApiVersion"`) sits in REFUSED_REST_HELPERS above.
     const source = ZZ_FETCH.replace(
       "      Authorization: `Bearer ${token}`,",
       '      Authorization: `Bearer ${token}`,\n      "X-Api-Version": "2",',
@@ -814,6 +1515,15 @@ describe("recognizeRestFetchHelper", () => {
       base: "https://api.zzstandalone.test",
       inlineHeaders: { "X-Api-Version": "2" },
     });
+  });
+
+  it("recognizes an identifier-shaped inline extra header written BARE", () => {
+    const source = ZZ_FETCH.replace(
+      "      Authorization: `Bearer ${token}`,",
+      '      Authorization: `Bearer ${token}`,\n      xApiVersion: "2",',
+    );
+    expect(source).not.toBe(ZZ_FETCH);
+    expect(runRest(source).fields?.inlineHeaders).toEqual({ xApiVersion: "2" });
   });
 
   // Every REFUSED_REST_HELPERS row: no fields recovered, and nothing claimed. See that table for

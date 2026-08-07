@@ -14,9 +14,24 @@ export type ManifestFields = {
   minNimbusVersion: string;
 };
 
+/**
+ * A manifest that IS a manifest but lacks a key `src/emit/manifest.ts` always writes — distinct
+ * from a file that is absent, unparseable, or carrying a wrong-typed field, all three of which
+ * stay in the coarse `no-manifest` bucket (`reqString`'s `TypeError` is the third, and is neither
+ * absent nor unparseable). `iac` is the live corpus instance: its `nimbus.extension.json` exists
+ * and parses; it simply predates `syncInterval`. `deriveSpec` maps this to
+ * `manifest:missing-<key>` rather than the generic bucket, so the histogram sends a reader to the
+ * missing field rather than to a file that is right there.
+ */
+export class MissingManifestKey extends Error {
+  constructor(readonly key: string) {
+    super(`nimbus.extension.json has no "${key}".`);
+  }
+}
+
 function req<T>(value: T | undefined, key: string): T {
   if (value === undefined) {
-    throw new Error(`nimbus.extension.json has no "${key}" — it is not a connector manifest.`);
+    throw new MissingManifestKey(key);
   }
   return value;
 }
@@ -34,9 +49,7 @@ function req<T>(value: T | undefined, key: string): T {
  */
 function reqString(value: unknown, key: string): string {
   if (typeof value !== "string") {
-    throw new TypeError(
-      `nimbus.extension.json's "${key}" is not a string — it is not a connector manifest.`,
-    );
+    throw new TypeError(`nimbus.extension.json's "${key}" is not a string.`);
   }
   return value;
 }

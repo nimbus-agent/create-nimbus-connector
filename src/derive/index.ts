@@ -1,13 +1,20 @@
-import { capitalize } from "../spec.ts";
+import { capitalize, type StaticPathStyle } from "../spec.ts";
 import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";
-import { deriveManifest, type ManifestFields } from "./manifest.ts";
+import { deriveManifest, type ManifestFields, MissingManifestKey } from "./manifest.ts";
+import { calleeOf, expressionOf, identName, importNames, importSource, startLine } from "./read.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
+import type { SchemaShape } from "./server/args.ts";
 import { recognizeEnv } from "./server/env.ts";
-import { recognizeFetchHelper, recognizeRestFetchHelper } from "./server/fetch-helper.ts";
+import {
+  recognizeFetchHelper,
+  recognizeRestFetchHelper,
+  recognizeWriteHelper,
+} from "./server/fetch-helper.ts";
 import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
+import type { BasePrefix } from "./server/query.ts";
 import { claimSearchImports, type SearchToolFields } from "./server/search.ts";
 import { recognizeTools, type ToolFields } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
@@ -47,13 +54,23 @@ function blocked(kind: string, detail: string): Derivation {
  * the observed set cannot be reproduced. --from-connector reports the attribution as unverified,
  * because for its purposes — a spec a human will edit — semantically wrong is a real cost even
  * when byte-identical.
+ *
+ * A recognized STUB is a second, silent candidate for every effect attributed below, and is
+ * treated as one (Task 7 follow-up): `ToolSchema`'s refine that pins a GET tool to
+ * `effect: "read"` explicitly excludes `impl: "stub"`, so a stub may declare "write" or "delete"
+ * freely, with no `method` for this function to ever notice — it can only ever fall through to
+ * the unattributed branch below. A single non-stub candidate is therefore no longer "the only
+ * attribution reproducing the observed set" the moment a stub is also in the tool list: the
+ * author could have written the effect on the stub instead, and `emitManifest`'s deduplicated-SET
+ * `hitlRequired` cannot tell the difference either way.
  */
 export type EffectAttribution = {
   tools: Record<string, unknown>[];
   /**
-   * Effects assigned to MORE THAN ONE tool, and therefore not forced by the evidence. With a
-   * single candidate the attribution is the only one reproducing the observed set, so it is
-   * correct; with several, at least one carries the effect and this function cannot say which.
+   * Effects not forced by the evidence — assigned to MORE THAN ONE tool, OR assigned to any tool
+   * at all while a stub sits in the list (see this function's own docstring for why a stub is a
+   * candidate too, despite never appearing in `counts` itself). With neither condition, a single
+   * candidate is the only attribution reproducing the observed set, so it is correct.
    */
   ambiguous: string[];
 };
@@ -81,20 +98,29 @@ export function attributeEffects(
   for (const e of wanted) {
     if (!counts.has(e)) return undefined;
   }
+  // See this function's own docstring: a stub is a free extra candidate for every effect
+  // attributed above, so `n > 1` alone (which a stub never contributes to, having no `method`)
+  // understates the ambiguity whenever one is present.
+  const hasStub = tools.some((t) => t.impl === "stub");
   return {
     tools: out,
-    ambiguous: [...counts].filter(([, n]) => n > 1).map(([e]) => e),
+    ambiguous: [...counts].filter(([, n]) => n > 1 || hasStub).map(([e]) => e),
   };
 }
 
 /**
- * `registrarName`'s sanitizing formula (src/spec.ts:745-746), mirrored rather than called: that
- * function takes a full `ConnectorSpec`, and constructing one here for a single-field read
- * would need a cast this module's accessors are built specifically to avoid (see read.ts's own
- * header). `capitalize` (src/spec.ts:740-741) IS imported rather than mirrored, deliberately —
- * it is not a full title-case (it upper-cases only the first character, e.g.
- * capitalize("google-meet") -> "Google-meet", hyphen and all), a shape non-obvious enough that
- * reimplementing it here would risk exactly the class of drift this task already found twice.
+ * `registrarName`'s sanitizing formula (src/spec.ts), mirrored rather than called: that function
+ * takes a full `ConnectorSpec`, and constructing one here for a single-field read would need a
+ * cast this module's accessors are built specifically to avoid (see read.ts's own header).
+ * `capitalize` (src/spec.ts) IS imported rather than mirrored, deliberately — it is not a full
+ * title-case (it upper-cases only the first character, e.g. capitalize("google-meet") ->
+ * "Google-meet", hyphen and all), a shape non-obvious enough that reimplementing it here would
+ * risk exactly the class of drift this task already found twice.
+ *
+ * Both are cited by SYMBOL, not by line: this docstring carried `src/spec.ts:745-746` and
+ * `740-741` for them, and both had drifted (to 779-781 and 774-776) by the time anyone checked.
+ * A line number is a citation that goes stale silently, which is the one thing a citation must
+ * not do.
  */
 function registrarNameFor(title: string): string {
   return `register${title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
@@ -161,9 +187,9 @@ function recognizeRestTitle(
  * winner; the caller turns it into `blocked("style:mixed-static-path", …)`.
  */
 export function voteStaticPathStyle(
-  styles: readonly ("quoted" | "template" | undefined)[],
-): { ok: true; value: "quoted" | "template" | undefined } | { ok: false } {
-  const decisive = styles.filter((s): s is "quoted" | "template" => s !== undefined);
+  styles: readonly (StaticPathStyle | undefined)[],
+): { ok: true; value: StaticPathStyle | undefined } | { ok: false } {
+  const decisive = styles.filter((s): s is StaticPathStyle => s !== undefined);
   if (new Set(decisive).size > 1) return { ok: false };
   return { ok: true, value: decisive[0] };
 }
@@ -183,7 +209,8 @@ export function voteStaticPathStyle(
  * is multi-line" is consistent with either "expanded", or "inline" where every schema happened
  * to be too long to stay on one line. Voting "expanded" in that case is nonetheless byte-safe —
  * measured, not assumed: `test/derive/style-recovery.test.ts`'s Step 6b check forces this vote's
- * output back onto every one of the 21 fixtures and requires byte-identical re-emission. Forcing
+ * output back onto every fixture in `fixtures/` — the list is read from the directory, so no
+ * count is restated here — and requires byte-identical re-emission. Forcing
  * `argsSchemaStyle: "expanded"` on an inline connector whose schemas are all wrapped (zzsearch,
  * zzwriterest) reproduces the original bytes; discord and google-meet carry a short schema that
  * stayed a one-liner, so the decisive rule above catches those before the multi-line fallback
@@ -194,12 +221,90 @@ export function voteStaticPathStyle(
  * single one-liner settles the question outright, so there is no disagreement case to refuse.
  */
 export function voteArgsSchemaStyle(
-  schemas: readonly { propertyCount: number; oneLine: boolean }[],
+  schemas: readonly SchemaShape[],
 ): "inline" | "expanded" | undefined {
   const nonEmpty = schemas.filter((s) => s.propertyCount > 0);
   if (nonEmpty.some((s) => s.oneLine)) return "inline";
   if (nonEmpty.length > 0) return "expanded";
   return undefined;
+}
+
+/**
+ * Every query tool's `new URL(...)` was rendered with `baseExpr(spec)` (src/emit/server/
+ * fetch-helper.ts) spliced in as a prefix, so each one must agree with the fetch helper this same
+ * module declares — and, for the literal form, the base has to come back OFF the recovered path
+ * before it can be a spec `path` again.
+ *
+ * Both happen HERE rather than inside `recognizeQueryBlock`, and not only because the tool
+ * recognizers run before `recognizeRestFetchHelper` and take no helper metadata. Two recognizers
+ * producing the base independently is how they drift; comparing them in the caller is the same
+ * guard `rest-fetch-helper-name-mismatch` below applies, for the same reason. And the literal
+ * split is not merely inconvenient to do earlier — it is not DECIDABLE earlier: `renderPath`
+ * fuses the base onto the path's first literal segment with nothing between them, a base may
+ * itself carry a path component, and a query tool's path must start with "/" — so several splits
+ * of that quasi are byte-identical and only the fetch helper's own `base` says which is right.
+ * See `BasePrefix`.
+ *
+ * `helper.base` is already in `baseExpr`'s own terms for a rest-kit connector: the schema's
+ * rest-kit refine (src/spec.ts) rejects any `${env.X}` in `fetchHelper.base`, so `resolveEnvRefs`
+ * is the identity on it and no second normalizer is needed there.
+ *
+ * The HAND-ROLLED caller has no such refine — `${env.X}` in `base` is legal for it — and this
+ * function is what REFUSES that combination rather than mis-splitting it. `baseExpr` resolves the
+ * reference, so `base: "https://${env.HOST}/api"` reaches `new URL` as
+ * `` `https://${HOST()}/api/v1/items` ``, whose leading quasi is "https://" — and `base` still
+ * spells the accessor as `${env.HOST}`, which an UNESCAPED reference can never leave in a rendered
+ * quasi: `resolveEnvRefs` consumes the base's own, and a path's is rejected by
+ * `parsePathTemplate`'s `assertNoUnparsedPlaceholders`. `startsWith` is therefore false for every
+ * such base with text ahead of the accessor, and one with none (`base: "${env.HOST}"`) never
+ * reaches here at all: `prefixedPath` refuses an empty leading quasi whose first expression is a
+ * call rather than a base const. Both halves are deliberate — see `prefixedPath`'s own comment —
+ * because a base that is decided per REQUEST is not one this recognizer can split off a template
+ * statically.
+ *
+ * "Unescaped" is load-bearing and the exception is NOT closed here. A base that escapes the
+ * sequence (`base: "https://a\\${env.X}"`) is not a reference `resolveEnvRefs`' own pattern
+ * consumes, and `renderPath` splices the prefix in raw — `assertNoUnparsedPlaceholders` inspects
+ * only the PATH's segments, never the base — so those characters do survive into a quasi,
+ * `startsWith` succeeds, and the module derives `ok: true` while re-emitting different bytes. That
+ * is a wrong claim, and it is a pre-existing one: it reproduces on a plain `grafana`-shaped
+ * connector with no query tool at all, because it is `reconstructBase`'s laxity about what the
+ * base template may contain rather than anything this function decides. Recorded rather than
+ * fixed, so the refusal above is not read as covering more than it does.
+ */
+function rebaseQueryTools<T extends { readonly path?: string }>(
+  tools: readonly T[],
+  prefixes: readonly (BasePrefix | undefined)[],
+  helper: { readonly base: string; readonly baseConst?: string },
+): T[] | undefined {
+  const out: T[] = [];
+  for (const [i, tool] of tools.entries()) {
+    const prefix = prefixes[i];
+    if (prefix === undefined) {
+      out.push(tool);
+      continue;
+    }
+    if (prefix.kind === "const") {
+      if (prefix.name !== helper.baseConst) return undefined;
+      out.push(tool);
+      continue;
+    }
+    // `tool.path === undefined` is unreachable for any tool this ever actually fires on — a
+    // `prefix` exists only for a query tool (see `basePrefixes`' own docstring), and a stub can
+    // never be one (ToolSchema's refine rejects `impl: "stub"` beside `query`) — but `path` is
+    // optional on the SHARED `T` bound (Task 7 widened it so a stub's fields could flow through
+    // this same array), so the type no longer proves that on its own; this is what keeps
+    // `tool.path.slice(...)` below from a possibly-undefined access.
+    if (tool.path === undefined) return undefined;
+    // The base must lie wholly inside the leading quasi — it cannot span a `${…}`. Testing the
+    // quasi rather than the recovered path is what keeps a base longer than that quasi from
+    // matching by running on into a placeholder's rendered text.
+    if (helper.baseConst !== undefined || !prefix.leadingQuasi.startsWith(helper.base)) {
+      return undefined;
+    }
+    out.push({ ...tool, path: tool.path.slice(helper.base.length) });
+  }
+  return out;
 }
 
 /**
@@ -259,6 +364,17 @@ function deriveRestKitSpec(
     );
   }
 
+  // The same class of guard as the name mismatch above, one recognizer further along: the query
+  // tools' base prefixes and the fetch helper's own base are recovered independently and have to
+  // agree. See `rebaseQueryTools`, which also finishes a literal prefix's path.
+  const rebasedTools = rebaseQueryTools(tools.tools, tools.basePrefixes, restFetchHelper);
+  if (rebasedTools === undefined) {
+    return blocked(
+      "query:base-prefix-mismatch",
+      "a query tool's new URL(...) prefix is not the base this module's fetch helper declares",
+    );
+  }
+
   const titleRecovery = recognizeRestTitle(registrar.registrar, frame.name);
   if (titleRecovery === undefined) {
     return blocked(
@@ -283,7 +399,7 @@ function deriveRestKitSpec(
   // Last, because it is a different kind of refusal from everything above — every earlier
   // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
   // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(tools.tools, manifest.hitlRequired);
+  const attribution = attributeEffects(rebasedTools, manifest.hitlRequired);
   if (attribution === undefined) {
     return blocked(
       "manifest:unattributable-hitl",
@@ -337,6 +453,61 @@ function deriveRestKitSpec(
 }
 
 /**
+ * The unclaimed set collapses to ONE blocker, `frame:tools-in-second-file`, when it is EXACTLY
+ * two statements — an import from a relative `./…` module, and one call to a name that import's
+ * own specifiers bind — rather than the ordinary per-statement blockers `blockerFor` would
+ * otherwise report.
+ *
+ * This is the eleven-connector shim shape (`athena`, `bigquery`, `cloud-logging`, `cloudwatch`,
+ * `dataprofile`, `elasticsearch`, `great-expectations`, `localdb`, `sagemaker`, `storybook`,
+ * `vertex-ai`): a read-only-kit frame that already matches, whose `src/server.ts` is nothing but
+ * that frame plus an import of `./tools.ts` and one `register<X>Tools(reg)` call. Left alone, the
+ * two statements land in unrelated buckets (`import-from:./tools.ts`, one `call:register<X>Tools`
+ * PER connector) that never say the thing they share: every tool lives in another file.
+ *
+ * A LABEL, not a claim (see this file's own header on the totality rule): the module still
+ * reports `ok: false`, and neither statement is claimed here — this only changes what
+ * `blockerFor` would otherwise have said about the same two statements.
+ *
+ * Both halves of the shape are pinned, not assumed from the pair's size alone. The import's
+ * source must be a RELATIVE `./…` module — `frame:no-registrar`'s four (`apple`, `fastmail`,
+ * `imap`, `protonmail`) also delegate to `./tools.ts`, but fail frame recognition itself
+ * (`recognizeFrame` returns `undefined` before `deriveSharedStyleSpec` ever runs), so they cannot
+ * reach this function at all. And the call's own callee must be a name that import's specifiers
+ * actually bind (`importNames`'s `local`), not merely "some call happened to be the other
+ * statement" — a connector importing one name and calling a different one falls through to the
+ * ordinary blockers instead of a label that asserts a relationship that is not there.
+ */
+function collapseSecondFileBlockers(
+  unclaimed: readonly AstNode[],
+  serverSource: string,
+): Blocker[] {
+  const ordinary = unclaimed.map((n) => blockerFor(n, serverSource));
+  if (unclaimed.length !== 2) return ordinary;
+  const [first, second] = unclaimed;
+
+  for (const [imp, call] of [
+    [first, second],
+    [second, first],
+  ] as const) {
+    const source = importSource(imp);
+    if (source === undefined || !source.startsWith("./")) continue;
+    const names = importNames(imp);
+    const calleeName = identName(calleeOf(expressionOf(call)));
+    if (names === undefined || calleeName === undefined) continue;
+    if (!names.some((n) => n.local === calleeName)) continue;
+    return [
+      {
+        kind: "frame:tools-in-second-file",
+        detail: `every tool is registered from "${source}", a second file this generator does not read`,
+        line: startLine(imp) ?? 0,
+      },
+    ];
+  }
+  return ordinary;
+}
+
+/**
  * The hand-rolled and read-only-kit assembly — one path, because the two styles differ only in
  * the frame that got them here (see `Frame`'s two statement lists), not in the env accessors,
  * fetch helper or `reg()` handlers those recognizers then read.
@@ -348,13 +519,27 @@ function deriveSharedStyleSpec(
   serverSource: string,
   filterSource: string | undefined,
 ): Derivation {
-  const env = recognizeEnv(frame.verifyStatements, claims);
-  const fetchHelper = recognizeFetchHelper(frame.verifyStatements, claims);
-  // fetchHelper?.local, not fetchHelper!.local: recognizeTools must be able to run (and refuse)
-  // even when the fetch helper itself was never recognized. Checked below, AFTER the totality
-  // rule — see this function's own comment on that ordering — rather than short-circuited here,
-  // so an unrecognized fetch helper still surfaces as a named, per-statement blocker instead of
-  // the coarse "no-fetch-helper" case.
+  const { entries: env, tokenServiceLabels } = recognizeEnv(frame.verifyStatements, claims);
+  const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);
+  // The write helper, held against the read helper when there is one — see `agreesWithReadHelper`
+  // (server/fetch-helper.ts) for why the read helper is the authority rather than a second source.
+  const writeHelper = recognizeWriteHelper(
+    frame.verifyStatements,
+    claims,
+    recognizedHelper?.fields,
+  );
+  // The read helper first, and the write helper only as a fallback: `renderReadHelper` emits
+  // nothing for a connector whose every tool is a write (zzwriteonly), and for THAT module the
+  // write helper is the only place `local`, `base`, `serviceLabel` and the headers appear at all.
+  // Where both exist they have already been checked equal, so which one is spread into the spec
+  // below cannot matter — but taking the read helper's keeps `normalizeLeadingSlash` and
+  // `jsonFallbackRaw`, which only it can carry.
+  const fetchHelper = recognizedHelper?.fields ?? writeHelper?.fields;
+  // fetchHelper?.local, not a non-null assertion: recognizeTools must be able to run
+  // (and refuse) even when neither helper was recognized. Checked below, AFTER the
+  // totality rule — see this function's own comment on that ordering — rather than
+  // short-circuited here, so an unrecognized fetch helper still surfaces as a named,
+  // per-statement blocker instead of the coarse "no-fetch-helper" case.
   const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
 
   // Claim the two search-specific imports only once a search tool is positively recognized —
@@ -368,18 +553,136 @@ function deriveSharedStyleSpec(
   }
 
   // The totality rule walks frame.verifyStatements, NOT the module's own statement list. For
-  // read-only-kit those differ by exactly one statement — the wrapper, replaced by its callback
-  // body — which is what stops the registrations inside it from inheriting coverage from a claim
-  // on the wrapper.
+  // read-only-kit those differ by exactly one statement, whichever of the style's two entry
+  // shapes the module writes: the inline wrapper, replaced by its callback body, or the exported
+  // `register<X>Tools` declaration, replaced by its own body (server/index.ts's
+  // `namedRegistrarBody`). Either way the container is spliced out rather than claimed, which is
+  // what stops the registrations inside it from inheriting coverage from a claim on it.
   const unclaimed = claims.unclaimed(frame.verifyStatements);
   if (unclaimed.length > 0) {
-    return { ok: false, blockers: unclaimed.map((n) => blockerFor(n, serverSource)) };
+    return { ok: false, blockers: collapseSecondFileBlockers(unclaimed, serverSource) };
   }
   if (fetchHelper === undefined) {
-    return blocked("no-fetch-helper", "no read helper recognized");
+    return blocked("no-fetch-helper", "neither a read nor a write helper was recognized");
   }
   if (toolsResult === undefined) {
     return blocked("unrecognized-handler", "a reg() handler was not understood");
+  }
+
+  // Which HELPERS the emitter writes is decided entirely by the tools, so each one's presence is
+  // evidence to be cross-checked rather than a fact to be recorded — the same class of guard as
+  // the passthrough below, one recognizer earlier. `renderReadHelper` emits the read helper iff
+  // some tool is a non-stub GET; `renderWriteHelper` emits the write helper iff some tool is
+  // non-GET (src/emit/server/fetch-helper.ts). A module carrying a helper no tool would call
+  // re-emits without it, and one missing a helper its tools DO call re-emits with it — neither
+  // reproduces, and neither recognizer can see the other's evidence on its own. `method` is
+  // omitted from `ToolFields` for GET, so its presence is the non-GET test.
+  //
+  // A stub calls NEITHER helper — it never issues a request at all — so it must not count as
+  // "read called" evidence even though its own `method` is also undefined (ToolSchema pins one
+  // to GET, but `renderTool`'s stub branch returns before ever reaching the read helper). Without
+  // this exclusion a connector whose every non-stub, non-search tool is a WRITE, plus a stub,
+  // would derive `read called: true` from the stub alone while `recognizedHelper` is correctly
+  // undefined (no tool actually calls it) — a false `fetch-helper:read-helper-mismatch` block on
+  // a connector this generator can regenerate. `bitrise`'s own read helper is called by its
+  // SEARCH tool, not either stub, so this exclusion does not change what bitrise derives to.
+  const nonStubTools = toolsResult.tools.filter((t) => t.impl !== "stub");
+  const helperMismatch = [
+    {
+      role: "read",
+      wanted: "GET",
+      present: recognizedHelper !== undefined,
+      called: nonStubTools.some((t) => t.method === undefined),
+    },
+    {
+      role: "write",
+      wanted: "non-GET",
+      present: writeHelper !== undefined,
+      called: nonStubTools.some((t) => t.method !== undefined),
+    },
+  ].find((h) => h.present !== h.called);
+  if (helperMismatch !== undefined) {
+    return blocked(
+      `fetch-helper:${helperMismatch.role}-helper-mismatch`,
+      `this module declares ${helperMismatch.present ? "a" : "no"} ${helperMismatch.role} ` +
+        `helper, but ${helperMismatch.called ? "a tool is" : "no tool is"} ` +
+        `${helperMismatch.wanted}`,
+    );
+  }
+
+  // One `spec.serviceLabel` writes BOTH the fetch helper's `${res.status}` error and the
+  // client-credentials token function's two — `renderEnvAccessors` passes it through to
+  // `renderTokenFunction` — and the two recognizers recover it independently, which is how they
+  // drift. Same class of guard as `rest-fetch-helper-name-mismatch` above, and the same reason it
+  // lives in the caller: `recognizeEnv` never sees the fetch helper.
+  const wrongLabel = tokenServiceLabels.find((label) => label !== fetchHelper.serviceLabel);
+  if (wrongLabel !== undefined) {
+    return blocked(
+      "env:token-service-label-mismatch",
+      `the client-credentials token exchange names service "${wrongLabel}", but this module's ` +
+        `fetch helper names "${fetchHelper.serviceLabel}"`,
+    );
+  }
+
+  // `headerOption` (src/emit/server/fetch-helper.ts) writes `await <accessor>()` exactly when the
+  // env entry that accessor names carries `auth: "client-credentials"` — the one accessor
+  // `renderEnvAccessor` emits `async` — and a bare `<accessor>()` for every other mode. So which
+  // form a helper carries is evidence about the ENV, recovered by a recognizer that cannot see
+  // the env, and held against it here. Without this, an awaited call to a synchronous accessor
+  // (or an un-awaited call to the async one) derives a spec that regenerates the OTHER form: a
+  // claimed statement the module does not reproduce, which the totality rule cannot see.
+  //
+  // This also covers the two helpers disagreeing with each other, which is why
+  // `agreesWithReadHelper` does not compare the flag: each is checked against the env separately,
+  // so a disagreement means at least one of them fails here.
+  const awaitsHeaders = env.some(
+    (e) => e.local === fetchHelper.headers && e.auth === "client-credentials",
+  );
+  const awaitMismatch = [
+    { role: "read", helper: recognizedHelper },
+    { role: "write", helper: writeHelper },
+  ].find((h) => h.helper !== undefined && h.helper.awaitedHeaders !== awaitsHeaders);
+  if (awaitMismatch !== undefined) {
+    return blocked(
+      "fetch-helper:headers-await-mismatch",
+      `the ${awaitMismatch.role} helper ${awaitsHeaders ? "does not await" : "awaits"} its ` +
+        `headers accessor, but ${awaitsHeaders ? "the" : "no"} env entry named ` +
+        `"${String(fetchHelper.headers)}" declares auth: "client-credentials"`,
+    );
+  }
+
+  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides BOTH helpers' passthrough line
+  // from the SET of tools, so each recognized helper must agree with it in both directions. A
+  // helper with the line and no query tool regenerates a helper without it; a query tool with no
+  // line regenerates one with it. Either way the derived spec would not reproduce this module —
+  // the wrong-claim class, caught here because neither recognizer can see the tools' evidence.
+  // `query` is read off the union without narrowing on purpose: `SearchToolFields` is built
+  // from `ToolFields` (`Omit<ToolFields, "impl" | "path"> & {...}`), so the field is there for
+  // both, and a search tool never carries one anyway (ToolSchema rejects `impl: "search"` beside
+  // `query`). Guarding it would state the opposite.
+  const anyQuery = toolsResult.tools.some((t) => t.query !== undefined);
+  const passthroughMismatch = [
+    { role: "read", helper: recognizedHelper },
+    { role: "write", helper: writeHelper },
+  ].find((h) => h.helper !== undefined && h.helper.passthrough !== anyQuery);
+  if (passthroughMismatch !== undefined) {
+    return blocked(
+      "fetch-helper:query-passthrough-mismatch",
+      `the ${passthroughMismatch.role} helper ${anyQuery ? "lacks" : "carries"} the absolute-URL ` +
+        `passthrough line, but ${anyQuery ? "a tool declares" : "no tool declares"} a query array`,
+    );
+  }
+
+  // The same class of guard, one recognizer further along: the query tools' base prefixes and the
+  // fetch helper's own base are recovered independently and have to agree. See `rebaseQueryTools`,
+  // which also finishes a literal prefix's path — and which is where an `${env.X}` base, legal for
+  // this style but not for rest-kit, is refused rather than mis-split.
+  const rebasedTools = rebaseQueryTools(toolsResult.tools, toolsResult.basePrefixes, fetchHelper);
+  if (rebasedTools === undefined) {
+    return blocked(
+      "query:base-prefix-mismatch",
+      "a query tool's new URL(...) prefix is not the base this module's fetch helper declares",
+    );
   }
 
   // A search tool whose filter file cannot be read must not derive a spec that regenerates a
@@ -389,7 +692,7 @@ function deriveSharedStyleSpec(
   // style's `spec.title` is recoverable at all (rest-kit recovers it from the registrar name
   // instead, in deriveRestKitSpec below) — so it stays unset for every connector with no search
   // tool, unchanged from before this task.
-  let tools: (ToolFields | SearchToolFields)[] = toolsResult.tools;
+  let tools: (ToolFields | SearchToolFields)[] = rebasedTools;
   let title: string | undefined;
   if (searchTools.length > 0) {
     if (filterSource === undefined) {
@@ -413,7 +716,7 @@ function deriveSharedStyleSpec(
     }
 
     const filterByExport = new Map(filterDerivation.result.filters.map((f) => [f.export, f]));
-    tools = toolsResult.tools.map((t) => {
+    tools = rebasedTools.map((t) => {
       if (!isSearchTool(t)) return t;
       const recovered = filterByExport.get(t.filter.export);
       return {
@@ -514,6 +817,13 @@ export function deriveSpec(files: SourceFiles): Derivation {
   try {
     manifest = deriveManifest(files.manifest);
   } catch (err) {
+    // A well-formed manifest missing one key the emitter always writes (iac: no syncInterval)
+    // is a different failure from a file that is absent or unparseable — see
+    // MissingManifestKey's own docstring. Anything else (JSON.parse throwing, reqString's
+    // wrong-type TypeError) stays the coarse no-manifest bucket.
+    if (err instanceof MissingManifestKey) {
+      return blocked(`manifest:missing-${err.key}`, err.message);
+    }
     return blocked("no-manifest", err instanceof Error ? err.message : String(err));
   }
 

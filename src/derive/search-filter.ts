@@ -1,4 +1,4 @@
-import { type FieldEntry, isPathEntry } from "../spec.ts";
+import { type FieldEntry, isPathEntry, resolveKeyedShape } from "../spec.ts";
 import type { AstNode } from "./ast.ts";
 import { parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
@@ -7,6 +7,7 @@ import {
   arrayElements,
   arrayElementType,
   arrowFn,
+  bareKeyedProps,
   binary,
   blockBody,
   boolLit,
@@ -29,7 +30,6 @@ import {
   isIdent,
   isNullLiteral,
   newOf,
-  objectProps,
   returnArgument,
   stringLit,
   throwArgument,
@@ -192,6 +192,13 @@ function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
     if (entry === undefined) return undefined;
     entries.push(entry);
   }
+  // emitSearchFilter writes the extractor form ONLY when resolveKeyedShape refuses the field list
+  // (see its `keyedShape`); for a keys-expressible list it writes `fieldsFromKeys([...])` instead.
+  // Recovering these entries would derive a spec that regenerates a DIFFERENT file — the
+  // wrong-claim class, which the totality rule cannot see because the statement was claimed, just
+  // claimed wrongly. Same source of truth as the schema's superRefine and validateSpec, so the
+  // three cannot drift.
+  if (resolveKeyedShape(entries) !== undefined) return undefined;
   return entries;
 }
 
@@ -237,7 +244,9 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
 
   let tags = false;
   if (innerArgs.length === 2) {
-    const props = objectProps(innerArgs[1]);
+    // `emitSearchFilter` hardcodes `{ tags: true }`, key bare — a quoted `"tags"` recovers the
+    // identical `tags` flag and re-emits the bare form.
+    const props = bareKeyedProps(innerArgs[1]);
     const only = props?.length === 1 ? props[0] : undefined;
     if (only === undefined || only.key !== "tags" || boolLit(only.value) !== true) {
       return undefined;

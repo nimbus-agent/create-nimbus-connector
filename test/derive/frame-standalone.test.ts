@@ -79,12 +79,19 @@ describe("frameFailureKind reads this generator's standalone output", () => {
     expect(frameFailureKind(parseModule(source))).toBe("frame:no-connect");
   });
 
-  it("names readonly-callback-not-inline, not no-kit-import, for a read-only-kit standalone module", () => {
-    // The standalone read-only-kit frame has no import to find at all — its discriminator is the
-    // INLINED `runReadOnlyMcpConnector` function declaration (isInlinedRunReadOnlyHelper). The old
-    // code checked only RUN_READ_ONLY_SUFFIX (an import path), which a standalone module never
-    // has, so it fell straight through the readonly-callback branch and reported "no-kit-import"
-    // even though this near miss (a named callback instead of an inline arrow) is the real cause.
+  it("names the real break (no-mcp-server), not no-kit-import, for a read-only-kit standalone module", () => {
+    // Element 1 for a standalone module is the "@nimbus-dev/sdk/connector-kit" import, which is
+    // present here and untouched; the old unwidened check looked only for "/mcp-tool-kit.ts",
+    // which a standalone module never has, and reported "no-kit-import" — telling the user to add
+    // an import already on line 1.
+    //
+    // The label this pins used to be `frame:readonly-callback-not-inline`, now retired: the ten
+    // corpus connectors that bucket named write the THREE-statement shape
+    // `recognizeReadOnlyFrame` reads today (test/derive/frame-readonly.test.ts), not this bare
+    // named callback, so the bucket was empty and the diagnostic never printed. The form below —
+    // a named callback with no `startConnector` and no entrypoint guard — is still refused, and
+    // falls through to the hand-rolled branch: kit import present, no top-level McpServer const
+    // (the standalone one is declared INSIDE the inlined helper, not at module scope).
     const wrapperCall = [
       'await runReadOnlyMcpConnector("nimbus-zzreadonly", (reg) => {',
       '  reg("zzreadonly_widget_list", "List widgets.", z.object({}), async () =>',
@@ -119,6 +126,6 @@ describe("frameFailureKind reads this generator's standalone output", () => {
     const emitted = standaloneServer("zzreadonly");
     expect(emitted).toContain(wrapperCall); // Fails loudly if the emitter's own shape ever drifts.
     const source = emitted.replace(wrapperCall, namedCallbackForm);
-    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-mcp-server");
   });
 });

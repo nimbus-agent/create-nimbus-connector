@@ -1,9 +1,17 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
+import { deriveSpec } from "../../src/derive/index.ts";
 import { frameFailureKind, recognizeFrame } from "../../src/derive/server/index.ts";
+import { generate } from "../../src/emit/index.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
+import { parseSpec } from "../../src/spec.ts";
+import { displayPath } from "../../src/types.ts";
 
 beforeAll(async () => {
+  await initFormatter();
   await initParser();
 });
 
@@ -131,7 +139,189 @@ const REFUSED_FRAMES = [
       "let transport = new StdioServerTransport();",
     ),
   ],
+
+  // The split-registrar axis is a CLAIM now (both consts), not the label it used to be, so the
+  // linkage between the two statements has to be structural: the second const's argument must be
+  // the identifier the FIRST one binds. Without that check `createZodToolRegistrar(<anything>)`
+  // beside an unrelated `createRegisterSimpleTool(mcp)` const would claim two statements whose
+  // relationship was never established — the same over-claim `isRegistrarConst` closed for the
+  // inlined form (see the argument-identity row above).
+  [
+    "rejects a split registrar whose second const passes an identifier the first does not bind",
+    FRAME.replace(
+      "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
+      [
+        "const registerSimpleTool = createRegisterSimpleTool(mcp);",
+        "const reg = createZodToolRegistrar(somethingElse);",
+      ].join("\n"),
+    ),
+  ],
+
+  // The inlined-transport axis, likewise promoted from label to claim: the connect call's sole
+  // argument must be `new StdioServerTransport()` specifically. `new SomethingElse()` is a
+  // transport this generator can neither emit nor describe, and claiming the tail on the strength
+  // of the receiver and the property name alone is exactly what `isConnect`'s own argument check
+  // exists to prevent on the two-statement form.
+  [
+    "rejects an inlined transport whose argument is not new StdioServerTransport()",
+    FRAME.replace(
+      "const transport = new StdioServerTransport();\nawait mcp.connect(transport);",
+      "await mcp.connect(new SomethingElse());",
+    ),
+  ],
+
+  // Key SPELLING, the same class as the interior checks above and invisible in the same way:
+  // `wiring()` (src/emit/server/index.ts) writes `{ name: …, version: … }` with both keys bare,
+  // and the underlying objectProps parse resolves `{ "name": … }` to the same `key`. So the
+  // quoted form recovered the IDENTICAL connectorName and varName and re-emitted the bare form —
+  // a claimed frame whose spec provably regenerates different bytes, which neither diff:golden
+  // (it emits what it read) nor the totality rule (the statement WAS claimed) can see.
+  // `bareKeyedProps` (src/derive/read.ts) is the pin.
+  [
+    "rejects a quoted `name` key in the McpServer literal",
+    FRAME.replace('{ name: "nimbus-newrelic"', '{ "name": "nimbus-newrelic"'),
+  ],
+  [
+    "rejects a quoted `version` key in the McpServer literal",
+    FRAME.replace('version: "0.1.0" });', '"version": "0.1.0" });'),
+  ],
 ];
+
+/**
+ * One replacement, proving it fired EXACTLY once.
+ *
+ * An anchor that matched nothing would leave the canonical fixture in place and make the
+ * deep-equality assertions below vacuous — they would be comparing a fixture against itself. An
+ * anchor that matched twice would rewrite the wrong occurrence and quietly test a different
+ * module than the one named. `split` settles both in one comparison.
+ */
+function rewrite(source: string, from: string, to: string): string {
+  expect(source.split(from)).toHaveLength(2);
+  return source.replace(from, to);
+}
+
+/**
+ * A fixture's emitted `src/server.ts` and `nimbus.extension.json`.
+ *
+ * The near-miss modules below are built by surgery on THIS repository's own output, never
+ * transcribed from a real connector: `src/`, `test/` and `fixtures/` may not carry AGPL connector
+ * source (CLAUDE.md's licensing constraint). It is also the stronger test — a fixture-derived
+ * near miss has a canonical counterpart whose derived spec it can be compared against field for
+ * field, which a hand-written module would not.
+ */
+function emitted(name: string): { server: string; manifest: string } {
+  const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
+  const files = formatAll(generate(parseSpec(JSON.parse(readFileSync(specPath, "utf8")))));
+  const read = (path: string): string => {
+    const file = files.find((f) => displayPath(f.path) === path);
+    if (file === undefined) throw new Error(`${name} emitted no ${path}`);
+    return file.content;
+  };
+  return { server: read("src/server.ts"), manifest: read("nimbus.extension.json") };
+}
+
+/** The spec `deriveSpec` recovers from a fixture's emitted output, `rewrite`n first when given. */
+function derive(name: string, surgery?: (source: string) => string): Record<string, unknown> {
+  const files = emitted(name);
+  const server = surgery === undefined ? files.server : surgery(files.server);
+  const result = deriveSpec({ ...files, server });
+  if (!result.ok) {
+    throw new Error(`${name} did not derive: ${result.blockers.map((b) => b.kind).join(", ")}`);
+  }
+  return result.spec;
+}
+
+/** `const <mcpVar>` -> the two-const split form, with `blankLine` between the McpServer const and it. */
+function splitRegistrar(mcpVar: string, blankLine: boolean): (source: string) => string {
+  return (source) =>
+    rewrite(
+      source,
+      `const reg = createZodToolRegistrar(createRegisterSimpleTool(${mcpVar}));`,
+      [
+        ...(blankLine ? [""] : []),
+        `const registerSimpleTool = createRegisterSimpleTool(${mcpVar});`,
+        "const reg = createZodToolRegistrar(registerSimpleTool);",
+      ].join("\n"),
+    );
+}
+
+/** The two-statement transport tail -> the one-statement inlined one. */
+function inlinedTransport(mcpVar: string): (source: string) => string {
+  return (source) =>
+    rewrite(
+      source,
+      `const transport = new StdioServerTransport();\nawait ${mcpVar}.connect(transport);`,
+      `await ${mcpVar}.connect(new StdioServerTransport());`,
+    );
+}
+
+/**
+ * Condition (b) for the split-registrar and inlined-transport axes: every spec field recovered
+ * from the near-miss shape is correct.
+ *
+ * Deep equality against the spec derived from the CANONICAL shape rather than a hand-listed set
+ * of fields — the near miss recovers the same spec, field for field, with no opportunity to
+ * forget one. Both axes are case 2 under docs/ROADMAP.md's *Shape variance the emitter models
+ * one way* ("Wiring and tail idiom"): they are shapes `wiring()` and `tail()` never write, so
+ * `diff:golden` cannot check this widening and these assertions are the whole of what stands
+ * between a correct one and a wrong one.
+ *
+ * The byte-diff's silence here is structural, not an oversight: because the emitter writes the
+ * canonical form, a connector in either near-miss shape re-emits as the canonical one and reaches
+ * `emits`, never `server-identical`.
+ */
+describe("recognizeFrame reads the split registrar and the inlined transport", () => {
+  it("derives the same spec from a split registrar as from the inlined one (hand-rolled)", () => {
+    expect(derive("zzscratch", splitRegistrar("mcp", true))).toEqual(derive("zzscratch"));
+  });
+
+  // obsidian writes the two consts with no blank line above them where the other 12 have one, so
+  // the pair must not be pinned to a layout. Biome preserves line breaks (CLAUDE.md's emitter
+  // conventions), so this is a real difference in the bytes, not one the formatter erases.
+  it("derives the same spec with no blank line above the split pair, as obsidian writes it", () => {
+    expect(derive("zzscratch", splitRegistrar("mcp", false))).toEqual(derive("zzscratch"));
+  });
+
+  it("derives the same spec from a split registrar as from the inlined one (rest-kit)", () => {
+    expect(derive("zzstandalone", splitRegistrar("server", true))).toEqual(derive("zzstandalone"));
+  });
+
+  it("derives the same spec from an inlined transport tail as from the transport const", () => {
+    expect(derive("zzscratch", inlinedTransport("mcp"))).toEqual(derive("zzscratch"));
+  });
+
+  // Both styles, same as the split registrar above, because this axis spans both.
+  //
+  // Measured 2026-08-07 against `packages/mcp-connectors` tree `94fd3623` (Nimbus commit
+  // `b3a6f159`), re-measurable in two greps over that directory — the recipe
+  // `isInlinedTransportConnect`'s own docstring records, and the reason these figures are dated
+  // here rather than deleted: which style this test has to run on is a CONCLUSION drawn from them,
+  // so a reader who cannot check the premise cannot check the conclusion.
+  //
+  //   grep -rl "connect(new StdioServerTransport())" --include=server.ts   -> the TEN
+  //   ... intersected with a `createZodToolRegistrar` grep                 -> the SIX
+  //
+  // Ten corpus connectors write the inlined tail; six of them reach this matcher at all (the other
+  // four — `apple`, `fastmail`, `imap`, `protonmail` — are `frame:no-registrar`). Of the six, five
+  // are rest-kit (`gmail`, `onedrive`, `outlook`, `google-meet`, `google-photos`) and
+  // `google-drive` is hand-rolled. The hand-rolled case alone would have proved the axis only on
+  // the MINORITY style — `isInlinedTransportConnect` takes the McpServer binding as a parameter
+  // precisely because `wiring()` names it `mcp` for one style and `server` for the other, and a
+  // parameter that is only ever exercised with one value is a parameter nothing has checked.
+  it("derives the same spec from an inlined transport tail on the rest-kit style too", () => {
+    expect(derive("zzstandalone", inlinedTransport("server"))).toEqual(derive("zzstandalone"));
+  });
+
+  // google-meet and google-photos write BOTH near misses. frameFailureKind checks the registrar
+  // element before the transport one, so either axis alone leaves them blocked on the registrar
+  // bucket — which is why the two land together, and why the combination is asserted rather than
+  // inferred from the two single-axis cases above.
+  it("derives the same spec when a module writes both near misses, as google-meet does", () => {
+    const both = (source: string): string =>
+      inlinedTransport("mcp")(splitRegistrar("mcp", true)(source));
+    expect(derive("zzscratch", both)).toEqual(derive("zzscratch"));
+  });
+});
 
 describe("recognizeFrame", () => {
   it("recovers the connector name and claims every frame statement", () => {
@@ -209,23 +399,30 @@ describe("recognizeFrame", () => {
 });
 
 describe("frameFailureKind", () => {
-  it("names the two-line registrar idiom (discord, github, and 9 more found by measurement)", () => {
+  // `frame:registrar-not-inlined` is retired: element 3 accepts the split form now, so this
+  // diagnostic must walk PAST it to whatever actually broke. A module writing the split registrar
+  // AND breaking element 5 used to stop at the registrar bucket and blame a construct that is no
+  // longer a fault at all.
+  it("walks past a split registrar to the element that actually broke", () => {
     const source = FRAME.replace(
       "const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));",
       [
         "const registerSimpleTool = createRegisterSimpleTool(mcp);",
         "const reg = createZodToolRegistrar(registerSimpleTool);",
       ].join("\n"),
-    );
-    expect(frameFailureKind(parseModule(source))).toBe("frame:registrar-not-inlined");
+    ).replace("await mcp.connect(transport);", "await mcp.connect(other);");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-connect");
   });
 
-  it("names the inlined transport tail (gmail, onedrive, outlook, google-*)", () => {
+  // `frame:tail-inlined-transport` is retired for the same reason: the inlined tail is recognized
+  // now, so what remains on this axis is a tail that is inlined but not a StdioServerTransport —
+  // no transport of any recognizable kind, which is the plain bucket.
+  it("names a missing transport when an inlined tail constructs something else", () => {
     const source = FRAME.replace(
       "const transport = new StdioServerTransport();\nawait mcp.connect(transport);",
-      "await mcp.connect(new StdioServerTransport());",
+      "await mcp.connect(new SomethingElse());",
     );
-    expect(frameFailureKind(parseModule(source))).toBe("frame:tail-inlined-transport");
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-transport");
   });
 
   it("names a missing kit import", () => {
@@ -264,32 +461,31 @@ describe("frameFailureKind", () => {
     expect(frameFailureKind(parseModule(source))).toBe("frame:no-connect");
   });
 
-  // Task 4's read-only-kit frame moved 50 connectors rather than the ~60 predicted; the
-  // shortfall is exactly this shape — argocd, bigeye, flux, looker, mlflow, monte-carlo,
-  // powerbi, snowflake, tableau, workday all pass an already-declared function by name rather
-  // than inlining the `(reg) => { ... }` arrow the emitter always writes, AND all ten gate the
-  // call behind `if (import.meta.main) { ... }` — an entrypoint guard `recognizeReadOnlyFrame`'s
-  // top-level scan does not look inside, since doing so there would be a claim, not a label.
-  it("names the named-callback read-only idiom, gated behind if (import.meta.main)", () => {
+  // `frame:readonly-callback-not-inline` is retired, and unlike the two axes above it was never
+  // firing in the first place: upstream commit `b3a6f159` refactored those ten connectors into the
+  // shape `recognizeReadOnlyFrame` now READS (see test/derive/frame-readonly.test.ts), and the two
+  // functions behind the bucket — `isNamedReadOnlyCallback` and `withTopLevelIfBodies` — were dead
+  // against the whole corpus, so that diagnostic never once printed. What is asserted instead is
+  // the fallback for a module in the recognized shape that still misses part of it.
+  //
+  // The absence is a live fact, so it carries how to re-check it: run
+  // `bun run reach --verbose --nimbus-root <path>` and grep the histogram for the bucket name. It
+  // was absent on 2026-08-07 against `packages/mcp-connectors` tree `94fd3623`. That is the whole
+  // reason this comment names a bucket at all — a reader meeting a *present* bucket must be able
+  // to tell that this sentence went stale rather than that the test is wrong.
+  it("faults a partial named-callback read-only module on the element it actually lacks", () => {
     const source = [
+      'import { mcpJsonResult as jsonResult } from "../../shared/mcp-tool-kit.ts";',
       'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
-      "function registerZzTools(reg) {}",
-      "if (import.meta.main) {",
+      "export async function startConnector(): Promise<void> {",
       '  await runReadOnlyMcpConnector("nimbus-zzreadonly", registerZzTools);',
       "}",
+      "if (import.meta.main) await startConnector();",
     ].join("\n");
-    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
-  });
-
-  // The bare (un-gated) form of the same near miss — no corpus connector writes this today, but
-  // withTopLevelIfBodies only ADDS candidate statements, so the un-nested form must keep working.
-  it("also names the named-callback idiom when it is not gated behind an if at all", () => {
-    const source = [
-      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
-      "function registerZzTools(reg) {}",
-      'await runReadOnlyMcpConnector("nimbus-zzreadonly", registerZzTools);',
-    ].join("\n");
-    expect(frameFailureKind(parseModule(source))).toBe("frame:readonly-callback-not-inline");
+    // `registerZzTools` is never declared, so the named read-only form is refused and the
+    // hand-rolled branch takes over: the kit import is present, a top-level McpServer const is
+    // not. That is the bucket the ten corpus connectors reported before this recognizer existed.
+    expect(frameFailureKind(parseModule(source))).toBe("frame:no-mcp-server");
   });
 
   // frameFailureKind is only ever called by deriveSpec once recognizeFrame has already

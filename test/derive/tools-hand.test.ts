@@ -82,6 +82,7 @@ describe("recognizeTools", () => {
       // per-tool values feed into.
       staticPathStyles: ["quoted"],
       schemaShapes: [{ propertyCount: 0, oneLine: false }],
+      basePrefixes: [undefined],
     });
     expect(unclaimed).toEqual([]);
   });
@@ -106,6 +107,7 @@ describe("recognizeTools", () => {
       // one-property schema shares its source line with `z.object({`, so it is "inline" evidence.
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -174,6 +176,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -211,6 +214,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -243,6 +247,7 @@ describe("recognizeTools", () => {
       ],
       staticPathStyles: [undefined],
       schemaShapes: [{ propertyCount: 1, oneLine: true }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -415,7 +420,7 @@ describe("recognizeTools", () => {
     ],
 
     // Computed-member sweep: memberArgName reads `p.<name>` off a hoist's test/init — same hazard
-    // as path-template.ts's argNameFromExpr (which cites args.ts:53 for it) and server/index.ts's
+    // as path-template.ts's argNameFromExpr (which cites `recognizeArgs`) and server/index.ts's
     // isConnect. A computed member (`p[only_open]`) has an Identifier `property` too — the KEY
     // variable's name, not a property name — and must not be read as naming the arg "only_open".
     [
@@ -477,6 +482,7 @@ describe("recognizeTools", () => {
       handlerStyle: "block",
       staticPathStyles: ["quoted"],
       schemaShapes: [{ propertyCount: 0, oneLine: false }],
+      basePrefixes: [undefined],
     });
   });
 
@@ -567,5 +573,154 @@ describe("recognizeTools recovers the HTTP method", () => {
     // whenever recognizeFetchHelper itself found nothing. It must refuse rather than guess.
     const body = parseModule(emittedServer(WRITE_SPEC));
     expect(recognizeTools(body, createClaimSet(), undefined)).toBeUndefined();
+  });
+});
+
+// The block `renderTool`'s stub branch writes, whatever the connector's style — the shape
+// `recognizeStubShape` reads (`renderTool`'s `impl === "stub"` branch,
+// src/emit/server/tools-hand.ts). "newrelic_" prefix and
+// "nrGet" helper match CONCISE/BLOCK/BLOCK_NO_HOIST above, so this composes with them directly.
+const STUB_CALL = [
+  "reg(",
+  '  "newrelic_stub_tool",',
+  '  "Not yet implemented.",',
+  "  z.object({}),",
+  "  async () => {",
+  '    throw new Error("newrelic_stub_tool is not implemented");',
+  "  },",
+  ");",
+].join("\n");
+
+const STUB_SPEC = {
+  name: "zzstub",
+  displayName: "Zz Stub",
+  description: "Fixture for stub tool recovery.",
+  serviceLabel: "ZzStub",
+  style: "hand-rolled",
+  env: [{ vars: ["ZZSTUB_TOKEN"], local: "headers", auth: "bearer", required: true }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzstub.test", headers: "headers" },
+  tools: [
+    {
+      name: "zzstub_list",
+      description: "List items (not yet implemented).",
+      impl: "stub",
+      args: { scope: { type: "string", optional: true } },
+    },
+    {
+      name: "zzstub_get",
+      description: "Get an item.",
+      path: "/v1/items",
+    },
+  ],
+};
+
+describe("recognizeTools recognizes the stub tool handler", () => {
+  it("recovers a stub tool as { name, description, args, impl: 'stub' } — no path, no method — beside a real tool", () => {
+    const body = parseModule(emittedServer(STUB_SPEC));
+    const result = recognizeTools(body, createClaimSet(), "zzGet");
+    expect(result?.tools).toEqual([
+      {
+        name: "zzstub_list",
+        description: "List items (not yet implemented).",
+        args: { scope: { type: "string", optional: true } },
+        impl: "stub",
+      },
+      {
+        name: "zzstub_get",
+        description: "Get an item.",
+        args: {},
+        path: "/v1/items",
+      },
+    ]);
+  });
+
+  it("does not let a stub tool vote 'block' against a concise tool", () => {
+    // renderTool's stub branch writes the block form unconditionally (see ToolShape's own
+    // docstring), so without votesHandlerStyle: false this pair would be refused outright — a
+    // block with no hoists beside a concise handler matches neither connector-wide handlerStyle
+    // (recognizeTools' own mixed-shape rule, exercised directly by the test just above it).
+    const { result } = run(`${CONCISE}\n${STUB_CALL}`);
+    expect(result?.handlerStyle).toBeUndefined();
+    expect(result?.tools.map((t) => t.name)).toEqual([
+      "newrelic_application_list",
+      "newrelic_stub_tool",
+    ]);
+  });
+
+  it("recovers STUB_CALL on its own — the base every REFUSED_STUBS row below corrupts", () => {
+    const { result } = run(STUB_CALL);
+    expect(result?.tools).toEqual([
+      { name: "newrelic_stub_tool", description: "Not yet implemented.", args: {}, impl: "stub" },
+    ]);
+  });
+
+  // Every mutation the recognizer must refuse outright — the brief's own four cases, plus the
+  // async guard (renderTool's hand-rolled stub always writes `async`, so a non-async one is a
+  // shape it cannot have written either), an arity-5 call (recognizeStubShape's own regCallParts
+  // pins arity 4 — nothing else here refuses the extra argument), and a single statement that is
+  // not a throw at all (distinct from "a thrown value that is not new Error(...)": that row still
+  // has a ThrowStatement, so `throwArgument` succeeds and `newOf` is what refuses it; this row has
+  // no throw at all, so `throwArgument` itself returns undefined first).
+  //
+  // Each row is a corruption of STUB_CALL — the same base the test just above pins as recognized
+  // — so a row is never vacuously "refused" by starting from an already-broken shape; the row
+  // above proves the base recovers, and `expect(corrupted).not.toBe(pristine)` proves each edit
+  // actually changed something.
+  const REFUSED_STUBS: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "a throw message that does not match `${name} is not implemented` exactly",
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      'throw new Error("something else went wrong");',
+    ],
+    [
+      "a thrown value that is not new Error(...)",
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      'throw "newrelic_stub_tool is not implemented";',
+    ],
+    [
+      "a single statement that is not a throw at all",
+      'throw new Error("newrelic_stub_tool is not implemented");',
+      "return undefined;",
+    ],
+    [
+      "a block with a statement before the throw",
+      '  async () => {\n    throw new Error("newrelic_stub_tool is not implemented");',
+      '  async () => {\n    const x = 1;\n    throw new Error("newrelic_stub_tool is not implemented");',
+    ],
+    [
+      "a stub handler taking a parameter — renderTool writes async () always",
+      "async () => {",
+      "async (p) => {",
+    ],
+    [
+      "a non-async stub handler — renderTool's hand-rolled stub is always async",
+      "async () => {",
+      "() => {",
+    ],
+    [
+      "a fifth argument — recognizeStubShape's regCallParts pins arity 4 like recognizeOne's own",
+      "  },\n);",
+      '  },\n  "extra",\n);',
+    ],
+  ];
+
+  it.each(REFUSED_STUBS)("refuses %s", (_name, from, to) => {
+    const pristine = STUB_CALL;
+    const corrupted = pristine.replace(from, to);
+    expect(corrupted).not.toBe(pristine);
+
+    const { result, claims } = run(corrupted);
+    expect(result).toBeUndefined();
+    expect(claims.claims()).toEqual([]);
+  });
+
+  it("refuses a corrupted throw message on a REAL emitted stub — not just a hand-typed one", () => {
+    const pristine = emittedServer(STUB_SPEC);
+    const corrupted = pristine.replace(
+      'throw new Error("zzstub_list is not implemented");',
+      'throw new Error("zzstub_list is broken");',
+    );
+    expect(corrupted).not.toBe(pristine);
+    expect(recognizeTools(parseModule(corrupted), createClaimSet(), "zzGet")).toBeUndefined();
   });
 });

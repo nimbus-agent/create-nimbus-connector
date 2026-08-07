@@ -71,7 +71,7 @@ describe("deriveFromDirectory", () => {
   });
 
   // I2 (final whole-branch review): `deriveSpec`'s `ok: true` only means every AST construct was
-  // recognized, not that the recovered spec passes `validateSpec` — `token` is one of ~30
+  // recognized, not that the recovered spec passes `validateSpec` — `token` is one of the
   // RESERVED_IDENTIFIERS (alongside `path`, `res`, `text`, `url`, `u`, `server`), and a
   // hand-authored connector is free to name its fetch helper that. Built by taking THIS repo's
   // own emitted output and renaming the fetch helper post-hoc (never hand-writing

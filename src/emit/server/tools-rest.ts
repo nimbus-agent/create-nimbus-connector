@@ -1,8 +1,14 @@
-import { type ConnectorSpec, type QueryParam, registrarName } from "../../spec.ts";
+import {
+  type ConnectorSpec,
+  type PathSegment,
+  parsePathTemplate,
+  type QueryParam,
+  registrarName,
+} from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
-import { type PathSegment, parsePathTemplate, renderPath } from "./path-template.ts";
+import { renderPath } from "./path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "./query.ts";
 
 const PARAM = "parsed";

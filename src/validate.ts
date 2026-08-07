@@ -1,6 +1,5 @@
-import { type PathSegment, parsePathTemplate } from "./emit/server/path-template.ts";
-import type { ConnectorSpec } from "./spec.ts";
-import { needsExtractor, registrarName } from "./spec.ts";
+import type { ConnectorSpec, PathSegment } from "./spec.ts";
+import { needsExtractor, parsePathTemplate, registrarName } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [

@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
-import { recognizeEnv } from "../../src/derive/server/env.ts";
+import { type EnvEntry, recognizeEnv } from "../../src/derive/server/env.ts";
+import { renderEnvAccessor } from "../../src/emit/server/env.ts";
+import { EnvSchema } from "../../src/spec.ts";
 
 beforeAll(async () => {
   await initParser();
@@ -27,8 +29,8 @@ const OPTIONAL = [
 function run(source: string) {
   const statements = parseModule(source);
   const claims = createClaimSet();
-  const entries = recognizeEnv(statements, claims);
-  return { entries, unclaimed: claims.unclaimed(statements) };
+  const { entries, tokenServiceLabels } = recognizeEnv(statements, claims);
+  return { entries, tokenServiceLabels, unclaimed: claims.unclaimed(statements) };
 }
 
 // Every source the recognizer must refuse, each with the reason it exists. One row per case:
@@ -606,6 +608,160 @@ describe("recognizeEnv: auth: basic", () => {
   });
 });
 
+/**
+ * The datadog `auth: "headers"` shape, the one accessor in this file whose keys are a SPEC FIELD
+ * (`headerNames`) rather than constants — so it is the one where both spellings are producible and
+ * `quoteMinimalProps`, not `bareKeyedProps`, is the rule. Mirrors the "recovers auth: headers with
+ * headerNames" test above; kept as its own constant so the two spelling directions can corrupt it.
+ */
+const HEADERS_AUTH = [
+  "function headers(): Record<string, string> {",
+  '  const ak = process.env["DD_API_KEY"]?.trim();',
+  '  const app = process.env["DD_APP_KEY"]?.trim();',
+  '  if (ak === undefined || ak === "" || app === undefined || app === "") {',
+  '    throw new Error("DD_API_KEY and DD_APP_KEY must be set");',
+  "  }",
+  "  return {",
+  '    "DD-API-KEY": ak,',
+  '    "DD-APPLICATION-KEY": app,',
+  '    Accept: "application/json",',
+  "  };",
+  "}",
+].join("\n");
+
+const BEARER_AUTH = [
+  "function authHeaders(): Record<string, string> {",
+  '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+  '  if (tok === undefined || tok === "") {',
+  '    throw new Error("GRAFANA_API_TOKEN is not set");',
+  "  }",
+  '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+  "}",
+].join("\n");
+
+const BASIC_AUTH = [
+  "function authHeader(): Record<string, string> {",
+  '  const user = process.env["AIRFLOW_USER"]?.trim();',
+  '  if (user === undefined || user === "") {',
+  '    throw new Error("AIRFLOW_USER is not set");',
+  "  }",
+  '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+  '  if (pass === undefined || pass === "") {',
+  '    throw new Error("AIRFLOW_PASSWORD is not set");',
+  "  }",
+  "  return {",
+  "    Authorization: encodeBasicAuthHeader(user, pass),",
+  '    Accept: "application/json",',
+  "  };",
+  "}",
+].join("\n");
+
+/**
+ * Every header object `src/emit/server/env.ts` writes, corrupted in its key SPELLING alone.
+ *
+ * `objectProps` resolves `{ "Accept": … }` and `{ Accept: … }` to the same `key`, so before these
+ * pins each row below recovered an `EnvEntry` identical to the pristine one and re-emitted the
+ * bare form — different bytes, an unchanged spec, invisible to `diff:golden`, to the round trip
+ * and to the totality rule alike, since each of those emits what it just read.
+ *
+ * Only the NEEDLESSLY-quoted direction is testable per key: a name `IDENTIFIER_KEY_RE` rejects
+ * cannot be written bare at all (`{ DD-API-KEY: ak }` is a syntax error), so the other direction
+ * is pinned by the positive tests below instead.
+ */
+const REFUSED_KEY_SPELLINGS: ReadonlyArray<readonly [string, string, string]> = [
+  [
+    "a quoted Authorization in a bearer accessor's return (recognizeOne's classifyAuthReturn)",
+    BEARER_AUTH,
+    BEARER_AUTH.replace("{ Authorization:", '{ "Authorization":'),
+  ],
+  [
+    "a quoted Accept in a headers accessor's return — the trailing constant, beside two header names that must STAY quoted",
+    HEADERS_AUTH,
+    HEADERS_AUTH.replace('    Accept: "application/json",', '    "Accept": "application/json",'),
+  ],
+  [
+    "a quoted Authorization in a basic accessor's return (recognizeBasicAuth)",
+    BASIC_AUTH,
+    BASIC_AUTH.replace("    Authorization: encode", '    "Authorization": encode'),
+  ],
+  [
+    "a quoted Accept in a basic accessor's return",
+    BASIC_AUTH,
+    BASIC_AUTH.replace('    Accept: "application/json",', '    "Accept": "application/json",'),
+  ],
+];
+
+describe("recognizeEnv: the key SPELLING of every emitted header object", () => {
+  for (const [reason, pristine, corrupted] of REFUSED_KEY_SPELLINGS) {
+    it(`refuses ${reason}`, () => {
+      expect(corrupted).not.toBe(pristine);
+      // The pristine form is recognized — so the row proves the SPELLING is what was refused,
+      // not that the source was malformed in some other way.
+      const before = run(pristine);
+      expect(before.entries).toHaveLength(1);
+      expect(before.unclaimed).toEqual([]);
+
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+
+  // The split-bearer wrapper needs its own two rows rather than a table entry: it is only ever
+  // offered the statement immediately after a matched reader, so the source is the PAIR, and a
+  // refused wrapper leaves the reader standing alone as a plain required entry rather than
+  // leaving nothing at all — the same fallback the "wrong callee" test above asserts.
+  for (const [reason, wrapper] of [
+    [
+      "a quoted Authorization",
+      SPLIT_BEARER_WRAPPER.replace("{ Authorization:", '{ "Authorization":'),
+    ],
+    [
+      "a quoted Accept",
+      SPLIT_BEARER_WRAPPER.replace('Accept: "application/json"', '"Accept": "application/json"'),
+    ],
+  ] as const) {
+    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitBearer writes both bare`, () => {
+      expect(wrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+      const source = [SPLIT_BEARER_READER, "", wrapper].join("\n\n");
+      const { entries, unclaimed } = run(source);
+      expect(entries).toEqual([
+        { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+      ]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+
+  it("keeps a header name the emitter MUST quote quoted — the direction a bare-key pin would break", () => {
+    // `returnLines` writes `IDENTIFIER_RE.test(header) ? header : JSON.stringify(header)`, so
+    // datadog's two header names are producible ONLY quoted. Pinning `bareKey === true` here
+    // would refuse datadog — the same wrong claim as accepting `"Accept"`, pointed the other way.
+    expect(HEADERS_AUTH).toContain('"DD-API-KEY": ak,');
+    expect(run(HEADERS_AUTH).entries[0]?.headerNames).toEqual(["DD-API-KEY", "DD-APPLICATION-KEY"]);
+  });
+
+  it("still accepts an identifier-shaped header name written BARE, which the same rule requires", () => {
+    // The mirror of the row above, and the reason the rule is `bareKey === IDENTIFIER_KEY_RE.test`
+    // rather than "quoted is always fine": a spec whose headerNames are all valid identifiers
+    // emits them bare, and that must keep deriving.
+    const source = HEADERS_AUTH.replace('"DD-API-KEY": ak,', "ddApiKey: ak,").replace(
+      '"DD-APPLICATION-KEY": app,',
+      "ddAppKey: app,",
+    );
+    expect(source).not.toBe(HEADERS_AUTH);
+    expect(run(source).entries[0]?.headerNames).toEqual(["ddApiKey", "ddAppKey"]);
+  });
+
+  it("refuses that same identifier-shaped header name written QUOTED", () => {
+    const source = HEADERS_AUTH.replace('"DD-API-KEY": ak,', '"ddApiKey": ak,').replace(
+      '"DD-APPLICATION-KEY": app,',
+      "ddAppKey: app,",
+    );
+    expect(source).not.toBe(HEADERS_AUTH);
+    expect(run(source).entries).toEqual([]);
+  });
+});
+
 describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
   const HELPER = [
     "function trimTrailingSlash(s: string): string {",
@@ -671,4 +827,566 @@ describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
     ]);
     expect(unclaimed).toHaveLength(1);
   });
+});
+
+/**
+ * The-honest-histogram's task 1, Finding B: matchSplitBearerReader, matchSplitBearerWrapper,
+ * recognizeBasicAuth and recognizeOne previously read a function's body and its name but never
+ * its return-type annotation or its async-ness, so a function whose TEXT the emitter cannot write
+ * still read as a match — `async function headers(): Promise<number>` read exactly like
+ * `function headers(): Record<string, string>`. Each `.replace()` below is preceded by an
+ * `expect(...).not.toBe(...)` guard — the same discipline test/derive/search-filter.test.ts's
+ * corruption tests use — so a no-op replace (because the emitter stopped writing that text)
+ * cannot silently stop testing anything.
+ */
+describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
+  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitBearer always writes `(): string`", () => {
+    const corruptedReader = SPLIT_BEARER_READER.replace(
+      "function apiToken(): string {",
+      "function apiToken(): unknown {",
+    );
+    expect(corruptedReader).not.toBe(SPLIT_BEARER_READER);
+    const source = [corruptedReader, "", SPLIT_BEARER_WRAPPER].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    // Neither statement is claimed: the reader fails both matchSplitBearerReader's new
+    // annotation check (inside the pairing loop) and recognizeOne's identical check (the plain-
+    // accessor fallback), and the wrapper is never even offered to the pairing logic once the
+    // reader itself is refused there.
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(2);
+  });
+
+  it("refuses an async split-bearer wrapper — renderSplitBearer never writes `async` on either half", () => {
+    const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace(
+      "function authHeader(): Record<string, string> {",
+      "async function authHeader(): Promise<Record<string, string>> {",
+    );
+    expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+    const source = [SPLIT_BEARER_READER, "", corruptedWrapper].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    // No tokenLocal-carrying entry forms — matchSplitBearerWrapper refuses the async half, the
+    // same "no pair" outcome the hand-written cases in "recognizeEnv: split-bearer pair
+    // (tokenLocal)" above cover. The untouched reader is BYTE-IDENTICAL to a plain required
+    // accessor (its own docstring), so it still falls back through the plain-accessor branch
+    // exactly as "falls back to a plain required entry when no wrapper follows the reader"
+    // (above) already establishes; the async wrapper itself now matches neither
+    // recognizeBasicAuth nor recognizeOne (both refuse async before reading anything else) and
+    // stays unclaimed.
+    expect(entries).toEqual([
+      { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+    ]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a basic accessor annotated something other than `: Record<string, string>` — renderBasic always writes that", () => {
+    const pristine = [
+      "function authHeader(): Record<string, string> {",
+      '  const user = process.env["AIRFLOW_USER"]?.trim();',
+      '  if (user === undefined || user === "") {',
+      '    throw new Error("AIRFLOW_USER is not set");',
+      "  }",
+      '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+      '  if (pass === undefined || pass === "") {',
+      '    throw new Error("AIRFLOW_PASSWORD is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: encodeBasicAuthHeader(user, pass),",
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const corrupted = pristine.replace(
+      "function authHeader(): Record<string, string> {",
+      "function authHeader(): unknown {",
+    );
+    expect(corrupted).not.toBe(pristine);
+    const { entries, unclaimed } = run(corrupted);
+    // recognizeBasicAuth refuses on the annotation; recognizeOne never competes for this
+    // read/guard/read/guard shape at all (its own docstring), so nothing else claims it either.
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a plain accessor whose annotation contradicts its auth shape — renderEnvAccessor writes `: string` for a bare read and `: Record<string, string>` for an auth one", () => {
+    const pristine = [
+      "function authHeaders(): Record<string, string> {",
+      '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+      '  if (tok === undefined || tok === "") {',
+      '    throw new Error("GRAFANA_API_TOKEN is not set");',
+      "  }",
+      '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const corrupted = pristine.replace(
+      "function authHeaders(): Record<string, string> {",
+      "function authHeaders(): string {",
+    );
+    expect(corrupted).not.toBe(pristine);
+    const { entries, unclaimed } = run(corrupted);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});
+
+/**
+ * The PR-review finding on top of Finding B above, and the SEVENTH instance of this branch's
+ * defining defect class: the four matchers Finding B pinned checked `typeAnnotationName(...) ===
+ * "Record"`, and `typeAnnotationName` reports a type reference's HEAD NAME only (its own
+ * docstring). `Record<string, number>` and `Record<unknown, unknown>` satisfied that check, while
+ * `renderEnvAccessor`, `renderSplitBearer`, `renderBasic` and `renderClientCredentials`
+ * (src/emit/server/env.ts) write exactly `Record<string, string>` and no other instantiation. Such
+ * a module recovers IDENTICAL `EnvEntry` fields and re-emits `Record<string, string>` — different
+ * bytes, an unchanged spec, and nothing that could see it: `diff:golden` compares emitted output
+ * against the corpus, the round trip emits the annotation going in and coming out, and the
+ * totality rule detects statements nobody claimed, not statements claimed wrongly.
+ *
+ * `hasWriteHelperSignature` (src/derive/server/fetch-helper.ts) already pinned `Promise`'s own
+ * type argument for exactly this reason, through the `typeArguments` accessor added for it. One
+ * module pinned; its sibling did not. `isStringRecord` is now the single guard both halves of that
+ * asymmetry answer to.
+ */
+describe("recognizeEnv: Record's type arguments, not just its head name", () => {
+  const BEARER_ACCESSOR = [
+    "function authHeaders(): Record<string, string> {",
+    '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+    '  if (tok === undefined || tok === "") {',
+    '    throw new Error("GRAFANA_API_TOKEN is not set");',
+    "  }",
+    '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+    "}",
+  ].join("\n");
+
+  const BASIC_ACCESSOR = [
+    "function authHeader(): Record<string, string> {",
+    '  const user = process.env["AIRFLOW_USER"]?.trim();',
+    '  if (user === undefined || user === "") {',
+    '    throw new Error("AIRFLOW_USER is not set");',
+    "  }",
+    '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+    '  if (pass === undefined || pass === "") {',
+    '    throw new Error("AIRFLOW_PASSWORD is not set");',
+    "  }",
+    "  return {",
+    "    Authorization: encodeBasicAuthHeader(user, pass),",
+    '    Accept: "application/json",',
+    "  };",
+    "}",
+  ].join("\n");
+
+  /**
+   * Three instantiations, each typechecking and each bytes no spec produces: a wrong VALUE type,
+   * a wrong KEY type (which the head-name check missed on the left of the pair as readily as on
+   * the right), and the bare reference with no arguments at all — the arity case, which
+   * `typeArguments` reports as absent rather than as an empty list.
+   */
+  const WRONG_RECORDS: ReadonlyArray<readonly [string]> = [
+    ["Record<string, number>"],
+    ["Record<unknown, unknown>"],
+    ["Record"],
+  ];
+
+  it.each(WRONG_RECORDS)(
+    "refuses a plain auth accessor returning %s — renderEnvAccessor writes Record<string, string>",
+    (wrong) => {
+      const corrupted = BEARER_ACCESSOR.replace("Record<string, string>", wrong);
+      expect(corrupted).not.toBe(BEARER_ACCESSOR);
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+
+  it.each(WRONG_RECORDS)(
+    "refuses a basic accessor returning %s — renderBasic writes Record<string, string>",
+    (wrong) => {
+      const corrupted = BASIC_ACCESSOR.replace("Record<string, string>", wrong);
+      expect(corrupted).not.toBe(BASIC_ACCESSOR);
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+
+  it.each(WRONG_RECORDS)(
+    "refuses a split-bearer wrapper returning %s — renderSplitBearer writes Record<string, string>",
+    (wrong) => {
+      const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace("Record<string, string>", wrong);
+      expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+      const { entries, unclaimed } = run([SPLIT_BEARER_READER, "", corruptedWrapper].join("\n\n"));
+      // The same outcome the async-wrapper row above establishes, and for the same reason: the
+      // untouched READER is byte-identical to a plain required accessor, so it still derives
+      // through the plain-accessor branch, while the wrapper — matching neither
+      // matchSplitBearerWrapper nor recognizeOne — carries no tokenLocal and stays unclaimed.
+      expect(entries).toEqual([
+        { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+      ]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+});
+
+/**
+ * `auth: "client-credentials"` — the-honest-histogram's task 8, and the largest single construct
+ * in this emitter: FOUR module-scope statements (`let cachedToken`, `let tokenExpiresAt`,
+ * `async function token()`, `async function <local>()`) claimed as ONE entry, the way the
+ * split-bearer PAIR already is.
+ *
+ * The source under test is `renderEnvAccessor`'s own output rather than text copied into this
+ * file, so a change to `renderClientCredentials` that this recognizer does not follow fails here
+ * instead of silently testing a shape the emitter stopped writing. Every corruption below is
+ * guarded with `expect(corrupted).not.toBe(pristine)` for the same reason.
+ *
+ * Only SIX of the ~30 lines those two functions emit carry a spec field (the two reads, the
+ * guard's own var names, the token URL, the `scope` line, the credential placement, and the
+ * wrapper's name). Everything else is a constant, and a module differing in one of them derives a
+ * spec that regenerates different bytes while the totality rule stays silent — the statement WAS
+ * claimed. Hence a refusal case per constant.
+ */
+const CC_SPEC = {
+  vars: ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  local: "authHeaders",
+  bindings: ["id", "secret"],
+  auth: "client-credentials",
+  tokenUrl: "https://api.zzwrite.test/oauth/token",
+  scope: "items:readwrite",
+  credentialsIn: "basic",
+};
+
+/** `renderEnvAccessor`'s own text for `CC_SPEC`, with fields replaced. */
+function emitClientCredentials(overrides: Record<string, unknown> = {}): string {
+  return renderEnvAccessor(EnvSchema.parse({ ...CC_SPEC, ...overrides }), "ZZ Write");
+}
+
+const CLIENT_CREDENTIALS = emitClientCredentials();
+
+/**
+ * The three comment lines `renderTokenFunction` writes above `const ttl`, verbatim — the ONLY
+ * comment any emitter in src/emit/ puts into src/server.ts, and therefore the only one a claimed
+ * module can contain. A claim is a byte range, so an unpinned comment is claimed with the
+ * statements around it and vanishes on re-emission: `ok: true` for a module the spec provably
+ * cannot regenerate, invisible to `diff:golden` and to the round trip alike (both emit it going in
+ * and coming out).
+ */
+const TTL_COMMENT = [
+  "  // Renew a little early so a token cannot expire mid-flight between this check and the",
+  "  // request that uses it. The skew is halved for short-lived tokens, which would",
+  "  // otherwise be treated as already expired and re-exchanged on every call.",
+].join("\n");
+
+/** What `CLIENT_CREDENTIALS` must derive back to — `CC_SPEC` plus the schema defaults. */
+const CC_ENTRY = {
+  vars: ["ZZWRITE_CLIENT_ID", "ZZWRITE_CLIENT_SECRET"],
+  local: "authHeaders",
+  bindings: ["id", "secret"],
+  // `needsGuard` is true for any entry with `auth`, whatever `required` says, so the two values
+  // regenerate identical bytes — the schema default is recorded, exactly as buildAuthEntry does.
+  required: false,
+  auth: "client-credentials",
+  tokenUrl: "https://api.zzwrite.test/oauth/token",
+  scope: "items:readwrite",
+  credentialsIn: "basic",
+} satisfies EnvEntry;
+
+describe("recognizeEnv: auth: client-credentials", () => {
+  it("recovers one entry from four statements, claiming all four (credentialsIn: basic)", () => {
+    const { entries, unclaimed, tokenServiceLabels } = run(CLIENT_CREDENTIALS);
+    expect(entries).toEqual([CC_ENTRY]);
+    expect(unclaimed).toEqual([]);
+    // The label is EVIDENCE, not a field of any entry: spec.serviceLabel is recovered from the
+    // fetch helper, and deriveSpec holds the two against each other.
+    expect(tokenServiceLabels).toEqual(["ZZ Write"]);
+  });
+
+  it("recovers credentialsIn: body from the two body.set lines and the header object that loses its Authorization entry", () => {
+    const source = emitClientCredentials({ credentialsIn: "body" });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([{ ...CC_ENTRY, credentialsIn: "body" as const }]);
+  });
+
+  it('omits scope when no body.set("scope", …) line exists', () => {
+    const source = emitClientCredentials({ scope: undefined });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    const { scope, ...withoutScope } = CC_ENTRY;
+    expect(scope).toBe("items:readwrite");
+    expect(run(source).entries).toEqual([withoutScope]);
+  });
+
+  it("recovers the camel-cased default bindings when the spec declares none", () => {
+    const source = emitClientCredentials({ bindings: undefined });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([
+      { ...CC_ENTRY, bindings: ["zzwriteClientId", "zzwriteClientSecret"] },
+    ]);
+  });
+
+  it("recovers the defaulted read form, which suppresses the guard entirely", () => {
+    // guardLines writes nothing once a `default` is present, whatever `required`/`auth` say —
+    // so the group is one statement shorter, and the recognizer must not demand the guard.
+    const source = emitClientCredentials({ default: "unset" });
+    expect(source).not.toBe(CLIENT_CREDENTIALS);
+    expect(run(source).entries).toEqual([{ ...CC_ENTRY, default: "unset" }]);
+  });
+
+  it('keeps the QUOTED "Content-Type" key, the one mixed-spelling literal any emitter writes', () => {
+    // `renderTokenFunction`'s headerLines write `"Content-Type"` quoted beside a bare `Accept`
+    // and `Authorization` — the emitter's rule (quote iff the name is not a valid identifier)
+    // applied to three hardcoded names. So the pin here is `quoteMinimalProps`, and the
+    // `bareKey === true` rule that is right for every other fixed-key literal in this file would
+    // refuse the emitter's own output. This test is what fails if a later sweep "simplifies"
+    // matchTokenHeaders onto bareKeyedProps.
+    expect(CLIENT_CREDENTIALS).toContain('"Content-Type": "application/x-www-form-urlencoded"');
+    expect(CLIENT_CREDENTIALS).not.toContain("Content-Type:");
+    expect(run(CLIENT_CREDENTIALS).entries).toEqual([CC_ENTRY]);
+  });
+
+  it("sorts the group by its FIRST statement's position, not the wrapper's", () => {
+    // recognizeEnv re-sorts into declaration order by index, and that order is what
+    // renderEnvAccessors regenerates the module's byte order from. A four-statement group keyed
+    // on its wrapper (the LAST statement) would sort behind an accessor declared between the
+    // `let cachedToken` line and it.
+    const source = [OPTIONAL, "", CLIENT_CREDENTIALS, "", REQUIRED].join("\n\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries.map((e) => e.local)).toEqual(["region", "authHeaders", "apiKey"]);
+    expect(unclaimed).toEqual([]);
+  });
+});
+
+/**
+ * Each corruption changes ONE of the constants `renderTokenFunction`/`renderClientCredentials`
+ * write, and each must leave all four statements unclaimed. The assertions are identical in every
+ * row — no entry, nothing claimed — so only the source and its rationale differ.
+ */
+const REFUSED_CLIENT_CREDENTIALS: [string, string][] = [
+  [
+    "cachedToken initialized to something other than null — the cache check compares against null",
+    CLIENT_CREDENTIALS.replace(
+      "let cachedToken: string | null = null;",
+      'let cachedToken: string | null = "";',
+    ),
+  ],
+  [
+    "cachedToken annotated something other than `string | null`, which typechecks and is bytes the emitter never writes",
+    CLIENT_CREDENTIALS.replace(
+      "let cachedToken: string | null = null;",
+      "let cachedToken: null | string = null;",
+    ),
+  ],
+  [
+    "tokenExpiresAt initialized to something other than 0",
+    CLIENT_CREDENTIALS.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt = 1;"),
+  ],
+  [
+    "tokenExpiresAt given an annotation — renderTokenFunction writes it bare, and `: number` re-emits differently",
+    CLIENT_CREDENTIALS.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt: number = 0;"),
+  ],
+  [
+    "a skew constant other than 60 — the derived spec carries no field for it, so this re-emits 60",
+    CLIENT_CREDENTIALS.replace("Math.min(60,", "Math.min(30,"),
+  ],
+  [
+    "a halving divisor other than 2, the other half of the same arithmetic",
+    CLIENT_CREDENTIALS.replace("parsed.expires_in / 2", "parsed.expires_in / 3"),
+  ],
+  [
+    "a TTL unit other than 1000 — seconds is what expires_in is measured in",
+    CLIENT_CREDENTIALS.replace("Date.now() + ttl * 1000", "Date.now() + ttl * 60000"),
+  ],
+  [
+    'a body.set("scope", …) naming a non-literal — `scope` is JSON.stringify\'d into the emitted text',
+    CLIENT_CREDENTIALS.replace(
+      'body.set("scope", "items:readwrite");',
+      "body.set(\"scope\", process.env['SCOPE']);",
+    ),
+  ],
+  [
+    'credentialsIn: "basic" with the client_id/client_secret body lines ALSO present — renderTokenFunction\'s if/else writes one or the other, never both',
+    CLIENT_CREDENTIALS.replace(
+      'body.set("scope", "items:readwrite");',
+      [
+        'body.set("scope", "items:readwrite");',
+        '  body.set("client_id", id);',
+        '  body.set("client_secret", secret);',
+      ].join("\n"),
+    ),
+  ],
+  [
+    "neither credential placement — no Authorization header and no body lines, a shape no credentialsIn value produces",
+    CLIENT_CREDENTIALS.replace("      Authorization: encodeBasicAuthHeader(id, secret),\n", ""),
+  ],
+  [
+    "a token endpoint that is not a string literal — `tokenUrl` is JSON.stringify'd into the fetch call",
+    CLIENT_CREDENTIALS.replace(
+      'await fetch("https://api.zzwrite.test/oauth/token", {',
+      "await fetch(tokenEndpoint(), {",
+    ),
+  ],
+  [
+    "a response-body slice other than 400 characters",
+    CLIENT_CREDENTIALS.replace("text.slice(0, 400)", "text.slice(0, 200)"),
+  ],
+  [
+    "two error messages naming DIFFERENT services — one serviceLabel writes both",
+    CLIENT_CREDENTIALS.replace(
+      '"ZZ Write token response missing access_token"',
+      '"Other Service token response missing access_token"',
+    ),
+  ],
+  [
+    "a JSON.parse cast that does not declare expires_in — the ttl arithmetic below reads it",
+    CLIENT_CREDENTIALS.replace(
+      "as { access_token?: unknown; expires_in?: unknown }",
+      "as { access_token?: unknown }",
+    ),
+  ],
+  [
+    "a cache check that treats an already-expired token as fresh (`<=` for `<`)",
+    CLIENT_CREDENTIALS.replace("Date.now() < tokenExpiresAt", "Date.now() <= tokenExpiresAt"),
+  ],
+  [
+    "an unbounded-TTL fallback other than Number.POSITIVE_INFINITY",
+    CLIENT_CREDENTIALS.replace("Number.POSITIVE_INFINITY", "Number.MAX_SAFE_INTEGER"),
+  ],
+  [
+    "an empty-token check that accepts the empty string",
+    CLIENT_CREDENTIALS.replace(' || parsed.access_token === ""', ""),
+  ],
+  [
+    "an extra statement inside the token function — the claim covers its whole byte range, so anything the walk does not account for rides along",
+    CLIENT_CREDENTIALS.replace(
+      "  return cachedToken;\n}",
+      "  logIt(cachedToken);\n  return cachedToken;\n}",
+    ),
+  ],
+  [
+    "a wrapper whose Authorization value is not exactly `Bearer ${await token()}`",
+    CLIENT_CREDENTIALS.replace(
+      "Authorization: `Bearer ${await token()}`",
+      "Authorization: `Token ${await token()}`",
+    ),
+  ],
+  [
+    "a wrapper that calls token() WITHOUT awaiting it — token() is async, and the un-awaited form re-emits with the await",
+    CLIENT_CREDENTIALS.replace("${await token()}", "${token()}"),
+  ],
+  [
+    "a wrapper calling a function other than token()",
+    CLIENT_CREDENTIALS.replace("await token()", "await otherToken()"),
+  ],
+  [
+    // The client-credentials half of the finding the "Record's type arguments" describe above
+    // covers for the other three matchers. This one is nested a level deeper —
+    // `renderClientCredentials` writes `Promise<Record<string, string>>` — so the outer
+    // `Promise` argument was already pinned and only the inner instantiation was not.
+    "a wrapper returning Promise<Record<string, number>> — renderClientCredentials writes Promise<Record<string, string>>",
+    CLIENT_CREDENTIALS.replace(
+      "Promise<Record<string, string>>",
+      "Promise<Record<string, number>>",
+    ),
+  ],
+  [
+    "a wrapper returning a bare Promise<Record> — the arity case, which `typeArguments` reports as absent rather than empty",
+    CLIENT_CREDENTIALS.replace("Promise<Record<string, string>>", "Promise<Record>"),
+  ],
+
+  // --- The emitted comment. renderTokenFunction is the only emitter that writes one into
+  // src/server.ts, so nothing in this deriver looked for one until this construct existed.
+  [
+    "a STRIPPED comment above `const ttl` — the module re-emits with it, so `ok: true` here would be a spec that provably cannot regenerate the input",
+    CLIENT_CREDENTIALS.replace(`${TTL_COMMENT}\n`, ""),
+  ],
+  [
+    "an ALTERED comment above `const ttl` — presence alone (hasLeadingComment) would accept this and silently restore the original wording",
+    CLIENT_CREDENTIALS.replace("Renew a little early", "Refresh a little early"),
+  ],
+  [
+    "a comment block one line SHORTER than the emitted one — the length check, not just the per-line comparison",
+    CLIENT_CREDENTIALS.replace(
+      "  // otherwise be treated as already expired and re-exchanged on every call.\n",
+      "",
+    ),
+  ],
+  [
+    "a comment above a statement the emitter writes none above — the claim covers the whole function, so this vanishes on re-emission exactly as a stripped one does",
+    CLIENT_CREDENTIALS.replace(
+      "  const text = await res.text();",
+      "  // fetched above\n  const text = await res.text();",
+    ),
+  ],
+  [
+    "a comment inside the wrapper, which renderClientCredentials writes bare",
+    CLIENT_CREDENTIALS.replace(
+      "  return { Authorization:",
+      "  // build the header\n  return { Authorization:",
+    ),
+  ],
+  [
+    "a comment above one of the two module-scope `let` bindings",
+    CLIENT_CREDENTIALS.replace(
+      "let tokenExpiresAt = 0;",
+      "// epoch millis\nlet tokenExpiresAt = 0;",
+    ),
+  ],
+
+  // --- Key SPELLING. Every key below is one `renderTokenFunction`/`renderClientCredentials`
+  // hardcodes, so the quoted form recovers the identical fields and re-emits the bare one:
+  // different bytes, an unchanged `EnvEntry`, and no gate that can see it. The `"Content-Type"`
+  // key is deliberately absent — it is the one key here the emitter DOES quote, and the positive
+  // test above pins it staying that way.
+  [
+    "a quoted `grant_type` in the URLSearchParams literal",
+    CLIENT_CREDENTIALS.replace("{ grant_type:", '{ "grant_type":'),
+  ],
+  [
+    "a quoted `method` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace('    method: "POST",', '    "method": "POST",'),
+  ],
+  [
+    "a quoted `headers` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace("    headers: {", '    "headers": {'),
+  ],
+  [
+    "a quoted `body` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace("    body: body.toString(),", '    "body": body.toString(),'),
+  ],
+  [
+    "a quoted `Accept` inside the token fetch's headers object, beside the correctly-quoted Content-Type",
+    CLIENT_CREDENTIALS.replace(
+      '      Accept: "application/json",',
+      '      "Accept": "application/json",',
+    ),
+  ],
+  [
+    "a quoted `Authorization` inside the token fetch's headers object (the credentialsIn: basic entry)",
+    CLIENT_CREDENTIALS.replace(
+      "      Authorization: encodeBasicAuthHeader(",
+      '      "Authorization": encodeBasicAuthHeader(',
+    ),
+  ],
+  [
+    "a quoted `Authorization` in the async wrapper's returned header object",
+    CLIENT_CREDENTIALS.replace("  return { Authorization:", '  return { "Authorization":'),
+  ],
+  [
+    "a quoted `Accept` in the async wrapper's returned header object",
+    CLIENT_CREDENTIALS.replace(
+      '`, Accept: "application/json" };',
+      '`, "Accept": "application/json" };',
+    ),
+  ],
+];
+
+describe("recognizeEnv: auth: client-credentials refusals", () => {
+  for (const [reason, corrupted] of REFUSED_CLIENT_CREDENTIALS) {
+    it(`refuses ${reason}`, () => {
+      expect(corrupted).not.toBe(CLIENT_CREDENTIALS);
+      const { entries, unclaimed, tokenServiceLabels } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(tokenServiceLabels).toEqual([]);
+      // All four statements stay unclaimed — including the WRAPPER, which is what stops the
+      // plain-accessor pass from picking it up as an env entry the module never declared. That
+      // guard is recognizeOne's async/return-type pin (task 1); this is what stops a later
+      // change from removing it silently.
+      expect(unclaimed).toHaveLength(4);
+    });
+  }
 });

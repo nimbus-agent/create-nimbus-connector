@@ -1,12 +1,12 @@
 import type { AstNode } from "../ast.ts";
 import {
+  bareKeyedProps,
   callArgs,
   calleeOf,
   isIdent,
   memberName,
   memberObject,
   numericValue,
-  objectProps,
   startLine,
 } from "../read.ts";
 
@@ -31,6 +31,14 @@ export type ArgFields = {
    */
   default?: string | number | boolean;
 };
+
+/**
+ * One tool's evidence for the connector-wide `argsSchemaStyle` vote — see `voteArgsSchemaStyle`
+ * (src/derive/index.ts) for why a `propertyCount` of 0 abstains and why a single one-liner is
+ * decisive while multi-line is not. Named because it was inlined at seven sites, and an inline
+ * structural type is a place for one site to gain a field the other six silently ignore.
+ */
+export type SchemaShape = { readonly propertyCount: number; readonly oneLine: boolean };
 
 const BASE_TYPES = new Set(["string", "number", "boolean"]);
 
@@ -61,7 +69,7 @@ export function recognizeArgs(node: AstNode): ArgsResult | undefined {
   // A computed member (`z[object](...)`) can have an Identifier `property` too — the KEY
   // variable's name, not a property name. Unguarded, this would accept `z[object](...)` as
   // `z.object(...)` whenever the index variable happened to be named "object". Same hazard as
-  // `objectProps` below guards on an object literal's OWN keys (a computed `{ [KEY]:
+  // `bareKeyedProps` below guards on an object literal's OWN keys (a computed `{ [KEY]:
   // z.string() }` would otherwise derive an arg literally named "KEY", the identifier's own
   // name, rather than being refused) and server/index.ts's isConnect guards on a member call's
   // receiver. `memberName`/`memberObject` carry this guard already.
@@ -70,7 +78,16 @@ export function recognizeArgs(node: AstNode): ArgsResult | undefined {
   if (!isIdent(memberObject(callee), "z")) return undefined;
 
   const objectNode = args[0];
-  const props = objectProps(objectNode);
+  // `bareKeyedProps`, not `quoteMinimalProps`, even though the key names here are VARIABLE: the
+  // two rules agree on every producible name, and disagree only on one that no spec can carry.
+  // `renderZodFieldList` (src/emit/server/args.ts) interpolates `${name}:` unquoted with no
+  // spelling test of its own, and `ToolSchema.args`' key regex (src/spec.ts) already confines
+  // `name` to a valid identifier — so the quoted spelling is unreachable in both directions.
+  // Under `quoteMinimalProps`, `{ "my-arg": z.string() }` would instead be ACCEPTED and derive an
+  // arg named "my-arg", which `parseSpec` then rejects one tier down with no bucket naming the
+  // construct that caused it. Refusing at the recognizer is what keeps the histogram honest —
+  // server/body.ts's `fieldName` makes the same choice for the same reason, on its empty key.
+  const props = bareKeyedProps(objectNode);
   if (props === undefined) return undefined;
 
   const out: Record<string, ArgFields> = {};

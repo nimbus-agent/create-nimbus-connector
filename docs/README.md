@@ -34,12 +34,14 @@ reasons, and the difference matters before you start work.
 **Still-live specification — not a historical record.**
 
 - [Completing the deriver's recognizer set](./superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-  specifies a seven-commit sequence of which only the first four have shipped — commit 4 being
-  search and search-filter, both now landed. The query and body recognizers have not,
-  which is why `test/derive/round-trip.test.ts`'s `BLOCKED` map still names fixtures blocked on
-  query parameters and write body.
+  specifies a seven-commit sequence, and every commit in it has now shipped — including the body
+  recognizer (`recognizeBodyExpr`), the hand-rolled write helper, the rest-kit init callback and
+  the optional client-credentials env shape. `test/derive/round-trip.test.ts`'s `BLOCKED` map is
+  consequently empty: every fixture in `fixtures/` round-trips or carries a named partial gap.
+  What is still live here is the document's *reasoning* — why each recognizer is shaped the way
+  it is, and what it deliberately refuses — not its checklist.
   [Its review](./superpowers/specs/2026-08-04-completing-the-recognizer-set-review.md) leaves
-  two questions open against that unbuilt work.
+  two questions open against work that has since been built.
 - [Guarded accessors and the two missing frames](./superpowers/plans/2026-08-04-guarded-accessors-and-frames.md)
   executed those first three commits and carries the plan-1 / plan-2 boundary: which of the
   design's remaining work is deferred, to what, and with what connector counts. Plan 2 has not
@@ -77,9 +79,13 @@ reasons, and the difference matters before you start work.
 - **Corpus measurements behind a default** → the [README](../README.md), next to the field they justify
 - **The traps that bite an agent working here** → [CLAUDE.md](../CLAUDE.md)
 
-**Live numbers are not written down anywhere.** Fixture counts and pass rates move with the
-corpus; `bun run diff:golden --nimbus-root <path>` is the answer, and a document restating it
-would go stale silently.
+**Live numbers are written down in exactly one place.** Fixture counts and pass rates move with
+the corpus; `bun run diff:golden --nimbus-root <path>` is the answer, and a document restating it
+goes stale silently. The one sanctioned exception is
+[ROADMAP § The measured ceiling](./ROADMAP.md#the-measured-ceiling), which states the corpus
+regeneration counts on purpose and earns it by carrying the date and the `packages/mcp-connectors`
+tree they were measured against — see [CLAUDE.md](../CLAUDE.md), which defines the rule and this
+exception together. A number without those two is what the rule forbids.
 
 ## The other repos
 

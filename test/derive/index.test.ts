@@ -167,6 +167,185 @@ const ZZTITLE_SPEC = {
   ],
 };
 
+/**
+ * The two facts `matchClientCredentials` (server/env.ts) and the fetch-helper recognizers recover
+ * INDEPENDENTLY and that only this module can hold against each other — the same class of guard
+ * as `rest-fetch-helper-name-mismatch` below, and both newly reachable as of task 8.
+ *
+ * A GET and a POST, so both helpers are emitted and each has to agree separately.
+ */
+const CC_SPEC = {
+  name: "zzcc",
+  displayName: "ZZ CC",
+  description: "Fixture for the client-credentials cross-checks.",
+  serviceLabel: "ZZ CC",
+  style: "hand-rolled",
+  network: ["api.zzcc.test"],
+  syncInterval: 300,
+  minNimbusVersion: "0.2.0",
+  env: [
+    {
+      vars: ["ZZCC_CLIENT_ID", "ZZCC_CLIENT_SECRET"],
+      local: "authHeaders",
+      bindings: ["id", "secret"],
+      auth: "client-credentials",
+      tokenUrl: "https://api.zzcc.test/oauth/token",
+      credentialsIn: "basic",
+    },
+  ],
+  fetchHelper: { local: "zzGet", base: "https://api.zzcc.test", headers: "authHeaders" },
+  tools: [
+    { name: "zzcc_item_list", description: "List items.", path: "/v1/items", args: {} },
+    {
+      name: "zzcc_item_create",
+      description: "Create an item.",
+      method: "POST",
+      effect: "write",
+      args: { title: { type: "string", min: 1 } },
+      path: "/v1/items",
+    },
+  ],
+};
+
+/** A bearer connector, identical in shape but for the auth mode — its accessor is synchronous. */
+const BEARER_SPEC = {
+  ...CC_SPEC,
+  name: "zzbearer",
+  displayName: "ZZ Bearer",
+  serviceLabel: "ZZ Bearer",
+  network: ["api.zzbearer.test"],
+  env: [{ vars: ["ZZBEARER_TOKEN"], local: "authHeaders", auth: "bearer" }],
+  fetchHelper: { local: "zzGet", base: "https://api.zzbearer.test", headers: "authHeaders" },
+};
+
+function emitPair(spec: unknown): { server: string; manifest: string } {
+  const files = formatAll(generate(parseSpec(spec)));
+  return { server: pick(files, "src/server.ts"), manifest: pick(files, "nimbus.extension.json") };
+}
+
+describe("deriveSpec, client-credentials cross-checks", () => {
+  it("derives the pristine module, so every corruption below is one edit from a producible shape", () => {
+    const result = deriveSpec(emitPair(CC_SPEC));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.spec).toMatchObject({
+      env: [
+        {
+          vars: ["ZZCC_CLIENT_ID", "ZZCC_CLIENT_SECRET"],
+          local: "authHeaders",
+          auth: "client-credentials",
+          tokenUrl: "https://api.zzcc.test/oauth/token",
+          credentialsIn: "basic",
+        },
+      ],
+      fetchHelper: { local: "zzGet", headers: "authHeaders" },
+    });
+  });
+
+  it("leaves the wrapper UNCLAIMED when the token exchange is malformed — the plain-accessor pass must not pick it up as an env entry the module never declared", () => {
+    // The hazard is not a confusing message: it is Pass B claiming `authHeaders` as a standalone
+    // accessor after Pass A' refused the group, which derives a spec carrying a bogus plain env
+    // entry. What stops it is `recognizeOne`'s async/return-type pin (task 1) — an interaction
+    // between two tasks, which is exactly the kind of thing that survives until someone reorders
+    // them, so it is proved here rather than assumed.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace("let tokenExpiresAt = 0;", "let tokenExpiresAt = 1;");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Reported as unclaimed, NOT silently absorbed into an env entry.
+    expect(result.blockers.some((b) => b.kind === "function:authHeaders")).toBe(true);
+    expect(result.blockers.some((b) => b.kind === "function:token")).toBe(true);
+  });
+
+  it("blocks a module whose emitted comment was stripped — the one defect neither diff:golden nor the round trip can see", () => {
+    // `renderTokenFunction` writes three `//` lines above `const ttl`, and it is the only emitter
+    // in src/emit/ that puts a comment into src/server.ts at all. A claim is a byte range, so an
+    // unpinned comment is claimed with the statements around it and vanishes on re-emission —
+    // `ok: true` for a module the derived spec provably cannot regenerate. Neither byte gate can
+    // catch it: both emit the comment going in and coming out, so the input and the re-emission
+    // agree with each other while disagreeing with the module actually read.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("// Renew a little early"))
+      .join("\n");
+    expect(corrupted).not.toBe(server);
+    // The defect it stands in for, stated as the assertion it is: before the pin, this derived.
+    expect(deriveSpec({ server: corrupted, manifest }).ok).toBe(false);
+
+    // And the group is reported statement by statement rather than half-claimed.
+    const result = deriveSpec({ server: corrupted, manifest });
+    if (result.ok) return;
+    expect(result.blockers.some((b) => b.kind === "function:token")).toBe(true);
+    expect(result.blockers.some((b) => b.kind === "function:authHeaders")).toBe(true);
+  });
+
+  it("blocks a token exchange naming a different service than the fetch helper does", () => {
+    // One `spec.serviceLabel` writes the token function's two error messages AND the fetch
+    // helper's — recovered by two recognizers that never see each other.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server
+      .replace("ZZ CC token exchange", "Other Service token exchange")
+      .replace("ZZ CC token response missing", "Other Service token response missing");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["env:token-service-label-mismatch"]);
+  });
+
+  it("blocks a client-credentials module whose read helper does NOT await its headers accessor", () => {
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace(
+      "{ headers: await authHeaders() }",
+      "{ headers: authHeaders() }",
+    );
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+
+  it("blocks a client-credentials module whose WRITE helper does not await, though its read helper does", () => {
+    // Each helper is checked against the env separately, which is why `agreesWithReadHelper`
+    // does not compare the flag: two helpers disagreeing means at least one disagrees with the
+    // env, and it is named here rather than as a vaguer helper-vs-helper mismatch.
+    const { server, manifest } = emitPair(CC_SPEC);
+    const corrupted = server.replace(
+      'headers: { ...(await authHeaders()), "Content-Type": "application/json" }',
+      'headers: { ...authHeaders(), "Content-Type": "application/json" }',
+    );
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+
+  it("blocks a BEARER module that awaits its headers accessor — the direction the widened accessor branch newly makes reachable", () => {
+    // `headerOption` writes `await` only for the client-credentials accessor, so this module
+    // re-emits WITHOUT the await: a claimed statement it does not reproduce, and one no byte
+    // diff could see, since the recovered `fetchHelper` fields are identical either way.
+    const { server, manifest } = emitPair(BEARER_SPEC);
+    const corrupted = server
+      .replace("{ headers: authHeaders() }", "{ headers: await authHeaders() }")
+      .replace("...authHeaders()", "...(await authHeaders())");
+    expect(corrupted).not.toBe(server);
+
+    const result = deriveSpec({ server: corrupted, manifest });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["fetch-helper:headers-await-mismatch"]);
+  });
+});
+
 describe("deriveSpec, search-filter assembly checks (Trap 6 and its neighbours)", () => {
   it("blocks a recognized search tool when no filter file was supplied, rather than deriving a spec that regenerates a different filter", () => {
     const files = formatAll(generate(parseSpec(ZZTITLE_SPEC)));
@@ -372,12 +551,9 @@ describe("deriveSpec", () => {
     expect(result.blockers.map((b) => b.kind)).toEqual(["manifest:unattributable-hitl"]);
   });
 
-  // A genuinely non-trivial attribution (a real write tool, or two tools competing for the
-  // same declared effect) is not reachable through deriveSpec() yet: no recognizer in this
-  // plan claims a write-effect fetch helper (hand-rolled/read-only-kit) or a non-GET rest-kit
-  // registration (round-trip.test.ts's BLOCKED["zzwriteonly"/"zzwriterest"], "write body") — a
-  // later phase's territory. attributeEffects' own success and ambiguity behaviour is exercised
-  // directly, and exhaustively, in test/derive/effect.test.ts instead.
+  // A real write tool IS reachable through deriveSpec() now — `recognizeWriteHelper` claims the
+  // hand-rolled `<local>Send` and `recognizeOneCall` reads the rest-kit arity-5 initFn, so
+  // `zzwriteonly` and `zzwriterest` both round-trip rather than blocking.
   it("attaches no $effectAmbiguity when attribution is a no-op, and the spec re-parses", () => {
     const result = deriveSpec({ server: SERVER, manifest: MANIFEST });
     expect(result.ok).toBe(true);
@@ -385,5 +561,121 @@ describe("deriveSpec", () => {
     expect("$effectAmbiguity" in result).toBe(false);
     expect("$effectAmbiguity" in result.spec).toBe(false);
     expect(() => parseSpec(result.spec)).not.toThrow();
+  });
+
+  /**
+   * The AMBIGUOUS attribution path, end-to-end at last (Task 7 follow-up). It used to need two
+   * or more METHOD-carrying tools competing for one declared effect, and every write fixture so
+   * far carries a single candidate per effect — no recognizer reached this before `recognizeTools`
+   * could read a stub at all. A stub reaches it a different way: it carries no `method`, so it is
+   * never itself the attributed tool, but `attributeEffects`'s own docstring is what actually
+   * fires here — a stub is a silent SECOND candidate for whatever effect this function attributes
+   * to a real tool, since `ToolSchema` lets a stub declare any effect it likes. A spec, not a
+   * fixture, is enough to exercise it — see `attributeEffects`'s own direct unit coverage
+   * (test/derive/effect.test.ts) for the exhaustive case table this end-to-end test does not
+   * repeat.
+   */
+  const STUB_AMBIGUITY_SPEC = {
+    name: "zzeffectstub",
+    displayName: "Zz Effect Stub",
+    description: "Fixture for the stub effect-ambiguity path.",
+    serviceLabel: "ZzEffectStub",
+    style: "hand-rolled",
+    env: [{ vars: ["ZZEFFECTSTUB_TOKEN"], local: "headers", auth: "bearer", required: true }],
+    fetchHelper: { local: "zzGet", base: "https://api.zzeffectstub.test", headers: "headers" },
+    tools: [
+      {
+        name: "zzeffectstub_list",
+        description: "Not yet implemented.",
+        impl: "stub",
+        effect: "write",
+      },
+      {
+        name: "zzeffectstub_create",
+        description: "Create an item.",
+        method: "POST",
+        effect: "write",
+        path: "/v1/items",
+        args: { title: { type: "string", min: 1 } },
+      },
+    ],
+  };
+
+  describe("the tools-in-a-second-file shim shape (Task 10)", () => {
+    // The exact six-line shape all eleven shim connectors write (athena, bigquery,
+    // cloud-logging, cloudwatch, dataprofile, elasticsearch, great-expectations, localdb,
+    // sagemaker, storybook, vertex-ai): a read-only-kit frame that already matches, wrapping
+    // nothing but an import of ./tools.ts and one call to the name it imports.
+    const SHIM_SERVER = [
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      'import { registerZzshimTools } from "./tools.ts";',
+      "",
+      'await runReadOnlyMcpConnector("nimbus-zzshim", (reg) => {',
+      "  registerZzshimTools(reg);",
+      "});",
+    ].join("\n");
+
+    it("collapses the import and the call into one frame:tools-in-second-file blocker", () => {
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual(["frame:tools-in-second-file"]);
+    });
+
+    it("does NOT collapse when the call names something the import does not bind — a label may be permissive, never arbitrary", () => {
+      const server = SHIM_SERVER.replace("registerZzshimTools(reg);", "somethingElse(reg);");
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:./tools.ts",
+        "call:somethingElse",
+      ]);
+    });
+
+    it("does NOT collapse when the import is not relative — a package import beside an unrelated call stays two ordinary blockers", () => {
+      const server = SHIM_SERVER.replace('"./tools.ts"', '"some-package"');
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:some-package",
+        "call:registerZzshimTools",
+      ]);
+    });
+
+    it("does NOT collapse three unclaimed statements — the shape is pinned to exactly two", () => {
+      const server = SHIM_SERVER.replace(
+        "  registerZzshimTools(reg);",
+        "  registerZzshimTools(reg);\n  extraCall();",
+      );
+      const result = deriveSpec({ server, manifest: MANIFEST });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blockers.map((b) => b.kind)).toEqual([
+        "import-from:./tools.ts",
+        "call:registerZzshimTools",
+        "call:extraCall",
+      ]);
+    });
+  });
+
+  it("attaches $effectAmbiguity when a stub sits beside a write tool competing for the same declared effect", () => {
+    const files = formatAll(generate(parseSpec(STUB_AMBIGUITY_SPEC)));
+    const server = pick(files, "src/server.ts");
+    const manifest = pick(files, "nimbus.extension.json");
+
+    const result = deriveSpec({ server, manifest });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.$effectAmbiguity).toEqual(["write"]);
+
+    // Byte-safe, not wrong: emitManifest's hitlRequired is a deduplicated SET, so it reproduces
+    // "write" whichever tool the derived spec attributes it to, and src/server.ts never reads
+    // `effect` at all — the ambiguity is real (a human editing this spec cannot tell which tool
+    // the author meant) without costing a single byte.
+    const reFiles = formatAll(generate(parseSpec(result.spec)));
+    expect(pick(reFiles, "src/server.ts")).toBe(server);
+    expect(pick(reFiles, "nimbus.extension.json")).toBe(manifest);
   });
 });
