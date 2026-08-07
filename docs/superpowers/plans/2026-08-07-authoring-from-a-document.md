@@ -309,6 +309,20 @@ alphabetically. Order is not cosmetic here — it is bytes.
 - **`args`** — from `parameters` (`in: "path"` and `in: "query"`), carrying `type`, `optional`
   (`required: false`), `default`, `min`/`max` (`minimum`/`maximum`), and `int`
   (`type: integer`).
+
+  **Merge the path item's own `parameters` first — Task 1 exposes them for you.** A path item may
+  declare `parameters` that apply to *every* operation inside it, and `/widgets/{widgetId}` with the
+  variable declared at path level is a canonical OpenAPI shape. Task 1 originally dropped them
+  silently, which would have left you seeing a `{widgetId}` in the path template with nothing
+  declaring it — forced to either refuse a common valid document or invent a type. It now carries
+  them as `Operation.pathParameters`.
+
+  **OpenAPI's merge rule, which you implement rather than re-derive:** path-level parameters apply
+  to all operations in the item, and an operation-level parameter **overrides** a path-level one
+  when both `name` **and** `in` match. Matching on `name` alone is wrong — the same name may legally
+  appear once in `path` and once in `query`. Test both: a path-level parameter inherited by an
+  operation that declares none, and an operation-level parameter overriding a path-level one of the
+  same `(name, in)`.
 - **`body`** — from a **flat** `requestBody` JSON schema: one level of properties, each a scalar.
   **Select the media type explicitly.** `requestBody.content` is keyed by media type; take
   `application/json` or a `+json` suffix type (`application/problem+json`). A body offering only
@@ -477,6 +491,15 @@ Through the real binary via `Bun.spawnSync`:
   rather than by choice. **Choose deliberately now** — a connector author who has already run
   `--list-operations` and wants everything mappable is a real case, and so is refusing to guess at
   a tool set. Whichever you pick, the help text must stop describing the provisional state.
+
+**One refusal is handed to you deliberately: an `--op` naming an unsupported-method operation.**
+Task 1 detects `head`/`options`/`trace` and originally refused the whole document for them — which
+was reversed, because refusing a valid forty-operation document over one `HEAD /health` defeats the
+purpose of `--list-operations`. Those operations are now **noted and omitted from the selectable
+set**, so the hard refusal belongs here, at selection: `--op` naming one must refuse **by name**,
+saying the method is unsupported rather than reporting the operation as missing. Those are different
+diagnoses and a user who is told "no such operation" for one they can see in the listing will not
+believe the tool. Test it.
 - Nothing is ever written to disk. Assert the output directory is untouched.
 
 - [ ] **Step 2: Run — must FAIL**
