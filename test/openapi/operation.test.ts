@@ -1,53 +1,23 @@
 import { describe, expect, it } from "bun:test";
-import { listOperations, loadDocument, type Operation } from "../../src/openapi/document.ts";
+import { listOperations, type Operation } from "../../src/openapi/document.ts";
 import {
   type MappedOperation,
   type MappedTool,
   mapOperation,
   type Refusal,
 } from "../../src/openapi/operation.ts";
-import type { OpenApiDocument } from "../../src/openapi/schema.ts";
 import { parsePathTemplate, ToolSchema } from "../../src/spec.ts";
 import { RESERVED_IDENTIFIERS } from "../../src/validate.ts";
+import { documentFor, onePath } from "../support/openapi-doc.ts";
 
 /**
  * Every document below is SYNTHETIC — invented here, not transcribed from any published API.
- * `test/support/openapi-doc.ts` holds Task 1's shared constant; these are built per case instead,
- * because a mapper test's point is that its operation differs from a passing one by exactly the
- * construct under test. One shared constant with fifty variants hung off it would make each
- * case's difference the thing a reader has to reconstruct by hand.
+ * `test/support/openapi-doc.ts` holds Task 1's shared constant and the two builders this file and
+ * `spec.test.ts` share; the documents themselves are built per case, because a mapper test's point
+ * is that its operation differs from a passing one by exactly the construct under test. One shared
+ * constant with fifty variants hung off it would make each case's difference the thing a reader has
+ * to reconstruct by hand.
  */
-function documentFor(
-  paths: Record<string, unknown>,
-  extra: Record<string, unknown> = {},
-): OpenApiDocument {
-  return loadDocument(
-    JSON.stringify({
-      openapi: "3.0.3",
-      info: { title: "ZZ Widgets", version: "1.0.0" },
-      servers: [{ url: "https://api.zzwidgets.test/v1" }],
-      paths,
-      ...extra,
-    }),
-  ).doc;
-}
-
-/**
- * One path item holding one operation, which is what almost every case below needs.
- *
- * The path item's own keys are spread FIRST so a `parameters` array sits ahead of the method
- * key, which is where a real document puts it — and Task 1 promises document order, so building
- * it the other way round would test a shape no document has.
- */
-function onePath(
-  path: string,
-  method: string,
-  operation: Record<string, unknown>,
-  pathItem: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return { [path]: { ...pathItem, [method]: { operationId: "op", ...operation } } };
-}
-
 function mapOne(
   paths: Record<string, unknown>,
   extra: Record<string, unknown> = {},

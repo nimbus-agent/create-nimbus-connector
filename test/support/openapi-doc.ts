@@ -1,3 +1,6 @@
+import { loadDocument } from "../../src/openapi/document.ts";
+import type { OpenApiDocument } from "../../src/openapi/schema.ts";
+
 /**
  * The synthetic OpenAPI document the reader's tests are built from.
  *
@@ -40,3 +43,47 @@ export const ZZ_WIDGETS_YAML = [
   "      summary: Fetch one widget.",
   "",
 ].join("\n");
+
+/**
+ * A loadable document built around `paths`, with `extra` overriding any root key.
+ *
+ * Also SYNTHETIC, and shared for the reason the constant above is: `test/openapi/operation.test.ts`
+ * and `test/openapi/spec.test.ts` both build documents this way, and two hand-kept copies of a
+ * builder drift — a drifted copy is a test asserting something about a document the other test no
+ * longer describes. Task 2's report flagged the copy as the wrong fix and the move as the right
+ * one, so the move is what happened when the second consumer arrived.
+ *
+ * `extra` is spread LAST so a case can replace `servers`, `info` or `components` outright — and,
+ * because `JSON.stringify` drops an `undefined` value, `{ servers: undefined }` produces a document
+ * with no `servers` key at all rather than one with an empty value.
+ */
+export function documentFor(
+  paths: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+): OpenApiDocument {
+  return loadDocument(
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "ZZ Widgets", version: "1.0.0" },
+      servers: [{ url: "https://api.zzwidgets.test/v1" }],
+      paths,
+      ...extra,
+    }),
+  ).doc;
+}
+
+/**
+ * One path item holding one operation, which is what almost every mapper case needs.
+ *
+ * The path item's own keys are spread FIRST so a `parameters` array sits ahead of the method
+ * key, which is where a real document puts it — and Task 1 promises document order, so building
+ * it the other way round would test a shape no document has.
+ */
+export function onePath(
+  path: string,
+  method: string,
+  operation: Record<string, unknown>,
+  pathItem: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { [path]: { ...pathItem, [method]: { operationId: "op", ...operation } } };
+}

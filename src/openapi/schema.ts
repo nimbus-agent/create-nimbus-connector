@@ -24,8 +24,9 @@
  * declares no method keys — see its own note.
  *
  * A second group of schemas sits at the bottom of this file — parameters, schema nodes, media
- * types and request bodies. Those are NOT part of `OpenApiDocumentSchema`; they are applied by
- * `src/openapi/operation.ts` to one operation at a time, and their own section header says why
+ * types, request bodies and security schemes. Those are NOT part of `OpenApiDocumentSchema`; they
+ * are applied by `src/openapi/operation.ts` to one operation at a time and by
+ * `src/openapi/spec.ts` to the one security scheme it reads, and their own section header says why
  * that separation is load-bearing rather than incidental.
  */
 import { z } from "zod";
@@ -82,9 +83,10 @@ export type OpenApiPathItem = z.infer<typeof OpenApiPathItemSchema>;
 /* ------------------------------------------------------------------------------------------ *
  * Constructs read at MAPPING time, not at document-parse time
  *
- * `OpenApiDocumentSchema` stops at the path item, and the five below pick up where it stops:
- * they are what `src/openapi/operation.ts` reads off `Operation.raw` and `Operation
- * .pathParameters`. They are deliberately NOT wired into the document schema. A document whose
+ * `OpenApiDocumentSchema` stops at the path item and at `securitySchemes`, and the six below pick
+ * up where it stops: five are what `src/openapi/operation.ts` reads off `Operation.raw` and
+ * `Operation.pathParameters`, and the sixth is the one security scheme `src/openapi/spec.ts`
+ * reads. They are deliberately NOT wired into the document schema. A document whose
  * fortieth operation carries a header parameter is still a document whose other thirty-nine map,
  * and the mapper refuses one OPERATION at a time, by name; folding these in would turn every one
  * of those per-operation refusals into a single whole-document `document-shape` error naming a
@@ -174,6 +176,31 @@ export const OpenApiSchemaNodeSchema = z.looseObject({
   nullable: z.unknown().optional(),
   readOnly: z.unknown().optional(),
   writeOnly: z.unknown().optional(),
+});
+
+/**
+ * One `components.securitySchemes` entry, to the depth `src/openapi/spec.ts` reads it.
+ *
+ * Declared here rather than inside `OpenApiDocumentSchema.components` for the reason this whole
+ * section exists: an `oauth2` scheme, or an `apiKey` in a cookie, is a construct this generator
+ * cannot express but the DOCUMENT is perfectly valid, and folding this in would turn a named
+ * refusal that says which scheme and why into a whole-document `document-shape` error naming a zod
+ * path. `securitySchemes` is therefore `z.record(z.string(), z.unknown())` at document level, and
+ * this is applied to the one entry that is read.
+ *
+ * `type` and `in` are plain strings for the same reason `OpenApiParameterSchema.in` is: a `z.enum`
+ * would report `type: "oauth2"` as a shape error rather than letting the assembler refuse it by
+ * name. `scheme` and `name` are optional so that "an http scheme that names no scheme" and "an
+ * apiKey that names no header" are refusals with their own messages, not zod issues.
+ */
+export const OpenApiSecuritySchemeSchema = z.looseObject({
+  type: z.string().min(1),
+  /** `http` only: `bearer`, `basic`, `digest`, … — compared case-insensitively, per RFC 7235. */
+  scheme: z.string().min(1).optional(),
+  /** `apiKey` only: `header`, `query` or `cookie`. */
+  in: z.string().min(1).optional(),
+  /** `apiKey` only: the header name the credential is sent in. */
+  name: z.string().min(1).optional(),
 });
 
 /** One `content` entry. Only `schema` is read; `example`/`encoding` pass through untouched. */
