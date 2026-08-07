@@ -522,18 +522,63 @@ Added at the maintainer's request after the plan was written. It runs **last** s
 final tree — every earlier task adds code, and coverage raised before them would be re-measured
 anyway.
 
-- [ ] **Step 1: Get the findings, and say which half you are doing**
+- [ ] **Step 1: Read the findings — they are already pulled**
 
-`sonar.projectKey=nimbus-agent_create-nimbus-connector`. The project is **not readable
-anonymously** — `api/measures/component` and `api/components/show` both answer *"Project doesn't
-exist"* — so the finding list must come from the SonarCloud UI or an authenticated token. If you
-have neither, **say so plainly in the report and do the coverage half only.** Do not guess at a
-finding list and call it cleared; the precedent commit `9c0886f` cleared 87 real findings, and a
-report claiming "no findings" without having read them is the false green this repo exists to
-refuse.
+`.superpowers/sdd/2026-08-07-the-unattended-repo/sonar-findings.md` holds all 58, grouped by rule,
+each with its file, line and message. Pulled from `api/issues/search` with `SONAR_TOKEN` (present
+in the environment; the project is not readable anonymously). **Re-pull before you start** — every
+earlier task changed code, so lines have moved and the set may have too:
 
-Note that Task 4 adds `sonar.qualitygate.wait`, which is the structural half of this: without it,
-findings accumulate behind a green workflow, which is how the count reached 87 before.
+```bash
+curl -s -u "$SONAR_TOKEN:" \
+  "https://sonarcloud.io/api/issues/search?componentKeys=nimbus-agent_create-nimbus-connector&resolved=false&ps=100"
+```
+
+The state when this task was written: **0 bugs, 0 vulnerabilities, 0 security hotspots, 0.0%
+duplicated lines, 58 code smells**, coverage 91.9% over 11,964 ncloc.
+
+| Rule | Count | Severity | What it is |
+| --- | --- | --- | --- |
+| `S3776` | 18 | CRITICAL | Cognitive complexity too high |
+| `S6582` | 14 | MINOR | Prefer an optional chain |
+| `S1135` | 10 | INFO | "Complete the task associated to this TODO comment" |
+| `S3358` | 6 | MAJOR | Nested ternary |
+| `S4624` | 3 | MAJOR | Nested template literal |
+| `S8786` | 2 | MAJOR | Regex with superlinear runtime |
+| `S5976` | 2 | MAJOR | Four similar tests → one parameterized |
+| `S7770` | 1 | MINOR | Arrow function equivalent to `String` |
+| `S4043` | 1 | MAJOR | Misleading in-place `sort` |
+| `S5906` | 1 | MINOR | Prefer `toHaveLength` over a generic assertion |
+
+Concentrated in `src/derive/server/env.ts` (11), `src/openapi/spec.ts` (9), `src/cli.ts` (8).
+
+Task 4 adds `sonar.qualitygate.wait`, which is the structural half: without it findings accumulate
+behind a green workflow, which is how the count reached 87 before `9c0886f` cleared them.
+
+- [ ] **Step 2: The ten `S1135` findings are false positives — do not "fix" them by damaging the docs**
+
+I checked all ten. **Every one is a docstring describing the `TODO:` marker mechanism**, not an
+incomplete task. Samples:
+
+```
+src/openapi/spec.ts:103   * The `TODO:` marker is prose-only, and that is a constraint rather than a style choice.
+src/openapi/spec.ts:18    *    the author is expected to set it, so they carry a `TODO:` marker wherever the field is prose.
+src/cli.ts:727            * leaves a file that `--spec` reads directly, while the notes — each a `TODO:` recording
+```
+
+`--from-openapi` emits `TODO:` markers into its output **by design** — that is the documented way
+the generated spec says "a human must set this". The documentation has to name the marker, so
+rewording it to dodge the token would degrade the docs to satisfy a linter, which is the wrong
+trade in this repository.
+
+Handle it as a **declared exclusion** in `sonar-project.properties`, using
+`sonar.issue.ignore.multicriteria`, scoped to `S1135` and to the files that document the marker —
+and write the reason above it. That file already sets the convention: its `sonar.exclusions` and
+`sonar.javascript.lcov.reportPaths` entries each carry a comment explaining themselves. An
+unexplained exclusion is indistinguishable from hiding a finding.
+
+If you judge a narrower fix possible without hurting the prose, take it — but say which you chose
+and why.
 
 - [ ] **Step 2: Read `bunfig.toml` in full before touching coverage — it forbids the obvious move**
 
