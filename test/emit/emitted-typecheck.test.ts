@@ -53,13 +53,51 @@ const BIOME_BIN = join(
  * throw, so there is nothing here for a member-name mismatch to break, and a real drift in
  * `Syncable` would have to be caught by regenerating against the monorepo.
  *
- * A generated *connector package* is not typechecked here. It imports the SDK, the MCP SDK
- * and zod, and stubbing all three would mean asserting against a surface this project made
- * up — which is how a check ends up green against a fiction. That case is covered by
- * `bun run standalone-acceptance`, which installs the real dependencies and runs the
- * package's own `tsc --noEmit` and `bun run lint`; the `zzwriteonly` fixture there exists
- * for this defect specifically. What remains below is the cheap, direct statement of the
- * emission rule, which the acceptance run then proves compiles.
+ * WHAT THIS FILE ACTUALLY COMPILES, by style x target. Stated by name because the file's own
+ * coverage was previously described only as "a generated connector package is not typechecked
+ * here", which stopped being true once the monorepo compiles below were added, and left the
+ * remaining gaps unnamed:
+ *
+ *   - `emitWiring` output (the Gateway sync pair) — `tsc --noEmit`. One case. Its spec says
+ *     `style: "hand-rolled"`, but `emitWiring` does not read `spec.style`; no `server.ts` is
+ *     compiled by that case.
+ *   - read-only-kit x monorepo `src/server.ts` (+ `src/search-filter.ts` where emitted) —
+ *     `tsc --noEmit`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor,
+ *     conditional query parameter.
+ *   - read-only-kit x standalone, whole package — a real `biome check src/` under the emitted
+ *     biome.json. That is a LINT, not a typecheck: no `tsc` runs against a standalone
+ *     `server.ts` anywhere in `bun test`.
+ *
+ * NOT compiled anywhere in `bun test`: hand-rolled `src/server.ts` and rest-kit
+ * `src/server.ts`, at EITHER target. The "read helper emission is conditional on a call site"
+ * block below is the only coverage those two styles have here, and it asserts substrings —
+ * exactly the shape this file exists because a substring cannot see through. Measured, not
+ * assumed: emitting `const zzProbeUnusedLocal: number = 1;` from the non-read-only-kit `wiring()`
+ * branch in src/emit/server/index.ts — a guaranteed `TS6133` under NIMBUS_COMPILER_OPTIONS'
+ * `noUnusedLocals` — leaves all 13 tests in this file passing, while the identical line emitted
+ * into the read-only-kit path fails four of them with
+ * `error TS6133: 'zzProbeUnusedLocal' is declared but its value is never read`.
+ * (The full `bun test` does notice that particular probe, but through the deriver's round-trip
+ * and the checked-in snapshots — byte comparisons. A type-level defect that leaves the bytes
+ * derivable would pass.) Those two styles are typechecked only by `bun run standalone-acceptance`
+ * and `bun run diff:golden`, neither of which runs in CI.
+ *
+ * Why the gap is not closed by simply adding two more cases. Measured across all six style x
+ * target combinations: read-only-kit x monorepo is the ONLY one whose `server.ts` does not
+ * import `@modelcontextprotocol/sdk` — there, `runReadOnlyMcpConnector` owns the McpServer and
+ * the stdio transport, so the whole file resolves against locally-written stand-ins. The other
+ * five (hand-rolled and rest-kit at both targets, AND read-only-kit x standalone, which emits
+ * the runReadOnly glue itself) all construct `new McpServer(...)` and `new
+ * StdioServerTransport()` directly. Stubbing that surface would mean asserting against a shape
+ * this project made up, which is how a check ends up green against a fiction. That is also why
+ * the standalone case below reaches for `biome check` rather than `tsc`: Biome's checks are
+ * syntactic and need no resolvable imports, so it is the strongest gate available on emitted
+ * standalone source without inventing the MCP SDK.
+ *
+ * `bun run standalone-acceptance` installs the real dependencies and runs the package's own
+ * `tsc --noEmit` and `bun run lint`; the `zzwriteonly` fixture there exists for this defect
+ * specifically. `bun run diff:golden` covers hand-rolled and rest-kit monorepo output by byte
+ * comparison. Neither runs in CI.
  */
 
 const tmp = tempDirs();
