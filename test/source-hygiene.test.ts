@@ -74,7 +74,7 @@ function rendersAsNothing(ch: string): boolean {
  * every top-level directory by a catch-all and re-admits the ones this repo owns by name — a
  * brand-new `schema/` was ignored, so `--exclude-standard` dropped it and the sweep saw none of it.
  * Every gate stayed green. Measured per path on 2026-08-07 with the same `git ls-files` invocation
- * `filesUnder` runs: src 58, test 84, scripts 26, schema 1, docs 11 — so `src` ALONE clears the
+ * `filesUnder` runs: src 58, test 86, scripts 28, schema 1, docs 11 — so `src` ALONE clears the
  * aggregate floor below, and any one of the others could go to zero without moving a single
  * assertion. `git ls-files` exits 0 and prints nothing for a path that matches nothing, so silence
  * is the failure mode, not an error.

@@ -82,6 +82,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned to the same Bun as ci.yml. The published `bin` is a TypeScript
+      # file executed by Bun, so the version that validates the artifact here
+      # should be the version that validates it on every PR.
+      # release-workflow-guard.test.ts asserts the two stay equal.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
       # The third irreversible-mistake gate, and the only one that has already fired in
       # production three times unnoticed. CHANGELOG.md's `## Unreleased` section is
       # hand-written — release-please derives its entries from commit subjects, and a change
@@ -91,10 +100,10 @@ jobs:
       # their own: 0.4.0, 0.5.0 and 0.6.0 each published with their own notes still filed as
       # unreleased, and nothing in the repository reported it.
       #
-      # Placed before Bun is even installed: it costs a second, and failing here leaves the
-      # ten minutes of typecheck/lint/test/pack below for the runs that can actually publish.
-      # It must fail BEFORE `npm publish` for the reason the other two gates give — npm
-      # cannot unpublish after 72h.
+      # First thing after Bun and before `bun install`, which it does not need: it costs a
+      # second, and failing here leaves the ten minutes of typecheck/lint/test/pack below for
+      # the runs that can actually publish. It must fail BEFORE `npm publish` for the reason
+      # the other two gates give — npm cannot unpublish after 72h.
       #
       # Recovery, if it ever fires: the GitHub release and tag already exist, so re-running
       # this job cannot help (it would check out the same commit) and a fresh run would see
@@ -102,45 +111,14 @@ jobs:
       # and let release-please cut the next patch — that publishes a correct changelog with
       # provenance intact. Publishing by hand loses the attestation and is not the fix.
       #
-      # awk, not grep+tail: the pipeline forms all need an exit code discarded somewhere to
-      # survive `set -o pipefail` on an empty match, and a discarded exit code in this
-      # directory is the failure mode being guarded against.
+      # This was nine lines of awk inlined here, and it was correct — but nothing tested it,
+      # and deleting `bad = 1` from either branch left it exiting 0 on every input with the
+      # whole suite green. The rule now lives in scripts/_lib/changelog-gate.ts, where
+      # test/scripts/changelog-gate.test.ts drives it over the ten cases that awk was
+      # verified against; release-workflow-guard.test.ts asserts this step still invokes it
+      # and still runs before the publish.
       - name: Refuse to publish with notes still in the changelog's Unreleased section
-        run: |
-          set -euo pipefail
-          awk '
-            BEGIN { bad = 0; inside = 0; last = "" }
-            /^## Unreleased[ \t]*$/ { inside = 1; next }
-            /^## / { inside = 0 }
-            inside {
-              line = $0
-              sub(/^[ \t]+/, "", line)
-              sub(/[ \t]+$/, "", line)
-              if (line == "") next
-              if (line ~ /^###/ || line ~ /^[*-][ \t]/) {
-                printf "::error file=CHANGELOG.md,line=%d::a release note is still filed as unreleased: %s\n", NR, line
-                bad = 1
-              }
-              last = line
-            }
-            END {
-              if (last != "*Nothing pending.*") {
-                printf "::error file=CHANGELOG.md::the Unreleased section must end with its placeholder *Nothing pending.* — it ends with: %s\n", (last == "" ? "(no ## Unreleased section at all)" : last)
-                bad = 1
-              }
-              exit bad
-            }
-          ' CHANGELOG.md
-          echo "changelog ok: the Unreleased section holds nothing but its placeholder"
-
-      # Pinned to the same Bun as ci.yml. The published `bin` is a TypeScript
-      # file executed by Bun, so the version that validates the artifact here
-      # should be the version that validates it on every PR.
-      # release-workflow-guard.test.ts asserts the two stay equal.
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.14
+        run: bun scripts/check-changelog.ts
 
       - name: Install
         run: bun install --frozen-lockfile --ignore-scripts

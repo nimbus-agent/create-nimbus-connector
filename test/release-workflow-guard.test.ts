@@ -17,7 +17,10 @@
  * is empty would fail every pull request between writing a note and cutting the release.
  * The emptiness check therefore has to run only on the release commit — a step inside
  * release.yml — and what this file guards is that the step still exists and still runs
- * before the publish.
+ * before the publish. Its LOGIC is a different question and lives in a different file:
+ * scripts/_lib/changelog-gate.ts, exercised by test/scripts/changelog-gate.test.ts. The
+ * split matters, because for a while only this half existed and the rule underneath could
+ * be deleted outright with every assertion here still passing.
  *
  * Not every describe below is a release fact. This file is also where the repository-wide
  * workflow invariants live, having no other home: one Bun pin everywhere, harden-runner first
@@ -35,6 +38,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { UNRELEASED_PLACEHOLDER } from "../scripts/_lib/changelog-gate.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const read = (path: string): string => readFileSync(join(repoRoot, path), "utf8");
@@ -125,10 +129,14 @@ const ROOT = ".";
 
 /**
  * The literal CHANGELOG.md's Unreleased section carries when it holds nothing, and the
- * string release.yml's changelog gate grades that section against. Stated once here; both
- * halves are asserted below.
+ * string release.yml's changelog gate grades that section against. Transcribed here rather
+ * than imported, so this file grades the other two statements of it instead of agreeing
+ * with one of them; all three are asserted below.
  */
 const CHANGELOG_PLACEHOLDER = "*Nothing pending.*";
+
+/** The command that gate is. Its rule is scripts/_lib/changelog-gate.ts, tested separately. */
+const CHANGELOG_GATE_COMMAND = "bun scripts/check-changelog.ts";
 
 const releaseSteps = (jobId: string): Step[] => release.jobs[jobId]?.steps ?? [];
 
@@ -281,31 +289,47 @@ describe("the release workflow", () => {
     // and the move is manual. It was missed on 0.4.0, 0.5.0 and 0.6.0, each of which shipped
     // with its own notes still filed as unreleased, and nothing in the repository noticed.
     //
-    // Matched on the placeholder literal in the step's script rather than on the step name,
-    // for the same reason the pack-and-execute assertion is: a rename must not make this
-    // guard blind to the step being deleted.
-    const gateIndex = stepIndex("publish", (s) => s.run?.includes(CHANGELOG_PLACEHOLDER) === true);
+    // Matched on what the step RUNS rather than on its name, for the same reason the
+    // pack-and-execute assertion is: a rename must not make this guard blind to the step
+    // being deleted. `invokes` rather than `includes`, so the sentence in the comment block
+    // above the step that names the script cannot satisfy this on its own.
+    const gateIndex = stepIndex("publish", (s) => invokes(s, CHANGELOG_GATE_COMMAND));
     const publishIndex = stepIndex("publish", (s) => invokes(s, "npm publish"));
     expect(
       gateIndex,
-      "the publish job must check CHANGELOG.md's Unreleased section against its " +
-        `${CHANGELOG_PLACEHOLDER} placeholder`,
+      `the publish job must run \`${CHANGELOG_GATE_COMMAND}\`, which grades CHANGELOG.md's ` +
+        `Unreleased section against its ${CHANGELOG_PLACEHOLDER} placeholder`,
     ).toBeGreaterThanOrEqual(0);
     expect(
       gateIndex,
       "the changelog check must run BEFORE the publish — npm cannot unpublish after 72h, " +
         "so a check that runs afterwards reports a wrong changelog instead of preventing it",
     ).toBeLessThan(publishIndex);
-    expect(releaseSteps("publish")[gateIndex]?.run).toContain("CHANGELOG.md");
+  });
+
+  it("runs the changelog gate before the ten minutes of typecheck, lint, test and pack", () => {
+    // Not decoration on the ordering above. The gate needs no `bun install` and costs a
+    // second; placed after the long steps it would still prevent the publish, but every
+    // release that trips it would burn ten minutes first. That is the difference between a
+    // cheap gate and one people start wanting to skip.
+    const gateIndex = stepIndex("publish", (s) => invokes(s, CHANGELOG_GATE_COMMAND));
+    // `findIndex` returns -1 for a step that is not there, and -1 is less than every real
+    // index — so without this, deleting the gate outright would satisfy both orderings below.
+    expect(gateIndex, "the changelog gate step must exist to be ordered").toBeGreaterThanOrEqual(0);
+    expect(gateIndex).toBeLessThan(stepIndex("publish", (s) => invokes(s, "bun run typecheck")));
+    expect(gateIndex).toBeLessThan(stepIndex("publish", (s) => invokes(s, "npm pack")));
   });
 
   it("checks the changelog against the placeholder that file actually documents", () => {
-    // One fact in two files: rename the placeholder in CHANGELOG.md's convention header and
-    // the workflow keeps grepping for a string nothing will ever contain again — a gate that
-    // fails every release for the wrong reason, or (if inverted) never fires. The header
-    // names the literal on purpose so this assertion holds while notes ARE pending, which is
-    // the normal mid-development state and must not fail CI.
+    // One fact in three files: CHANGELOG.md's convention header names the literal so a reader
+    // knows what to leave behind, scripts/_lib/changelog-gate.ts grades against it, and this
+    // is an independent transcription of both. Rename it in one place and the gate would
+    // grade against a string nothing will ever contain again — a gate that fails every
+    // release for the wrong reason, or (if inverted) never fires. The header names the
+    // literal on purpose so this assertion holds while notes ARE pending, which is the normal
+    // mid-development state and must not fail CI.
     expect(read("CHANGELOG.md")).toContain(CHANGELOG_PLACEHOLDER);
+    expect(UNRELEASED_PLACEHOLDER).toBe(CHANGELOG_PLACEHOLDER);
   });
 
   it("never authenticates with a token", () => {
