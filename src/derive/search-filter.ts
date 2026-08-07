@@ -111,9 +111,29 @@ function stringArrayElements(node: AstNode | undefined): string[] | undefined {
 }
 
 /**
+ * The `nestedString(row, [...])` arm of `matchEntryCall`, split out because it is the only one of
+ * the four whose ARGUMENT has to be validated rather than merely read — the other three accept the
+ * call the moment their first argument is `row`. Inline, its three guards were the whole reason
+ * that table of four forms did not read as a table.
+ */
+function matchNestedStringEntry(args: readonly AstNode[]): FieldEntry | undefined {
+  if (!isIdent(args[0], "row")) return undefined;
+  const path = stringArrayElements(args[1]);
+  if (path === undefined) return undefined;
+  // SearchFilterSchema's own superRefine (src/spec.ts) rejects a "path" entry with fewer
+  // than two segments — a one-segment path is indistinguishable from the plain-key form, so
+  // the emitter never writes one and this recognizer must not accept it either.
+  return path.length >= 2 ? { path } : undefined;
+}
+
+/**
  * `stringField(row, "<key>")` / `nestedString(row, [...])` / `tagText(row)` /
  * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
  * `renderEntry`.
+ *
+ * Four forms, one line each, in `renderEntry`'s own order. The arms are mutually exclusive by
+ * callee name, so the sequence is a table rather than a chain of decisions — reaching the end
+ * means the call is none of the four, which is the `undefined` a caller reads as "not an entry".
  */
 function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const stringArgs = callTo(node, "stringField", 2);
@@ -122,15 +142,7 @@ function matchEntryCall(node: AstNode): FieldEntry | undefined {
   }
 
   const nestedArgs = callTo(node, "nestedString", 2);
-  if (nestedArgs !== undefined) {
-    if (!isIdent(nestedArgs[0], "row")) return undefined;
-    const path = stringArrayElements(nestedArgs[1]);
-    if (path === undefined) return undefined;
-    // SearchFilterSchema's own superRefine (src/spec.ts) rejects a "path" entry with fewer
-    // than two segments — a one-segment path is indistinguishable from the plain-key form, so
-    // the emitter never writes one and this recognizer must not accept it either.
-    return path.length >= 2 ? { path } : undefined;
-  }
+  if (nestedArgs !== undefined) return matchNestedStringEntry(nestedArgs);
 
   const objectsArgs = callTo(node, "tagNamesFromObjects", 1);
   if (objectsArgs !== undefined) {
