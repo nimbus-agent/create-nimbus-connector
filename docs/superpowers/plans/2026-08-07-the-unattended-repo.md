@@ -512,6 +512,85 @@ git commit -m "docs: name every gate in every list, and retire the design worksp
 
 ---
 
+## Task 11: clear Sonar, and raise coverage as far as it honestly goes
+
+**Files:**
+- Modify: `bunfig.toml`, plus whichever test and source files close a real gap
+- Verify only: `sonar-project.properties`
+
+Added at the maintainer's request after the plan was written. It runs **last** so it sees the
+final tree — every earlier task adds code, and coverage raised before them would be re-measured
+anyway.
+
+- [ ] **Step 1: Get the findings, and say which half you are doing**
+
+`sonar.projectKey=nimbus-agent_create-nimbus-connector`. The project is **not readable
+anonymously** — `api/measures/component` and `api/components/show` both answer *"Project doesn't
+exist"* — so the finding list must come from the SonarCloud UI or an authenticated token. If you
+have neither, **say so plainly in the report and do the coverage half only.** Do not guess at a
+finding list and call it cleared; the precedent commit `9c0886f` cleared 87 real findings, and a
+report claiming "no findings" without having read them is the false green this repo exists to
+refuse.
+
+Note that Task 4 adds `sonar.qualitygate.wait`, which is the structural half of this: without it,
+findings accumulate behind a green workflow, which is how the count reached 87 before.
+
+- [ ] **Step 2: Read `bunfig.toml` in full before touching coverage — it forbids the obvious move**
+
+It explains at length that `src/cli.ts` and `src/prompts.ts` are excluded from the **metric, not
+from testing**: both are driven through `Bun.spawnSync` on the real binary, which Bun cannot
+instrument, so every line `main()` executes reads as uncovered. It then says directly:
+
+> So do NOT "raise coverage" on those two by adding in-process tests that duplicate the
+> subprocess ones. That would move the number without adding assurance, which is the
+> false-green pattern this repo has spent several rounds removing.
+
+**That instruction binds this task.** "As high as possible" means as high as *real assurance*
+reaches, not as high as the number can be pushed.
+
+- [ ] **Step 3: Close the real gaps, and only the real ones**
+
+At the time of writing, per-file coverage is 100% almost everywhere. The exceptions:
+
+| File | Gap |
+| --- | --- |
+| `src/derive/manifest.ts` | 89.29% lines — sets the current floor |
+| `src/emit/server/tools-hand.ts` | 90.00% functions — sets the current function floor |
+| `src/format.ts` | 90.91% |
+| `src/emit/server/tools-rest.ts` | 91.67% |
+| `src/derive/index.ts` | 97.22% |
+
+**Re-measure before acting** — Task 1 already added `scripts/_lib/preflight.ts`, and later tasks
+add `scripts/_lib/build-spec-doc.ts`.
+
+For each gap, identify the *uncovered branch* and ask what would make it observable. If the answer
+is a genuine untested behaviour, test it. If the answer is that the line is unreachable, that is a
+finding about the line, not about the test. `src/format.ts` is the model: its gap closed by
+extracting `formatterUnavailableReasonFor()` as a pure exported function and unit-testing all six
+diagnosis branches, **while keeping** the subprocess tests that prove `initFormatter` routes a
+failed import into that diagnosis. Both layers earned their place. Follow that shape.
+
+- [ ] **Step 4: Raise `coverageThreshold` to the new floor**
+
+It is `{ lines = 0.88, functions = 0.90 }`. Raise it to whatever the weakest file actually
+supports after Step 3, and **update `bunfig.toml`'s comment to name the new floor-setting file and
+its number**, exactly as the current comment names `src/derive/manifest.ts` and
+`src/emit/server/tools-hand.ts`. A threshold whose comment names the wrong file is the stale-claim
+defect this branch has hit repeatedly.
+
+Do not raise the floor above what the tree supports "for headroom" — the next legitimate line
+added to a small file would fail the gate for no reason. `manifest.ts` already has zero slack, and
+the comment says so.
+
+- [ ] **Step 5: Run every gate, then commit**
+
+```bash
+git add bunfig.toml test/ src/
+git commit -m "test: close the remaining coverage gaps and raise the floor to match"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage.** §6.2 → Task 9. §7.1 (CI's ceiling) → Task 10 Step 3. §7.2 (`preflight`) → Task 1. §7.3 (documents table) → Tasks 6–10; `docs/GLOSSARY.md`'s four reach tiers / three frame styles / case 1 vs case 2 → Task 10 Step 6. §7.5 → Tasks 2, 5, 6, 7, 8, 10. §7.6 → Tasks 3, 4, 5, 10 Step 4. §7.4 (hygiene baseline) is a measurement, not a task.
