@@ -1,6 +1,5 @@
-import { type PathSegment, parsePathTemplate } from "./emit/server/path-template.ts";
-import type { ConnectorSpec } from "./spec.ts";
-import { needsExtractor, registrarName } from "./spec.ts";
+import type { ConnectorSpec, PathSegment } from "./spec.ts";
+import { needsExtractor, parsePathTemplate, registrarName } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -144,6 +143,18 @@ function claim(seen: Map<string, string>, name: string, owner: string): void {
   seen.set(name, owner);
 }
 
+/** Every env accessor is a module-scope function, so every one of their names is claimed. */
+function claimEnvIdentifiers(seen: Map<string, string>, spec: ConnectorSpec): void {
+  for (const e of spec.env) {
+    claim(seen, e.local, `env accessor for ${e.vars.join(", ")}`);
+    // The split-bearer form declares a second function beside `local`; both are module
+    // scope, so both have to be claimed or the collision surfaces only at tsc.
+    if (e.tokenLocal !== undefined) {
+      claim(seen, e.tokenLocal, `the raw-token accessor for ${e.vars.join(", ")}`);
+    }
+  }
+}
+
 export function validateSpec(spec: ConnectorSpec): void {
   const seen = new Map<string, string>();
 
@@ -155,14 +166,7 @@ export function validateSpec(spec: ConnectorSpec): void {
     claim(seen, registrarName(spec), "the rest-kit tool registrar");
   }
 
-  for (const e of spec.env) {
-    claim(seen, e.local, `env accessor for ${e.vars.join(", ")}`);
-    // The split-bearer form declares a second function beside `local`; both are module
-    // scope, so both have to be claimed or the collision surfaces only at tsc.
-    if (e.tokenLocal !== undefined) {
-      claim(seen, e.tokenLocal, `the raw-token accessor for ${e.vars.join(", ")}`);
-    }
-  }
+  claimEnvIdentifiers(seen, spec);
 
   // Module-scope `const <baseConst> = "<base>";`, claimed for the same reason.
   if (spec.fetchHelper.baseConst !== undefined) {
@@ -174,6 +178,27 @@ export function validateSpec(spec: ConnectorSpec): void {
   // spec that validates today must not start failing the moment a write tool is added to it.
   claim(seen, `${spec.fetchHelper.local}Send`, "the write helper");
 
+  validateTools(seen, spec);
+  validateSingleExtractor(spec);
+}
+
+type ToolLike = ConnectorSpec["tools"][number];
+type ArgSegment = Extract<PathSegment, { kind: "arg" }>;
+type EnvSegment = Extract<PathSegment, { kind: "env" }>;
+
+/** Only a hoisted argument declares a name of its own, so only a hoisted one is claimed. */
+function claimHoistedArgs(seen: Map<string, string>, t: ToolLike): void {
+  for (const [argName, arg] of Object.entries(t.args)) {
+    const local = arg.local ?? argName;
+    const hoisted = arg.default !== undefined || arg.type === "boolean";
+    if (hoisted) {
+      claim(seen, local, `the hoisted argument "${argName}" of tool ${t.name}`);
+    }
+  }
+}
+
+/** Tool names are unique, and every name a tool contributes to module scope is claimed. */
+function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
   const toolNames = new Set<string>();
   for (const t of spec.tools) {
     if (toolNames.has(t.name)) {
@@ -187,28 +212,26 @@ export function validateSpec(spec: ConnectorSpec): void {
       claim(seen, t.filter.export, `the search filter for tool ${t.name}`);
     }
 
-    for (const [argName, arg] of Object.entries(t.args)) {
-      const local = arg.local ?? argName;
-      const hoisted = arg.default !== undefined || arg.type === "boolean";
-      if (hoisted) {
-        claim(seen, local, `the hoisted argument "${argName}" of tool ${t.name}`);
-      }
-    }
+    claimHoistedArgs(seen, t);
 
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);
     }
   }
+}
 
-  // A connector may declare at most one search filter that takes the extractor branch:
-  // extractorFilter (src/emit/search-filter.ts) hardcodes the name "fieldsOf", and
-  // emitSearchFilter maps it over every tool taking that branch, so a second one emits a
-  // second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
-  // implementation, and because both hoist, the second silently wins for both makeQueryFilter
-  // calls. Corpus measurement: the only corpus connector with two extractors in one file is
-  // readwise (`fieldsOf` and `bookFieldsOf`) — its field lists are otherwise expressible, so
-  // this rule alone is what keeps it unreachable. Rejected rather than adding a spec field to
-  // name the extractor or auto-suffixing it, per the Stage E design's declined-options list.
+/**
+ * A connector may declare at most one search filter that takes the extractor branch:
+ * extractorFilter (src/emit/search-filter.ts) hardcodes the name "fieldsOf", and
+ * emitSearchFilter maps it over every tool taking that branch, so a second one emits a
+ * second `function fieldsOf(...)` in the same module — TS2393 Duplicate function
+ * implementation, and because both hoist, the second silently wins for both makeQueryFilter
+ * calls. Corpus measurement: the only corpus connector with two extractors in one file is
+ * readwise (`fieldsOf` and `bookFieldsOf`) — its field lists are otherwise expressible, so
+ * this rule alone is what keeps it unreachable. Rejected rather than adding a spec field to
+ * name the extractor or auto-suffixing it, per the Stage E design's declined-options list.
+ */
+function validateSingleExtractor(spec: ConnectorSpec): void {
   const extractorTools = spec.tools.filter(
     (t) => t.filter !== undefined && needsExtractor(t.filter),
   );
@@ -223,10 +246,6 @@ export function validateSpec(spec: ConnectorSpec): void {
     );
   }
 }
-
-type ToolLike = ConnectorSpec["tools"][number];
-type ArgSegment = Extract<PathSegment, { kind: "arg" }>;
-type EnvSegment = Extract<PathSegment, { kind: "env" }>;
 
 /** A `${arg.X}` reference must name an arg the tool declares, with a mode that fits its type. */
 function validateArgSegment(t: ToolLike, seg: ArgSegment): void {

@@ -21,6 +21,15 @@ document owns everything generator-shaped.
 > **Measured results are deliberately not repeated here.** Fixture counts and pass rates move
 > with the corpus, and a roadmap that restates them goes stale silently. `bun run diff:golden`
 > is the live answer; [known limitations](#known-limitations) records the durable gaps.
+>
+> **The rule is about undated numbers, not about numbers.** [The measured ceiling](#the-measured-ceiling)
+> states the corpus regeneration counts, with the date and the `packages/mcp-connectors` tree they
+> were measured against; it is the only place in this *document* that does. A handful of source
+> comments carry a measurement too, because the measurement is the rationale for the choice above
+> it and deleting it would leave a decision with no stated reason — `src/emit/wiring.ts`,
+> `src/spec.ts` and `test/derive/frame.test.ts` are the three. **Each states its date, its tree,
+> and the command that re-measures it.** A number carrying those can be checked; one without them
+> is what the rule above forbids.
 
 ---
 
@@ -123,10 +132,16 @@ file, `src/search-filter.ts`. The search kit shipped in `@nimbus-dev/sdk` 1.15.0
 `standalone-acceptance --registry` verifies the search fixtures against the published artifact
 rather than skipping them.
 
-### Stage E — the corpus tail `[ ]`
+### Stage E — the corpus tail `[~]`
 
 The shapes still unreachable, each already measured and documented as a limitation rather than
-discovered later:
+discovered later.
+
+**Half-closed, stated accurately.** The stage's measurement half is done — the deriver is a
+complete inverse of the emitter, every fixture round-trips, and every blocked corpus connector
+has a named cause. The *raising* half is not: three bullets below are still `[ ]`, and the
+headline count did not move. See [The measured ceiling](#the-measured-ceiling) for the number,
+its denominator and which of those causes are permanent.
 
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
@@ -159,7 +174,19 @@ discovered later:
       which only `dependencytrack` currently achieves.
 - [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
-      file.
+      file. Carrying the file and being *blocked by* it are different questions, and the answer
+      is now the sharper of the two: the ones that are pure shims report as
+      `frame:tools-in-second-file` under `bun run reach --verbose`, rather than as an
+      `import-from:./tools.ts` statement blocker plus a per-connector `call:register<X>Tools`
+      one. **How many is in [The measured ceiling](#the-measured-ceiling)**, with its date and
+      corpus tree, rather than restated here where it would go stale unmarked. The label does
+      **not** come from `recognizeFrame`, which *succeeds* for every one of them — they are a
+      well-formed read-only-kit frame. It comes from `collapseSecondFileBlockers` (`src/derive/index.ts`),
+      called from `deriveSharedStyleSpec` at the totality rule, after the env, fetch-helper and
+      tool recognizers have already run. Those recognizers find nothing to do, because a shim's
+      `src/server.ts` is nothing but the frame plus those two statements — so the unclaimed set
+      is exactly the pair, and the label collapses it into the one thing the pair shares. The
+      `frame:` prefix names the ceiling, not the stage that detected it.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
       sent only when an optional argument is present or non-empty. See the README for the
@@ -169,24 +196,33 @@ discovered later:
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
 - [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
-      than `fetch`.
+      than `fetch`: `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai`. All five
+      write that CLI logic in `src/tools.ts`, so `bun run reach` reports them as
+      `frame:tools-in-second-file`, not under a CLI-shaped bucket of their own — the construct
+      itself is never reached. A separate set (`aws`, `azure`, `gcp`, `kubernetes`) shells out
+      via `shared/run-cli-json` directly from `server.ts`, without `safe-cli-arg`, and *does*
+      surface as its own bucket, `import-from:../../shared/run-cli-json.ts`.
 - [~] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
-      number with its method. The method is no longer a hand count: `bun run reach
-      --nimbus-root <path>` derives a spec from every real connector's `src/server.ts` and
-      `nimbus.extension.json`, runs it through the same `parseSpec` → `validateSpec` →
-      `generate()` pipeline the CLI uses, and reports a tier histogram plus the connectors
-      blocking each tier. `bun run reach:baseline` records a per-connector snapshot in
-      `fixtures/reach-baseline.json`; `bun run reach --baseline` fails when a connector
-      regresses a tier against it. What remains open is *raising* the number, not measuring
-      it.
+      number with its method. **The publishing half is closed; the raising half is not, and
+      this bullet stays `[~]` for that reason rather than being marked done.** The method is no
+      longer a hand count: `bun run reach --nimbus-root <path>` derives a spec from every real
+      connector's `src/server.ts` and `nimbus.extension.json`, runs it through the same
+      `parseSpec` → `validateSpec` → `generate()` pipeline the CLI uses, and reports a tier
+      histogram plus the connectors blocking each tier. `bun run reach:baseline` records a
+      per-connector snapshot in `fixtures/reach-baseline.json`; `bun run reach --baseline`
+      fails when a connector regresses a tier against it. The number itself, with its date, its
+      corpus tree and a named cause for every connector under it, is
+      [The measured ceiling](#the-measured-ceiling).
 
 ### Stage F — authoring experience `[ ]`
 
 - [ ] **Spec authoring from an OpenAPI document.** The largest reduction in effort available:
       most of a spec is endpoints, arguments and descriptions that an OpenAPI file already has.
-- [ ] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
+- [x] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
       make regeneration coverage measurable in bulk rather than one hand-written fixture at a
-      time.
+      time. Shipped, with `--partial` for a draft from a module that blocks; `bun run reach` is
+      the bulk half, running the same deriver over a whole checkout. See
+      [Known limitations](#known-limitations) for what its report does and does not carry.
 - [ ] **Better validation errors**, pointing at the JSON path rather than naming the field.
 - [ ] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
       file.
@@ -248,12 +284,162 @@ question, asked with the same discipline the three wrong counts above forced on 
 what the code actually does, not what its name suggests — pointed at a script instead of a
 person, so the count cannot go stale from being restated by hand.
 
+The corpus-wide question is asked across all three frame styles a connector's wiring can take —
+`hand-rolled`, `rest-kit` and `read-only-kit` — not just the first one the deriver recognized.
+A connector's frame style decides which tool recognizer runs next; it says nothing on its own
+about whether that recognizer can express what the connector's tools do.
+
 ---
 
 ## Known limitations
 
 Measured, not guessed, and each one visible on every harness run rather than hidden in an
 expectation file. They are listed here so nobody rediscovers them the hard way.
+
+### The measured ceiling
+
+**Measured 2026-08-06 against `packages/mcp-connectors` tree `94fd3623` (Nimbus commit
+`b3a6f159`).** This is the one place in this repository where the corpus *regeneration* counts
+are written down, and it carries the date and the corpus tree so a reader can tell when it was
+true. (Three source comments carry a measurement of their own, each dated and each with its own
+re-measure command — see *How to read this* at the top of this document.) Re-measure
+with `bun run reach --verbose --nimbus-root <path>`; the per-connector tiers for this same tree
+are in `fixtures/reach-baseline.json`, which is regenerated by `bun run reach:baseline` and
+never hand-edited.
+
+**6 of 94 reach `server-identical`. 4 of those 94 reach `all-identical`** — the byte-locked
+fixtures. The remaining **88 are `blocked`, and every one of them has a named cause.**
+
+The grouping below is what makes the number a ceiling rather than a score. Each cause is either
+a **spec-language gap** — a construct the spec cannot express, which no recognizer can close —
+or a **recognizer gap**, a construct the spec *can* express and `src/derive/` does not read,
+which is remaining work. A number without that split says nothing about which half is
+achievable.
+
+| Cause | Connectors | Which gap |
+| --- | --- | --- |
+| **Frame** — `frame:tools-in-second-file` (11), `frame:no-registrar` (4) | 15 | **spec-language**, both |
+| **Manifest** — `manifest:missing-syncInterval` (`iac`) | 1 | **spec-language** |
+| **Tool registration** — `call:reg`, eleven single-connector `call:register<X>Tool` buckets, `const-call:makeRestToolRegistrar` | 68 | mostly **spec-language**; see below |
+| **Hoisted helper functions** — 173 distinct `function:<name>` buckets | 67 | **spec-language** |
+| **Hoisted consts and schemas** — `statement:VariableDeclaration`, `method-call:.object`, `.extend` | 42 | **spec-language**, plus one downstream case |
+| **Local type declarations** — `TSTypeAliasDeclaration`, `TSInterfaceDeclaration` | 9 | **spec-language** |
+| **Imports** — 23 buckets: shared primitives, node builtins, per-connector modules | 61 | mixed, and mostly downstream |
+
+**Those columns do not add to 88, and that is the most important thing to know about them.** A
+connector is blocked by *every* statement nothing claimed, so one refusal upstream produces
+several buckets downstream: a connector whose fetch helper is refused also reports its hoisted
+base-URL const, its imports and its registrations as unclaimed, none of which is an independent
+cause. **19 connectors carry exactly one bucket**, and only for those is the bucket the whole
+story: the 15 frame-only ones, `iac`, and `intercom`/`lever`/`readwise` on `function:authHeader`.
+Read the histogram as a map of constructs, not as a ranking of causes.
+
+Four groups are worth naming precisely, because each is a *different* kind of gap:
+
+- **The frame group is the cleanest ceiling in the corpus.** Fifteen connectors are blocked by
+  their wiring shape and nothing else. Eleven put their tools in `src/tools.ts`, and the
+  generator emits one source file; four (`apple`, `fastmail`, `imap`, `protonmail`) wire through
+  a bespoke `registerXTools(server, …)` with no `createZodToolRegistrar`, and `style` has three
+  values, none of which is that. Both are spec-language gaps — no recognizer can close either,
+  because the emitter cannot write what it would be reading.
+- **The named argument-schema const is the largest single closable-looking shape, and it is
+  not one recognizer.** Twenty connectors hoist `const <name>Schema = z.object({ … })` to module
+  scope — 109 such declarations — and pass it to `reg` by name. **Five** connectors compose with
+  `.extend` (`bitbucket`, `circleci`, `github`, `github-actions`, `gitlab`), and only four of them
+  produce a bucket for it: the other four hoist the composed schema into a module-scope const,
+  while `circleci` writes `.extend` only inside its registrar call's arguments, where it is part
+  of a registration nothing claimed rather than a hoisted declaration of its own.
+  That produces both their `method-call:.object` buckets *and* their `call:reg` ones,
+  since a registration whose third argument is an identifier is not a shape any tool recognizer
+  reads. Closing it is a spec-language gap **plus** an emitter change: `argsSchemaStyle` chooses
+  between inline forms only, and a recognizer that read the hoisted form without the emitter
+  writing it would derive a spec that re-emits differently — reaching `emits` and never
+  `server-identical`.
+- **The narrowest gap in the whole corpus is two env fields.** `function:authHeader` blocks 15
+  connectors, and for `intercom`, `lever` and `readwise` it is the *only* bucket: three
+  connectors one construct from deriving. All three write an `Authorization` value `EnvSchema`
+  cannot state — an alternate scheme (`readwise`'s `` `Token ${…}` ``), a basic credential whose
+  second half is a literal `""` (`lever`), or a static extra header beside a bearer one
+  (`intercom`'s `Intercom-Version`). `auth: "headers"` does not reach them either: it maps each
+  var to a header name and emits the binding bare, with no scheme prefix and no literal-valued
+  key. A spec-language gap, and a small one.
+- **`const-call:makeRestToolRegistrar` looks like a recognizer gap and is not.** `gmail`,
+  `onedrive` and `outlook` all pass a fifth registrar option, `snippetMax: 200`, which
+  `renderRestKitTools` never writes and no spec field carries. Reading it would need the field
+  first.
+
+The two largest import buckets — `./search-filter.ts` (43) and `../../shared/mcp-search-tool.ts`
+(39) — are downstream in the same way: `claimSearchImports` (`src/derive/server/search.ts`) claims
+both imports, and it never ran for these connectors because their search registration was not
+recognized — it is called only once at least one search tool has been positively recognized. No
+connector in the corpus is blocked by imports alone.
+
+#### Three constructs the histogram cannot show
+
+These do not appear as buckets at all. Each is a construct this generator **emits** and the
+corpus **writes differently**, so the connectors carrying it are blocked earlier and the
+divergence never surfaces. All three were measured 2026-08-06 against tree `94fd3623`. **The
+cost of closing each is named; none is proposed.**
+
+- **The query tail.** Ten connectors write `new URL(...)` inside a path-builder lambda. Eight
+  end it `` return `${u.pathname}${u.search}` `` (`circleci`, `discord`, `github`,
+  `github-actions`, `google-meet`, `google-photos`, `outlook`, `pagerduty`) and two end it
+  `return u.toString()` (`gitlab`, `gmail`). **None writes `` return `${u}`; ``,** which is what
+  this generator emits, deliberately — see *An upstream defect this generator deliberately does
+  not reproduce* below. A further **22** build a query string from a standalone
+  `new URLSearchParams` with no `new URL` at all. Cost: the first is **a change to what the
+  emitter writes** — recognizing the pathname+search tail without emitting it derives a spec
+  that re-emits the other form, and emitting it means reproducing the doubling defect. The
+  second is **a different construct**, needing its own spec shape before any recognizer applies.
+- **The write helper.** **No corpus connector declares `<local>Send`** — the two-helper
+  read/write split is this generator's own convention. Three carry a generic `<x>Post(path,
+  body)` (`argocd`, `mlflow`, `snyk`); **16** route reads *and* writes through a single helper
+  taking `init?: RequestInit` and supply the verb there. Cost: **a change to what the emitter
+  writes** — a second hand-rolled helper shape, chosen per connector, which means a spec field
+  to choose it and a second emitter path gated on a field the four byte-locked fixtures never
+  set.
+- **The token exchange.** Three connectors run a client-credentials grant (`powerbi`, `ramp`,
+  `wiz`) and no two share a shape. **`expires_in` appears nowhere in any connector's source**,
+  and none of the three caches an expiry: the corpus's four `let cachedToken` declarations have
+  four different types, and the only one carrying an `expiresAt` belongs to `firebase`, which is
+  not a client-credentials connector. This generator's `token()` reads `expires_in`, renews
+  early and halves the skew for short-lived tokens. Cost: **a change to what the emitter
+  writes**, and one that would have to be optional — emitting the corpus's cache-forever shape
+  by default would remove a correctness property from every connector this tool generates.
+
+#### Three follow-ups, all deliberately not built here
+
+- **The recovered rest-kit `title` should be reported per run, like `$effectAmbiguity`.** The
+  limitation itself is recorded below under *A recovered rest-kit `title` is verified against
+  only one of its two consumers*; what is missing is the per-run note. `src/derive/index.ts`
+  has the exact precedent — `$effectAmbiguity` reports an attribution that is byte-identical
+  but not forced, on the stated grounds that semantically wrong is a real cost even when
+  byte-identical — and the `title` case is stronger, because the recovered value is byte-*visible*
+  and byte-*wrong* in a file the deriver never sees. Start from `$effectAmbiguity` rather than
+  rediscovering the shape. Deferred because widening `Derivation` is a contract change across
+  three consumers (`src/derive/from-connector.ts`, `scripts/_lib/reach.ts`,
+  `test/derive/round-trip.test.ts`).
+- **The `derive → emit` layering, and the rule that keeps it safe.** `parsePathTemplate` now
+  lives in `src/spec.ts`, not `src/emit/server/path-template.ts`, so `src/derive/server/body.ts`
+  imports the spec language rather than the emitter. The rule that placement encodes:
+  **`src/derive/` may share the spec language's parser; it may never import the emitter's
+  renderer.** Sharing a parser removes the only failure direction nothing can see — a private
+  copy that under-parses leaves an arg in the default body set and emits a spurious explicit
+  `body` that is byte-identical, invisible to `diff:golden`, to the round trip and to every
+  other gate, while one that over-parses throws. Comparing *rendered* text against observed
+  source is the opposite: it would let a renderer bug agree with itself and disappear.
+- **The property *shorthand* spelling is not pinned the way the key spelling now is.** The key
+  spelling was made structural: `objectProps` is module-private in `src/derive/read.ts`, and the
+  only exported readings are `bareKeyedProps` and `quoteMinimalProps`, so a recognizer cannot
+  obtain an unjudged key. Shorthand-ness has no such treatment. `isRestReturnStatement`
+  (`src/derive/server/fetch-helper.ts`) accepts the longhand `{ json: json }` where the emitter
+  writes the shorthand `{ json, text }` — the same wrong-claim shape, since the recovered fields
+  are identical and re-emission differs. Both the precedent and the accessor already exist:
+  `src/derive/server/body.ts`'s `bodyPairs` pins shorthand-ness through `isShorthandProperty`
+  for exactly this reason. Deferred rather than folded into the key sweep because it is a
+  different predicate over a different call-site set, and the sweep that settled the keys was
+  scoped to the keys. Whoever takes it should sweep `isShorthandProperty`'s absence the same way
+  the key sweep swept `objectProps`', rather than fixing the one site named here.
 
 **Content no spec field can derive.**
 
@@ -269,22 +455,27 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   write `p.pageSize ?? 50` at the call site, but a `default`-bearing arg is always hoisted to a
   named const above the handler (`isHoisted` in `src/emit/server/args.ts`), so `google-meet`'s
   `pageSize`/`searchPageSize` differ from the real file on that one line even though the
-  request they build is identical. **Repeating, multi-value parameters** — `gmail` sends the
-  same key more than once via `searchParams.append`, not `.set` — are out of scope; `query`
-  models one value per name. **A slashless path**: the query branch threads the fetch helper's
+  request they build is identical. **Repeating, multi-value parameters** — `gmail` sends
+  `labelIds` and `metadataHeaders` more than once via `searchParams.append`, and `pagerduty`
+  does the same with `statuses[]` — are out of scope; `query` models one value per name. **A
+  slashless path**: the query branch threads the fetch helper's
   base straight into `renderPath`'s `prefix` with no separator and none of the leading-slash
   normalization the non-query path gets, so `query` is rejected at parse time on any tool whose
   `path` does not begin with `/`.
-- **An upstream defect this generator deliberately does not reproduce.** `discord`, `circleci`,
-  `google-meet` and `google-photos`'s hand-written path builders return
-  `` `${u.pathname}${u.search}` ``. `u.pathname` already carries the base's own path component
-  — the base is spliced into `new URL(...)` as a literal string prefix, not passed as the
-  URL's origin — and the connector's fetch helper prepends that same base a second time. The
-  real `discord` connector therefore requests
+- **An upstream defect this generator deliberately does not reproduce.** Eight corpus
+  connectors' hand-written path builders return `` `${u.pathname}${u.search}` ``, measured
+  2026-08-06: `circleci`, `discord`, `github`, `github-actions`, `google-meet`, `google-photos`,
+  `outlook` and `pagerduty`. `u.pathname` already carries the base's own path component — the
+  base is spliced into `new URL(...)` as a literal string prefix, not passed as the URL's
+  origin — and the connector's fetch helper prepends that same base a second time
+  (`resolveUrlWithBase` concatenates verbatim for any path not starting `http`). The real
+  `discord` connector therefore requests
   `https://discord.com/api/v10/api/v10/channels/123/messages`, a doubled `/api/v10`; verified
-  by running the connector's own code. `github` and `github-actions` write the identical
-  `u.pathname`/`u.search` pattern and escape only because `api.github.com` has no path
-  component to double. This generator emits `` `${u}` `` — the absolute URL — instead, which
+  by running the connector's own code. **Which of the eight actually double is decided by the
+  base, not the tail:** `discord`, `circleci`, `google-meet`, `google-photos` and `outlook`
+  (whose `GRAPH` base carries `/v1.0`) have a path component to double; `github`,
+  `github-actions` and `pagerduty` escape only because `api.github.com` and
+  `api.pagerduty.com` have none. This generator emits `` `${u}` `` — the absolute URL — instead, which
   the fetch helper's own `startsWith("http")` short-circuit passes through untouched,
   producing one correct request. That is a deliberate divergence from a defect, not a
   generator shortcoming, and it is why `discord` and `google-meet` do not byte-match
@@ -306,6 +497,9 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
   source file.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+- **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
+  `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
+  Reported as `frame:no-registrar`.
 - **At most one extractor-branch search filter per connector.** The emitted `fieldsOf` function
   is always that name, so a second search tool taking the extractor branch in the same
   `src/search-filter.ts` would redeclare it — `validateSpec` rejects this at parse time rather
@@ -315,11 +509,16 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   [Measuring reach](#measuring-reach) — so this rule is the sole reason it is not generatable
   today, not a second, independent gap stacked on top of one.
 - **Bespoke search extractors, past what `path` and tag entries reach.** `filter.fields` omitted
-  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, 30
-  define a local helper function or need logic no declarative field list expresses — a join, an
-  array flatten, a coercion — and one (`zoom`) does not use `makeQueryFilter` at all. A local
-  *variable* binding that just projects a sub-object before reading flat keys off it is not in
-  this group — that shape is exactly what a `path` entry expresses.
+  still emits a throwing stub. Of the 40 corpus filter files that hand-write an extractor, **14**
+  need logic no declarative field list expresses — a join over a non-`tags` array, a numeric
+  coercion, an alternate tag shape, a conditional array search, a per-item concatenation — and
+  `zoom`, which does not use `makeQueryFilter` at all, is one of those 14, not an extra on top
+  of them. The other 26 are expressible; [Stage E](#stage-e--the-corpus-tail-) names the cause
+  for each of the 14 and [Measuring reach](#measuring-reach) gives the method. **Defining a
+  local helper function is not on its own disqualifying** — an earlier count of 30 asked that
+  structural question instead of a semantic one, and understated reach by more than half. A
+  local *variable* binding that just projects a sub-object before reading flat keys off it is
+  not in this group either — that shape is exactly what a `path` entry expresses.
 
 **Shape variance the emitter models one way.**
 
@@ -329,9 +528,62 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
   credential is resolved by the registrar rather than an env accessor.
 - **Registrar and helper naming.** Derived by formula. A connector whose author picked a
   shorter name by hand will differ on that line.
-- **Wiring and tail idiom.** Roughly half the rest-kit corpus writes the one-line registrar
-  form and half the two-line one; likewise the transport tail. There is no majority to converge
-  on, so the emitter picks one and the other half differs.
+- **A recovered rest-kit `title` is verified against only one of its two consumers.** For
+  `style: "rest-kit"`, the deriver recovers `spec.title` by inverting the registrar name
+  `register<Title>Tool` and asserts the round trip reproduces the observed identifier
+  (`recognizeRestTitle` in `src/derive/index.ts`). `spec.title` has a second consumer
+  the deriver does not check — `src/emit/readme.ts` — and the sanitization is many-to-one, so a
+  recovered `title` that reproduces the registrar name can still regenerate a different
+  `README.md`. Bounded, not silent: the `all-identical` tier requires every emitted file to
+  match, so this downgrades such a connector to `server-identical` rather than passing falsely.
+- **Wiring and tail idiom.** The emitter always writes the one-line registrar form
+  (`const reg = createZodToolRegistrar(createRegisterSimpleTool(mcp));`) and a named transport
+  const. Real connectors write two other forms, and `recognizeFrame`
+  (`src/derive/server/index.ts`) now **reads** both: the **split registrar**, which hoists the
+  inner call to its own `const registerSimpleTool = …;` one line above, and the **inlined
+  transport tail**, `await <mcpVar>.connect(new StdioServerTransport());` as the file's last
+  statement with no transport const at all. Neither axis is rest-kit-only: the split registrar
+  mixes hand-rolled connectors (e.g. `bitbucket`, `notion`) with rest-kit ones (e.g. `discord`,
+  `github`), and a connector may write both (`google-meet`, `google-photos`) — which is why the
+  two recognizers had to land together, since `frameFailureKind` checks the registrar element
+  before the transport one and such a connector stays blocked while either is missing. Reading a
+  form is not emitting it: `wiring()` and `tail()` (`src/emit/server/index.ts`) still write the
+  one-line registrar and the named transport const. What recognizing these forms buys is that a
+  connector writing one **gets past the frame** — and it then blocks on whatever is behind it.
+  That is the measured result, not a prediction: all 27 connectors on these axes are `blocked`
+  today, on statement-level blockers the frame used to hide. **Not one reaches `emits`** — and no
+  connector in the corpus carries that tier as its verdict, since the only six that derive and
+  emit all go on to `server-identical`. (`bun run reach` prints the tiers cumulatively, so
+  "spec derived + emits 6/94" beside "server.ts identical 6/94" is that same fact, not a
+  separate six.) The frame widening reveals rather than clears, which is what it was for.
+  The `emits` ceiling stated here is what these axes would impose *if* everything behind them
+  were recognized — a connector in either form would then re-emit in **this generator's** form,
+  reaching `emits` and never `server-identical`. No cosmetic spec field is added to close that
+  gap — the operative bar is "no cosmetic field without a fixture that byte-matches *because of*
+  it", and no such fixture can exist until what sits behind those frames has itself been
+  measured, which reading them is what makes possible. There is no majority to converge on, so
+  the emitter picks one form per axis and the other differs.
+- **A read-only-kit callback that is a named function reference, not an inline arrow.**
+  `argocd`, `bigeye`, `flux`, `looker`, `mlflow`, `monte-carlo`, `powerbi`, `snowflake`,
+  `tableau` and `workday` write three top-level statements where the emitter writes one: an
+  exported `register<X>Tools(reg: ZodToolRegistrar)`, an exported `async startConnector()` whose
+  body awaits `runReadOnlyMcpConnector("nimbus-<x>", register<X>Tools)` with a **bare function
+  reference**, and `if (import.meta.main) await startConnector();`. `recognizeReadOnlyFrame`
+  reads this as a second entry shape alongside the inline wrapper, splicing
+  `register<X>Tools`' **body** into `verifyStatements` rather than claiming the declaration —
+  see `src/derive/server/frame.ts` on why claiming it would cover every registration by
+  containment. As with the wiring and tail idioms above, `renderTools` still writes the inline
+  `(reg) => { … }` arrow at the call site, so `emits` rather than `server-identical` is the best
+  any of these ten could reach — and none reaches it: all ten get past the frame and block on
+  statements behind it, which is the whole of what recognizing the shape changed. This entry used
+  to promise a
+  `frame:readonly-callback-not-inline` histogram bucket, which upstream commit `b3a6f159`
+  emptied when it refactored these ten into the shape above; until this recognizer existed they
+  were reported as `frame:no-mcp-server`, that shape having no top-level `McpServer` const at
+  all. The divergence was found by tracing why the read-only-kit frame recognizer moved 50
+  connectors rather than the roughly 60 predicted going in — see
+  [Measuring reach](#measuring-reach) on reading what the code does rather than trusting a
+  prediction.
 - **`permissions.filesystem` is always collapsed to one line**, which is what 27 of the 29
   manifests declaring it do.
 - **The type alias in a filter file** is emitted always, following 47 of 49 connectors; the
@@ -360,6 +612,31 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 - **A connector with no `test/sandbox.test.ts`.** 15 of the 94 lack one; the generator always
   emits it, so the harness reports `MISSING` rather than `DIFF`.
 
+**`--from-connector`'s report shape.**
+
+- **`--partial` prints less than the report it replaces.** `partialResult`
+  (`src/derive/from-connector.ts`) keeps only each blocker's `kind`; `renderBlockers`, the exit-1
+  report `--partial` stands in for, prints the `kind` **and** the source line. `docs/USAGE.md`
+  calls the flag "a draft to work from," which is true of the one thing it reliably carries — the
+  `$partial` marker key `ConnectorSpecSchema`'s `z.strictObject` refuses by construction, so the
+  draft cannot reach `generate()` until a human deletes it — but the exit-0 draft is strictly less
+  informative than the exit-1 report it replaces. The mechanism is sound; the label overstates
+  what ships with it.
+- **`--partial` does not reach a missing-file blocker.** `deriveFromDirectory` checks
+  `existsSync` on both inputs and returns before `options.partial` is ever read, so
+  `--from-connector <dir-missing-src/server.ts> --partial` exits 1 with the same blocker report a
+  non-partial run prints, while the identical flag against a directory that has both files but
+  blocks later exits 0 with a draft. Defensible — there is no source to draft a spec from — but
+  the asymmetry is easy to miss, since every other blocker in this module does downgrade to a
+  draft under `--partial`.
+- **A file that exists but cannot be read still throws raw.** `deriveFromDirectory` gates on
+  `existsSync`, then reads both files with `Bun.file(...).text()` unguarded. A path that exists
+  but isn't a readable file — permissions, or (verified) a directory sitting where
+  `src/server.ts` should be — throws Bun's own error message straight through `main`'s top-level
+  catch, printed as one line with none of `renderBlockers`'s formatting. `missing()`'s own
+  comment in that file claims "one report shape covers every failure"; this is the failure that
+  report shape doesn't cover.
+
 ## Considered and declined
 
 Recorded so they are not re-proposed. Each was measured before being rejected.
@@ -368,6 +645,47 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   one level down — `matchesResult` does `Array.isArray(rows) ? … : []`, so `undefined`, `null`
   and any non-array already yield an empty match set. The coercion would be dead code that
   changes a byte-exact fixture's bytes.
+- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening (see
+  [the roadmap-completion design](./superpowers/specs/2026-08-05-roadmap-completion-design.md)'s
+  *Application: the rows pluck*): corpus connectors commonly hoist
+  `function <name>From(root: unknown): unknown[]` above their registrations and pluck the row
+  array there, so a recognizer could read that key back as `rows` even though `renderSearchTool`
+  writes the narrowing inline. The proposal drew a careful line between the pluck bodies that are
+  behaviourally identical to the inline form and the ones that fall back to the root array, which
+  `rows` cannot express. That line was correct and irrelevant: **the connectors that hoist a
+  pluck helper are exactly the ones that never call `matchesResult`.** They build the
+  `{ matches }` envelope by hand — `const matches = filterX(<pluck>(root), { query: p.query,
+  limit: p.limit }); return jsonResult({ matches });` — and `recognizeSearchTool` requires
+  `matchesResult` before it inspects a handler body at all. Every corpus `matchesResult` call
+  site instead passes a bare identifier, `root` or the narrowed const, which
+  `recognizeNoRowsBody` and `recognizeRowsBody` already read. That same design document's trap
+  list had measured this from the other side — a connector that carries `src/search-filter.ts`
+  without calling `matchesResult` builds its own envelope and is "out of the recognizer's reach
+  by construction, not by omission" — so that proposal and that trap could not both be true, and
+  the trap is the half backed by a measurement.
+
+  Recognizing the **hand-written result tail** instead would be a legitimate case-2 widening —
+  `matchesResult`'s own docstring calls it the verbatim equivalent of that tail — and is declined
+  because it moves no connector out of `blocked`. Two separate things stop it, each sufficient
+  alone: `recognizeTools` is all-or-nothing, and several of these connectors also call the pluck
+  helper from an unmodeled *list* handler (`jsonResult({ items: <pluck>(root) })`), so nothing in
+  those modules would be claimed; and `matchSearchKitImport` requires `matchesResult` in a clause
+  these connectors import only `searchToolInputSchema` from. A bespoke result envelope is bespoke
+  code — a matcher for it would add surface area and a case-2 divergence to maintain, and change
+  no number.
+
+  A **third** reason was recorded here and has since died: that the connectors whose read-only-kit
+  callback is a named function reference never reach a statement-level blocker at all, failing
+  earlier at `frame:no-mcp-server`. `recognizeReadOnlyFrame` now reads exactly that shape — see
+  *A read-only-kit callback that is a named function reference* above — so all ten do reach
+  statement-level blockers. It is struck rather than deleted because the conclusion did not
+  depend on it, and a reason that expires is worth showing as expired.
+
+  The sweep behind the proposal also under-counted the helper's own body shapes, and a table that
+  claims to be exhaustive and is not is worth recording as such: beside the keyed pluck, the
+  root-array pluck, the array-first prelude and the keyed-first root fallback, `figma` writes a
+  loop flattener returning `Array<{ id; name }>` rather than `unknown[]`, so it keeps a
+  `function:<name>From` blocker under any correct guard.
 - **A validation warning on a large `maxLimit`.** It measures the wrong quantity. `maxLimit`
   caps how many matches are *returned*, not how many rows are *fetched* — the connector has
   already awaited the full response. A connector with `maxLimit: 50` against an endpoint
@@ -376,8 +694,11 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   would train authors to lower a number that is not the problem.
 - **Making the URL/body treatment of an unset optional boolean consistent.** Both halves are
   right for their medium and one is byte-locked by the corpus. See the README.
-- **Generating a working Gateway `sync()`.** The shape it would assume fits 2 of ~98 real sync
-  files, and producing it would mean reproducing AGPL source nearly verbatim in an MIT repo.
+- **Generating a working Gateway `sync()`.** The shape it would assume fits 6 of the 98 real
+  `*-sync.ts` files, and producing it would mean reproducing AGPL source nearly verbatim in an
+  MIT repo. (The 6 is a re-measurement: this said 2, which was the two files the shape was
+  find/replaced from rather than the number carrying it. The licensing half of the reason does
+  not depend on the count.)
 - **Growing the spec with purely cosmetic fields.** `local` and `bindings` are permitted
   everywhere; beyond those, a field that changes only appearance is refused and the difference
   is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a

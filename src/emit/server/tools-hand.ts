@@ -1,12 +1,54 @@
-import type { ConnectorSpec } from "../../spec.ts";
+import {
+  type ConnectorSpec,
+  type PathSegment,
+  parsePathTemplate,
+  type QueryParam,
+} from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
-import { parsePathTemplate, renderPath } from "./path-template.ts";
+import { renderPath } from "./path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "./query.ts";
 import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
+
+/**
+ * The hoisted consts this tool's emitted handler actually reads — see renderHoists for why
+ * only those may be emitted.
+ *
+ * `seed` carries the body's own usage, which the caller reports (it excludes booleans). The
+ * path consumes every hoisted arg it names; and a query entry reads the same hoisted const
+ * the path would, so its args must join the set or the hoist is never emitted and the
+ * reference dangles.
+ */
+function usedHoists(
+  segments: readonly PathSegment[],
+  hoisted: ReadonlyMap<string, string>,
+  query: readonly QueryParam[] | undefined,
+  seed: Iterable<string>,
+): Set<string> {
+  const used = new Set<string>(seed);
+  for (const s of segments) {
+    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
+  }
+  if (query !== undefined) {
+    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
+  }
+  return used;
+}
+
+/**
+ * The one-line `reg(name, description, schema, async … => call,\n);` form, which only the
+ * "concise" convention uses.
+ *
+ * `inline` keeps the call on the arrow's own line — the shape a handler that takes a
+ * parameter writes; a parameterless one wraps the call onto the next line instead.
+ */
+function renderConciseTool(head: string, param: string, call: string, inline: boolean): string {
+  if (inline) return `reg(${head}, async ${param} => ${call},\n);`;
+  return `reg(${head}, async ${param} =>\n  ${call},\n);`;
+}
 
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   if (tool.impl === "search") return renderSearchTool(spec, tool);
@@ -62,17 +104,9 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       ? `jsonResult(await ${spec.fetchHelper.local}(${callPath}))`
       : `jsonResult(await ${spec.fetchHelper.local}Send(${callPath}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
 
-  // Only hoists something actually reads are emitted — see renderHoists. The path consumes
-  // every hoisted arg it names; the body reports its own usage, which excludes booleans.
-  const used = new Set<string>(body?.hoistsUsed ?? []);
-  for (const s of segments) {
-    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
-  }
-  // A query entry reads the same hoisted const the path would, so its args join `used` or the
-  // hoist is never emitted and the reference dangles.
-  if (query !== undefined) {
-    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
-  }
+  // Only hoists something actually reads are emitted — see renderHoists, and usedHoists for
+  // which of the body, the path and the query contributes what.
+  const used = usedHoists(segments, hoisted, query, body?.hoistsUsed ?? []);
 
   // The body only ever references PARAM through renderBodyExpr's own param.field
   // expressions, so a defined bodyExpr always needs the parameter — even when the path
@@ -117,14 +151,10 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     ].join("\n");
   }
 
-  // The one-line `reg(name, description, schema, async … => call,\n);` form, which only the
-  // "concise" convention uses. A hoist has nowhere to live in an expression body, so a tool
-  // that needs one takes the block form regardless of the connector's declared style.
+  // A hoist has nowhere to live in an expression body, so a tool that needs one takes the
+  // block form regardless of the connector's declared style.
   if (used.size === 0 && spec.handlerStyle === "concise") {
-    if (needsParam) {
-      return `reg(${head}, async ${param} => ${call},\n);`;
-    }
-    return `reg(${head}, async ${param} =>\n  ${call},\n);`;
+    return renderConciseTool(head, param, call, needsParam);
   }
 
   const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);

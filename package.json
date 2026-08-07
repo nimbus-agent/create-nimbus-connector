@@ -1,6 +1,6 @@
 {
   "name": "create-nimbus-connector",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -34,13 +34,13 @@
     "zod": "^4.4.2"
   },
   "optionalDependencies": {
-    "@biomejs/js-api": "^6.0.0",
-    "@biomejs/wasm-nodejs": "^2.5.6"
-  },
-  "devDependencies": {
     "@babel/parser": "^8.0.4",
     "@babel/types": "^8.0.4",
-    "@biomejs/biome": "^2.5.6",
+    "@biomejs/js-api": "^6.0.0",
+    "@biomejs/wasm-nodejs": "^2.5.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
     "@types/bun": "latest",
     "typescript": "^7.0.2"
   }

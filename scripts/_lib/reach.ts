@@ -1,13 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { takeValue } from "../../src/cli.ts";
+import type { Blocker } from "../../src/derive/blockers.ts";
+import { type Derivation, deriveSpec } from "../../src/derive/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../../src/types.ts";
 import { validateSpec } from "../../src/validate.ts";
-import type { Blocker } from "./derive/blockers.ts";
-import { type Derivation, deriveSpec } from "./derive/index.ts";
 
 /**
  * `bun run reach`'s own argument parsing, lifted out of scripts/reach.ts on the
@@ -95,7 +95,7 @@ export function measure(name: string, files: ReadonlyMap<string, string>): Conne
     };
   }
 
-  const derivation = deriveSpec({ server, manifest });
+  const derivation = deriveSpec({ server, manifest, filter: files.get("src/search-filter.ts") });
   if (!derivation.ok) return { name, tier: "blocked", blockers: derivation.blockers };
 
   // parseSpec and validateSpec ARE the `emits` tier boundary: a derived spec that trips

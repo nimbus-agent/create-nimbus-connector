@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { parsePathTemplate, renderPath } from "../../../src/emit/server/path-template.ts";
+// The DSL's two halves live in two modules on purpose — `parsePathTemplate` in src/spec.ts,
+// because `tool.path` is a spec field three layers must read the same way, and `renderPath` in
+// src/emit/, because rendering is the emitter's alone. They are tested together here: parse ->
+// render is the round trip that matters, and splitting the file would test each half against
+// nothing.
+import { renderPath } from "../../../src/emit/server/path-template.ts";
+import { parsePathTemplate } from "../../../src/spec.ts";
 
 const noHoists = { param: "p", hoisted: new Map<string, string>() };
 

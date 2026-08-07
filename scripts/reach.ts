@@ -12,6 +12,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { initParser, parserAvailable, parserUnavailableReason } from "../src/derive/ast.ts";
 import {
   biomeVersion,
   formatterAvailable,
@@ -114,51 +115,17 @@ export function measure(name: string, root: string): ConnectorResult {
   return measureFiles(name, files);
 }
 
-async function main(argv: readonly string[]): Promise<void> {
-  await initFormatter();
-  if (!formatterAvailable()) {
-    throw new Error(
-      "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
-        `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
-    );
-  }
-
-  const { names, nimbusRoot, baseline, verbose } = parseArgs(argv);
-
-  const scopeRefusal = baselineScopeRefusal(names, baseline);
-  if (scopeRefusal !== undefined) {
-    console.log(`\n${scopeRefusal}`);
-    process.exit(2);
-  }
-
-  const root = resolveNimbusRoot({ flag: nimbusRoot, env: process.env["NIMBUS_ROOT"], scriptDir });
-
-  const selected = selectConnectors(names, connectorDirs(root));
-
-  const resolvedBiome = biomeVersion();
-  console.log(`Nimbus root: ${root}   (${selected.length} connectors)`);
-  console.log(`Biome:       ${resolvedBiome}`);
-  const warning = checkBiomeVersion(root, resolvedBiome);
-  if (warning !== undefined) console.log(warning);
-  console.log();
-
-  const results = selected.map((name) => measure(name, root));
-
-  for (const line of summaryLines(results)) console.log(line);
-  console.log("\nBlocked by, most common first:");
-  for (const bucket of histogram(results)) {
-    console.log(`  ${String(bucket.count).padStart(3)}  ${bucket.kind}`);
-    if (verbose) console.log(`       ${bucket.examples.join(", ")}`);
-  }
-  console.log("\n(no derived spec written)");
-
-  if (verbose || names.length > 0) {
-    console.log();
-    for (const r of results) console.log(`  ${r.tier.padEnd(18)} ${r.name}`);
-  }
-
-  if (!baseline) return;
-
+/**
+ * The `--baseline` half of the run, lifted out of `main()` whole.
+ *
+ * Reached only after the plain report has already printed, and only when `--baseline` was
+ * passed — the caller keeps that `if`, because "no baseline requested" is not a comparison
+ * outcome. Every refusal below still ends the process here rather than returning a value: the
+ * two failure exits mean different things and must stay distinguishable — 2 for "this checkout
+ * cannot be compared at all", 1 for "it compared, and a connector lost a tier" — and returning
+ * a status for `main()` to re-dispatch on would be a second place to get that mapping wrong.
+ */
+function compareAgainstBaseline(root: string, results: readonly ConnectorResult[]): void {
   const head = git(root, ["rev-parse", "HEAD"]);
   const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
   // A failed `git status` must not be read as "clean": status.value === "" either way, so
@@ -200,6 +167,61 @@ async function main(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
   console.log("\nNo connector lost a tier.");
+}
+
+async function main(argv: readonly string[]): Promise<void> {
+  await initFormatter();
+  if (!formatterAvailable()) {
+    throw new Error(
+      "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
+        `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
+    );
+  }
+  // Without this, every connector would derive as blocked:parse-error and the run would report
+  // a false 0/94 that reads as a real (if bad) measurement rather than a broken toolchain.
+  await initParser();
+  if (!parserAvailable()) {
+    throw new Error(
+      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
+    );
+  }
+
+  const { names, nimbusRoot, baseline, verbose } = parseArgs(argv);
+
+  const scopeRefusal = baselineScopeRefusal(names, baseline);
+  if (scopeRefusal !== undefined) {
+    console.log(`\n${scopeRefusal}`);
+    process.exit(2);
+  }
+
+  const root = resolveNimbusRoot({ flag: nimbusRoot, env: process.env["NIMBUS_ROOT"], scriptDir });
+
+  const selected = selectConnectors(names, connectorDirs(root));
+
+  const resolvedBiome = biomeVersion();
+  console.log(`Nimbus root: ${root}   (${selected.length} connectors)`);
+  console.log(`Biome:       ${resolvedBiome}`);
+  const warning = checkBiomeVersion(root, resolvedBiome);
+  if (warning !== undefined) console.log(warning);
+  console.log();
+
+  const results = selected.map((name) => measure(name, root));
+
+  for (const line of summaryLines(results)) console.log(line);
+  console.log("\nBlocked by, most common first:");
+  for (const bucket of histogram(results)) {
+    console.log(`  ${String(bucket.count).padStart(3)}  ${bucket.kind}`);
+    if (verbose) console.log(`       ${bucket.examples.join(", ")}`);
+  }
+  console.log("\n(no derived spec written)");
+
+  if (verbose || names.length > 0) {
+    console.log();
+    for (const r of results) console.log(`  ${r.tier.padEnd(18)} ${r.name}`);
+  }
+
+  if (!baseline) return;
+  compareAgainstBaseline(root, results);
 }
 
 // Guarded exactly as scripts/diff-golden.ts is, so importing this module cannot run the harness.

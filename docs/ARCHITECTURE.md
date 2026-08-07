@@ -8,7 +8,7 @@ rules an agent working here needs see [CLAUDE.md](../CLAUDE.md).
 
 One direction, four stages, no cycles:
 
-```
+```text
 JSON spec ──▶ parseSpec ──▶ validateSpec ──▶ generate ──▶ formatAll ──▶ writeFiles
               (src/spec)    (src/validate)  (src/emit)   (src/format)  (src/cli)
                    │              │              │            │
@@ -71,6 +71,13 @@ that would silently generate something other than what it describes is rejected.
 `parseSpec` also derives `title` (PascalCase from `name`) when absent, which is why
 `ConnectorSpec` is `z.infer<...> & { title: string }`.
 
+It also holds the spec language's **parsers**, alongside the schema: `resolveKeyedShape` and
+`needsExtractor` for a search filter's field list, and `parsePathTemplate` for `tool.path`'s
+`${env.X}` / `${arg.X|enc}` DSL. Those answer questions about a spec *field*, and three layers
+need the same answer — `src/validate.ts` checks that every `${arg.X}` names a declared argument,
+`src/emit/` renders it, `src/derive/` reads it back. This module is the one place all three
+already depend on, so it is where the answer lives rather than in any one of them.
+
 ### `src/validate.ts` — identifier collisions
 
 Separate from the schema because it is a *whole-spec* question, not a field question: does
@@ -85,12 +92,12 @@ parse time, where the message can name the offending field.
 `biome-json.ts`, `search-filter.ts`, `wiring.ts`, and `server/` for the one file complex
 enough to need splitting:
 
-```
+```text
 server/index.ts         imports, wiring, glue, assembly
 server/env.ts           credential accessors, the auth modes
 server/fetch-helper.ts  the read and write helpers
 server/args.ts          zod argument schemas
-server/path-template.ts the ${env.X} / ${arg.X|enc} DSL
+server/path-template.ts renderPath — the DSL's renderer (the parser is in src/spec.ts)
 server/query.ts         conditional query-string parameters (query + omitWhen)
 server/body.ts          request bodies for write tools
 server/tools-hand.ts    hand-rolled + read-only-kit registrations
@@ -100,6 +107,43 @@ server/search.ts        impl: "search" registrations
 
 `emit/index.ts` composes them into `GeneratedFile[]`. A seventh file joins the six-file tree
 only when the spec declares a search tool.
+
+### `src/derive/` — the inverse of `src/emit/`
+
+`deriveSpec(files)` turns a connector's `src/server.ts`, `nimbus.extension.json` and (when
+present) `src/search-filter.ts` back into a spec, or into named blockers. It is what
+`--from-connector` and `bun run reach` both run; it ships, because `package.json`'s `files` is
+`["src", "README.md"]`.
+
+```text
+ast.ts             the Babel boundary — parseModule, the AstNode type
+read.ts            THE ONLY module that reads a node's fields, through guarded accessors
+claims.ts          byte-range claims; coverage is containment
+blockers.ts        an unclaimed statement -> a histogram bucket
+manifest.ts        nimbus.extension.json -> spec fields
+search-filter.ts   src/search-filter.ts -> filter entries
+index.ts           deriveSpec(files) -> Derivation
+from-connector.ts  a connector DIRECTORY -> a spec, or a blocker report
+server/            mirrors src/emit/server/ — one recognizer per emitter module, plus
+                   frame.ts and hoists.ts, which have no emitter counterpart
+```
+
+Three properties hold it honest, and each exists because its absence produced a false pass:
+
+- **The totality rule.** Every top-level and function-body statement must be covered by a claim;
+  an unclaimed statement fails the connector. There is no ignore-the-rest path. The number this
+  produces is deliberately lower than a scrape's, because a scrape is silent about what it does
+  not recognize and silence reads as absence.
+- **`AstNode` carries only `type`, `start`, `end`, `loc`**, so every other field read goes
+  through `read.ts`. `bunx tsc --noEmit` is the enforcement: with an index signature,
+  `node["computed"]` typechecks for any key and yields `undefined`, and a matcher that validates
+  part of a construct while claiming the whole of it is exactly the defect the totality rule
+  cannot see.
+- **The dependency direction.** A recognizer may import the **spec language** — `src/spec.ts`'s
+  `parsePathTemplate`, `resolveKeyedShape` — because a private copy that under-parses fails
+  silently while the shared one fails loudly. It may **never** import `src/emit/`'s renderers:
+  comparing rendered text against observed source would make a renderer bug self-consistent and
+  invisible to every gate.
 
 ### `src/golden/` — fixture machinery
 
@@ -139,10 +183,14 @@ generator can derive a spec for and regenerate at all. It derives a spec from ea
 `src/server.ts` and `nimbus.extension.json`, runs it through `parseSpec`, `validateSpec` and
 `generate()`, and buckets the result into a tier — `blocked`, `emits`, `server-identical`, or
 `all-identical` — without ever writing the derived spec to disk. `bun run reach:baseline`
-records the per-connector tiers alongside the Nimbus commit they were measured at in
-`fixtures/reach-baseline.json`; `bun run reach --baseline` refuses to compare across a moved or
-dirty checkout and otherwise fails when a connector has regressed a tier. Like `diff:golden` and
-`wiring:conformance`, it needs the AGPL monorepo and so cannot run in CI.
+records the per-connector tiers in `fixtures/reach-baseline.json`, keyed on `connectorsTree`:
+the git tree object of `packages/mcp-connectors`, the only path the harness reads. Keying on
+HEAD was deliberately refused — two commits can carry a byte-identical `packages/mcp-connectors`
+(a change elsewhere in the monorepo, a merge, a revert), and refusing on a commit SHA that moved
+while the tree did not made `--baseline` refuse a corpus that had not actually changed.
+`bun run reach --baseline` refuses to compare across a moved or dirty checkout and otherwise
+fails when a connector has regressed a tier. Like `diff:golden` and `wiring:conformance`, it
+needs the AGPL monorepo and so cannot run in CI.
 
 ### 2. The golden-fixture harness, in detail
 

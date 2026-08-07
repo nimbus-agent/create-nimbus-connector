@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { PARTIAL_MARKER } from "../src/derive/from-connector.ts";
 import { parseSpec } from "../src/spec.ts";
 
 const MINIMAL = {
@@ -47,6 +48,20 @@ describe("parseSpec", () => {
 
   it("rejects an unknown top-level key", () => {
     expect(() => parseSpec({ ...MINIMAL, oauth: true })).toThrow(/oauth/);
+  });
+
+  it("rejects --from-connector --partial's draft marker specifically, not a missing field", () => {
+    // MINIMAL alone already parses (see "applies derived defaults" above), so every OTHER
+    // required field is present here too — a throw can only be the strict-object rejection of
+    // PARTIAL_MARKER itself, not some unrelated missing field masking it. That distinction is
+    // the whole point of the marker being the mechanism: see src/derive/from-connector.ts.
+    // toThrow(string) is substring containment, not a pattern — so the marker is matched
+    // literally and needs no regex escaping. The escaped-RegExp form this replaced used
+    // `.replace("$", "\\$")`, which escapes only the FIRST "$"; correct for today's one-dollar
+    // marker and silently wrong the day it gains a second. CodeQL flagged it (js/incomplete-
+    // sanitization) on PR #62.
+    const draft = { ...MINIMAL, [PARTIAL_MARKER]: { note: "x", blockers: ["stub"] } };
+    expect(() => parseSpec(draft)).toThrow(PARTIAL_MARKER);
   });
 
   it("accepts a non-GET method on a tool now that method/effect are in scope", () => {
@@ -760,8 +775,8 @@ describe("Stage C tool fields", () => {
 /**
  * Final fix wave, IMPORTANT 4. These five refines had zero coverage: replacing any of them
  * with `.refine((_e) => true)` left 374 tests passing. Two of them are load-bearing beyond
- * schema tidiness — `env.ts:87` does `e.credentialsIn!` and `env.ts:121` does
- * `JSON.stringify(e.tokenUrl)`, so without them a spec omitting either emits
+ * schema tidiness — `renderTokenFunction` (src/emit/server/env.ts) does both `e.credentialsIn!`
+ * and `JSON.stringify(e.tokenUrl)`, so without them a spec omitting either emits
  * `const res = await fetch(undefined, {...})`. One test per refine, each written so that
  * only its own refine can produce the asserted message.
  */

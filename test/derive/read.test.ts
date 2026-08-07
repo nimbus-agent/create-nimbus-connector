@@ -1,0 +1,735 @@
+import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseModule } from "../../src/derive/ast.ts";
+import {
+  arrayElements,
+  arrowFn,
+  asExpression,
+  assignment,
+  awaited,
+  bareKeyedProps,
+  binary,
+  blockBody,
+  boolLit,
+  calleeOf,
+  callTo,
+  callToAny,
+  catchClause,
+  computedMember,
+  conditional,
+  constDecl,
+  expressionOf,
+  functionBody,
+  functionName,
+  functionParams,
+  functionReturnType,
+  identName,
+  ifStatement,
+  importNames,
+  importSource,
+  isAsyncFunction,
+  isComputedProperty,
+  isNullLiteral,
+  isShorthandProperty,
+  labelCallee,
+  labelFirstInit,
+  labelName,
+  leadingCommentTexts,
+  letDecl,
+  logical,
+  memberName,
+  memberObject,
+  memberOn,
+  methodCallTo,
+  newOf,
+  numberLit,
+  numericValue,
+  objectExpressionProperties,
+  objectProperty,
+  optionalCallCallee,
+  optionalMemberName,
+  optionalMemberObject,
+  quoteMinimalProps,
+  regExpLit,
+  returnArgument,
+  spreadArgument,
+  stringLit,
+  templateLiteral,
+  throwArgument,
+  tryStatement,
+  typeAnnotationName,
+  typeArguments,
+  unary,
+  uninitializedLet,
+  unionTypes,
+} from "../../src/derive/read.ts";
+
+beforeAll(async () => {
+  await initParser();
+});
+
+/** The single top-level statement of `source`. */
+function only(source: string) {
+  const statements = parseModule(source);
+  if (statements.length !== 1) throw new Error(`expected 1 statement, got ${statements.length}`);
+  return statements[0]!;
+}
+
+/** The init of `const x = <expr>;`. */
+function initOf(expr: string) {
+  const decl = constDecl(only(`const x = ${expr};`));
+  if (decl?.init === undefined) throw new Error(`no init for ${expr}`);
+  return decl.init;
+}
+
+describe("constDecl", () => {
+  it("reads a single const declarator", () => {
+    expect(constDecl(only("const a = 1;"))?.name).toBe("a");
+  });
+
+  it("rejects let and var — the emitter only ever writes const", () => {
+    expect(constDecl(only("let a = 1;"))).toBeUndefined();
+    expect(constDecl(only("var a = 1;"))).toBeUndefined();
+  });
+
+  it("rejects a multi-declarator statement", () => {
+    expect(constDecl(only("const a = 1, b = 2;"))).toBeUndefined();
+  });
+
+  it("rejects a destructuring pattern", () => {
+    expect(constDecl(only("const { a } = o;"))).toBeUndefined();
+  });
+});
+
+describe("memberName", () => {
+  it("reads a plain property", () => {
+    expect(memberName(initOf("p.limit"))).toBe("limit");
+  });
+
+  it("rejects a computed member — p[key] is not p.key", () => {
+    expect(memberName(initOf("p[key]"))).toBeUndefined();
+  });
+
+  it("rejects an optional member — ?. is a different node type", () => {
+    expect(memberName(initOf("p?.limit"))).toBeUndefined();
+  });
+
+  it("memberObject rejects a computed member too", () => {
+    expect(memberObject(initOf("p[key]"))).toBeUndefined();
+    expect(identName(memberObject(initOf("p.limit")))).toBe("p");
+  });
+});
+
+describe("callTo", () => {
+  it("returns the arguments on an exact name and arity match", () => {
+    expect(callTo(initOf("f(1, 2)"), "f", 2)).toHaveLength(2);
+  });
+
+  it("rejects a wrong arity", () => {
+    expect(callTo(initOf("f(1)"), "f", 2)).toBeUndefined();
+  });
+
+  it("rejects a wrong callee", () => {
+    expect(callTo(initOf("g(1, 2)"), "f", 2)).toBeUndefined();
+  });
+
+  it("rejects an optional call — f?.() is a different node type", () => {
+    expect(callTo(initOf("f?.(1)"), "f", 1)).toBeUndefined();
+  });
+});
+
+describe("methodCallTo", () => {
+  it("matches receiver, property and arity together", () => {
+    expect(methodCallTo(initOf("mcp.connect(transport)"), "mcp", "connect", 1)).toHaveLength(1);
+  });
+
+  it("rejects a computed property — u[set](a, b) is not u.set(a, b)", () => {
+    expect(methodCallTo(initOf("u[set](a, b)"), "u", "set", 2)).toBeUndefined();
+  });
+
+  it("rejects a different receiver", () => {
+    expect(methodCallTo(initOf("v.connect(t)"), "mcp", "connect", 1)).toBeUndefined();
+  });
+
+  it("rejects a wrong arity", () => {
+    expect(methodCallTo(initOf("mcp.connect(a, b)"), "mcp", "connect", 1)).toBeUndefined();
+  });
+
+  /**
+   * `u.searchParams.set(k, v)` is a TWO-level chain: the callee's object is itself a
+   * MemberExpression, not an Identifier. methodCallTo models a ONE-level receiver and must
+   * refuse it — widening the receiver check to also accept the inner member's property name
+   * would make `methodCallTo(x, "searchParams", "set", 2)` match `anything.searchParams.set(...)`,
+   * dropping the identity of `u` entirely. That is a matcher validating part of a shape and
+   * claiming the whole of it: the exact defect class this module exists to make impossible,
+   * reintroduced into the module built to prevent it.
+   *
+   * The query recognizer that needs this shape composes it from the strict primitives instead —
+   * asserted below so the composition is a tested route rather than a hopeful one.
+   */
+  it("refuses a two-level chain, which composes from the primitives instead", () => {
+    const call = initOf("u.searchParams.set(k, v)");
+    expect(methodCallTo(call, "searchParams", "set", 2)).toBeUndefined();
+    expect(methodCallTo(call, "u", "set", 2)).toBeUndefined();
+
+    const callee = calleeOf(call);
+    expect(memberName(callee)).toBe("set");
+    const inner = memberObject(callee);
+    expect(memberName(inner)).toBe("searchParams");
+    expect(identName(memberObject(inner))).toBe("u");
+  });
+});
+
+describe("newOf", () => {
+  it("matches constructor and arity", () => {
+    expect(newOf(initOf("new StdioServerTransport()"), "StdioServerTransport", 0)).toEqual([]);
+  });
+
+  it("rejects a wrong arity", () => {
+    expect(newOf(initOf("new McpServer()"), "McpServer", 1)).toBeUndefined();
+  });
+});
+
+describe("bareKeyedProps / quoteMinimalProps — the two readings of an object literal", () => {
+  it("reads identifier and string keys", () => {
+    const props = quoteMinimalProps(initOf('({ a: 1, "b-c": 2 })'));
+    expect(props?.map((p) => p.key)).toEqual(["a", "b-c"]);
+  });
+
+  it("reads a shorthand property as key and value alike", () => {
+    const props = bareKeyedProps(initOf("({ issueId })"));
+    expect(props?.[0]?.key).toBe("issueId");
+    expect(identName(props?.[0]?.value)).toBe("issueId");
+  });
+
+  it("rejects a computed key — { [K]: v } has no literal name", () => {
+    expect(bareKeyedProps(initOf("({ [K]: 1 })"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("({ [K]: 1 })"))).toBeUndefined();
+  });
+
+  it("rejects a spread element", () => {
+    expect(bareKeyedProps(initOf("({ ...rest })"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("({ ...rest })"))).toBeUndefined();
+  });
+
+  it("rejects a non-ObjectExpression through both readings", () => {
+    expect(bareKeyedProps(initOf("1"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("1"))).toBeUndefined();
+  });
+
+  it("splits on the key SPELLING, which the resolved `key` erases", () => {
+    // `{ a: 1 }` and `{ "a": 1 }` resolve to the same `key`. No emitter under src/emit/ writes the
+    // quoted spelling for an identifier-shaped name (src/emit/server/env.ts's `returnLines` quotes
+    // a header name exactly when `IDENTIFIER_RE` rejects it, and quotes nothing else), so a
+    // recognizer that cannot tell the two apart claims a module it re-emits differently.
+    // Formatting does not rescue that: `formatAll` leaves a needlessly quoted key quoted —
+    // verified 2026-08-07 by running `{ "method": "DELETE" }` through it — so the quoted spelling
+    // survives all the way to the byte comparison.
+    const source = '({ a: 1, "b": 2, "b-c": 3, d })';
+
+    // bareKeyedProps: every key bare, so both quoted spellings are out — including "b-c", which
+    // is why a fixed-key literal can never legitimately carry a name needing quotes.
+    expect(bareKeyedProps(initOf(source))).toBeUndefined();
+    expect(bareKeyedProps(initOf("({ a: 1, d })"))?.map((p) => p.key)).toEqual(["a", "d"]);
+    expect(bareKeyedProps(initOf('({ "b-c": 3 })'))).toBeUndefined();
+
+    // quoteMinimalProps: quoted iff the name cannot be bare. `"b"` is the only refusal here.
+    expect(quoteMinimalProps(initOf(source))).toBeUndefined();
+    expect(quoteMinimalProps(initOf('({ a: 1, "b-c": 3, d })'))?.map((p) => p.key)).toEqual([
+      "a",
+      "b-c",
+      "d",
+    ]);
+    expect(quoteMinimalProps(initOf('({ "b": 2 })'))).toBeUndefined();
+  });
+
+  it("carries the spelling on each Prop, which is what the two readings are built from", () => {
+    const props = quoteMinimalProps(initOf('({ a: 1, "b-c": 3, d })'));
+    expect(props?.map((p) => ({ key: p.key, bareKey: p.bareKey }))).toEqual([
+      { key: "a", bareKey: true },
+      { key: "b-c", bareKey: false },
+      { key: "d", bareKey: true },
+    ]);
+  });
+});
+
+describe("literals", () => {
+  it("reads each literal type only at its own node type", () => {
+    expect(stringLit(initOf('"hi"'))).toBe("hi");
+    expect(numberLit(initOf("42"))).toBe(42);
+    expect(boolLit(initOf("true"))).toBe(true);
+    expect(stringLit(initOf("42"))).toBeUndefined();
+    expect(numberLit(initOf('"42"'))).toBeUndefined();
+  });
+
+  it("numberLit rejects -1, which Babel parses as a UnaryExpression", () => {
+    expect(numberLit(initOf("-1"))).toBeUndefined();
+  });
+
+  it("numericValue accepts a negative literal, which ArgSchema permits for min/max/default", () => {
+    expect(numericValue(initOf("-1"))).toBe(-1);
+    expect(numericValue(initOf("42"))).toBe(42);
+  });
+
+  it("numericValue rejects unary plus — the emitter never writes a non-negative bound signed", () => {
+    expect(numericValue(initOf("+5"))).toBeUndefined();
+  });
+
+  it("numericValue rejects a unary operator that is not a sign", () => {
+    expect(numericValue(initOf("!1"))).toBeUndefined();
+    expect(numericValue(initOf("-x"))).toBeUndefined();
+  });
+});
+
+describe("statement and function readers", () => {
+  it("unwraps an expression statement and an await", () => {
+    const call = awaited(expressionOf(only("await f();")));
+    expect(callTo(call, "f", 0)).toEqual([]);
+  });
+
+  it("reads an arrow's params and block body", () => {
+    const arrow = arrowFn(initOf("(a, b) => { return 1; }"));
+    expect(arrow?.params).toHaveLength(2);
+    expect(arrow?.isBlock).toBe(true);
+    expect(blockBody(arrow?.body)).toHaveLength(1);
+  });
+
+  it("reports an expression-bodied arrow as not a block", () => {
+    expect(arrowFn(initOf("(a) => 1"))?.isBlock).toBe(false);
+  });
+
+  it("reads an arrow's async flag, on the arrow's own node rather than isAsyncFunction's", () => {
+    expect(arrowFn(initOf("async (a) => { return 1; }"))?.isAsync).toBe(true);
+    expect(arrowFn(initOf("(a) => { return 1; }"))?.isAsync).toBe(false);
+  });
+
+  it("reads a return argument, and undefined for a bare return", () => {
+    const arrow = arrowFn(initOf("() => { return 7; }"));
+    expect(numberLit(returnArgument(blockBody(arrow?.body)?.[0]))).toBe(7);
+  });
+
+  it("reads a conditional's three limbs", () => {
+    const c = conditional(initOf('a === true ? "true" : "false"'));
+    expect(stringLit(c?.consequent)).toBe("true");
+    expect(stringLit(c?.alternate)).toBe("false");
+  });
+
+  it("reads an import specifier source", () => {
+    expect(importSource(only('import { a } from "./x.ts";'))).toBe("./x.ts");
+  });
+});
+
+/**
+ * The Step 1 fixtures above exercise every accessor `blockers.ts`, `args.ts` and the query
+ * recognizer already reach through. These accessors are exports Tasks 2–6 are declared to use
+ * but nothing here reaches yet — covered directly so the per-file floor in `bunfig.toml`
+ * measures this module honestly rather than needing a `coveragePathIgnorePatterns` entry.
+ */
+describe("accessors not yet reached by a recognizer", () => {
+  it("memberOn reads a member only when the receiver identifier matches", () => {
+    expect(memberOn(initOf("p.limit"), "p")).toBe("limit");
+    expect(memberOn(initOf("p.limit"), "q")).toBeUndefined();
+  });
+
+  it("functionName reads a declaration's name, and rejects a non-declaration", () => {
+    expect(functionName(only("function foo() {}"))).toBe("foo");
+    expect(functionName(only("const foo = () => {};"))).toBeUndefined();
+  });
+
+  it("callToAny matches any arity by callee identity alone", () => {
+    expect(callToAny(initOf("f(1, 2, 3)"), "f")).toHaveLength(3);
+    expect(callToAny(initOf("g(1, 2, 3)"), "f")).toBeUndefined();
+  });
+
+  it("arrayElements reads elements, and rejects a spread", () => {
+    expect(arrayElements(initOf("[1, 2, 3]"))).toHaveLength(3);
+    expect(arrayElements(initOf("[...rest]"))).toBeUndefined();
+  });
+
+  it("binary reads operator and sides, never a LogicalExpression", () => {
+    const b = binary(initOf("a === b"));
+    expect(b?.operator).toBe("===");
+    expect(identName(b?.left)).toBe("a");
+    expect(identName(b?.right)).toBe("b");
+    expect(binary(initOf("a ?? b"))).toBeUndefined();
+  });
+
+  it("logical reads operator and sides, never a BinaryExpression", () => {
+    const l = logical(initOf("a ?? b"));
+    expect(l?.operator).toBe("??");
+    expect(logical(initOf("a === b"))).toBeUndefined();
+  });
+
+  it("templateLiteral reads cooked quasis and expressions in step", () => {
+    const t = templateLiteral(initOf("`a${b}c`"));
+    expect(t?.quasis).toEqual(["a", "c"]);
+    expect(t?.expressions).toHaveLength(1);
+    expect(identName(t?.expressions[0])).toBe("b");
+  });
+
+  it("importNames reads every named specifier, aliased or not", () => {
+    const names = importNames(only('import { a, b as c } from "./x.ts";'));
+    expect(names).toEqual([
+      { imported: "a", local: "a", isType: false },
+      { imported: "b", local: "c", isType: false },
+    ]);
+  });
+
+  it("importNames rejects a default or namespace specifier", () => {
+    expect(importNames(only('import a from "./x.ts";'))).toBeUndefined();
+  });
+
+  it("labelName reads an identifier or a member's property, unguarded on computed", () => {
+    expect(labelName(initOf("a"))).toBe("a");
+    expect(labelName(initOf("p[key]"))).toBe("key");
+    expect(labelName(initOf("1"))).toBeUndefined();
+  });
+
+  it("labelCallee reads a call's callee for labelling only", () => {
+    expect(identName(labelCallee(initOf("f(1)")))).toBe("f");
+  });
+
+  it("labelFirstInit reads the first declarator's init on let, not just const", () => {
+    expect(numberLit(labelFirstInit(only("let a = 1, b = 2;")))).toBe(1);
+    expect(labelFirstInit(only("f();"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 2's accessors — added when `tsc --noEmit` (after `AstNode` lost its index signature)
+ * surfaced a shape none of Task 1's accessors covered. Each pairs a guarded reader with the
+ * node shape it exists for, the same way the accessors above do.
+ */
+describe("Task 2 accessors", () => {
+  it("regExpLit reads a regex literal's pattern and flags", () => {
+    expect(regExpLit(initOf("/\\/$/"))).toEqual({ pattern: "\\/$", flags: "" });
+    expect(regExpLit(initOf('"not a regex"'))).toBeUndefined();
+  });
+
+  it("optionalCallCallee/optionalMemberName/optionalMemberObject read x?.trim()'s ?. step", () => {
+    // `x?.trim()` is an OptionalCallExpression whose callee is an OptionalMemberExpression — a
+    // distinct pair of node types from the plain CallExpression/MemberExpression the rest of
+    // this module reads, needed for env.ts's `process.env[...]?.trim()`.
+    const callee = optionalCallCallee(initOf("x?.trim()"));
+    expect(optionalMemberName(callee)).toBe("trim");
+    expect(identName(optionalMemberObject(callee))).toBe("x");
+  });
+
+  it("optionalMemberName/optionalMemberObject reject a computed member and a plain one", () => {
+    expect(optionalCallCallee(initOf("x.trim()"))).toBeUndefined();
+
+    // Anchored: confirm the callee really did parse as an OptionalMemberExpression before
+    // checking that optionalMemberName still refuses it for being computed — otherwise this
+    // assertion would pass just as well if optionalCallCallee itself had returned undefined.
+    const computedCallee = optionalCallCallee(initOf("x?.[trim]()"));
+    expect(computedCallee?.type).toBe("OptionalMemberExpression");
+    expect(optionalMemberName(computedCallee)).toBeUndefined();
+
+    // A plain (non-optional) MemberExpression is not an OptionalMemberExpression either.
+    const plainCallee = calleeOf(initOf("x.trim()"));
+    expect(plainCallee?.type).toBe("MemberExpression");
+    expect(optionalMemberName(plainCallee)).toBeUndefined();
+  });
+
+  it("computedMember reads a deliberately computed member's object and its resolved literal key, unlike memberName", () => {
+    const m = computedMember(initOf('process.env["VAR"]'));
+    // Anchored: `m?.key` can only equal "VAR" when `m` is actually defined, so this also proves
+    // `m` is not undefined before the next assertion relies on that.
+    expect(m?.key).toBe("VAR");
+    expect(identName(m?.object)).toBeUndefined(); // process.env is itself a MemberExpression
+    // memberName/memberObject reject the same node — computedMember is their deliberate inverse.
+    expect(memberName(initOf('process.env["VAR"]'))).toBeUndefined();
+  });
+
+  it("computedMember rejects a non-computed member", () => {
+    expect(computedMember(initOf("p.limit"))).toBeUndefined();
+  });
+
+  it("computedMember rejects a non-literal (identifier) key, since it resolves the key itself now", () => {
+    // process.env[key] would otherwise be misread as env var "key" — the exact hazard this
+    // accessor's docstring says resolving the key (rather than handing back an unresolved node)
+    // exists to prevent. `process.env["VAR"]` is the only computed member src/emit/server/
+    // writes, so requiring a literal key here is lossless.
+    expect(computedMember(initOf("process.env[key]"))).toBeUndefined();
+  });
+
+  it("functionParams/functionBody/isAsyncFunction read a FunctionDeclaration's shape", () => {
+    const fn = only("async function f(a, b) { return 1; }");
+    expect(functionParams(fn)?.map((p) => identName(p))).toEqual(["a", "b"]);
+    expect(functionBody(fn)).toHaveLength(1);
+    expect(isAsyncFunction(fn)).toBe(true);
+  });
+
+  it("isAsyncFunction is false for a non-async declaration, functionParams/Body undefined for a non-declaration", () => {
+    expect(isAsyncFunction(only("function f() {}"))).toBe(false);
+    expect(functionParams(only("const f = () => {};"))).toBeUndefined();
+    expect(functionBody(only("const f = () => {};"))).toBeUndefined();
+  });
+
+  it("objectExpressionProperties/objectProperty read a properties list unfiltered, unlike the objectProps readings", () => {
+    const props = objectExpressionProperties(initOf("({ a: 1, ...rest, [k]: 2 })"));
+    expect(props).toHaveLength(3);
+    // The objectProps parse underneath both readings rejects the whole object over the spread
+    // and the computed key.
+    expect(bareKeyedProps(initOf("({ a: 1, ...rest, [k]: 2 })"))).toBeUndefined();
+
+    const first = objectProperty(props?.[0]);
+    expect(identName(first?.key)).toBe("a");
+    expect(numberLit(first?.value)).toBe(1);
+    // A SpreadElement has no key/value pair — objectProperty returns undefined, not a crash.
+    expect(objectProperty(props?.[1])).toBeUndefined();
+    // Unlike that parse, objectProperty does NOT reject a computed key — it hands back the
+    // key node as written, for a caller that discriminates the key node's own shape itself
+    // (pairing with isComputedProperty below when the caller instead needs to know computed-ness).
+    const computed = objectProperty(props?.[2]);
+    expect(computed).toBeDefined();
+  });
+
+  it("objectExpressionProperties rejects a non-ObjectExpression", () => {
+    expect(objectExpressionProperties(initOf("1"))).toBeUndefined();
+  });
+
+  it("isComputedProperty distinguishes a computed key from a literal one", () => {
+    const props = objectExpressionProperties(initOf("({ a: 1, [k]: 2 })"));
+    expect(props).toHaveLength(2);
+    expect(isComputedProperty(props?.[0])).toBe(false);
+    expect(isComputedProperty(props?.[1])).toBe(true);
+    // Not an ObjectProperty at all — a SpreadElement, say — is not "computed" either.
+    const withSpread = objectExpressionProperties(initOf("({ ...rest })"));
+    expect(isComputedProperty(withSpread?.[0])).toBe(false);
+  });
+
+  it("ifStatement reads test/consequent/alternate, alternate undefined when absent", () => {
+    const withElse = ifStatement(only("if (a) { b; } else { c; }"));
+    expect(identName(withElse?.test)).toBe("a");
+    expect(blockBody(withElse?.consequent)).toHaveLength(1);
+    expect(blockBody(withElse?.alternate)).toHaveLength(1);
+
+    const withoutElse = ifStatement(only("if (a) { b; }"));
+    expect(withoutElse?.alternate).toBeUndefined();
+  });
+
+  it("throwArgument reads a throw statement's argument", () => {
+    const args = newOf(throwArgument(only('throw new Error("x");')), "Error", 1);
+    expect(stringLit(args?.[0])).toBe("x");
+    expect(throwArgument(only("f();"))).toBeUndefined();
+  });
+
+  it("unary reads operator and argument, e.g. the !res.ok guard", () => {
+    const u = unary(initOf("!res.ok"));
+    expect(u?.operator).toBe("!");
+    expect(memberOn(u?.argument, "res")).toBe("ok");
+    expect(unary(initOf("1"))).toBeUndefined();
+  });
+
+  it("asExpression reads the expression and the type annotation's own type", () => {
+    const a = asExpression(initOf("value as unknown"));
+    expect(identName(a?.expression)).toBe("value");
+    expect(a?.typeAnnotationType).toBe("TSUnknownKeyword");
+    expect(asExpression(initOf("value"))).toBeUndefined();
+  });
+
+  it("tryStatement/catchClause read a try/catch's parts, finalizer undefined when absent", () => {
+    const t = tryStatement(only("try { a; } catch (e) { b; }"));
+    expect(blockBody(t?.block)).toHaveLength(1);
+    expect(t?.finalizer).toBeUndefined();
+    const c = catchClause(t?.handler);
+    expect(identName(c?.param)).toBe("e");
+    expect(blockBody(c?.body)).toHaveLength(1);
+  });
+
+  it("catchClause reads a bare catch (no param) and tryStatement reads a finalizer", () => {
+    const t = tryStatement(only("try { a; } catch { b; } finally { c; }"));
+    expect(t?.finalizer).toBeDefined();
+    const c = catchClause(t?.handler);
+    expect(c?.param).toBeUndefined();
+    expect(catchClause(only("f();"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 5's accessors — added for renderRestKitFetchHelper's shape, the one place this
+ * deriver's emitter output assigns inside a try/catch rather than returning from one.
+ */
+describe("Task 5 accessors", () => {
+  it("spreadArgument reads a SpreadElement's own argument, undefined for a plain property", () => {
+    const props = objectExpressionProperties(initOf("({ ...init, a: 1 })"));
+    expect(identName(spreadArgument(props?.[0]))).toBe("init");
+    expect(spreadArgument(props?.[1])).toBeUndefined();
+  });
+
+  it("assignment reads operator and sides, distinct from binary/logical", () => {
+    const a = assignment(expressionOf(only("json = value;")));
+    expect(a?.operator).toBe("=");
+    expect(identName(a?.left)).toBe("json");
+    expect(identName(a?.right)).toBe("value");
+    expect(assignment(initOf("a === b"))).toBeUndefined();
+  });
+
+  it("isNullLiteral is true only for the literal null", () => {
+    expect(isNullLiteral(initOf("null"))).toBe(true);
+    expect(isNullLiteral(initOf("undefined"))).toBe(false);
+    expect(isNullLiteral(initOf("0"))).toBe(false);
+  });
+
+  it("uninitializedLet reads a bare `let`'s own name, rejecting const, var and an initializer", () => {
+    expect(uninitializedLet(only("let json: unknown;"))).toBe("json");
+    expect(uninitializedLet(only("const json = 1;"))).toBeUndefined();
+    expect(uninitializedLet(only("var json;"))).toBeUndefined();
+    expect(uninitializedLet(only("let json = 1;"))).toBeUndefined();
+  });
+});
+
+/**
+ * Task 8's accessor — `renderTokenFunction` (src/emit/server/env.ts) writes the only two
+ * initialized `let`s this deriver's emitter output declares, one annotated and one not, and
+ * neither `constDecl` (kind-guarded to "const") nor `uninitializedLet` (no-initializer only)
+ * can read either.
+ */
+describe("letDecl", () => {
+  it("reads the annotated form, carrying the annotation node the emitter's own text pins", () => {
+    const decl = letDecl(only("let cachedToken: string | null = null;"));
+    expect(decl?.name).toBe("cachedToken");
+    expect(isNullLiteral(decl?.init)).toBe(true);
+    // Handed back rather than dropped: `let cachedToken: null | string = null;` typechecks
+    // identically, and is bytes renderTokenFunction never writes.
+    expect(unionTypes(decl?.typeAnnotation)?.map((t) => typeAnnotationName(t))).toEqual([
+      "string",
+      "null",
+    ]);
+  });
+
+  it("reads the bare form, reporting the ABSENT annotation as undefined rather than guessing one", () => {
+    const decl = letDecl(only("let tokenExpiresAt = 0;"));
+    expect(decl?.name).toBe("tokenExpiresAt");
+    expect(numberLit(decl?.init)).toBe(0);
+    // `let tokenExpiresAt: number = 0;` is the shape a caller has to be able to refuse.
+    expect(decl?.typeAnnotation).toBeUndefined();
+    expect(letDecl(only("let tokenExpiresAt: number = 0;"))?.typeAnnotation).toBeDefined();
+  });
+
+  it("rejects const, var, an uninitialized let, and a multi-declarator or destructuring statement", () => {
+    expect(letDecl(only("const cachedToken = null;"))).toBeUndefined();
+    expect(letDecl(only("var cachedToken = null;"))).toBeUndefined();
+    expect(letDecl(only("let cachedToken: string | null;"))).toBeUndefined();
+    expect(letDecl(only("let a = 1, b = 2;"))).toBeUndefined();
+    expect(letDecl(only("let { a } = o;"))).toBeUndefined();
+    expect(letDecl(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * `renderTokenFunction` (src/emit/server/env.ts) is the only emitter in this repository that
+ * writes a comment into `src/server.ts`, so `server/env.ts` has to compare its TEXT — presence,
+ * which is all `hasLeadingComment` reports and all `search-filter.ts` needs, would accept a
+ * reworded comment and silently re-emit the original.
+ */
+describe("leadingCommentTexts", () => {
+  it("reads every leading comment's text in source order, for both comment syntaxes", () => {
+    const [stmt] = parseModule(["// one", "// two", "const a = 1;"].join("\n"));
+    expect(leadingCommentTexts(stmt)).toEqual([" one", " two"]);
+    const [block] = parseModule(["/* doc */", "const b = 2;"].join("\n"));
+    expect(leadingCommentTexts(block)).toEqual([" doc "]);
+  });
+
+  it("is empty — not undefined — for a node with no comment, and for no node at all", () => {
+    // The distinction matters at the call site: `commentsAre(stmt, [])` asserts the ABSENCE of a
+    // comment, which only works if absence is an empty list rather than a refusal.
+    expect(leadingCommentTexts(only("const a = 1;"))).toEqual([]);
+    expect(leadingCommentTexts(undefined)).toEqual([]);
+  });
+
+  it("attaches to the FOLLOWING statement, which is the one a positional walk checks", () => {
+    // Babel records the same comment on the previous statement's `trailingComments` too; this
+    // accessor reads only `leadingComments`, so the statement BEFORE a comment stays clean.
+    const statements = parseModule(["const a = 1;", "// mid", "const b = 2;"].join("\n"));
+    expect(leadingCommentTexts(statements[0])).toEqual([]);
+    expect(leadingCommentTexts(statements[1])).toEqual([" mid"]);
+  });
+});
+
+/**
+ * Added for the-honest-histogram's task 5: `renderBodyExpr` writes `{ scope }` and never
+ * `{ scope: scope }`, and `renderWriteHelper` writes `method,` and `{ body }` shorthand
+ * unconditionally — Babel gives the two forms identical key and value children, so no other
+ * accessor here can tell them apart. See task-5-report.md.
+ */
+describe("typeArguments", () => {
+  it("reads a type reference's arguments, which typeAnnotationName deliberately does not", () => {
+    const unknownArg = functionReturnType(only("function a(): Promise<unknown> { return x; }"));
+    const voidArg = functionReturnType(only("function b(): Promise<void> { return x; }"));
+    // Indistinguishable through typeAnnotationName, which reports the head name only.
+    expect(typeAnnotationName(unknownArg)).toBe("Promise");
+    expect(typeAnnotationName(voidArg)).toBe("Promise");
+
+    expect(typeArguments(unknownArg)).toHaveLength(1);
+    expect(typeAnnotationName(typeArguments(unknownArg)?.[0])).toBe("unknown");
+    expect(typeAnnotationName(typeArguments(voidArg)?.[0])).toBe("void");
+    expect(
+      typeArguments(functionReturnType(only("function c(): Record<string, string> { return x; }"))),
+    ).toHaveLength(2);
+  });
+
+  it("is undefined for a reference with no arguments, and for a keyword annotation", () => {
+    expect(
+      typeArguments(functionReturnType(only("function d(): Thing { return x; }"))),
+    ).toBeUndefined();
+    expect(
+      typeArguments(functionReturnType(only("function e(): string { return x; }"))),
+    ).toBeUndefined();
+    expect(typeArguments(undefined)).toBeUndefined();
+  });
+});
+
+describe("isShorthandProperty", () => {
+  it("distinguishes shorthand from a longhand property with the identical key and value", () => {
+    const shorthand = objectExpressionProperties(initOf("({ scope })"));
+    const longhand = objectExpressionProperties(initOf("({ scope: scope })"));
+    // The two are indistinguishable through every other accessor: same key name, same value node.
+    expect(identName(objectProperty(shorthand?.[0])?.key)).toBe("scope");
+    expect(identName(objectProperty(longhand?.[0])?.key)).toBe("scope");
+    expect(identName(objectProperty(shorthand?.[0])?.value)).toBe("scope");
+    expect(identName(objectProperty(longhand?.[0])?.value)).toBe("scope");
+
+    expect(isShorthandProperty(shorthand?.[0])).toBe(true);
+    expect(isShorthandProperty(longhand?.[0])).toBe(false);
+  });
+
+  it("is false for a plain property, a spread and a non-node", () => {
+    expect(isShorthandProperty(objectExpressionProperties(initOf("({ a: 1 })"))?.[0])).toBe(false);
+    expect(isShorthandProperty(objectExpressionProperties(initOf("({ ...rest })"))?.[0])).toBe(
+      false,
+    );
+    expect(isShorthandProperty(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Added for the-honest-histogram's task 1: server/env.ts's four accessor matchers previously read
+ * a function's body and name but ignored its return-type annotation entirely, so `(): unknown`
+ * read exactly like `(): string`. See task-1-report.md.
+ */
+describe("typeAnnotationName", () => {
+  it("reads a keyword annotation's own name off the node's type — no name child exists to read", () => {
+    const fn = only('function a(): string { return "x"; }');
+    expect(typeAnnotationName(functionReturnType(fn))).toBe("string");
+  });
+
+  it("reads a type reference's head name, ignoring its type arguments", () => {
+    const fn = only("function b(): Record<string, string> { return {}; }");
+    expect(typeAnnotationName(functionReturnType(fn))).toBe("Record");
+  });
+
+  it("returns undefined for a type shape that is neither a keyword nor a type reference", () => {
+    const fn = only("function c(): string[] { return []; }");
+    const returnType = functionReturnType(fn);
+    // Anchored: confirm the annotation really did parse as a TSArrayType before relying on
+    // typeAnnotationName's refusal of it — otherwise this assertion would pass just as well if
+    // functionReturnType itself had returned undefined.
+    expect(returnType?.type).toBe("TSArrayType");
+    expect(typeAnnotationName(returnType)).toBeUndefined();
+  });
+
+  it("returns undefined for an absent annotation", () => {
+    expect(typeAnnotationName(undefined)).toBeUndefined();
+  });
+});

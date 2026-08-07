@@ -287,8 +287,8 @@ describe("toolsListCheck", () => {
 
   it("reports a server that exits before answering, and quotes its stderr", async () => {
     // The failure mode a broken bundle produces. It must come back as a FAILED check
-    // carrying the diagnosis — the harness is collecting verdicts for five fixtures, and
-    // throwing here would abandon the rest of the run.
+    // carrying the diagnosis — the harness is collecting verdicts for every fixture in
+    // standalone-acceptance.ts's `FIXTURES`, and throwing here would abandon the rest of the run.
     const { cwd, entry } = fakeEntry("server.ts", "exit");
 
     const result = await toolsListCheck(cwd, entry, ["a_one"]);

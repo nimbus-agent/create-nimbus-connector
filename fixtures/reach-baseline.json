@@ -1,5 +1,5 @@
 {
-  "connectorsTree": "e3751a3af7c47c5b9cc885e8fedb29bd595d4c96",
+  "connectorsTree": "94fd362350d37b0a8a78d8109b1b4987364bc727",
   "tiers": {
     "airflow": "blocked",
     "apple": "blocked",
@@ -54,7 +54,7 @@
     "localdb": "blocked",
     "looker": "blocked",
     "mendeley": "blocked",
-    "mercury": "blocked",
+    "mercury": "server-identical",
     "metabase": "blocked",
     "miro": "blocked",
     "mlflow": "blocked",
@@ -92,7 +92,7 @@
     "vertex-ai": "blocked",
     "wiz": "blocked",
     "workday": "blocked",
-    "zendesk": "blocked",
+    "zendesk": "server-identical",
     "zoom": "blocked",
     "zotero": "blocked"
   }

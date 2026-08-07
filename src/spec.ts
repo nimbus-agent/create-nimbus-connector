@@ -22,6 +22,117 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const identifierField = () => z.string().regex(IDENTIFIER_RE, "must be a valid JS identifier");
 
+/* ------------------------------------------------------------------------------------------ *
+ * The path-template DSL: `${env.X}`, `${arg.X}`, `${arg.X|enc|num|bool|raw}`
+ *
+ * This is the PARSER, and it lives here — beside `resolveKeyedShape` and `needsExtractor` —
+ * because `tool.path` is a field of the SPEC, so what its placeholders mean is the spec
+ * language's question, not the emitter's. Three layers need the answer and none of them owns
+ * it: `src/validate.ts` reads the segments to check that every `${arg.X}` names a declared
+ * argument, `src/emit/server/path-template.ts` renders them, and `src/derive/server/body.ts`
+ * reconstructs the default write body from the same set of path-referenced args the emitter
+ * excluded.
+ *
+ * That deriver import is the reason this is a parser and not a copy. A private copy that
+ * UNDER-parses leaves an arg in the default body set and emits a spurious explicit `body` that
+ * is byte-identical to the correct output — invisible to `diff:golden`, to the round trip and
+ * to every other gate — while one that over-parses throws. Sharing removes the only direction
+ * nothing can see.
+ *
+ * The boundary that makes that safe: `src/derive/` may share the spec language's **parser**,
+ * never the emitter's **renderer**. `renderPath` stays in `src/emit/server/path-template.ts`,
+ * because comparing rendered text against observed source would let a renderer bug agree with
+ * itself and disappear.
+ * ------------------------------------------------------------------------------------------ */
+
+export type ArgMode = "raw" | "enc" | "num" | "bool";
+
+export type PathSegment =
+  | { kind: "literal"; text: string }
+  | { kind: "env"; name: string }
+  | { kind: "arg"; name: string; mode: ArgMode };
+
+const MODES = new Set<string>(["raw", "enc", "num", "bool"]);
+const PLACEHOLDER = /\$\{([a-z]+)\.(\w+)(?:\|([a-z]+))?\}/g;
+
+/**
+ * The two placeholder conventions a user is most likely to reach for by habit — OpenAPI's
+ * `{id}` and Express's `/:id` — neither of which this generator interpolates.
+ *
+ * They are caught rather than passed through because passing them through is silent and
+ * wrong: `"/items/{id}"` emits `vcGet("/items/{id}")`, which compiles, typechecks, passes
+ * every gate, and requests a URL containing the literal characters `{id}`. Nothing fails
+ * until the connector is pointed at a real API.
+ *
+ * The Express arm requires the colon to follow a slash. A bare `:name` would false-positive
+ * on query values that legitimately contain one — sentry's fixture path carries
+ * `?query=is:unresolved`, and `is:unresolved` is not a placeholder.
+ */
+const FOREIGN_PLACEHOLDER = /\{([A-Za-z_]\w*)\}|\/:([A-Za-z_]\w*)/;
+
+/** One matched `${ns.name|mode}` placeholder, as the segment it denotes. */
+function toPlaceholderSegment(
+  whole: string,
+  ns: string | undefined,
+  name: string,
+  mode: string | undefined,
+): PathSegment {
+  if (ns === "env") {
+    if (mode !== undefined) throw new Error(`env placeholder "${whole}" cannot take a mode`);
+    return { kind: "env", name };
+  }
+  if (ns !== "arg") {
+    throw new Error(`Unknown placeholder namespace "${ns}" in "${whole}"`);
+  }
+  const m2 = mode ?? "raw";
+  if (!MODES.has(m2)) throw new Error(`Unknown placeholder mode "${m2}" in "${whole}"`);
+  return { kind: "arg", name, mode: m2 as ArgMode };
+}
+
+/**
+ * Reject anything left in a literal segment that only *looks* like a placeholder: a `${`
+ * this parser did not consume (wrong case, wrong shape), or one of the two foreign
+ * conventions FOREIGN_PLACEHOLDER describes.
+ */
+function assertNoUnparsedPlaceholders(segments: readonly PathSegment[]): void {
+  for (const seg of segments) {
+    if (seg.kind !== "literal") continue;
+    if (seg.text.includes("${")) {
+      throw new Error(
+        `Malformed placeholder in path template: ${JSON.stringify(seg.text)}. ` +
+          "Expected ${env.NAME} or ${arg.NAME} with an optional |raw, |enc, |num or |bool mode; " +
+          "namespace and mode must be lowercase.",
+      );
+    }
+    const foreign = FOREIGN_PLACEHOLDER.exec(seg.text);
+    if (foreign !== null) {
+      throw new Error(
+        `Path template uses ${foreign[0]}, which this generator does not interpolate: ` +
+          `${JSON.stringify(seg.text)}. It would be emitted as a literal path segment, and ` +
+          `the connector would request the characters "${foreign[0]}" instead of a value. ` +
+          `Use \${arg.${foreign[1] ?? foreign[2]}|enc} instead.`,
+      );
+    }
+  }
+}
+
+export function parsePathTemplate(tpl: string): PathSegment[] {
+  const out: PathSegment[] = [];
+  let last = 0;
+  for (const m of tpl.matchAll(PLACEHOLDER)) {
+    const [whole, ns, name, mode] = m;
+    const at = m.index;
+    if (at > last) out.push({ kind: "literal", text: tpl.slice(last, at) });
+    out.push(toPlaceholderSegment(whole, ns, name!, mode));
+    last = at + whole.length;
+  }
+  if (last < tpl.length) out.push({ kind: "literal", text: tpl.slice(last) });
+
+  assertNoUnparsedPlaceholders(out);
+
+  return out;
+}
+
 export const ArgSchema = z
   .strictObject({
     type: z.enum(["string", "number", "boolean"]),
@@ -228,6 +339,106 @@ export const QueryParamSchema = z.strictObject({
 
 export type QueryParam = z.infer<typeof QueryParamSchema>;
 
+/**
+ * A `"custom"` issue as the query checks below raise it: where it points, and what it says.
+ * Those checks are module-level functions rather than blocks inside the superRefine, so they
+ * take a sink instead of zod's refinement context — the `code: "custom"` is supplied by the
+ * single call site that owns the context, and nothing else here names a zod issue type.
+ */
+type QueryIssue = { path: (string | number)[]; message: string };
+type AddQueryIssue = (issue: QueryIssue) => void;
+
+/**
+ * renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
+ * (the fetch helper's base) straight into the template with no separator — it never
+ * applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
+ * applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
+ * cleanly; a path that does not silently fuses onto the base with nothing between them
+ * (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
+ * only visible once the connector makes a request. Rejecting here, rather than teaching
+ * renderPath the same normalization, keeps that guard in the one place
+ * (fetch-helper.ts) that owns it.
+ *
+ * Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
+ * impl/path pairing refine above), and this check evaluated `""` as that stub's path
+ * would fire alongside the "stub" + "query" rejection a few refines up — two issues for
+ * one mistake, with the correct one buried under noise. The stub case is already
+ * rejected there; this check has nothing to add for it.
+ */
+function checkQueryPathPrefix(name: string, path: string | undefined, add: AddQueryIssue): void {
+  if (path !== undefined && !path.startsWith("/")) {
+    add({
+      path: ["path"],
+      message:
+        `tool ${JSON.stringify(name)} declares "query", so "path" must begin with "/" ` +
+        `— got ${JSON.stringify(path)}`,
+    });
+  }
+}
+
+/** Which of canOmitQueryValue's three clauses an arg fails, phrased for the message below. */
+function omitWhenViolations(arg: z.infer<typeof ArgSchema>): string[] {
+  const violations: string[] = [];
+  if (!arg.optional) violations.push('is not declared "optional": true');
+  if (arg.default !== undefined) violations.push('declares a "default"');
+  if (arg.type === "boolean") violations.push('is type "boolean"');
+  return violations;
+}
+
+/** The two rules that read one query entry against the arg it names. */
+function checkQueryEntryArg(
+  q: QueryParam,
+  arg: z.infer<typeof ArgSchema>,
+  i: number,
+  add: AddQueryIssue,
+): void {
+  // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
+  // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
+  if (q.omitWhen === "empty" && arg.type !== "string") {
+    add({
+      path: ["query", i, "omitWhen"],
+      message:
+        `"query" entry ${JSON.stringify(q.name)} sets omitWhen: "empty", but arg ` +
+        `${JSON.stringify(q.arg)} declares type ${JSON.stringify(arg.type)} — comparing ` +
+        `a ${arg.type} to "" does not typecheck`,
+    });
+  }
+
+  // omitWhen's guard only omits anything if the value it tests can genuinely be
+  // undefined — canOmitQueryValue's exact predicate. Both directions of that question
+  // are checked here, off the one predicate, so they cannot drift apart: no corpus
+  // connector combines omitWhen with a dead guard (github writes
+  // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
+  // with no default and type number).
+  if (q.omitWhen === undefined) {
+    // A value that CAN be undefined and has no guard reaches searchParams.set
+    // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
+    // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
+    // since the non-string branch wraps in String(...) and String(undefined) ===
+    // "undefined". Neither is visible to a spec author until the generated package is
+    // built or the request is inspected — this rejection is what makes it visible here.
+    if (canOmitQueryValue(arg)) {
+      add({
+        path: ["query", i, "omitWhen"],
+        message:
+          `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
+          'which can be undefined ("optional": true, no "default", not type "boolean") ' +
+          'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
+          'parameter is sent as an unconditional (and possibly literal-"undefined") value',
+      });
+    }
+  } else if (!canOmitQueryValue(arg)) {
+    const violations = omitWhenViolations(arg).join(" and ");
+    add({
+      path: ["query", i, "omitWhen"],
+      message:
+        `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
+        `${JSON.stringify(q.arg)} ${violations} — its value can never be ` +
+        "undefined, so the guard can never omit the parameter",
+    });
+  }
+}
+
 export const ToolSchema = z
   .strictObject({
     name: z.string().min(1),
@@ -328,31 +539,10 @@ export const ToolSchema = z
   })
   .superRefine((t, ctx) => {
     if (t.query === undefined) return;
+    const add: AddQueryIssue = ({ path, message }) =>
+      ctx.addIssue({ code: "custom", path, message });
 
-    // renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
-    // (the fetch helper's base) straight into the template with no separator — it never
-    // applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
-    // applies (src/emit/server/fetch-helper.ts). A path that already starts with "/" joins
-    // cleanly; a path that does not silently fuses onto the base with nothing between them
-    // (`https://x.testitems` instead of `https://x.test/items`) and the malformed URL is
-    // only visible once the connector makes a request. Rejecting here, rather than teaching
-    // renderPath the same normalization, keeps that guard in the one place
-    // (fetch-helper.ts) that owns it.
-    //
-    // Guarded on t.path !== undefined: a "stub" tool has no "path" by construction (the
-    // impl/path pairing refine above), and this check evaluated `""` as that stub's path
-    // would fire alongside the "stub" + "query" rejection a few refines up — two issues for
-    // one mistake, with the correct one buried under noise. The stub case is already
-    // rejected there; this check has nothing to add for it.
-    if (t.path !== undefined && !t.path.startsWith("/")) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["path"],
-        message:
-          `tool ${JSON.stringify(t.name)} declares "query", so "path" must begin with "/" ` +
-          `— got ${JSON.stringify(t.path)}`,
-      });
-    }
+    checkQueryPathPrefix(t.name, t.path, add);
 
     const seen = new Set<string>();
     for (const [i, q] of t.query.entries()) {
@@ -361,78 +551,24 @@ export const ToolSchema = z
       // method instead of failing loudly. `Object.hasOwn` checks only t.args's own keys.
       const declared = Object.hasOwn(t.args, q.arg);
       if (!declared) {
-        ctx.addIssue({
-          code: "custom",
+        add({
           path: ["query", i, "arg"],
           message: `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, which the tool does not declare`,
         });
       }
       if (seen.has(q.name)) {
-        ctx.addIssue({
-          code: "custom",
+        add({
           path: ["query", i, "name"],
           message: `"query" declares ${JSON.stringify(q.name)} twice — the second would silently win`,
         });
       }
       seen.add(q.name);
 
-      // Both checks below are skipped when the arg itself is undeclared — the "does not
-      // declare" issue above already covers that case, and `arg.type`/`arg.default` would
-      // have nothing real to report on.
+      // The checks in checkQueryEntryArg are skipped when the arg itself is undeclared — the
+      // "does not declare" issue above already covers that case, and `arg.type`/`arg.default`
+      // would have nothing real to report on.
       if (!declared) continue;
-      const arg = t.args[q.arg]!;
-
-      // Comparing a number or boolean to "" is TS2367 in the generated package, and passing
-      // that comparison's operand to `set` is TS2345 — compiled to confirm, not assumed.
-      if (q.omitWhen === "empty" && arg.type !== "string") {
-        ctx.addIssue({
-          code: "custom",
-          path: ["query", i, "omitWhen"],
-          message:
-            `"query" entry ${JSON.stringify(q.name)} sets omitWhen: "empty", but arg ` +
-            `${JSON.stringify(q.arg)} declares type ${JSON.stringify(arg.type)} — comparing ` +
-            `a ${arg.type} to "" does not typecheck`,
-        });
-      }
-
-      // omitWhen's guard only omits anything if the value it tests can genuinely be
-      // undefined — canOmitQueryValue's exact predicate. Both directions of that question
-      // are checked here, off the one predicate, so they cannot drift apart: no corpus
-      // connector combines omitWhen with a dead guard (github writes
-      // `String(parsed.perPage ?? 30)` unconditionally and guards `page`, which is optional
-      // with no default and type number).
-      if (q.omitWhen === undefined) {
-        // A value that CAN be undefined and has no guard reaches searchParams.set
-        // unconditionally: TS2345 for a string arg (set(key, value) rejects `string |
-        // undefined`), and a literal "?<name>=undefined" on the wire for anything else,
-        // since the non-string branch wraps in String(...) and String(undefined) ===
-        // "undefined". Neither is visible to a spec author until the generated package is
-        // built or the request is inspected — this rejection is what makes it visible here.
-        if (canOmitQueryValue(arg)) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["query", i, "omitWhen"],
-            message:
-              `"query" entry ${JSON.stringify(q.name)} names arg ${JSON.stringify(q.arg)}, ` +
-              'which can be undefined ("optional": true, no "default", not type "boolean") ' +
-              'but declares no "omitWhen" — set "omitWhen" to "absent" or "empty", or the ' +
-              'parameter is sent as an unconditional (and possibly literal-"undefined") value',
-          });
-        }
-      } else if (!canOmitQueryValue(arg)) {
-        const violations: string[] = [];
-        if (!arg.optional) violations.push('is not declared "optional": true');
-        if (arg.default !== undefined) violations.push('declares a "default"');
-        if (arg.type === "boolean") violations.push('is type "boolean"');
-        ctx.addIssue({
-          code: "custom",
-          path: ["query", i, "omitWhen"],
-          message:
-            `"query" entry ${JSON.stringify(q.name)} sets omitWhen, but arg ` +
-            `${JSON.stringify(q.arg)} ${violations.join(" and ")} — its value can never be ` +
-            "undefined, so the guard can never omit the parameter",
-        });
-      }
+      checkQueryEntryArg(q, t.args[q.arg]!, i, add);
     }
   });
 
@@ -730,6 +866,21 @@ export type EnvSpec = z.infer<typeof EnvSchema>;
 export type ToolSpec = z.infer<typeof ToolSchema>;
 export type ArgSpec = z.infer<typeof ArgSchema>;
 export type FetchHelperSpec = z.infer<typeof FetchHelperSchema>;
+
+/**
+ * `fetchHelper.staticPathStyle`'s two values, derived from the schema rather than restated — it
+ * appeared as an inline `"quoted" | "template"` at eleven sites across src/emit and src/derive
+ * when this alias was introduced (measured 2026-08-06), which was eleven places for the schema to
+ * be widened and one of them to be missed.
+ *
+ * That eleven is a HISTORICAL count and no command reproduces it — the change that motivated the
+ * alias is what removed the sites. The figure that stays checkable is the current one, and it only
+ * grows: `grep -rn "StaticPathStyle" src/` reports 27 lines as of 2026-08-07 (20 use sites, six
+ * imports, and this declaration). The field carries `.default("quoted")`, so `z.infer`'s output is
+ * already the non-optional union — `NonNullable` would be noise (verified: both forms compile
+ * identically).
+ */
+export type StaticPathStyle = z.infer<typeof FetchHelperSchema>["staticPathStyle"];
 
 export type ConnectorSpec = z.infer<typeof ConnectorSpecSchema> & {
   readonly title: string;

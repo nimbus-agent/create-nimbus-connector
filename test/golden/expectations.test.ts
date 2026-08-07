@@ -134,6 +134,8 @@ describe("the checked-in fixtures/expectations.json", () => {
       "sentry",
       "zendesk",
       "zzextract",
+      "zzquery",
+      "zzreadonly",
       "zzscratch",
       "zzsearch",
       "zzsearchstub",

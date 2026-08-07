@@ -21,6 +21,7 @@ bunx create-nimbus-connector acme --standalone
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
+| [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) · [GOVERNANCE.md](./docs/GOVERNANCE.md) · [RELEASING.md](./docs/RELEASING.md) · [SECURITY.md](./SECURITY.md) | Working on it |
 | [GLOSSARY.md](./docs/GLOSSARY.md) | Terms as this repo uses them |
 | [CLAUDE.md](./CLAUDE.md) | Context for Claude Code |
@@ -264,6 +265,8 @@ With a positional name it runs an interactive prompt session (name, display name
 - `--license <spdx>` — **standalone only.** Set the generated package's license. Defaults to `UNLICENSED`. Passing it without `--standalone` is an **error**, not a silent no-op: a monorepo-target connector is `AGPL-3.0-only` unconditionally.
 - `--gateway-wiring <nimbus-root>` — **opt-in, monorepo target only.** Also emit the Gateway wiring skeleton. Passing it with `--standalone` is an **error**: a standalone connector is not registered with any Gateway.
 - `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts`. An **error** without `--gateway-wiring`.
+- `--from-connector <dir>` — the pipeline in reverse: read a connector directory and print the `ConnectorSpec` that would regenerate it, writing nothing. Mutually exclusive with a positional `<name>`, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run`. A connector the spec language cannot fully describe exits non-zero with the constructs that stopped the read, in the same vocabulary `bun run reach --verbose` uses — never a silent approximation. See [`docs/USAGE.md`](./docs/USAGE.md#8-deriving-a-spec-from-an-existing-connector), and [`docs/LICENSING.md`](./docs/LICENSING.md) for why running it against a checkout you already have is not vendoring.
+- `--partial` — with `--from-connector`, print a draft spec instead of only the blocker report. The draft carries a `$partial` marker key that `ConnectorSpecSchema`'s `z.strictObject` refuses by construction, so it cannot be generated until you resolve the blockers and delete the key. An **error** without `--from-connector`.
 - `--help` — print usage. Every flag in that text is one `parseFlags` actually parses; `test/cli.test.ts` asserts the two agree, so an undocumented flag is a failing test.
 - `--version` — print the version.
 
