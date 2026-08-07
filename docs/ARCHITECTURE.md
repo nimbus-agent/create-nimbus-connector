@@ -8,7 +8,7 @@ rules an agent working here needs see [CLAUDE.md](../CLAUDE.md).
 
 One direction, four stages, no cycles:
 
-```
+```text
 JSON spec ──▶ parseSpec ──▶ validateSpec ──▶ generate ──▶ formatAll ──▶ writeFiles
               (src/spec)    (src/validate)  (src/emit)   (src/format)  (src/cli)
                    │              │              │            │
@@ -92,7 +92,7 @@ parse time, where the message can name the offending field.
 `biome-json.ts`, `search-filter.ts`, `wiring.ts`, and `server/` for the one file complex
 enough to need splitting:
 
-```
+```text
 server/index.ts         imports, wiring, glue, assembly
 server/env.ts           credential accessors, the auth modes
 server/fetch-helper.ts  the read and write helpers
@@ -115,7 +115,7 @@ present) `src/search-filter.ts` back into a spec, or into named blockers. It is 
 `--from-connector` and `bun run reach` both run; it ships, because `package.json`'s `files` is
 `["src", "README.md"]`.
 
-```
+```text
 ast.ts             the Babel boundary — parseModule, the AstNode type
 read.ts            THE ONLY module that reads a node's fields, through guarded accessors
 claims.ts          byte-range claims; coverage is containment

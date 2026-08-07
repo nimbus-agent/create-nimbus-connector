@@ -869,10 +869,16 @@ export type FetchHelperSpec = z.infer<typeof FetchHelperSchema>;
 
 /**
  * `fetchHelper.staticPathStyle`'s two values, derived from the schema rather than restated — it
- * appeared as an inline `"quoted" | "template"` at eleven sites across src/emit and src/derive,
- * which is eleven places for the schema to be widened and one of them to be missed. The field
- * carries `.default("quoted")`, so `z.infer`'s output is already the non-optional union —
- * `NonNullable` would be noise (verified: both forms compile identically).
+ * appeared as an inline `"quoted" | "template"` at eleven sites across src/emit and src/derive
+ * when this alias was introduced (measured 2026-08-06), which was eleven places for the schema to
+ * be widened and one of them to be missed.
+ *
+ * That eleven is a HISTORICAL count and no command reproduces it — the change that motivated the
+ * alias is what removed the sites. The figure that stays checkable is the current one, and it only
+ * grows: `grep -rn "StaticPathStyle" src/` reports 27 lines as of 2026-08-07 (20 use sites, six
+ * imports, and this declaration). The field carries `.default("quoted")`, so `z.infer`'s output is
+ * already the non-optional union — `NonNullable` would be noise (verified: both forms compile
+ * identically).
  */
 export type StaticPathStyle = z.infer<typeof FetchHelperSchema>["staticPathStyle"];
 

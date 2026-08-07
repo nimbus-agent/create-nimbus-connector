@@ -2328,9 +2328,14 @@ Task 7's own text.
 1. **Item 13's third axis was retargeted.** The design named `frame:readonly-callback-not-inline`;
    upstream `b3a6f159` retired that shape mid-phase-2a and the ten connectors now write a local
    `startConnector` wrapper. Task 11 targets what they carry today.
-2. **Item 11's rows pluck was narrowed.** The design stated it as one shape; the corpus has four, and
-   two of them carry a fallback to the root array that `rows` cannot express. Task 9 accepts two and
-   refuses two, with the reason written into the recognizer.
+2. **Item 11's rows pluck was retired, not narrowed.** This entry used to say the corpus had four
+   body shapes and Task 9 would accept two and refuse two. That describes a recognizer that was
+   never written. The task's whole premise measured false before any code: the widening targeted
+   `matchesResult(<helper>(…))`, and **zero** of the twelve candidate connectors call
+   `matchesResult` at all — the two populations are disjoint, and the design's own trap list
+   already said so on the facing page. Task 9 ships as a **refusal**: no `src/` change, no test
+   change, and a *Considered and declined* entry in `docs/ROADMAP.md` recording why re-scoping to
+   the hand-written result tail was declined too. See Task 9's own text for the measurement.
 
 **What this plan deliberately does not do.** It does not touch `src/emit/`, add a spec field, or move
 the `all-identical` count. Every new recognizer reads a shape the emitter already writes, except the
@@ -2343,8 +2348,9 @@ recoverable from a rest-kit `src/server.ts` only up to `registrarName`'s sanitiz
 `"Google Meet"` derives as `"GoogleMeet"`. It sits in a third list, `PARTIAL_ROUND_TRIP`, which names
 the files that differ and asserts they really do. Tasks 3–8
 are measured to move **no** corpus connector: every construct they read is written differently by
-every corpus connector that has it. Task 9 shrinks the `function:*From` buckets by up to 12 without
-necessarily moving a tier. Task 10 changes labels and nothing else, by design. Task 11 puts 27
+every corpus connector that has it. Task 9 was expected to shrink the `function:*From` buckets
+without necessarily moving a tier; it shrinks nothing, because it is not implemented — see the
+deviation recorded above. Task 10 changes labels and nothing else, by design. Task 11 puts 27
 connectors past their frame and is expected to *add* buckets.
 
 **So `server-identical` may still read 6/94 when this branch lands, and that is not a failed branch.**

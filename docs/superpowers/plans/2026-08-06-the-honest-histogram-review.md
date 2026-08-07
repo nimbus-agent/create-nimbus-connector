@@ -17,7 +17,7 @@
 
 ### 1. Fetch Helper Base URL Availability in `tools-rest.ts`
 * **Observation:** Task 3, Step 6 suggests that during REST tool recognition, `recognizeQueryBlock` should verify that the stripped prefix of `pathExpr` matches the fetch helper's base URL.
-* **Problem:** In `deriveRestKitSpec` ([`src/derive/index.ts`](file:///C:/gitrep/create-nimbus-connector/src/derive/index.ts#L226-L230)), `recognizeRestTools` is invoked *before* `recognizeRestFetchHelper`. Even if we reorder them, `recognizeRestTools` and `recognizeOneCall` currently do not accept any fetch helper metadata or base URL parameters.
+* **Problem:** In `deriveRestKitSpec` ([`src/derive/index.ts`](../../../src/derive/index.ts)), `recognizeRestTools` is invoked *before* `recognizeRestFetchHelper`. Even if we reorder them, `recognizeRestTools` and `recognizeOneCall` currently do not accept any fetch helper metadata or base URL parameters.
 * **Suggestion:** We should:
   * Reorder the calls in `deriveRestKitSpec` so `restFetchHelper` is recognized first.
   * Update `recognizeRestTools` and `recognizeOneCall` to accept an optional `helperBase?: string` parameter to perform this validation inline.

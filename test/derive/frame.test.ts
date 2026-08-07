@@ -274,16 +274,24 @@ describe("recognizeFrame reads the split registrar and the inlined transport", (
     expect(derive("zzscratch", inlinedTransport("mcp"))).toEqual(derive("zzscratch"));
   });
 
-  // Both styles, same as the split registrar above, because this axis spans both. Ten corpus
-  // connectors write the inlined tail and six of them reach this matcher at all (the other four
-  // are `frame:no-registrar` — see `isInlinedTransportConnect`'s docstring, which separates the
-  // ten, the six and the bucket's four). Of the six, five are rest-kit (`gmail`, `onedrive`,
-  // `outlook`, `google-meet`, `google-photos`) and `google-drive` is hand-rolled. The hand-rolled
-  // case alone
-  // would have proved the axis only on the MINORITY style — `isInlinedTransportConnect` takes the
-  // McpServer binding as a parameter precisely because `wiring()` names it `mcp` for one style and
-  // `server` for the other, and a parameter that is only ever exercised with one value is a
-  // parameter nothing has checked.
+  // Both styles, same as the split registrar above, because this axis spans both.
+  //
+  // Measured 2026-08-07 against `packages/mcp-connectors` tree `94fd3623` (Nimbus commit
+  // `b3a6f159`), re-measurable in two greps over that directory — the recipe
+  // `isInlinedTransportConnect`'s own docstring records, and the reason these figures are dated
+  // here rather than deleted: which style this test has to run on is a CONCLUSION drawn from them,
+  // so a reader who cannot check the premise cannot check the conclusion.
+  //
+  //   grep -rl "connect(new StdioServerTransport())" --include=server.ts   -> the TEN
+  //   ... intersected with a `createZodToolRegistrar` grep                 -> the SIX
+  //
+  // Ten corpus connectors write the inlined tail; six of them reach this matcher at all (the other
+  // four — `apple`, `fastmail`, `imap`, `protonmail` — are `frame:no-registrar`). Of the six, five
+  // are rest-kit (`gmail`, `onedrive`, `outlook`, `google-meet`, `google-photos`) and
+  // `google-drive` is hand-rolled. The hand-rolled case alone would have proved the axis only on
+  // the MINORITY style — `isInlinedTransportConnect` takes the McpServer binding as a parameter
+  // precisely because `wiring()` names it `mcp` for one style and `server` for the other, and a
+  // parameter that is only ever exercised with one value is a parameter nothing has checked.
   it("derives the same spec from an inlined transport tail on the rest-kit style too", () => {
     expect(derive("zzstandalone", inlinedTransport("server"))).toEqual(derive("zzstandalone"));
   });
@@ -438,12 +446,17 @@ describe("frameFailureKind", () => {
   });
 
   // `frame:readonly-callback-not-inline` is retired, and unlike the two axes above it was never
-  // firing in the first place: upstream commit b3a6f159 refactored those ten connectors into the
-  // shape `recognizeReadOnlyFrame` now READS (see test/derive/frame-readonly.test.ts), and the
-  // bucket has been absent from `bun run reach --verbose`'s histogram ever since — the two
-  // functions behind it, `isNamedReadOnlyCallback` and `withTopLevelIfBodies`, were dead against
-  // the whole corpus and that diagnostic never once printed. What is asserted instead is the
-  // fallback for a module in the recognized shape that still misses part of it.
+  // firing in the first place: upstream commit `b3a6f159` refactored those ten connectors into the
+  // shape `recognizeReadOnlyFrame` now READS (see test/derive/frame-readonly.test.ts), and the two
+  // functions behind the bucket — `isNamedReadOnlyCallback` and `withTopLevelIfBodies` — were dead
+  // against the whole corpus, so that diagnostic never once printed. What is asserted instead is
+  // the fallback for a module in the recognized shape that still misses part of it.
+  //
+  // The absence is a live fact, so it carries how to re-check it: run
+  // `bun run reach --verbose --nimbus-root <path>` and grep the histogram for the bucket name. It
+  // was absent on 2026-08-07 against `packages/mcp-connectors` tree `94fd3623`. That is the whole
+  // reason this comment names a bucket at all — a reader meeting a *present* bucket must be able
+  // to tell that this sentence went stale rather than that the test is wrong.
   it("faults a partial named-callback read-only module on the element it actually lacks", () => {
     const source = [
       'import { mcpJsonResult as jsonResult } from "../../shared/mcp-tool-kit.ts";',

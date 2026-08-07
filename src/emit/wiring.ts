@@ -46,12 +46,17 @@ function otherListTools(spec: ConnectorSpec, chosen: ToolSpec): ToolSpec[] {
  * landing in an MIT repository, not "how the corpus does it".
  *
  * That last clause used to cite "exactly 2 of ~98 connector files", which was the count of files
- * the shape was COPIED FROM, not the count carrying it. Re-measured against
- * packages/gateway/src/connectors: 6 of the 98 `*-sync.ts` files import `listConnectorItems`
- * from warehouse-sync-transport.ts and drain it through that same assembly — `bigeye`, `looker`,
- * `monte-carlo`, `powerbi`, `snowflake`, `tableau`. Still a minority, and the licensing half of
- * the reason never depended on the count at all. Nothing this function EMITS changes with the
- * correction; only the sentence justifying it.
+ * the shape was COPIED FROM, not the count carrying it. **Re-measured 2026-08-07 against
+ * `packages/gateway/src/connectors` tree `188f4ddd` (Nimbus commit `826b76a1`) — a different
+ * subtree from the `packages/mcp-connectors` tree every other measurement in this repository
+ * cites: 6 of the 98 `*-sync.ts` files import `listConnectorItems` from
+ * warehouse-sync-transport.ts and drain it through that same assembly — `bigeye`, `looker`,
+ * `monte-carlo`, `powerbi`, `snowflake`, `tableau`. Re-measure with
+ * `grep -l listConnectorItems <nimbus>/packages/gateway/src/connectors/*-sync.ts`. Still a
+ * minority, and the licensing half of the reason never depended on the count at all. Nothing this
+ * function EMITS changes with the correction; only the sentence justifying it — which is why the
+ * figure carries its tree and its command rather than being deleted: the measurement IS the
+ * rationale for what this emitter refuses to write.
  *
  * This now emits only what the Gateway's own `Syncable` type dictates (the shape, not
  * anyone's implementation choices) plus a to-do note written in this project's own words. The
