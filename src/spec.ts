@@ -1073,8 +1073,8 @@ export const EnvSchema = z
    *   transform: strip…      TS18048  `zzUrl.replace(…)` on a possibly-undefined binding
    *   transform: trim…Fn     TS2345   `trimTrailingSlash(zzUrl)`
    *   prefix / suffix / both CLEAN, and wrong at runtime — the value lands in a template
-   *                          literal, so the accessor returns the eight characters "undefined"
-   *                          and the fetch helper requests `https://undefined/…`
+   *                          literal, so the accessor returns the LITERAL TEXT "undefined" and
+   *                          the fetch helper requests `https://undefined/…`
    *
    * Widening the return type to `string | undefined` fixes only the first row: the two
    * `transform` rows fail INSIDE the body, where the return type is not what is being checked,

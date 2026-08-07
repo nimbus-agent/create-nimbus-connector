@@ -14,7 +14,7 @@ import { EnvSchema, type EnvSpec, parseSpec } from "../src/spec.ts";
  * fix, and restating it proves only that the schema agrees with itself. What this file asserts
  * instead is the PROPERTY the rule exists to protect — an env accessor is total. With its
  * variable unset it either throws a named error or returns a real value; it never hands back
- * `undefined`, and never the eight characters "undefined" spliced into a URL.
+ * `undefined`, and never the literal text "undefined" spliced into a URL.
  *
  * That property is checked by EXECUTING the emitted accessor, because three of the six broken
  * shapes typecheck. `prefix`/`suffix` splice the binding into a template literal, so
