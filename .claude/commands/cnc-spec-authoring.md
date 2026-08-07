@@ -178,8 +178,11 @@ accessor.
   which decorate the **username**.
 - `headers` requires `headerNames` with one entry per var.
 - `client-credentials` requires two `vars`, `tokenUrl`, `credentialsIn` (`basic` | `body`),
-  optional `scope` — and **`style: "hand-rolled"`**. Caches the token, renewing early; the skew
-  halves for short-lived tokens. No refresh-token flow exists in the corpus.
+  optional `scope` — and any style **except `rest-kit`**; `hand-rolled` and `read-only-kit` both
+  accept it. **At most one such entry per connector** — the emitted exchange declares `token`
+  and `cachedToken` at module scope, so a second would redeclare both. Caches the token,
+  renewing early; the skew halves for short-lived tokens. No refresh-token flow exists in the
+  corpus.
 - `tokenLocal` is bearer-only: it names a raw-token accessor beside the header accessor, and
   must differ from `local`.
 - `default` and `required` are mutually exclusive — a defaulted value is never empty.

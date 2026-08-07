@@ -102,13 +102,21 @@ function returnLines(e: EnvEntry): string[] {
 }
 
 /**
- * The token exchange, hoisted to module scope so `cachedToken` survives across calls.
- * Self-contained: it reads and guards its own two vars rather than sharing the accessor's
- * locals, because `token()` is called as `await token()` — no arguments — everywhere it is
- * used (the accessor below, and nowhere else). Cached for the process lifetime and never
- * refreshed, matching ramp and wiz. Correct only because connectors are spawned per
- * invocation and are short-lived — no connector in the corpus reads expires_in. A
- * long-lived connector would use a stale token.
+ * The token exchange, hoisted to module scope so `cachedToken` and `tokenExpiresAt` survive
+ * across calls. Self-contained: it reads and guards its own two vars rather than sharing the
+ * accessor's locals, because `token()` is called as `await token()` — no arguments —
+ * everywhere it is used (the accessor below, and nowhere else).
+ *
+ * The cache is EXPIRY-AWARE, and that is the one place this deliberately departs from the
+ * corpus. ramp and wiz cache for the process lifetime and never refresh, which is correct
+ * only while a connector is spawned per invocation and is short-lived; a long-lived one
+ * would keep using a stale token. So the emitted `token()` reads `expires_in` and renews a
+ * little early — the skew halved for short-lived tokens, which would otherwise read as
+ * already expired and be re-exchanged on every call.
+ *
+ * The corpus behaviour survives as the FALLBACK, not as the rule: a response carrying no
+ * usable `expires_in` sets `tokenExpiresAt` to `Number.POSITIVE_INFINITY`, because treating
+ * its absence as "expired" would re-exchange on every call instead.
  */
 function renderTokenFunction(e: EnvEntry, serviceLabel: string): string {
   const idBinding = bindingOf(e, 0);
