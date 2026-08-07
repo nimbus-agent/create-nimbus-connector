@@ -323,6 +323,19 @@ alphabetically. Order is not cosmetic here — it is bytes.
   appear once in `path` and once in `query`. Test both: a path-level parameter inherited by an
   operation that declares none, and an operation-level parameter overriding a path-level one of the
   same `(name, in)`.
+
+  **Those two tests are the only gate this obligation has.** Task 1's implementer flagged it
+  precisely: *"a Task 2 that ignores `pathParameters` entirely still passes every gate in this
+  task."* The field exists, the rule is documented, and nothing fails if you never read it — so
+  omitting the tests is not a thin test file, it is an unenforced contract, and a document whose
+  path variable is declared at path level would then map with an invented type or a spurious
+  refusal. Write them first.
+
+  **One more inherited condition, with an expiry.** Task 1 resolves a `$ref` by replacing the whole
+  node, so `summary`/`description` siblings are dropped — documented there as acceptable *because no
+  mapper reads them*. If you read any field from a schema node beyond `type`, `format`, `enum`,
+  `minimum`, `maximum` and `default`, **that argument expires and nothing will notice**. Say so in
+  your report if you do.
 - **`body`** — from a **flat** `requestBody` JSON schema: one level of properties, each a scalar.
   **Select the media type explicitly.** `requestBody.content` is keyed by media type; take
   `application/json` or a `+json` suffix type (`application/problem+json`). A body offering only
@@ -500,6 +513,11 @@ set**, so the hard refusal belongs here, at selection: `--op` naming one must re
 saying the method is unsupported rather than reporting the operation as missing. Those are different
 diagnoses and a user who is told "no such operation" for one they can see in the listing will not
 believe the tool. Test it.
+
+**That test is the only gate this obligation has**, and Task 1's implementer said so explicitly when
+handing it over. `listSkippedOperations` exists and nothing fails if you never call it. A `--op`
+naming a skipped operation would then fall through to the generic missing-operation path and report
+a confidently wrong diagnosis.
 - Nothing is ever written to disk. Assert the output directory is untouched.
 
 - [ ] **Step 2: Run — must FAIL**
