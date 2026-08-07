@@ -94,6 +94,42 @@ describe("renderFetchHelper", () => {
     expect(out).toContain("return { ok: res.ok, status: res.status, json, text };");
   });
 
+  /**
+   * The premise of `FetchHelperSchema`'s injection refinement, held where it is true: the base
+   * is spliced RAW, so a backtick that reaches here is not escaped, quoted or rejected — it
+   * closes the URL template literal and what follows is emitted as code.
+   *
+   * The spec is poisoned AFTER `parseSpec` deliberately. Going through the schema is exactly
+   * what the refinement now prevents (test/spec.test.ts holds that half), so a test that went
+   * through it could only assert the rejection again and would prove nothing about this line.
+   * That split is the finding: the emitter is unguarded and the schema is the only gate, which
+   * is why the fix is in `src/spec.ts` and why weakening it there is not compensated for here.
+   */
+  it("splices `base` raw — a backtick in it closes the emitted template literal", () => {
+    const clean = make({
+      serviceLabel: "Zz",
+      fetchHelper: { local: "zzGet", base: "https://api.zz.test/v1", inlineHeaders: {} },
+    });
+    const poisoned = {
+      ...clean,
+      fetchHelper: {
+        ...clean.fetchHelper,
+        base: "https://api.zz.test/v1` + String(Date.now()) + `",
+      },
+    };
+
+    const before = renderFetchHelper(clean);
+    const after = renderFetchHelper(poisoned);
+
+    // Corrupted, and this is what corrupted means: the clean emission holds the whole URL
+    // inside one literal, and the poisoned one has a call expression between two of them.
+    expect(before).toContain("const res = await fetch(`https://api.zz.test/v1${path}`, {");
+    expect(after).toContain(
+      "const res = await fetch(`https://api.zz.test/v1` + String(Date.now()) + `${path}`, {",
+    );
+    expect(after).not.toContain("`https://api.zz.test/v1${path}`");
+  });
+
   it("does not throw on non-2xx in rest-kit style — mcpJsonResultIfOk owns that", () => {
     const out = renderFetchHelper(
       make({

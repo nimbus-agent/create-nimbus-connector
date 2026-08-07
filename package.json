@@ -12,6 +12,7 @@
   },
   "files": [
     "src",
+    "schema",
     "README.md"
   ],
   "publishConfig": {
@@ -21,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
+    "schema": "bun scripts/build-schema.ts",
     "diff:golden": "bun scripts/diff-golden.ts",
     "reach": "bun scripts/reach.ts",
     "reach:baseline": "bun scripts/reach-baseline.ts",

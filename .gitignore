@@ -23,6 +23,7 @@ coverage/
 !/.github/
 !/docs/
 !/fixtures/
+!/schema/
 !/scripts/
 !/src/
 !/test/

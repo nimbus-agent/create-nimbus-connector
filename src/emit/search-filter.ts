@@ -4,6 +4,7 @@ import {
   isPathEntry,
   resolveKeyedShape,
   type ToolSpec,
+  titleIdentifier,
 } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import type { GenerateTarget } from "./index.ts";
@@ -195,7 +196,12 @@ export function emitSearchFilter(
 
   const sections = [
     importLines.join("\n"),
-    `export type ${spec.title}SearchMatchOptions = SearchMatchOptions;`,
+    // titleIdentifier, not spec.title: this is a type-alias NAME. The raw title was spliced
+    // here and nowhere else — src/emit/wiring.ts and registrarName both strip — so a spec
+    // named "google-meet" emitted `export type Google-meetSearchMatchOptions` and the
+    // generator failed against its own output. Every existing search fixture has a
+    // single-word alphanumeric title, so stripping moves no byte.
+    `export type ${titleIdentifier(spec.title)}SearchMatchOptions = SearchMatchOptions;`,
     ...tools.map((t) => renderToolFilter(t, shapes.get(t))),
   ];
 

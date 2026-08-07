@@ -20,7 +20,146 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
  * JS identifier, not just a non-empty string.
  */
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const identifierField = () => z.string().regex(IDENTIFIER_RE, "must be a valid JS identifier");
+
+/**
+ * The words `IDENTIFIER_RE` matches that a declaration position will not take.
+ *
+ * `bindings: ["class"]` emitted `const class = process.env["ZZ_V"]?.trim();` — a PARSE error
+ * against the generator's own output, which surfaces as `formatAll` failing in Biome rather
+ * than as a named spec error. Same failure mode as `rows: "data-items"`, one field over, and
+ * the regex above matched every reserved word there is.
+ *
+ * **Derived by generating, not written from memory.** The candidate universe was extracted from
+ * two installed packages rather than typed out: every `createKeyword("…")` and
+ * `createKeywordLike("…")` in `@babel/parser`'s lib, plus the `keyword`/`strict`/`strictBind`
+ * tables in `@babel/helper-validator-identifier` — which is where `package`, `private`,
+ * `protected`, `public`, `eval` and `arguments` come from, six words neither of the parser's own
+ * keyword tables carries because strict mode, not the tokenizer, is what reserves them — plus
+ * twenty TypeScript type-space spellings added as controls. Each was then put through the real
+ * generator in each of the ten identifier positions the spec language has, for both targets, and
+ * the emitted files were handed to the real Biome. A word is here if and only if Biome refused to
+ * parse the result.
+ *
+ * **95 candidates, 48 of them here**, measured against @babel/parser 8.0.4 and
+ * @babel/helper-validator-identifier 8.0.4 — the versions are stated because the count moves with
+ * them, and a count with nothing to date it is what this repository's own rule forbids.
+ * test/reserved-words.test.ts re-derives the answer on every run and asserts floors rather than
+ * these numbers, so a version that adds a contextual keyword updates the rule instead of
+ * failing it.
+ *
+ * The 48 below broke in NINE of the ten positions — every declaration position there is — and
+ * the tenth (a tool argument key) is discussed at its own call site. The other 47 emitted clean
+ * and are deliberately absent: `type`, `as`, `any`, `namespace`, `declare`, `readonly`,
+ * `satisfies`, `keyof`, `infer`, `is`, `out`, `override`, `accessor`, `using`, `async`, `of`,
+ * `from`, `get`, `set`, `global`, `module`, `require`, `assert`, `unique` and the rest are
+ * contextual in TypeScript and are ordinary identifiers in a declaration. Refusing them would
+ * reject specs that work, which is a real cost and not a safe default.
+ *
+ * `undefined`, `NaN` and `Infinity` are not here either — they parse. They are GLOBALS the
+ * emitted code reads, which is `RESERVED_IDENTIFIERS`' business (src/validate.ts), not this
+ * regex's.
+ */
+const RESERVED_WORDS: ReadonlySet<string> = new Set([
+  "arguments",
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "eval",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "new",
+  "null",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "return",
+  "static",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield",
+]);
+
+/**
+ * What every emitted identifier has to satisfy: the shape, and then the word.
+ *
+ * `regexMessage` is the only thing that varies. Tool argument keys said "argument name must be a
+ * valid JS identifier" through a second copy of `IDENTIFIER_RE` written inline in `ToolSchema`,
+ * and a second copy is how the reserved-word hole stayed open in that field after being closed
+ * everywhere else. There is one rule now, and one place to change it.
+ *
+ * `hint` closes the message with what to do instead, which differs by field: an emitted
+ * identifier is internal and can simply be renamed, while an argument key an author chose to
+ * match an API's own parameter name has a wire spelling to preserve.
+ */
+const RENAME_HINT =
+  "Rename it — an emitted identifier is internal to the generated package and appears nowhere " +
+  "on the wire.";
+
+/**
+ * Whether a name is one of the words above — exported for the ONE caller that has to ask before
+ * a spec exists.
+ *
+ * `src/openapi/operation.ts` builds argument names out of a document and refuses the bad ones
+ * where the document names them, so `--from-openapi` reports the parameter the user wrote rather
+ * than a path into an assembled spec they never saw. It cannot call `parseSpec` to find out — by
+ * then the position is lost. A fourth private copy of the word list is exactly the mistake the
+ * arg-key rule already made with the regex, so the list stays here and the question is exported.
+ */
+export function isReservedWord(name: string): boolean {
+  return RESERVED_WORDS.has(name);
+}
+
+function identifierField(
+  regexMessage = "must be a valid JS identifier",
+  hint: string = RENAME_HINT,
+) {
+  return z
+    .string()
+    .regex(IDENTIFIER_RE, regexMessage)
+    .superRefine((v, ctx) => {
+      if (!RESERVED_WORDS.has(v)) return;
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `${JSON.stringify(v)} is a JavaScript reserved word. Every identifier field is ` +
+          "spliced into a declaration position in the generated source — `const <name> = …`, " +
+          "`function <name>(…)`, `export function <name>(…)` — where a reserved word does not " +
+          "parse, so the generator fails inside its own formatter instead of reporting a spec " +
+          `error. ${hint}`,
+      });
+    });
+}
 
 /* ------------------------------------------------------------------------------------------ *
  * The path-template DSL: `${env.X}`, `${arg.X}`, `${arg.X|enc|num|bool|raw}`
@@ -133,6 +272,203 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
   return out;
 }
 
+/**
+ * The sequences that break out of the construct a raw-spliced spec string is emitted into.
+ *
+ * **The rule this list serves: every spec string an emitter splices into generated source
+ * unquoted goes through `rawSplicedString`.** This docstring used to open by counting the
+ * fields that do — "Two fields are spliced with no quoting or escaping" — and the count was
+ * wrong when it was written. Six more carried the same splice, one of them (`env[].prefix`)
+ * putting an attacker-supplied IIFE into the Authorization header of every request. A number in
+ * prose is precisely the artefact that makes the next reader stop looking, so there is no number
+ * here now and there must not be one again. `test/raw-splice.test.ts` DERIVES the carrier set by
+ * probing the emitters with a marker no quoting scheme leaves intact, and fails when a new
+ * carrier appears; that census, not this comment, is the authority on which fields are raw.
+ *
+ * Every sequence below is rejected in EVERY guarded field, including where the field does not
+ * reach that construct today. The rule belongs to the field rather than to the splice site,
+ * because splice sites are what emitter changes add: `serviceLabel`'s own comment site
+ * (src/emit/wiring.ts, Stage C) arrived a day after its two template sites, and nothing about
+ * that change would have prompted anyone to revisit a per-site rule.
+ *
+ * The backslash is not a terminator, and it is here because the omission of an ESCAPE is the
+ * same hole one step sideways: it changes the meaning of the character after it rather than
+ * ending anything. A `base` of `https://api.zz.test/v1\` emits
+ * `` `https://api.zz.test/v1\${path}` ``, in which `\$` is an escape — so the template's value
+ * is the literal text `https://api.zz.test/v1${path}`, the path is never interpolated, and the
+ * connector requests that URL verbatim. Valid TypeScript, clean under Biome and under the
+ * generated package's own tsc, and silent until the connector is pointed at a real API: exactly
+ * the failure class `FOREIGN_PLACEHOLDER` above exists for.
+ */
+const RAW_SPLICE_TERMINATORS = [
+  { seq: "`", named: "a backtick", effect: "ends a template literal" },
+  { seq: "*/", named: "a block comment terminator", effect: "ends a block comment" },
+  {
+    seq: "\\",
+    named: "a backslash",
+    effect:
+      "escapes the character after it, so a ${…} that follows is emitted as literal text " +
+      "instead of an interpolation",
+  },
+] as const;
+
+/**
+ * The one `${…}` shape an emitter RESOLVES, so that it stops being interpolation before it
+ * reaches generated source.
+ *
+ * This mirrors `resolveEnvRefs` (src/emit/server/fetch-helper.ts) — the function that performs
+ * the rewrite, and therefore the authority on which references are not live. `baseExpr` is the
+ * exported entry point that runs it, and "accepts %j exactly when the emitter resolves every
+ * interpolation in it" in test/spec.test.ts holds this rule against that function's real output
+ * rather than against a second copy of this pattern, so a `resolveEnvRefs` that widens or narrows
+ * fails there instead of quietly disagreeing with this file.
+ *
+ * Note what is NOT reused: `headerOption` (same file) tests an inline header value with an
+ * ANCHORED `/^\$\{env\.\w+\}$/`, because a header value either is one reference or is a plain
+ * string. A base is a template — `https://${env.siteHost}/api` is the shape every fixture that
+ * uses one actually writes — so the question here is per-occurrence, "is every `${` in this
+ * string one of these", not "is this string one of these".
+ */
+const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
+
+/**
+ * Whether an inline header VALUE is the one shape `headerOption` (src/emit/server/fetch-helper.ts)
+ * resolves: a reference and nothing else.
+ *
+ * **Exported and CALLED by `headerOption` itself**, on the precedent `canOmitQueryValue` set —
+ * not restated beside it. That is what makes `FetchHelperSchema`'s refusal below and the
+ * emitter's branch the same test rather than two that agree today. Restating it is how the bug
+ * this closes stayed open: `headerOption` falls through to `JSON.stringify(v)` for anything this
+ * returns `false` for, so `"Bearer ${env.apiKey}"` — a value that plainly means to reference the
+ * credential — emitted `Authorization: "Bearer ${env.apiKey}"` and put those literal characters
+ * on the wire. Accepted at parse time, discarded at emit time; the connector compiles, lints,
+ * typechecks and authenticates against nothing.
+ *
+ * Anchored, unlike `RESOLVED_ENV_REF`'s per-occurrence sweep, and the difference is the two
+ * fields': a header value either IS one reference or is a plain string, while a base is a
+ * template with references embedded in surrounding text.
+ */
+export function isEnvRefHeaderValue(v: string): boolean {
+  return /^\$\{env\.\w+\}$/.test(v);
+}
+
+/**
+ * How a raw-spliced field's `${…}` is disposed of, which is the one thing the guarded fields do
+ * not share.
+ *
+ * A `RegExp` is the shape an EMITTER rewrites before emission, stripped before the residue is
+ * scanned. `undefined` means the field takes no interpolation at all. `"path-template"` means the
+ * field is a path template, where `${…}` is the DSL's own and `parsePathTemplate` — not this
+ * refinement — decides which spellings are legal; it already refuses every `${` it did not
+ * consume, with a message naming the modes, so restating that here would produce two rejections
+ * for one mistake and one of them would be the vaguer.
+ */
+type SpliceInterpolation = RegExp | undefined | "path-template";
+
+/** One issue as the raw-splice refinement raises it: a message, at the field zod is checking. */
+type AddSpliceIssue = (message: string) => void;
+
+/**
+ * The terminator half, factored out because `tools[].path` needs it WITHOUT the interpolation
+ * half — see `SpliceInterpolation`. Splitting the two is what lets the terminator set stay one
+ * list applied uniformly to every carrier, which is the whole claim `RAW_SPLICE_TERMINATORS`
+ * makes about itself.
+ */
+function refuseTerminators(field: string, sites: string, v: string, add: AddSpliceIssue): void {
+  for (const t of RAW_SPLICE_TERMINATORS) {
+    if (!v.includes(t.seq)) continue;
+    add(
+      `"${field}" contains ${t.named} (${JSON.stringify(t.seq)}), which ${t.effect}. ` +
+        `This field is spliced raw into generated source (${sites}), so the sequence stops ` +
+        "being text: what follows it is emitted as something other than what was written, and " +
+        "the result still compiles, lints and typechecks, so nothing downstream reports it. " +
+        "Every sequence in this set is refused in every raw-spliced field, including where the " +
+        "field does not reach that construct today.",
+    );
+  }
+}
+
+/**
+ * A spec string the emitter splices RAW into generated source, refused if it can end the
+ * construct it lands in, or if it opens an interpolation nothing resolves.
+ *
+ * This is the only place that catches either. The emitters quote nothing (proved on the emitter
+ * itself by "splices `base` raw" in test/emit/server/fetch-helper.test.ts), and the resulting
+ * file is VALID TypeScript — `"https://api.zz.test/v1` + String(Date.now()) + `"` as a base emits
+ * a call expression between two literals, which Biome reformats and `tsc --noEmit --strict`
+ * accepts. Every gate downstream of the schema therefore reports green. Rejecting at the schema
+ * rather than at the splice sites is also what covers all three ways a spec is authored at once —
+ * hand-written, `--from-connector`, `--from-openapi`.
+ *
+ * `resolves` is the one thing the guarded fields do not share, and they differ because the
+ * EMITTERS do. Three dispositions, named by `SpliceInterpolation` above:
+ *
+ *   - `undefined` — nothing rewrites anything in the field, so every `${` it carries is live and
+ *     all of them are refused. `serviceLabel`, `tools[].name`, `env[].prefix`, `env[].suffix`.
+ *   - a `RegExp` — the shape an emitter resolves, stripped before the residue is scanned, so
+ *     every OTHER `${` is refused. `fetchHelper.base` and `RESOLVED_ENV_REF`, because `${env.X}`
+ *     there is a documented feature: it is what 7 of the 22 fixtures write, three of them the
+ *     byte-locked datadog, grafana and sentry, so banning `${` outright would fail diff:golden on
+ *     the first run, and `bun run reach --baseline` says the same of the specs the deriver
+ *     reconstructs from the corpus. The residue left once the resolved shape is removed is
+ *     exactly what survives into the emitted template literal.
+ *   - `"path-template"` — the field is the path DSL and `parsePathTemplate` owns the question.
+ *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 19 of the
+ *     22 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-07 over `fixtures/*.spec.json`).
+ *     Every one of those is a placeholder the DSL consumes, and `assertNoUnparsedPlaceholders`
+ *     already refuses every spelling it did not — which is why a second rule here would produce
+ *     two rejections for one mistake.
+ *
+ * **An earlier version of this rule admitted `${` wherever it appeared**, on the grounds that an
+ * unresolved one produces an UNDEFINED IDENTIFIER the generated package's own `tsc --noEmit`
+ * reports. That is true of `${x}` and of nothing else. An interpolation whose expression is
+ * self-contained — `${(() => { … })()}`, which names nothing outside itself — leaves no identifier
+ * to be undefined: it compiles, lints and typechecks clean and then RUNS, in `base` on every
+ * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
+ * to draw the rule on, because it is a property of one payload rather than of the field.
+ *
+ * Measured across the 22 fixtures: no guarded field carries a backtick, a block-comment
+ * terminator or a backslash — which this docstring cannot spell out literally, the hazard in
+ * miniature.
+ *
+ * `emptyIsMeaningful` exists for one carrier pair. `wrapped()` (src/emit/server/env.ts)
+ * substitutes `?? ""` for whichever of `prefix`/`suffix` is unset, so `""` and omitted emit
+ * identical bytes — and `classifyPlainReturn` (src/derive/server/env.ts) reads both from the
+ * template's cooked quasis unconditionally, which means `--from-connector` genuinely produces
+ * `""` for the unused side. A `.min(1)` on those two would reject a spec this repository's own
+ * deriver writes, and `reach --baseline` is where that would have been found.
+ */
+function rawSplicedString(
+  field: string,
+  sites: string,
+  resolves: SpliceInterpolation,
+  emptyIsMeaningful = false,
+) {
+  return (emptyIsMeaningful ? z.string() : z.string().min(1)).superRefine((v, ctx) => {
+    const add: AddSpliceIssue = (message) => ctx.addIssue({ code: "custom", message });
+    refuseTerminators(field, sites, v, add);
+
+    if (resolves === "path-template") return;
+
+    // Named for the claim it gates — an interpolation still live in the generated package —
+    // rather than for the residue that reveals it.
+    const hasLiveInterpolation = (resolves === undefined ? v : v.replaceAll(resolves, "")).includes(
+      "${",
+    );
+    if (!hasLiveInterpolation) return;
+    add(
+      `"${field}" opens an interpolation (\${…}) that no emitter resolves. This field is ` +
+        `spliced raw into generated source (${sites}), so the expression inside it is emitted ` +
+        "as an expression and evaluated at runtime. A self-contained one names nothing " +
+        "outside itself, so it compiles, lints and typechecks clean — nothing downstream " +
+        "reports it. " +
+        (resolves === undefined
+          ? "This field takes no interpolation at all: no emitter rewrites a reference in it."
+          : "The only interpolation this field takes is ${env.NAME}, which resolveEnvRefs " +
+            "(src/emit/server/fetch-helper.ts) rewrites to an accessor call before emission."),
+    );
+  });
+}
 export const ArgSchema = z
   .strictObject({
     type: z.enum(["string", "number", "boolean"]),
@@ -313,9 +649,24 @@ export const SearchFilterSchema = z
  * missing guard — `searchParams.set` receives a value that can be `undefined`, which is
  * `TS2345` for a string arg (the wrapped-in-`String()` cases compile, but send the literal
  * query value `"undefined"` on the wire, since `String(undefined) === "undefined"`).
+ *
+ * **Exported for a third consumer**, on the same reasoning `parsePathTemplate` and
+ * `resolveKeyedShape` are: `src/openapi/operation.ts` decides whether a query parameter it maps
+ * gets an `omitWhen`, and it must reach exactly this answer or emit a spec these very refines
+ * reject. A private copy there would be a restatement that can drift, and the direction that
+ * drifts silently is the one where the copy is too permissive.
+ *
+ * The parameter is structural rather than `z.infer<typeof ArgSchema>` so a caller holding a
+ * partially-built argument can ask. `optional` is compared to `true` rather than used for its
+ * truthiness, which is identical for the schema's own output (where `.default(false)` makes it a
+ * boolean) and correct for a caller whose field is absent.
  */
-function canOmitQueryValue(arg: z.infer<typeof ArgSchema>): boolean {
-  return arg.optional && arg.default === undefined && arg.type !== "boolean";
+export function canOmitQueryValue(arg: {
+  readonly optional?: boolean;
+  readonly default?: string | number | boolean;
+  readonly type: "string" | "number" | "boolean";
+}): boolean {
+  return arg.optional === true && arg.default === undefined && arg.type !== "boolean";
 }
 
 /**
@@ -441,17 +792,62 @@ function checkQueryEntryArg(
 
 export const ToolSchema = z
   .strictObject({
-    name: z.string().min(1),
+    /**
+     * Quoted almost everywhere it is emitted — and raw in one place, which is the whole reason
+     * it is guarded: `renderMapping` (src/emit/wiring.ts) writes it into the `/** … *\/`
+     * docstring of the generated `<name>-mapping.ts`, where a name ending in `_list` and
+     * containing a block-comment terminator closes the docstring early and everything after it
+     * is emitted as statements.
+     */
+    name: rawSplicedString(
+      "tools[].name",
+      "the Gateway wiring mapping stub's block comment",
+      undefined,
+    ),
     description: z.string().min(1),
+    /**
+     * An argument key reaches a declaration position only when the argument is HOISTED —
+     * `claimHoistedArgs` (src/validate.ts) resolves the hoisted name as `arg.local ?? argName`,
+     * so a key with a `default` or of type `"boolean"` becomes `const <key> = …`. Measured:
+     * `{ "class": { "type": "string" } }` emits clean, `{ "class": { "type": "boolean" } }` is a
+     * Biome parse error.
+     *
+     * The rule is applied FLAT anyway, which over-rejects the non-hoisted case on purpose. A
+     * conditional rule would mean adding `"default": 1` to an argument that already validated
+     * flips the whole spec to invalid — the argument `RESERVED_IDENTIFIERS` (src/validate.ts)
+     * makes for itself three separate times, and it is stronger here, because the field that
+     * would decide validity sits inside the same object as the name being judged.
+     */
     args: z
       .record(
-        z
-          .string()
-          .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, "argument name must be a valid JS identifier"),
+        identifierField(
+          "argument name must be a valid JS identifier",
+          "Rename the argument. Where the API spells the parameter this way, the wire spelling " +
+            'is carried separately — by a "query" entry\'s "name", or by "body", which maps an ' +
+            "argument key to the field name the request actually sends.",
+        ),
         ArgSchema,
       )
       .default({}),
-    path: z.string().optional(),
+    /**
+     * `renderPath` (src/emit/server/path-template.ts) splices every literal segment into a
+     * template literal, escaping a backslash and a backtick as it goes — so those two are
+     * neutralised at the splice site and this guard is the second line rather than the only
+     * one. It is applied anyway, on `RAW_SPLICE_TERMINATORS`'s stated rule: the terminator set
+     * belongs to the field, and the block-comment terminator is neutralised nowhere. A path is
+     * the one carrier whose `${…}` is a documented DSL, so `parsePathTemplate` keeps that half
+     * — see `SpliceInterpolation`.
+     *
+     * No `.min(1)` here, deliberately: `path` was `z.string().optional()` and an empty path is
+     * already rejected by the checks that read it (a query tool's leading-`/` rule), so adding
+     * one would move where an existing rejection comes from without changing what is accepted.
+     */
+    path: rawSplicedString(
+      "tools[].path",
+      "the fetch helper's path argument template literal",
+      "path-template",
+      true,
+    ).optional(),
     query: z
       .array(QueryParamSchema)
       .min(1, "a query must declare at least one parameter")
@@ -471,8 +867,17 @@ export const ToolSchema = z
     effect: z.enum(["read", "write", "delete"]).default("read"),
     /** arg name -> API field name. Omitted means "the args object is the body". */
     body: z.record(z.string().min(1), z.string().min(1)).optional(),
-    /** Property plucked from the response envelope. Omitted means the response IS the array. */
-    rows: z.string().min(1).optional(),
+    /**
+     * Property plucked from the response envelope. Omitted means the response IS the array.
+     *
+     * An identifier, not a free string, because `renderSearchTool` (src/emit/server/search.ts)
+     * splices it into three code positions in one line — `const <rows> = (root as { <rows>?:
+     * unknown[] } | null)?.<rows>;`. An ordinary envelope key like `data-items` emits
+     * `const data-items = …`, which fails as a Biome PARSE error against the generator's own
+     * output rather than as a named spec error. `validateSpec` then checks it against every
+     * claimed name — see `checkRowsIdentifier` there for why it is checked and not claimed.
+     */
+    rows: identifierField().optional(),
     /** Per-connector result cap. Corpus: 100 ×24, 200 ×12, 2000 ×2, 50 ×1. */
     maxLimit: z.number().int().positive().default(100),
     filter: SearchFilterSchema.optional(),
@@ -577,8 +982,15 @@ export const EnvSchema = z
     vars: z.array(z.string().min(1)).min(1),
     /** Accessor function name. */
     local: identifierField(),
-    /** Internal variable name per var. Cosmetic; defaults to camelCase(var). */
-    bindings: z.array(z.string().min(1)).optional(),
+    /**
+     * Internal variable name per var. Cosmetic; defaults to camelCase(var).
+     *
+     * An identifier for the same reason `local` is, and it was not one: `readLines`
+     * (src/emit/server/env.ts) emits `const <binding> = process.env[…]?.trim();`, so a binding
+     * of `t = ((): string => { … })(); const junk` emits a second declaration whose initializer
+     * runs on every call to the accessor.
+     */
+    bindings: z.array(identifierField()).optional(),
     required: z.boolean().default(false),
     default: z.string().optional(),
     /**
@@ -592,8 +1004,27 @@ export const EnvSchema = z
      * template.
      */
     transform: z.enum(["stripTrailingSlash", "trimTrailingSlashFn"]).optional(),
-    prefix: z.string().optional(),
-    suffix: z.string().optional(),
+    /**
+     * Text placed either side of the accessor's value, spliced RAW into `wrapped()`'s template
+     * literal (src/emit/server/env.ts) — and, for `auth: "basic"`, into the username ARGUMENT
+     * of `encodeBasicAuthHeader`, which is an expression position with no `return` in front of
+     * it. Reproduced before this guard existed: a `prefix` of
+     * `${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}` on zendesk's basic entry
+     * emitted that IIFE into the Authorization header built for every request. Both fields take
+     * no interpolation of their own — no emitter rewrites a reference in either.
+     */
+    prefix: rawSplicedString(
+      "env[].prefix",
+      "the env accessor's value template, and the username argument to encodeBasicAuthHeader",
+      undefined,
+      true,
+    ).optional(),
+    suffix: rawSplicedString(
+      "env[].suffix",
+      "the env accessor's value template, and the username argument to encodeBasicAuthHeader",
+      undefined,
+      true,
+    ).optional(),
     auth: z.enum(["bearer", "basic", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
@@ -627,8 +1058,57 @@ export const EnvSchema = z
     message:
       'env entry cannot declare both "default" and "required" — a defaulted value is never empty',
   })
+  /*
+   * The one entry shape with no way to emit correct code: no `auth`, no `default`, and
+   * `required` left at its schema default of `false`. `guardLines` (src/emit/server/env.ts)
+   * emits nothing for it, so the accessor returns `process.env[…]?.trim()` — `string |
+   * undefined` — out of a function `renderEnvAccessor` declares as `(): string`. It is the
+   * shape an author gets by omitting fields, and no fixture has it, so no gate saw it.
+   *
+   * REFUSED rather than emitted differently, and that is the measured choice. All six shapes
+   * that reach this branch were compiled under Nimbus's own compilerOptions, and each of the two
+   * emitter fixes closes some of them and leaves the rest:
+   *
+   *   bare                   TS2322   return type `string`, expression `string | undefined`
+   *   transform: strip…      TS18048  `zzUrl.replace(…)` on a possibly-undefined binding
+   *   transform: trim…Fn     TS2345   `trimTrailingSlash(zzUrl)`
+   *   prefix / suffix / both CLEAN, and wrong at runtime — the value lands in a template
+   *                          literal, so the accessor returns the LITERAL TEXT "undefined" and
+   *                          the fetch helper requests `https://undefined/…`
+   *
+   * Widening the return type to `string | undefined` fixes only the first row: the two
+   * `transform` rows fail INSIDE the body, where the return type is not what is being checked,
+   * and it turns the three clean rows into `string | undefined` at every `${env.X}` call site,
+   * which is the same silent interpolation one level out. Coalescing the body (`?? ""`) does
+   * typecheck all six, at the price of converting three loud failures into an empty URL
+   * authority. Refusing costs no emitted byte at all — this rule touches no emitter — and it is
+   * the only option that leaves nothing behind that compiles and is wrong.
+   *
+   * An optional variable is still expressible, and the message names the two spellings: give it
+   * a `default`, which suppresses the guard and makes the binding `string`.
+   */
+  .refine((e) => e.auth !== undefined || e.default !== undefined || e.required, {
+    message:
+      'an env entry with no "auth" and no "default" must set "required": true — with no guard ' +
+      "to narrow it, its accessor returns process.env[…]?.trim() unchanged, which is " +
+      "`string | undefined`, from a function the emitter declares as `(): string`. The " +
+      "generated package then fails its own typecheck (TS2322, or TS18048/TS2345 when " +
+      '"transform" is set) — or, with "prefix"/"suffix", where the value is spliced into a ' +
+      'template literal, it typechecks and returns the text "undefined" at runtime. Set ' +
+      '"required": true, or give the variable a "default".',
+  })
   .refine((e) => e.bindings === undefined || e.bindings.length === e.vars.length, {
     message: '"bindings" must have exactly one entry per "vars" entry',
+  })
+  // Within ONE entry, not across entries: `readLines` emits `const <binding> = …` once per var
+  // into a single accessor body, so two vars sharing a binding emit two `const`s of that name in
+  // one block — the generator failing against its own output instead of with a named spec error.
+  // Two DIFFERENT entries may share a binding freely; each is a separate function scope, and
+  // several fixtures do (bindings: ["t"] appears in twelve of them).
+  .refine((e) => e.bindings === undefined || new Set(e.bindings).size === e.bindings.length, {
+    message:
+      '"bindings" repeats a name — each var in one entry is read into its own const in the ' +
+      "same accessor body, so two vars cannot share one",
   })
   .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
     message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
@@ -693,7 +1173,11 @@ export const FetchHelperSchema = z
   .strictObject({
     local: identifierField(),
     /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
-    base: z.string().min(1),
+    base: rawSplicedString(
+      "fetchHelper.base",
+      "the fetch helper's URL template literal",
+      RESOLVED_ENV_REF,
+    ),
     /**
      * Hoist `base` to a module-scope `const <name> = "<base>";` and reference that const
      * from the emitted helper(s) instead of inlining the literal. mercury spells it `BASE`,
@@ -701,8 +1185,15 @@ export const FetchHelperSchema = z
      * newrelic/datadog/grafana/sentry do.
      */
     baseConst: identifierField().optional(),
-    /** Name of an env accessor returning the header record. */
-    headers: z.string().min(1).optional(),
+    /**
+     * Name of an env accessor returning the header record.
+     *
+     * An identifier, because `headerOption` (src/emit/server/fetch-helper.ts) emits it as a CALL
+     * — `headers: <name>()` — with nothing between the spec string and the emitted expression.
+     * A value of `((): Record<string, string> => { globalThis.__PWNED__ = "x"; return headers();
+     * })` emitted an IIFE the fetch helper invokes on every request, and it typechecked.
+     */
+    headers: identifierField().optional(),
     /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
     inlineHeaders: z.record(z.string(), z.string()).optional(),
     normalizeLeadingSlash: z.boolean().default(false),
@@ -721,6 +1212,27 @@ export const FetchHelperSchema = z
     message:
       '"baseConst" requires a fully static "base" — a base naming ${env.X} resolves to an ' +
       "accessor call, which must not run at module-initialisation time",
+  })
+  // The "accepted then discarded" class, on the one field where the discarded thing is a
+  // CREDENTIAL — see isEnvRefHeaderValue, which is the emitter's own predicate rather than a
+  // copy of it. An anchored value keeps working; a value with no ${ at all is a plain header
+  // and is untouched; only the mixed form is refused, and it is refused because there is no
+  // spelling of it the emitter honours.
+  .superRefine((f, ctx) => {
+    for (const [name, value] of Object.entries(f.inlineHeaders ?? {})) {
+      if (!value.includes("${") || isEnvRefHeaderValue(value)) continue;
+      ctx.addIssue({
+        code: "custom",
+        path: ["inlineHeaders", name],
+        message:
+          `inline header ${JSON.stringify(name)} mixes text with an interpolation ` +
+          `(${JSON.stringify(value)}). The emitter resolves a value that is exactly ` +
+          '"${env.NAME}" and JSON-quotes everything else, so this one is emitted as those ' +
+          "literal characters and sent on the wire verbatim — for an Authorization header, " +
+          "the credential is never read. Move the surrounding text into the env accessor " +
+          '(env[].prefix / env[].suffix) and leave "${env.NAME}" alone here.',
+      });
+    }
   });
 
 /**
@@ -739,7 +1251,11 @@ export const ConnectorSpecSchema = z
     displayName: z.string().min(1),
     id: z.string().min(1).optional(),
     description: z.string().min(1),
-    serviceLabel: z.string().min(1),
+    serviceLabel: rawSplicedString(
+      "serviceLabel",
+      "an emitted error message's template literal and a block comment in the Gateway wiring",
+      undefined,
+    ),
     style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
     /**
      * How a REST tool's handler is written. `"concise"` is an expression-bodied arrow
@@ -892,9 +1408,28 @@ export function capitalize(s: string): string {
   return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * The PascalCase identifier fragment every emitted name built from `title` is derived from —
+ * `register<X>Tool`, `create<X>Syncable`, `map<X>ItemToItem`, `<X>SearchMatchOptions`.
+ *
+ * Exported and shared because it was restated at three call sites and TWO of them stripped.
+ * `src/emit/search-filter.ts` spliced `title` in raw, so the ordinary two-word title every
+ * hyphenated connector defaults to — `capitalize("google-meet")` is `"Google-meet"` — emitted
+ * `export type Google-meetSearchMatchOptions`, and the generator failed with a Biome PARSE
+ * error against its own output. No search fixture has a multi-word title, which is why every
+ * gate stayed green; `google-meet`, `google-photos` and `github-actions` are exactly the corpus
+ * connectors a future search fixture would come from.
+ *
+ * `validateSpec` checks the RESULT is a usable identifier — stripping cannot rescue a title
+ * whose first character is a digit, and it can produce the empty string.
+ */
+export function titleIdentifier(title: string): string {
+  return title.replaceAll(/[^A-Za-z0-9]/g, "");
+}
+
 /** Module-scope registrar constant emitted for `style: "rest-kit"` connectors. */
 export function registrarName(spec: ConnectorSpec): string {
-  return `register${spec.title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
+  return `register${titleIdentifier(spec.title)}Tool`;
 }
 
 function preflightOutOfScope(input: unknown): void {
@@ -911,11 +1446,104 @@ function preflightOutOfScope(input: unknown): void {
   }
 }
 
+/**
+ * Render an issue's path the way a human editing spec JSON by hand reads it: dotted keys,
+ * bracketed array indices — `tools[0].args.limit`, never `tools.0.args.limit`, in which the `0`
+ * could be an array position or an object key literally named `"0"`. JSON Pointer (`/tools/0/…`)
+ * makes the same distinction unambiguous for a machine; this string is for the person who wrote
+ * the JSON, so brackets read closer to how they typed the array index than a slash would.
+ *
+ * The first segment gets NO leading dot, and that arm needs an ANCHORED assertion to be tested
+ * at all: dropping it yields `.tools[0].args.limit.max`, which still CONTAINS
+ * `tools[0].args.limit.max`, so every unanchored `toContain`/`toMatch` in test/spec.test.ts
+ * stayed green when it was mutated out. The assertions that guard it match `/^ {2}…/` against a
+ * line, pinning the indent the line actually starts with.
+ *
+ * Module-private: `parseSpec` below is its only caller. An export is a contract, and this one
+ * has no second consumer.
+ */
+function formatIssuePath(path: readonly PropertyKey[]): string {
+  if (path.length === 0) return "(root)";
+  let out = "";
+  for (const seg of path) {
+    out +=
+      typeof seg === "number" ? `[${seg}]` : out.length === 0 ? String(seg) : `.${String(seg)}`;
+  }
+  return out;
+}
+
+/**
+ * Walk the RAW input (before Zod applies defaults or transforms) by an issue's own path, so the
+ * error line can show what was actually rejected there rather than only where. This reads the
+ * caller's input directly instead of Zod's own per-issue `input` (available via `{ reportInput:
+ * true }`) because that field reports the value at the schema level the issue's check RAN at —
+ * for a `superRefine` on `ToolSchema` that adds an issue at a relative path like
+ * `["query", 0, "arg"]`, Zod's `input` is the whole tool object, not the query entry's `arg`
+ * string. Re-resolving the issue's full (already-absolute) `path` against the original input
+ * lands on the same specific value for every issue kind, built-in or custom — verified against
+ * both in a scratch script before writing this.
+ */
+function valueAtPath(input: unknown, path: readonly PropertyKey[]): unknown {
+  let cur = input;
+  for (const seg of path) {
+    if (typeof cur !== "object" || cur === null) return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[seg];
+  }
+  return cur;
+}
+
+/**
+ * How much of a rejected value an error line shows.
+ *
+ * A root-level issue has an EMPTY path, so the value at it is the whole spec: an unrecognized
+ * top-level key printed the entire file back on one line — 387 characters for the smallest spec
+ * this repo's tests use, 3,169 for `fixtures/dependencytrack.spec.json`, and unbounded for a
+ * spec a user wrote. The received value is here to identify what was rejected, not to reproduce
+ * it, and 120 characters is well past every scalar a spec writes (a `name`, a `local`, a `base`)
+ * while cutting an object dump down to something that still reads as one line.
+ */
+const RECEIVED_MAX_CHARS = 120;
+
+/**
+ * The `(…)` half of an error line: what was at the issue's path, rendered as JSON.
+ *
+ * The `undefined` branch is not a defensive shrug. `JSON.stringify` returns `undefined` — the
+ * value, not the string — for everything JSON cannot represent, and a MISSING REQUIRED KEY is
+ * exactly that case, and the commonest failure in a hand-written spec. Interpolated, it printed
+ * the bare token `undefined`: the one rendering on these lines that is not a JSON literal,
+ * sitting where `"ten"`, `null` and `42` all appear as themselves. It says so in words instead.
+ */
+function formatReceived(input: unknown, path: readonly PropertyKey[]): string {
+  const json = JSON.stringify(valueAtPath(input, path));
+  if (json === undefined) return "no JSON value there — usually a missing key";
+  const shown = json.length > RECEIVED_MAX_CHARS ? `${json.slice(0, RECEIVED_MAX_CHARS)}…` : json;
+  return `received ${shown}`;
+}
+
+/**
+ * The message an issue carries — or, for a record KEY rejection, the messages of the checks the
+ * key actually failed.
+ *
+ * zod 4 wraps a key-schema failure in an `invalid_key` issue whose own message is the generic
+ * "Invalid key in record", with the real ones nested in its `issues` array. Only one field has a
+ * key schema (`tools[].args`), and everything that field's rule has to say was landing in that
+ * nested array and going nowhere: `{ "data-items": … }` reported "Invalid key in record" and not
+ * "argument name must be a valid JS identifier", which pre-dates the reserved-word rule by every
+ * release this schema has had. Unwrapped here rather than at the key schema, because the
+ * flattening is Zod's and one line at the formatter is the whole of it.
+ */
+function issueMessage(issue: z.core.$ZodIssue): string {
+  if (issue.code !== "invalid_key" || issue.issues.length === 0) return issue.message;
+  return issue.issues.map((nested) => nested.message).join("; ");
+}
+
 export function parseSpec(input: unknown): ConnectorSpec {
   preflightOutOfScope(input);
   const parsed = ConnectorSpecSchema.safeParse(input);
   if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
+    const lines = parsed.error.issues.map(
+      (i) => `  ${formatIssuePath(i.path)}: ${issueMessage(i)} (${formatReceived(input, i.path)})`,
+    );
     throw new Error(`Invalid connector spec:\n${lines.join("\n")}`);
   }
   const s = parsed.data;

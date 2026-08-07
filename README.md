@@ -247,6 +247,26 @@ They are reserved **unconditionally**, not only for specs that use the feature �
 - **`token`** — a spec that named an env `local` `"token"` and validated under 0.2.2 is now rejected. Rename the local; nothing else changes.
 - **`root`** — an ordinary word, and a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`. A fetch helper named `root` would emit `const root = await root(…)`, a use-before-declaration error rather than a shadow.
 
+### Editor support: the published JSON Schema, and what it cannot check
+
+The spec language is published as a JSON Schema at [`schema/connector-spec.schema.json`](./schema/connector-spec.schema.json), generated from `ConnectorSpecSchema` itself — `bun run schema` rewrites it, and `test/schema.test.ts` byte-compares the checked-in file against a fresh build, so the document cannot drift from the language it describes. It ships in the npm package too, at `node_modules/create-nimbus-connector/schema/connector-spec.schema.json`.
+
+**Reference it with an editor-side mapping, not with a `$schema` key inside the spec file.** `ConnectorSpecSchema` is a `z.strictObject`, so a spec carrying `"$schema": …` is refused with `Unrecognized key: "$schema"` — that route would make the file validate in the editor and fail at the CLI, which is the opposite of the point. In VS Code, map the glob instead:
+
+```json
+// .vscode/settings.json
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["*.spec.json"],
+      "url": "https://raw.githubusercontent.com/nimbus-agent/create-nimbus-connector/main/schema/connector-spec.schema.json"
+    }
+  ]
+}
+```
+
+**And read what it is worth before trusting it.** Refinements enforced by `parseSpec` and `validateSpec` (cross-field rules, reserved identifiers, style-specific requirements) cannot be expressed in JSON Schema and are **not** represented here. A spec that validates against this schema may still be rejected by the generator. An argument declaring `default` without `optional: true`, a `fetchHelper.base` of `https://api.acme.test/${(() => Date.now())()}` — an interpolation spliced raw into the generated source and evaluated on every request — and an env `local` named `token` are each green in an editor and refused by the CLI. Completion and structural checking are what the schema buys you; `bun src/cli.ts --spec <path> --dry-run` is what tells you the spec is actually accepted.
+
 ## CLI reference
 
 ```
@@ -267,6 +287,11 @@ With a positional name it runs an interactive prompt session (name, display name
 - `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts`. An **error** without `--gateway-wiring`.
 - `--from-connector <dir>` — the pipeline in reverse: read a connector directory and print the `ConnectorSpec` that would regenerate it, writing nothing. Mutually exclusive with a positional `<name>`, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run`. A connector the spec language cannot fully describe exits non-zero with the constructs that stopped the read, in the same vocabulary `bun run reach --verbose` uses — never a silent approximation. See [`docs/USAGE.md`](./docs/USAGE.md#8-deriving-a-spec-from-an-existing-connector), and [`docs/LICENSING.md`](./docs/LICENSING.md) for why running it against a checkout you already have is not vendoring.
 - `--partial` — with `--from-connector`, print a draft spec instead of only the blocker report. The draft carries a `$partial` marker key that `ConnectorSpecSchema`'s `z.strictObject` refuses by construction, so it cannot be generated until you resolve the blockers and delete the key. An **error** without `--from-connector`.
+- `--from-openapi <doc>` — read an OpenAPI 3 document (JSON or YAML, `$ref`s resolved internally) and print the `ConnectorSpec` for a selection of its operations, writing nothing. Mutually exclusive with a positional `<name>`, `--spec`, `--from-connector` and every flag that shapes a write. Requires either `--list-operations` or at least one `--op`. See [What an OpenAPI document can and cannot supply](#what-an-openapi-document-can-and-cannot-supply).
+- `--list-operations` — with `--from-openapi`, print one `operationId  METHOD  /path` line per operation to stdout, in document order, so `--op` arguments can be copied straight off it. Operations this reader can see but not offer — `head`/`options`/`trace`, and a mis-cased method key like `Post:` — are named on **stderr** with the reason, never silently dropped. An **error** without `--from-openapi`.
+- `--op <operationId>` — with `--from-openapi`, select an operation to become a tool. Repeatable; the tools appear in the order named. An `--op` naming an operation `--list-operations` reported as skipped is refused as *that*, not as a missing operation. An **error** without `--from-openapi`, and an **error** combined with `--list-operations` — both read the same document and only one can produce output.
+
+A bare `--from-openapi` with no `--op` is an **error**, not "map everything". Which operations become tools is a product decision the document does not state: a document describes a whole API, where a connector exposes the few operations an agent should be able to call. Mapping everything would also make one operation the spec language cannot express — of a kind most real documents carry — refuse the whole document, since an operation maps completely or not at all.
 - `--help` — print usage. Every flag in that text is one `parseFlags` actually parses; `test/cli.test.ts` asserts the two agree, so an undocumented flag is a failing test.
 - `--version` — print the version.
 
@@ -279,6 +304,26 @@ bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
 bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
 bun src/cli.ts acme --standalone --license MIT
 ```
+
+### What an OpenAPI document can and cannot supply
+
+```bash
+bun src/cli.ts --from-openapi widgets.yaml --list-operations
+bun src/cli.ts --from-openapi widgets.yaml --op listWidgets --op getWidget > widgets.spec.json
+bun src/cli.ts --spec widgets.spec.json
+```
+
+The spec goes to **stdout** and every note and refusal to **stderr**, so the redirect above leaves a file that `--spec` reads while the notes stay on screen.
+
+**Read from the document.** The connector `name` (`info.title`, slugified to lower-kebab-case), the fetch helper's `base` and the `network` permission (the one `servers[0].url`), the env auth mode (`components.securitySchemes`: `http`/`bearer`, `http`/`basic`, and an `apiKey` sent in a header), and one tool per selected operation — its name from `operationId`, its description from `summary`, its `path` with each `{widgetId}` turned into `${arg.widgetId|enc}`, its method, its query parameters (including OpenAPI's rule that an operation-level parameter overrides a path-item one of the same name and location), and a flat JSON request body.
+
+**Filled with a placeholder, for you to replace.** `style`, `syncInterval`, `minNimbusVersion`, `displayName`, `serviceLabel`, the connector `description`, and a tool description for an operation with no `summary`. Every prose one carries a `TODO:` marker; `style` and `syncInterval` cannot hold prose, so they carry a value that parses and is obviously provisional.
+
+**Cannot be filled at all, and is noted rather than guessed.** `effect` — the manifest's human-in-the-loop confirmation — is left unset on every operation, and each non-GET carries a note asking for it, because the corpus is emphatic that deriving it from the HTTP method is wrong for a third of connectors. An exclusive `exclusiveMinimum`/`exclusiveMaximum` becomes an inclusive `min`/`max` with a note recording the widening, which is the one knowing divergence in the whole path.
+
+**Refused by name rather than approximated.** At the document level: Swagger 2.0 or any non-3 version; a `$ref` that leaves the document, returns to itself, or names a node that is not there; an operation with no `operationId`, or two sharing one; no `servers`, more than one, a URL carrying server-variable templating, one that is not http(s), and one carrying a query string or fragment; no security scheme, more than one, and a scheme with no env auth mode — oauth2 (whose `credentialsIn` the document cannot state) and an `apiKey` in a query string or a cookie. At the operation level: a header or cookie parameter, an `array` or `object` argument, `oneOf`/`anyOf`/`allOf`, a request body that is not flat `application/json`, a body on a GET, a path that is not `/`-absolute or that uses Express-style `/:id` templating, an argument name no slug can make into a JS identifier, two names slugifying onto one argument, and a name landing on a reserved identifier or on a JavaScript reserved word. An operation maps completely or not at all — a tool missing the one parameter that could not be expressed is a connector that passes every gate and sends the wrong request.
+
+`head`, `options` and `trace` operations, and a mis-cased method key, are the two constructs that are **reported instead of refused**: they are listed by `--list-operations` on stderr and omitted from the selectable set, so one `HEAD /health` cannot take forty mappable operations down with it. Naming one with `--op` is then refused as *that*, rather than as an operation the document does not contain.
 
 ### Licensing of generated connectors
 

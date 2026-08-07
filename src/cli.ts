@@ -12,8 +12,21 @@ import {
 } from "./format.ts";
 import { MARKER } from "./golden/resolve.ts";
 import { MONOREPO_LICENSE, validateLicense } from "./license.ts";
+// Statically imported, unlike src/derive/, which is behind a dynamic import because it needs the
+// optional @babel/parser. This reader's only dependency is zod, already in the graph via spec.ts.
+import {
+  type LoadedDocument,
+  listOperations,
+  listSkippedOperations,
+  loadDocument,
+  type Operation,
+  type SkippedOperation,
+} from "./openapi/document.ts";
+import type { Refusal } from "./openapi/operation.ts";
+import type { OpenApiDocument } from "./openapi/schema.ts";
+import { assembleSpec } from "./openapi/spec.ts";
 import { promptForSpec } from "./prompts.ts";
-import { parseSpec } from "./spec.ts";
+import { type ConnectorSpec, parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
 
 export type CliOptions = {
@@ -38,6 +51,17 @@ export type CliOptions = {
    * z.strictObject) refuses by construction — see src/derive/from-connector.ts.
    */
   partial: boolean;
+  /** --from-openapi <doc>: read an OpenAPI 3 document. See src/openapi/document.ts. */
+  fromOpenapi?: string;
+  /** --list-operations: with --from-openapi, print the operations the document declares. */
+  listOperations: boolean;
+  /**
+   * --op <operationId>, repeatable: the operations that become tools, in the order named.
+   *
+   * Order is not cosmetic — src/openapi/spec.ts assembles tools in the order it is handed them,
+   * and `tools` order is the order they are registered in the generated server.
+   */
+  ops: string[];
 };
 
 /** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
@@ -45,9 +69,12 @@ const KNOWN_FLAGS = [
   "--dry-run",
   "--force",
   "--from-connector",
+  "--from-openapi",
   "--gateway-wiring",
   "--help",
   "--license",
+  "--list-operations",
+  "--op",
   "--out-dir",
   "--partial",
   "--spec",
@@ -94,13 +121,22 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 
 /** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
 function parseFlags(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false, standalone: false, force: false, partial: false };
+  const opts: CliOptions = {
+    dryRun: false,
+    standalone: false,
+    force: false,
+    partial: false,
+    listOperations: false,
+    ops: [],
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--standalone") opts.standalone = true;
     else if (a === "--force") opts.force = true;
     else if (a === "--partial") opts.partial = true;
+    else if (a === "--list-operations") opts.listOperations = true;
+    else if (a === "--op") opts.ops.push(takeValue(argv, ++i, "--op"));
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
@@ -108,6 +144,8 @@ function parseFlags(argv: readonly string[]): CliOptions {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
     } else if (a === "--from-connector") {
       opts.fromConnector = takeValue(argv, ++i, "--from-connector");
+    } else if (a === "--from-openapi") {
+      opts.fromOpenapi = takeValue(argv, ++i, "--from-openapi");
     } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
     else opts.name = a;
   }
@@ -156,6 +194,124 @@ function assertFlagCombination(opts: CliOptions): void {
     throw new Error(
       "--from-connector never writes files, with or without --dry-run — the two flags claim " +
         "the same thing twice. Drop --dry-run.",
+    );
+  }
+  // The gap in this group the --from-openapi group's comment claimed was closed. --force alone
+  // reports "only applies to --gateway-wiring. Add it, or drop --force." — and adding
+  // --gateway-wiring is refused four checks below, so following the first half of that advice
+  // never reaches a valid command. Wrong advice is worse than none.
+  if (opts.fromConnector !== undefined && opts.force) {
+    throw new Error(
+      "--force lets --gateway-wiring overwrite files it did not create, and --from-connector " +
+        "writes no files at all — adding --gateway-wiring to give --force something to apply " +
+        "to is refused too. Drop --force.",
+    );
+  }
+  // The --from-openapi group, checked ahead of each flag's own generic rule for exactly the
+  // reason the --from-connector group above is: this command prints a spec to stdout and writes
+  // nothing, so every flag that shapes a WRITE is dead here, and reporting "--license needs
+  // --standalone" would send the user to a flag that is equally dead. Grouped into one message
+  // rather than five checks because they all fail for one reason, and naming every dead flag at
+  // once beats three successive runs each rejecting the next one.
+  if (opts.fromOpenapi !== undefined) {
+    const dead = [
+      opts.outDir === undefined ? undefined : "--out-dir",
+      opts.standalone ? "--standalone" : undefined,
+      opts.license === undefined ? undefined : "--license",
+      opts.dryRun ? "--dry-run" : undefined,
+      opts.gatewayWiring === undefined ? undefined : "--gateway-wiring",
+      // --force and --partial are dead here for one more step than the rest: each is gated on a
+      // flag that is ITSELF refused alongside --from-openapi, so following the first line of
+      // "--force only applies to --gateway-wiring" never reaches a valid command.
+      opts.force ? "--force" : undefined,
+      opts.partial ? "--partial" : undefined,
+    ].filter((f): f is string => f !== undefined);
+    if (dead.length > 0) {
+      throw new Error(
+        `--from-openapi reads a document and prints a spec to stdout — it generates no package, ` +
+          `so ${dead.join(", ")} would be silently ignored. Drop ${dead.length === 1 ? "it" : "them"}, ` +
+          `then generate from the printed spec with --spec.`,
+      );
+    }
+  }
+  if (opts.fromOpenapi !== undefined && opts.fromConnector !== undefined) {
+    throw new Error(
+      "--from-openapi reads an OpenAPI document and --from-connector reads a connector " +
+        "directory; both print a spec, so passing them together means one would be discarded. " +
+        "Keep one.",
+    );
+  }
+  if (opts.fromOpenapi !== undefined && opts.specPath !== undefined) {
+    throw new Error(
+      "--from-openapi derives a spec from a document and --spec reads one from a file; passing " +
+        "both means one would be discarded. Keep one.",
+    );
+  }
+  if (opts.fromOpenapi !== undefined && opts.name !== undefined) {
+    throw new Error(
+      "--from-openapi takes the connector name from the document's info.title; a positional " +
+        "name is redundant and was probably a mistake — remove one.",
+    );
+  }
+  // The same trap the --force check above closes. --list-operations and --op only mean anything
+  // against an OpenAPI document, so on their own they say "Add --from-openapi <doc>" — which is
+  // wrong advice when a flag that REFUSES --from-openapi is already present. --spec and
+  // --from-connector each supply a spec of their own and are both refused alongside it, so
+  // following the first half of that advice never reaches a valid command. Checked ahead of the
+  // two rules below, which give the advice.
+  const documentOnly = [
+    opts.listOperations ? "--list-operations" : undefined,
+    opts.ops.length > 0 ? "--op" : undefined,
+  ].filter((f): f is string => f !== undefined);
+  const suppliesASpec =
+    opts.fromConnector !== undefined
+      ? "--from-connector"
+      : opts.specPath !== undefined
+        ? "--spec"
+        : undefined;
+  if (documentOnly.length > 0 && opts.fromOpenapi === undefined && suppliesASpec !== undefined) {
+    throw new Error(
+      `${documentOnly.join(" and ")} read an OpenAPI document, and ${suppliesASpec} supplies a ` +
+        `spec of its own — adding --from-openapi is refused alongside ${suppliesASpec}, since ` +
+        "both would produce a spec. Keep one.",
+    );
+  }
+  if (opts.listOperations && opts.fromOpenapi === undefined) {
+    throw new Error(
+      "--list-operations lists the operations of an OpenAPI document, and no document was " +
+        "named. Add --from-openapi <doc>.",
+    );
+  }
+  if (opts.ops.length > 0 && opts.fromOpenapi === undefined) {
+    throw new Error(
+      "--op selects an operation of an OpenAPI document by operationId, and no document was " +
+        "named. Add --from-openapi <doc>.",
+    );
+  }
+  if (opts.listOperations && opts.ops.length > 0) {
+    throw new Error(
+      "--list-operations prints what a document declares and --op assembles a spec from a " +
+        "selection of it; both read the same document, and only one of them can produce output, " +
+        "so passing both means one would be discarded. List first, then run again with --op.",
+    );
+  }
+  // The pinned answer to "what does a bare --from-openapi do", which stood provisionally as
+  // "pass --list-operations" only because assembling a spec was not yet wired.
+  //
+  // It refuses rather than mapping every operation, and the reason is not caution. A connector's
+  // tool set is a product decision the document does not state: a document describes an API,
+  // where a Nimbus connector exposes the handful of operations an agent should be able to call,
+  // and taking all of them would put every endpoint of the API into one connector. The mechanical
+  // half is just as decisive — src/openapi/spec.ts refuses the WHOLE spec when any selected
+  // operation refuses (an operation maps completely or not at all), so "everything" would mean a
+  // single unmappable operation, of a kind most real documents carry, yielding no spec and a wall
+  // of refusals about operations the author never wanted.
+  if (opts.fromOpenapi !== undefined && !opts.listOperations && opts.ops.length === 0) {
+    throw new Error(
+      "--from-openapi: no operation was selected, and which operations become tools is a choice " +
+        "this reader will not make for you — a document describes a whole API, where a connector " +
+        "exposes the few operations an agent should call. Run --list-operations to see the " +
+        "operationIds this document declares, then pass one or more --op <operationId>.",
     );
   }
   // A user who believes they set a license and did not is a worse outcome than an error.
@@ -301,6 +457,10 @@ Flags:
   --force                  allow --gateway-wiring to overwrite existing target files
   --from-connector <dir>   read an existing connector directory and print its spec
   --partial                with --from-connector, emit a DRAFT spec instead of a blocker report
+  --from-openapi <doc>     read an OpenAPI 3 document (JSON or YAML) and print a spec
+  --list-operations        with --from-openapi, print each operationId, method and path
+  --op <operationId>       with --from-openapi, select an operation to become a tool;
+                           repeatable, and one is required (the tool set is yours to choose)
   --dry-run                print what would be written, write nothing
   --version                print the version
   --help                   show this message
@@ -327,6 +487,38 @@ async function readSpecFile(specPath: string): Promise<unknown> {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(`--spec: ${specPath} is not valid JSON (${detail}).`);
+  }
+}
+
+/**
+ * `parseSpec` for a spec FILE, with one sentence about the published JSON Schema appended when
+ * it refuses.
+ *
+ * The schema is generated from `ConnectorSpecSchema` and cannot carry its refinements — JSON
+ * Schema has no way to express them — so a spec an editor calls valid can still be refused here.
+ * That limit is stated in the schema document's own `description`, in README's *Editor support*
+ * section and in ROADMAP, and all three require the reader to already be looking. This is where
+ * they are not: they are looking at a CLI that just refused a file their editor called clean, and
+ * nothing in `parseSpec`'s message mentions a schema at all.
+ *
+ * Appended HERE rather than inside `parseSpec`, on purpose. That message is one line per issue
+ * and `test/spec.test.ts` asserts the exact line count, so a sentence added there would either
+ * break the test or be excused by widening it. It also does not belong there: `parseSpec` is
+ * called by `--from-connector`, `--from-openapi` and the interactive prompts, none of which
+ * involve a file a user hand-edited against the schema.
+ */
+async function parseSpecFile(specPath: string): Promise<ConnectorSpec> {
+  const input = await readSpecFile(specPath);
+  try {
+    return parseSpec(input);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `${message}\n\nThe published JSON Schema checks STRUCTURE only — the cross-field rules, ` +
+        "reserved identifiers and style requirements above are refinements it cannot express, " +
+        "so an editor can call this file valid while this command refuses it. See README's " +
+        '"Editor support: the published JSON Schema, and what it cannot check".',
+    );
   }
 }
 
@@ -375,10 +567,213 @@ function warnIfUnformatted(outDir: string): void {
  */
 type WiringOutput = { readonly dir: string; readonly files: readonly GeneratedFile[] };
 
+/** The document text, with the one failure a user actually hits named by flag and by file. */
+async function readDocumentFile(docPath: string): Promise<LoadedDocument> {
+  let text: string;
+  try {
+    text = await Bun.file(docPath).text();
+  } catch {
+    throw new Error(
+      `--from-openapi: cannot read ${docPath}. Check the path exists and is readable.`,
+    );
+  }
+  return loadDocument(text);
+}
+
+/**
+ * `--from-openapi <doc> --list-operations`.
+ *
+ * One line per operation, so `--op` arguments can be copied straight off it — in the order the
+ * document declares them, which is why src/openapi/schema.ts's path item declares no method keys.
+ */
+function listDocumentOperations({ doc, source }: LoadedDocument, docPath: string): void {
+  const operations = listOperations(doc);
+  const width = Math.max(0, ...operations.map((o) => o.operationId.length));
+  for (const op of operations) {
+    console.log(`${op.operationId.padEnd(width)}  ${op.method.padEnd(6)} ${op.path}`);
+  }
+  console.error(`note: read ${operations.length} operation(s) from ${source} ${docPath}`);
+  // On stderr, so stdout stays a list of --op arguments that can be copied whole. Named rather
+  // than omitted: an operation the reader can see but not offer is one the user would otherwise
+  // hunt for in their own file, having been given no reason it is absent.
+  for (const skipped of listSkippedOperations(doc)) {
+    console.error(`note: skipped ${describeSkipped(skipped)} — ${skipped.detail}`);
+  }
+}
+
+/**
+ * One skipped operation, named the way both commands that mention it need.
+ *
+ * The `operationId` is included when there is one so that this listing and the refusal `--op`
+ * produces for the same operation describe one thing rather than two: without it, the listing
+ * says `head /health` and the refusal says `probeHealth`, and connecting them is the reader's
+ * problem. Method and path come first because an operation with no `operationId` has nothing
+ * else to be identified by.
+ */
+function describeSkipped(skipped: SkippedOperation): string {
+  const named = skipped.operationId === undefined ? "" : `, operationId: ${skipped.operationId}`;
+  return `${skipped.method} ${skipped.path} (${skipped.reason}${named})`;
+}
+
+/**
+ * `--op` arguments → the operations to map, or every reason one of them could not be selected.
+ *
+ * Three diagnoses, and keeping them apart is this function's entire job — each is a different
+ * thing for the user to do next:
+ *
+ * 1. **The document offers nothing selectable.** Checked first and reported once, as a fact about
+ *    the document rather than once per `--op`. `assembleSpec` would answer this case with
+ *    `no-operations`, whose message ends "run --list-operations and pass one or more --op" —
+ *    circular advice for a document whose listing prints nothing. The reason the set is empty is
+ *    in hand HERE (the reader reported it), so it is what gets printed.
+ * 2. **The named operation was skipped.** `head`/`options`/`trace` and a mis-cased method key are
+ *    reported by the reader and omitted from the selectable set rather than refusing the
+ *    document — refusing forty mappable operations over one `HEAD /health` would defeat
+ *    `--list-operations`. The hard refusal belongs here, at selection, and it must name the
+ *    method as unsupported: "no such operation" for one the user is reading in their own document
+ *    is a confidently wrong diagnosis.
+ * 3. **The document does not contain it.** Only then, and with the operationIds that are
+ *    available, because the likeliest cause is a typo or a stale listing.
+ *
+ * Every `--op` is checked before returning, so one run names every argument standing in the way —
+ * the same rule `mapOperation` and `assembleSpec` follow.
+ */
+function selectOperations(doc: OpenApiDocument, ids: readonly string[]): SelectedOperations {
+  const available = listOperations(doc);
+  const skipped = listSkippedOperations(doc);
+
+  if (available.length === 0) {
+    // ONE refusal about the document, not one per --op: repeating "no such operation" for each
+    // argument would describe the arguments, when the fact to report is that this document offers
+    // none. Every skipped operation is listed with its own reason — the first one's is not
+    // representative when a `head:` and a mis-cased `Post:` are both present.
+    const refusal: Refusal =
+      skipped.length === 0
+        ? {
+            kind: "no-operations",
+            detail:
+              "there is nothing for --op to select: this document declares no operation at " +
+              "all. Check that it is the document you meant.",
+          }
+        : {
+            kind: "no-selectable-operation",
+            detail:
+              "there is nothing for --op to select: every operation this document declares was " +
+              `skipped.\n${skipped.map((s) => `    ${describeSkipped(s)} — ${s.detail}`).join("\n")}`,
+          };
+    return { ok: false, refusals: [refusal] };
+  }
+
+  const byId = new Map(available.map((op) => [op.operationId, op]));
+  const skippedById = new Map(
+    skipped.flatMap((s) => (s.operationId === undefined ? [] : [[s.operationId, s] as const])),
+  );
+
+  const ops: Operation[] = [];
+  const refusals: Refusal[] = [];
+  for (const id of ids) {
+    const op = byId.get(id);
+    if (op !== undefined) {
+      ops.push(op);
+      continue;
+    }
+    const missing = skippedById.get(id);
+    if (missing !== undefined) {
+      refusals.push({
+        kind: missing.reason,
+        // The reason is the kind, so it is not repeated inside the sentence: what this adds is
+        // WHICH method key and path the id the user typed resolves to, since that is the line
+        // they have to go and change.
+        detail:
+          `--op ${id} names ${missing.method} ${missing.path}, which --list-operations reports ` +
+          `as skipped and does not offer — ${missing.detail}`,
+      });
+      continue;
+    }
+    refusals.push({
+      kind: "no-such-operation",
+      detail:
+        `--op ${id} names no operation in this document. It declares: ` +
+        `${available.map((o) => o.operationId).join(", ")}.`,
+    });
+  }
+  return refusals.length > 0 ? { ok: false, refusals } : { ok: true, ops };
+}
+
+type SelectedOperations =
+  | { ok: true; ops: readonly Operation[] }
+  | { ok: false; refusals: readonly Refusal[] };
+
+/**
+ * Every reason a document could not become a spec, printed rather than thrown.
+ *
+ * Same shape as `renderBlockers` and for the same reason: the top-level catcher formats a thrown
+ * Error as one prefixed line, which would mangle a multi-line report and repeat the program name.
+ * Each label names a construct — the vocabulary src/openapi/document.ts, src/openapi/operation.ts
+ * and src/openapi/spec.ts all refuse in.
+ */
+function renderOpenapiRefusals(docPath: string, refusals: readonly Refusal[]): string {
+  return (
+    `cannot read ${docPath} into a spec. What stopped it:\n\n` +
+    `${refusals.map((r) => `  ${r.kind}: ${r.detail}`).join("\n\n")}\n`
+  );
+}
+
+/**
+ * `--from-openapi <doc> --op <id>…`: the document and a selection of its operations as a spec.
+ *
+ * **The spec goes to stdout and everything else to stderr**, which is the reason this prints
+ * rather than writing a file: `--from-openapi doc.yaml --op listWidgets > widgets.spec.json`
+ * leaves a file that `--spec` reads directly, while the notes — each a `TODO:` recording
+ * something the document could not state, or something the spec language could not carry
+ * unchanged — stay on the terminal where the author will see them. A written file would have to
+ * choose between putting the notes in it (and breaking the JSON) and dropping them (and losing
+ * the record of what was assumed).
+ */
+function assembleDocumentSpec(loaded: LoadedDocument, docPath: string, ids: readonly string[]) {
+  const selected = selectOperations(loaded.doc, ids);
+  if (!selected.ok) return refuseDocument(docPath, selected.refusals);
+
+  const assembled = assembleSpec(loaded.doc, selected.ops);
+  if (!assembled.ok) return refuseDocument(docPath, assembled.refusals);
+
+  console.log(JSON.stringify(assembled.spec, null, 2));
+  console.error(
+    `note: assembled ${selected.ops.length} operation(s) from ${loaded.source} ${docPath}`,
+  );
+  for (const note of assembled.notes) console.error(`note: ${note}`);
+  // Not a note per placeholder: src/openapi/spec.ts marks every one of them in the spec itself,
+  // so the printed file is the list. This says the file is a draft, which the file cannot.
+  //
+  // "style" and "syncInterval" are named separately rather than folded into the sentence: they
+  // are placeholders too, but an enum and a positive integer cannot hold a "TODO:" marker, so a
+  // note claiming every placeholder is marked would be false for exactly those two.
+  console.error(
+    'note: every "TODO:" in the printed spec is a value the document could not state. "style" ' +
+      'and "syncInterval" carry a provisional value instead, neither being able to hold prose. ' +
+      "Review both before generating.",
+  );
+}
+
+/** Printed, not thrown, so the report keeps its shape; the throw is only how main exits 1. */
+function refuseDocument(docPath: string, refusals: readonly Refusal[]): never {
+  console.error(renderOpenapiRefusals(docPath, refusals));
+  throw new Error(`--from-openapi: ${docPath} could not be read into a spec.`);
+}
+
 export async function main(argv: readonly string[]): Promise<void> {
   if (await handleInfoFlags(argv)) return;
 
   const opts = parseCliArgs(argv);
+
+  if (opts.fromOpenapi !== undefined) {
+    // One read for both commands. assertFlagCombination has already established that exactly one
+    // of them was asked for, so this is a choice between two, not a fallthrough.
+    const loaded = await readDocumentFile(opts.fromOpenapi);
+    if (opts.listOperations) listDocumentOperations(loaded, opts.fromOpenapi);
+    else assembleDocumentSpec(loaded, opts.fromOpenapi, opts.ops);
+    return;
+  }
 
   if (opts.fromConnector !== undefined) {
     // Lazy: a static import would pull @babel/parser into the module graph for every command,
@@ -409,9 +804,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   }
 
   const spec =
-    opts.specPath !== undefined
-      ? parseSpec(await readSpecFile(opts.specPath))
-      : promptForSpec(opts.name);
+    opts.specPath !== undefined ? await parseSpecFile(opts.specPath) : promptForSpec(opts.name);
 
   const target = opts.standalone ? "standalone" : "monorepo";
   const outDir = resolveOutDir(opts, spec.name);

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PARTIAL_MARKER } from "../src/derive/from-connector.ts";
-import { parseSpec } from "../src/spec.ts";
+import { baseExpr } from "../src/emit/server/fetch-helper.ts";
+import { type ConnectorSpec, parseSpec } from "../src/spec.ts";
 
 const MINIMAL = {
   name: "newrelic",
@@ -255,7 +258,7 @@ describe("parseSpec", () => {
       ...MINIMAL,
       env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
     };
-    expect(() => parseSpec(bad)).toThrow(/env\.0\.local.*valid JS identifier/s);
+    expect(() => parseSpec(bad)).toThrow(/env\[0\]\.local.*valid JS identifier/s);
   });
 
   it("rejects an arg local that is not a valid JS identifier (F6)", () => {
@@ -304,6 +307,138 @@ describe("parseSpec", () => {
       const msg = (e as Error).message;
       expect(msg).toContain("per-page");
     }
+  });
+
+  it("points at the JSON path with bracketed indices, so an array position is distinguishable from a key", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    // ANCHORED, and the anchor is half the assertion. `/tools\[0\]\.args\.limit/` on its own
+    // matches ".tools[0].args.limit" just as happily — which is what formatIssuePath emits with
+    // its first-segment branch removed, and why that mutation left the whole suite green.
+    // `^ {2}` pins the two-space indent the line genuinely starts with, so a leading dot fails.
+    expect(() => parseSpec(bad)).toThrow(/^ {2}tools\[0\]\.args\.limit\.max: /m);
+  });
+
+  it("reports every issue, not just the first", () => {
+    // Two independent bad values in unrelated subtrees — an invalid env local and an invalid
+    // arg bound — so this can only pass if parseSpec keeps collecting after the first failure.
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    // Anchored for the same reason as the test above: an unanchored match cannot tell
+    // "env[0].local" from ".env[0].local".
+    expect(message).toMatch(/^ {2}env\[0\]\.local: /m);
+    expect(message).toMatch(/^ {2}tools\[0\]\.args\.limit\.max: /m);
+  });
+
+  it("names the root for a top-level issue rather than printing an empty path", () => {
+    // ConnectorSpecSchema's own .refine (not a per-field one) fires here — the schema's
+    // "exactly one env entry" rule on a rest-kit spec with zero env entries — so its issue has
+    // no path segments at all, not merely a short one.
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/\(root\)/);
+  });
+
+  it("includes the received value, so a reader sees what was rejected and not only where", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/\(received "ten"\)/);
+  });
+
+  it("says so in words when nothing is at the path, rather than printing a bare `undefined`", () => {
+    // A missing required key is the commonest failure in a hand-written spec, and it is the one
+    // value JSON.stringify cannot render: it returns `undefined` (the value, not the string), so
+    // the line used to end `(received undefined)` — a bare token where every other value appears
+    // as a JSON literal (`"ten"`, `null`, `42`).
+    const { description: _dropped, ...bad } = MINIMAL;
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(
+      /^ {2}description: .*\(no JSON value there — usually a missing key\)$/m,
+    );
+    expect(message).not.toContain("(received undefined)");
+  });
+
+  it("caps the received value, so a root-level issue does not print the whole spec back", () => {
+    // A root-level issue's path is EMPTY, so the value at it is the entire spec. An unrecognized
+    // top-level key — `$schema`, the one an author reaches for first — dumped all ~500 characters
+    // of this spec onto one line, and a real spec is larger still
+    // (fixtures/dependencytrack.spec.json is 3,169 characters once compacted).
+    const bad = { ...MINIMAL, $schema: "https://example.test/connector-spec.schema.json" };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/^ {2}\(root\): Unrecognized key: "\$schema" \(received \{/m);
+
+    const received = /\(received (.*)\)$/m.exec(message)?.[1];
+    // Exactly the cap plus one ellipsis. Asserting the LENGTH, not just the presence of the
+    // ellipsis, is what makes a change to the cap fail in EITHER direction: lower it and this is
+    // shorter, raise it past the ~500-character dump and nothing is truncated at all.
+    expect(received).toHaveLength(121);
+    expect(received?.endsWith("…")).toBe(true);
+    // And the cap is conditional, not a blanket slice — the short-value test above still sees
+    // `(received "ten")` whole.
+  });
+
+  it("keeps one line per issue, so a spec with several problems stays readable", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
+      tools: [
+        {
+          ...MINIMAL.tools[0],
+          args: {
+            limit: { type: "number", max: "ten" },
+            limit2: { type: "number", max: "twenty" },
+          },
+        },
+      ],
+    };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    const lines = message.split("\n");
+    // One header line ("Invalid connector spec:") plus exactly one line per issue — proves no
+    // issue's own text wraps onto a second physical line, which is what "readable at ten
+    // problems" actually requires.
+    expect(lines).toHaveLength(4);
+    // `toMatch` against a single line with `^` anchoring, not `toContain` — each of these is
+    // the first segment of its path, so the leading-dot suppression is exactly what an
+    // unanchored substring test cannot see.
+    expect(lines[1]).toMatch(/^ {2}env\[0\]\.local: /);
+    expect(lines[2]).toMatch(/^ {2}tools\[0\]\.args\.limit\.max: /);
+    expect(lines[3]).toMatch(/^ {2}tools\[0\]\.args\.limit2\.max: /);
   });
 
   it("rejects auth: bearer with prefix", () => {
@@ -1517,5 +1652,393 @@ describe("ToolSchema query parameters", () => {
   it("leaves a tool with no query untouched", () => {
     const spec = withQuery({ args: {} });
     expect(spec.tools[0]!.query).toBeUndefined();
+  });
+});
+
+describe("strings the emitter splices raw into generated source", () => {
+  // The payload that reproduced the hole: it closes renderFetchHelper's URL template literal,
+  // runs a call, and reopens the literal so `${path}` still lands inside one. The emitted file
+  // is valid TypeScript, Biome reformats it happily and `tsc --noEmit --strict` passes it —
+  // test/emit/server/fetch-helper.ts's "splices `base` raw" test holds that half.
+  const CLOSES_TEMPLATE = "https://api.zz.test/v1` + String(Date.now()) + `";
+  // A serviceLabel reaches a block comment in src/emit/wiring.ts, where these two characters
+  // are the ones that end the construct rather than a backtick.
+  const CLOSES_COMMENT = "Zz */ export const pwned = 1; /*";
+
+  const withBase = (base: string) => ({
+    ...MINIMAL,
+    fetchHelper: { ...MINIMAL.fetchHelper, base },
+  });
+
+  it("rejects a backtick in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase(CLOSES_TEMPLATE))).toThrow(/fetchHelper\.base.*backtick/s);
+  });
+
+  it("rejects a backtick in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "New `Relic`" })).toThrow(
+      /serviceLabel.*backtick/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase("https://api.zz.test/*/v1*/"))).toThrow(
+      /fetchHelper\.base.*block comment/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: CLOSES_COMMENT })).toThrow(
+      /serviceLabel.*block comment/s,
+    );
+  });
+
+  /*
+   * The `${` half of the same hole. This suite used to carry the opposite claim — that a `${`
+   * needs no rejection because it "produces an UNDEFINED IDENTIFIER the generated package's own
+   * tsc reports". That holds for a BARE IDENTIFIER and for nothing else: an interpolation whose
+   * expression is self-contained names nothing outside itself, so there is no identifier left to
+   * be undefined. Verified end to end on both fields before this suite was written — parseSpec
+   * accepted it, generate() spliced it, Biome only reformatted it, `tsc --noEmit --strict` passed
+   * it clean, and the IIFE was present in the emitted src/server.ts. In `serviceLabel` it lands in
+   * the fetch helper's error template, where it runs on every non-2xx response.
+   */
+  const SELF_CONTAINED_IIFE = '${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}';
+
+  it("rejects a self-contained interpolation in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase(`https://api.zz.test/v1${SELF_CONTAINED_IIFE}`))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
+  });
+
+  it("rejects a self-contained interpolation in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: `ZZ${SELF_CONTAINED_IIFE}` })).toThrow(
+      /serviceLabel.*interpolation/s,
+    );
+  });
+
+  // The two messages differ because the two FIELDS do, and an author who reads only the message
+  // has to be told which of the two rules they hit. Asserted rather than left to coverage: both
+  // arms execute either way, so nothing else fails if they are swapped.
+  it("tells a base author which single interpolation the field does take", () => {
+    expect(() => parseSpec(withBase("https://${host}/v1"))).toThrow(/\$\{env\.NAME\}/);
+  });
+
+  it("tells a serviceLabel author the field takes none at all", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "Zz ${host}" })).toThrow(
+      /takes no interpolation at all/,
+    );
+  });
+
+  // The bare-identifier form, refused HERE rather than left to the generated package's tsc.
+  // Relying on a different tool, run at a different time, on a different package to report an
+  // injection is what made the self-contained payload above reachable: the argument was about
+  // one shape and the field admitted every shape.
+  it("rejects a bare identifier interpolation in fetchHelper.base", () => {
+    expect(() => parseSpec(withBase("https://${host}/v1"))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
+  });
+
+  // serviceLabel resolves NOTHING: no emitter rewrites a reference in it, so the env form that
+  // `base` documents is just another live interpolation here.
+  it("rejects ${env.X} in serviceLabel, which no emitter resolves", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "Zz ${env.siteHost}" })).toThrow(
+      /serviceLabel.*interpolation/s,
+    );
+  });
+
+  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 22
+  // fixtures use it, three of them byte-locked — so the refinement above has to admit exactly
+  // that shape and refuse the rest. A tightening that folded it into the rejection would break
+  // the feature; it fails here, in milliseconds, instead of in diff:golden.
+  const withEnvBase = (base: string) => ({
+    ...MINIMAL,
+    env: [{ vars: ["ZZ_SITE"], local: "siteHost", bindings: ["h"], required: true }],
+    fetchHelper: { local: "nrGet", base, inlineHeaders: { Accept: "application/json" } },
+  });
+
+  it("still accepts ${env.X} in fetchHelper.base", () => {
+    expect(parseSpec(withEnvBase("https://${env.siteHost}/api")).fetchHelper.base).toBe(
+      "https://${env.siteHost}/api",
+    );
+  });
+
+  // The shape the fixtures actually use is a reference EMBEDDED in surrounding text, not a value
+  // that is one reference and nothing else — `${env.X}` alone is what `headerOption` matches with
+  // its anchored test, and reusing that anchoring here would reject every fixture base there is.
+  it("accepts ${env.X} embedded in surrounding text, and more than one of them", () => {
+    const base = "https://${env.siteHost}.zz.test/${env.apiVersion}/api";
+    expect(parseSpec(withEnvBase(base)).fetchHelper.base).toBe(base);
+  });
+
+  // A `${` that OPENS an env reference but never closes it as one. The removal pass leaves the
+  // opener behind, which is the point of scanning the residue rather than testing whether an
+  // env reference appears somewhere in the string.
+  it("rejects an interpolation that only begins like an env reference", () => {
+    expect(() => parseSpec(withBase("https://${env.siteHost${Date.now()}}/api"))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
+  });
+
+  // diff:golden proves this too, but only against an AGPL checkout and only as part of a full
+  // byte diff. This fails in milliseconds and names the fixture that stopped parsing.
+  it.each(["newrelic", "datadog", "grafana", "sentry"])(
+    "leaves the byte-locked %s fixture parseable",
+    (name) => {
+      const raw = readFileSync(
+        join(import.meta.dir, "..", "fixtures", `${name}.spec.json`),
+        "utf8",
+      );
+      expect(() => parseSpec(JSON.parse(raw))).not.toThrow();
+    },
+  );
+
+  /*
+   * What makes the `base` predicate a MIRROR of the emitter rather than a second opinion about
+   * which characters look dangerous. `resolveEnvRefs` (src/emit/server/fetch-helper.ts) is the
+   * authority on which references stop being interpolation; `baseExpr` is the exported function
+   * that runs it, so the two rules are held against each other through real emitter output here
+   * instead of by two copies of one regex agreeing with themselves.
+   *
+   * The stripper below is the emitter's OUTPUT shape — `${NAME()}`, what `resolveEnvRefs` writes
+   * for a reference it resolved — deliberately not the schema's input pattern. Removing it leaves
+   * exactly the interpolations the emitter did NOT resolve, which is the set the schema must
+   * refuse; so a `resolveEnvRefs` that stops resolving `${env.X}`, or starts resolving something
+   * else, fails this test rather than silently disagreeing with `src/spec.ts`.
+   *
+   * The one base it cannot judge is one that already reads `${NAME()}` before the emitter sees it
+   * — a live call the stripper cannot tell from a resolved reference. The schema refuses it (it is
+   * not an `env.` reference), which is the safe verdict; it is left out of the table below rather
+   * than asserted, because this test's model genuinely cannot see it.
+   */
+  const RESOLVED_CALL = /\$\{\w+\(\)\}/g;
+  const emitterLeavesLiveInterpolation = (base: string) =>
+    baseExpr({ fetchHelper: { base } } as unknown as ConnectorSpec)
+      .replaceAll(RESOLVED_CALL, "")
+      .includes("${");
+
+  it.each([
+    "https://api.zz.test/v1",
+    "https://${env.siteHost}/api",
+    "https://${env.siteHost}.zz.test/${env.apiVersion}/api",
+    `https://api.zz.test/v1${SELF_CONTAINED_IIFE}`,
+    "https://${host}/v1",
+    // A reference in the same DOTTED shape naming something other than `env` — the difference
+    // between mirroring `resolveEnvRefs` and merely resembling it.
+    "https://${cfg.host}/api",
+    "https://${env.}/api",
+    // The reference NEVER CLOSES as one: a rule that asked whether an env reference appears
+    // anywhere in the string, or that matched its name loosely, would accept this.
+    "https://${env.siteHost${Date.now()}}/api",
+  ])("accepts %j exactly when the emitter resolves every interpolation in it", (base) => {
+    let accepted = true;
+    try {
+      parseSpec(withEnvBase(base));
+    } catch {
+      accepted = false;
+    }
+    expect(accepted).toBe(!emitterLeavesLiveInterpolation(base));
+  });
+});
+
+/**
+ * The rest of the raw-splice carrier set, guarded field by field with a message that names the
+ * field. `test/raw-splice.test.ts` is what says this set is COMPLETE — it derives the carriers
+ * from the emitters — and these are what say each rejection reads usefully when it fires.
+ */
+describe("the raw-splice carriers the first version of the guard missed", () => {
+  const withEnv = (over: Record<string, unknown>) => ({
+    ...MINIMAL,
+    env: [
+      { vars: ["NEW_RELIC_API_KEY"], local: "apiKey", bindings: ["k"], required: true, ...over },
+    ],
+  });
+  const withTool = (over: Record<string, unknown>) => ({
+    ...MINIMAL,
+    tools: [{ ...MINIMAL.tools[0], ...over }],
+  });
+
+  // The CRITICAL. `wrapped()` splices prefix into a template literal, and renderBasic splices
+  // that template into the username ARGUMENT of encodeBasicAuthHeader — an expression position.
+  const IIFE = '${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}';
+
+  it("rejects a self-contained interpolation in env[].prefix, naming the field", () => {
+    expect(() => parseSpec(withEnv({ prefix: IIFE }))).toThrow(/env\[\]\.prefix.*interpolation/s);
+  });
+
+  it("rejects a self-contained interpolation in env[].suffix, naming the field", () => {
+    expect(() => parseSpec(withEnv({ suffix: IIFE }))).toThrow(/env\[\]\.suffix.*interpolation/s);
+  });
+
+  it("rejects a backtick in env[].prefix, which has no `return` in front of it in renderBasic", () => {
+    expect(() => parseSpec(withEnv({ prefix: "a` + evil() + `" }))).toThrow(
+      /env\[\]\.prefix.*backtick/s,
+    );
+  });
+
+  it("still accepts the affixes the byte-locked fixtures declare", () => {
+    // datadog writes prefix "api.", sentry suffix "/api/0", zendesk suffix "/token". Guarding
+    // these two fields is measured at zero cost, and this is where that is pinned.
+    expect(parseSpec(withEnv({ prefix: "api." })).env[0]!.prefix).toBe("api.");
+    expect(parseSpec(withEnv({ suffix: "/api/0" })).env[0]!.suffix).toBe("/api/0");
+  });
+
+  it("accepts an EMPTY affix, which is what --from-connector records for the unused side", () => {
+    // classifyPlainReturn (src/derive/server/env.ts) reads both from the template's cooked
+    // quasis unconditionally. A .min(1) here would reject a spec this repo's own deriver writes.
+    expect(parseSpec(withEnv({ prefix: "", suffix: "/token" })).env[0]!.prefix).toBe("");
+  });
+
+  it("rejects a block-comment terminator in tools[].name, which closes the wiring docstring", () => {
+    expect(() => parseSpec(withTool({ name: 'a*/;(globalThis as never).x="t";/*b_list' }))).toThrow(
+      /tools\[\]\.name.*block comment/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in tools[].path", () => {
+    expect(() => parseSpec(withTool({ path: "/v2/*/applications.json*/" }))).toThrow(
+      /tools\[\]\.path.*block comment/s,
+    );
+  });
+
+  it("leaves tools[].path's OWN ${…} to parsePathTemplate, which names the modes", () => {
+    // The path DSL is the one carrier whose interpolation is a documented feature, so the
+    // raw-splice guard supplies only the terminator half here — and the arg reference below
+    // still parses rather than being caught by a second, vaguer rule.
+    expect(
+      parseSpec(withTool({ path: "/v2/${arg.id|enc}", args: { id: { type: "string" } } })).tools[0]!
+        .path,
+    ).toBe("/v2/${arg.id|enc}");
+  });
+
+  // I1: not a terminator but an ESCAPE, and the only sequence in the set that changes the
+  // meaning of what comes AFTER it rather than ending what came before.
+  it("rejects a trailing backslash in fetchHelper.base, which un-interpolates ${path}", () => {
+    // Reproduced: `https://api.zz.test/v1\` emitted `` `https://api.zz.test/v1\${path}` ``,
+    // whose VALUE is the literal text "https://api.zz.test/v1${path}" — verified by evaluating
+    // the emitted template. The connector then requests that URL verbatim.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        fetchHelper: { ...MINIMAL.fetchHelper, base: "https://a.test/v1\\" },
+      }),
+    ).toThrow(/fetchHelper\.base.*backslash/s);
+  });
+
+  it("rejects a backslash in serviceLabel too, per the field-not-site rule", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: String.raw`New\Relic` })).toThrow(
+      /serviceLabel.*backslash/s,
+    );
+  });
+
+  it("rejects two vars in one entry sharing a binding, which emits a duplicate const", () => {
+    // Found while auditing the carriers, not in the review: `readLines` emits one
+    // `const <binding> = …` per var into a SINGLE accessor body, so ["t", "t"] emitted
+    // `const t = process.env["A_K"]…; const t = process.env["A_S"]…;` in one block.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        env: [
+          {
+            vars: ["A_K", "A_S"],
+            local: "h",
+            bindings: ["t", "t"],
+            auth: "headers",
+            headerNames: ["X-A", "X-B"],
+          },
+        ],
+        fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", headers: "h" },
+      }),
+    ).toThrow(/repeats a name/);
+  });
+
+  it("lets two DIFFERENT env entries share a binding, since each is its own function scope", () => {
+    // Twelve fixtures write bindings: ["t"], several of them alongside another entry.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        env: [
+          { vars: ["A_ONE"], local: "one", bindings: ["t"], required: true },
+          { vars: ["A_TWO"], local: "two", bindings: ["t"], required: true },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a non-identifier env binding, which is emitted as a const NAME", () => {
+    expect(() => parseSpec(withEnv({ bindings: ["k = evil(); const j"] }))).toThrow(/identifier/);
+  });
+
+  it("rejects a non-identifier fetchHelper.headers, which is emitted as a CALL", () => {
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        fetchHelper: {
+          local: "nrGet",
+          base: "https://api.newrelic.com",
+          headers: "((): Record<string, string> => { globalThis.x = 1; return h(); })",
+        },
+      }),
+    ).toThrow(/identifier/);
+  });
+
+  it("rejects a non-identifier rows, which is emitted as a const NAME three times", () => {
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        style: "read-only-kit",
+        fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", headers: "apiKey" },
+        tools: [
+          {
+            name: "nr_search",
+            description: "S.",
+            impl: "search",
+            path: "/v2/x",
+            rows: "data-items",
+            filter: { export: "nrFilter", fields: ["id"] },
+          },
+        ],
+      }),
+    ).toThrow(/identifier/);
+  });
+});
+
+/**
+ * I6, the ledger's own deferred follow-up: an inline header value that MEANS to reference the
+ * credential and is emitted as literal characters instead.
+ */
+describe("an inline header value that mixes text with an env reference", () => {
+  const withHeaders = (inlineHeaders: Record<string, string>) => ({
+    ...MINIMAL,
+    fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", inlineHeaders },
+  });
+
+  it("rejects it, naming the header and quoting the value", () => {
+    // Emitted `Authorization: "Bearer ${env.apiKey}"` before this rule: the literal characters
+    // went on the wire and the credential was never read. It compiled, linted and typechecked.
+    expect(() => parseSpec(withHeaders({ Authorization: "Bearer ${env.apiKey}" }))).toThrow(
+      /Authorization.*Bearer/s,
+    );
+  });
+
+  it("keeps the anchored form, which is what the only fixture using inlineHeaders writes", () => {
+    // fixtures/newrelic.spec.json — byte-locked at 6/6 — writes exactly this.
+    const spec = parseSpec(
+      withHeaders({ "X-Api-Key": "${env.apiKey}", Accept: "application/json" }),
+    );
+    expect(spec.fetchHelper.inlineHeaders).toEqual({
+      "X-Api-Key": "${env.apiKey}",
+      Accept: "application/json",
+    });
+  });
+
+  it("leaves a plain header with no interpolation alone", () => {
+    expect(
+      parseSpec(withHeaders({ Accept: "application/json" })).fetchHelper.inlineHeaders,
+    ).toEqual({ Accept: "application/json" });
+  });
+
+  it("rejects an interpolation that is not an env reference at all", () => {
+    expect(() => parseSpec(withHeaders({ "X-Api-Key": "${apiKey()}" }))).toThrow(/X-Api-Key/);
   });
 });
