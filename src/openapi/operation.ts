@@ -49,10 +49,13 @@
  *
  * **On `$ref` siblings.** `resolveRefs` replaces a referenced node whole, dropping any
  * `summary`/`description` sibling, and its docstring calls that acceptable *because no mapper
- * reads them*. That still holds: the fields read from a schema node here are `type`, `format`,
- * `enum`, `minimum`, `maximum`, `default`, `properties` and `required` — the structural ones a
- * flat body cannot be read without — and no documentation field of any node, at any depth.
+ * reads them*. That still holds, and the checkable form of the claim is: every schema-node field
+ * this file reads is DECLARED in `OpenApiSchemaNodeSchema`, and that schema declares no
+ * documentation field — no `description`, no `summary`, no `title` — at any depth. Reading the
+ * one schema is therefore enough to re-verify the condition, which a list restated here would
+ * only invite going stale.
  */
+import { canOmitQueryValue } from "../spec.ts";
 import { RESERVED_IDENTIFIERS } from "../validate.ts";
 import type { Operation } from "./document.ts";
 import {
@@ -176,16 +179,31 @@ function slugifyArgName(documentName: string): string | undefined {
  * ------------------------------------------------------------------------------------------ */
 
 /**
- * The template variables in a path, in the order they appear, refusing every form that is not
- * OpenAPI's `{name}`.
+ * The template variables in a path, in the order they appear — or `undefined` when the path could
+ * not be read at all, refusing every form that is not OpenAPI's `{name}`.
  *
  * Every check here refuses rather than passing through, and the reason is the same one
  * `src/spec.ts`'s `FOREIGN_PLACEHOLDER` gives: a placeholder this generator does not interpolate
  * is emitted as literal path characters, and the connector then requests a URL containing
  * `{widgetId}`. That compiles, typechecks and passes every gate. Nothing fails until the
  * connector is pointed at a real API.
+ *
+ * **`undefined` is not the same as `[]`, and conflating them stated something false.** An
+ * unreadable path yields no variables, and `checkPathParameterAgreement` reading that as "the
+ * template names nothing" then told the user that every correctly declared `in: "path"` parameter
+ * was one "the path template never names". `"widgets/{widgetId}"` reproduced it exactly:
+ * `["path-not-absolute", "unused-path-parameter"]`, the second of which invites deleting a
+ * parameter that is right. So an unreadable path returns `undefined` and the caller skips the
+ * agreement check.
+ *
+ * The signal is "did THIS function refuse", measured off the shared sink rather than a flag set
+ * per branch. That is deliberate: a refusal added here later cannot forget to opt in, which a
+ * per-branch `return undefined` could — and did, in the partial-list branches below, where the
+ * first version returned the names it had managed to collect.
  */
-function readPathVariables(path: string, c: Collected): string[] {
+function readPathVariables(path: string, c: Collected): string[] | undefined {
+  const before = c.refusals.length;
+
   if (!path.startsWith("/")) {
     refuse(
       c,
@@ -193,7 +211,7 @@ function readPathVariables(path: string, c: Collected): string[] {
       `a path must begin with "/" — the fetch helper joins it onto the base URL with no ` +
         `separator, so "${path}" would fuse onto the host.`,
     );
-    return [];
+    return undefined;
   }
   if (path.includes("${")) {
     refuse(
@@ -202,7 +220,7 @@ function readPathVariables(path: string, c: Collected): string[] {
       `this path already contains "\${", which is this generator's own placeholder syntax, not ` +
         "OpenAPI's. It cannot be told apart from a template this mapper wrote.",
     );
-    return [];
+    return undefined;
   }
   if (EXPRESS_PLACEHOLDER.test(path)) {
     refuse(
@@ -211,7 +229,7 @@ function readPathVariables(path: string, c: Collected): string[] {
       "this path uses Express-style `/:name` segments. OpenAPI templating is `{name}`, and a " +
         "`:name` segment would be sent as literal path characters.",
     );
-    return [];
+    return undefined;
   }
 
   const names: string[] = [];
@@ -232,7 +250,7 @@ function readPathVariables(path: string, c: Collected): string[] {
   if (residue.includes("{") || residue.includes("}")) {
     refuse(c, "path-templating", `"${path}" has an unbalanced brace outside any {name}.`);
   }
-  return names;
+  return c.refusals.length === before ? names : undefined;
 }
 
 // `/widgets/{widget-id}` -> `/widgets/${arg.widgetId|enc}`.
@@ -249,6 +267,14 @@ function readPathVariables(path: string, c: Collected): string[] {
 // encoding one that needed it produces a malformed URL for any id holding a slash or a space.
 //
 // Only ever called once an operation has no refusals, so every variable has a slug by here.
+//
+// `slugFor` is built with `new Map(parameters.map(p => [p.documentName, p.slug]))`, which assumes
+// document names are UNIQUE across the operation as well as present — two parameters sharing one
+// would silently keep the last. That is unreachable today only INCIDENTALLY: one document name
+// slugifies to one slug, so a repeat is already an `argument-name-collision`. The assumption is
+// therefore load-bearing on that refusal, not on anything local. Relaxing the collision rule (see
+// claimArgument, which records that the refusal is a choice rather than a necessity) means giving
+// this map a real key — the `(name, in)` pair — in the same change.
 function renderSpecPath(path: string, slugFor: ReadonlyMap<string, string>): string {
   return path.replaceAll(
     PATH_VARIABLE,
@@ -415,16 +441,18 @@ function mapParameters(merged: readonly unknown[], c: Collected): MappedParamete
 /**
  * One `query` entry per query parameter.
  *
- * `omitWhen` is set exactly when `ToolSchema`'s own `canOmitQueryValue` would demand it — the
- * value can genuinely be `undefined` — and left off otherwise, where the schema rejects it as a
- * guard that can never fire. `"absent"` rather than `"empty"`: the document says nothing about
- * empty strings, and `"empty"` is the strictly stronger claim (it also drops `""`), so choosing
- * it would be asserting something the document does not.
+ * `omitWhen` is set exactly when `canOmitQueryValue` says the value can genuinely be `undefined`,
+ * and left off otherwise, where `ToolSchema` rejects it as a guard that can never fire. That
+ * predicate is IMPORTED from `src/spec.ts` rather than restated: the schema uses the same function
+ * to reject both a missing guard and a dead one, so a local copy here could drift into emitting a
+ * spec those refines reject — or, worse, agree with them today and stop agreeing silently.
+ *
+ * `"absent"` rather than `"empty"`: the document says nothing about empty strings, and `"empty"`
+ * is the strictly stronger claim (it drops `""` as well), so choosing it would assert something
+ * the document does not.
  */
 function queryEntry(p: MappedParameter): Record<string, unknown> {
-  const canOmit =
-    p.arg.optional === true && p.arg.default === undefined && p.arg.type !== "boolean";
-  return canOmit
+  return canOmitQueryValue(p.arg)
     ? { name: p.documentName, arg: p.slug, omitWhen: "absent" }
     : { name: p.documentName, arg: p.slug };
 }
@@ -508,7 +536,51 @@ function mapScalarSchema(
         "the document; the spec language has no enum, so the generated schema accepts any value.",
     );
   }
+  applyUncarried(schema, where, c);
   return arg;
+}
+
+/**
+ * Constraint keywords `ArgSchema` has no field for, reported rather than dropped in silence.
+ *
+ * `format` and `enum` above are the same class and already get a note each; these were the ones
+ * that did not, which made the rule "a constraint the generated schema will not enforce is
+ * reported" true of two keywords and false of seven. One sweep instead of seven branches, so a
+ * keyword added to the list cannot be added without its note.
+ *
+ * `readOnly` earns a second, sharper note. The others make the generated schema LOOSER than the
+ * document — it accepts values the API will reject, which the caller finds out from the API.
+ * `readOnly: true` on a request-body property is different in kind: the API rejects the field
+ * itself on a write, so the tool is offering an argument that cannot be sent at all.
+ */
+const UNCARRIED_KEYWORDS = [
+  "pattern",
+  "minLength",
+  "maxLength",
+  "multipleOf",
+  "nullable",
+  "readOnly",
+  "writeOnly",
+] as const;
+
+function applyUncarried(schema: OpenApiSchemaNode, where: string, c: Collected): void {
+  const node = schema as Record<string, unknown>;
+  const present = UNCARRIED_KEYWORDS.filter((k) => node[k] !== undefined);
+  if (present.length > 0) {
+    note(
+      c,
+      `TODO: ${where} declares ${present.join(", ")}, which the spec language does not carry — ` +
+        "the generated schema does not enforce them.",
+    );
+  }
+  if (schema.readOnly === true) {
+    note(
+      c,
+      `TODO: ${where} is readOnly in the document, so the API rejects it on a write. The ` +
+        "generated tool offers it as an argument a caller can set — remove it, or the request " +
+        "fails whenever it is used.",
+    );
+  }
 }
 
 /**
@@ -568,16 +640,60 @@ function applyDefault(
   return true;
 }
 
+/** One end of a numeric range: the inclusive bound to emit, and whether the document meant `>`. */
+type Bound = { value: number | undefined; exclusive: boolean };
+
 /**
- * `minimum`/`maximum` onto a numeric argument.
+ * One bound as `ArgSchema` can express it, which is INCLUSIVE and only inclusive.
+ *
+ * Both OpenAPI dialects reach here, because `assertSupportedVersion` accepts any 3.x. OpenAPI
+ * **3.0** spells `> 5` as `minimum: 5` with the boolean `exclusiveMinimum: true`; **3.1** (JSON
+ * Schema 2020-12) spells it as the number `exclusiveMinimum: 5`. Reading only `minimum` — which
+ * is what this did first — turned `> 5` into `>= 5` with nothing said, so the generated tool
+ * accepted a value the document says the API rejects. That is a spec whose constraint
+ * CONTRADICTS its source, which is worse than one that merely fails to carry it.
+ *
+ * Where both a numeric `exclusiveMinimum` and a `minimum` are present, every keyword in a schema
+ * must hold, so the tighter of the two is the effective bound. That is JSON Schema's own
+ * semantics, not an approximation invented here — which is why `tighter` is passed in
+ * (`Math.max` for a lower bound, `Math.min` for an upper one) rather than assumed.
+ */
+function inclusiveBound(
+  inclusive: number | undefined,
+  exclusive: unknown,
+  tighter: (a: number, b: number) => number,
+): Bound {
+  if (typeof exclusive === "number") {
+    return {
+      value: inclusive === undefined ? exclusive : tighter(inclusive, exclusive),
+      exclusive: true,
+    };
+  }
+  return { value: inclusive, exclusive: exclusive === true };
+}
+
+/**
+ * `minimum`/`maximum` onto a numeric argument, widened from exclusive where necessary.
  *
  * Carried only for a number, because `ArgSchema`'s `min`/`max` emit `z.string().min(n)` on a
  * string — a LENGTH constraint, where OpenAPI's `minimum` is a numeric bound — and are rejected
  * outright on a boolean by the schema's own refine. Silently turning a value bound into a length
  * bound would generate a schema that rejects valid input, so the pair is dropped with a note.
+ *
+ * An exclusive bound is mapped and NOTED rather than refused, matching how `enum` and `format`
+ * are handled two functions up: all three make the generated schema looser than the document, and
+ * refusing an operation over an off-by-one bound would cost more reach than the looseness costs
+ * correctness — `exclusiveMinimum: 0` for "a positive number" is ordinary in real documents. The
+ * note is what stops it being silence. Widening to `>= 6` for an integer would be exact, and is
+ * deliberately not done: it is a bound the document does not state, and it would be right for
+ * `integer` and wrong for `number`.
  */
 function applyBounds(schema: OpenApiSchemaNode, arg: ArgDecl, where: string, c: Collected): void {
-  if (schema.minimum === undefined && schema.maximum === undefined) return;
+  const min = inclusiveBound(schema.minimum, schema.exclusiveMinimum, Math.max);
+  const max = inclusiveBound(schema.maximum, schema.exclusiveMaximum, Math.min);
+  if (min.value === undefined && max.value === undefined && !min.exclusive && !max.exclusive) {
+    return;
+  }
   if (arg.type !== "number") {
     note(
       c,
@@ -587,8 +703,19 @@ function applyBounds(schema: OpenApiSchemaNode, arg: ArgDecl, where: string, c: 
     );
     return;
   }
-  if (schema.minimum !== undefined) arg.min = schema.minimum;
-  if (schema.maximum !== undefined) arg.max = schema.maximum;
+  if (min.value !== undefined) arg.min = min.value;
+  if (max.value !== undefined) arg.max = max.value;
+  if (min.exclusive || max.exclusive) {
+    const which = [min.exclusive ? "exclusiveMinimum" : "", max.exclusive ? "exclusiveMaximum" : ""]
+      .filter((s) => s !== "")
+      .join(" and ");
+    note(
+      c,
+      `TODO: ${where} declares ${which}, and the spec language's "min"/"max" are INCLUSIVE — the ` +
+        "generated schema accepts the boundary value the document excludes. Move the bound by " +
+        "one, or drop it.",
+    );
+  }
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -753,6 +880,16 @@ function mapBodyProperties(rootSchema: unknown, c: Collected): MappedProperty[] 
  * an argument, and the tool would then send one value where the API expects two. A slug landing
  * on a `RESERVED_IDENTIFIERS` entry produces a spec that fails this project's own `validateSpec`,
  * which is strictly worse than a refusal naming the parameter.
+ *
+ * **The collision refusal is a CHOICE, and the conservative one.** It also catches a shape that is
+ * legal OpenAPI — the same name once `in: "path"` and once `in: "query"` — and that case could be
+ * disambiguated instead, on the same argument that justifies slugifying at all: the argument name
+ * is spec-internal, the `query` entry carries the document's own spelling, and the path template
+ * carries the position, so a suffixed second name would emit a byte-identical request plus a
+ * `TODO:` note. It is refused today because a refusal that names both sources is easier to act on
+ * than a renamed argument nobody asked for. Two things move with that decision if it is ever
+ * revisited: `renderSpecPath`'s `slugFor` map is keyed by document name and would need the
+ * `(name, in)` pair instead, and the suffixing rule would itself have to stay injective.
  */
 function claimArgument(
   args: Record<string, ArgDecl>,
@@ -793,9 +930,14 @@ function claimArgument(
  * prevent — and an `in: "path"` parameter the template never mentions would become an argument
  * the generated tool declares, prompts a caller for, and never sends anywhere.
  *
- * `declared` comes from the MERGED list rather than from the successfully mapped parameters, so a
- * path parameter that was already refused for some other reason does not also earn an
- * `undeclared-path-parameter` — one cause, one refusal.
+ * **One cause, one refusal, in BOTH directions** — the discipline this function's first version
+ * claimed while applying it only one way:
+ *
+ * - `declared` comes from the MERGED list rather than from the successfully mapped parameters, so
+ *   a path parameter already refused for some other reason does not also earn an
+ *   `undeclared-path-parameter`;
+ * - and the caller does not run this at all when `readPathVariables` returned `undefined`, so a
+ *   path that could not be READ does not make every parameter under it look unused.
  */
 function checkPathParameterAgreement(
   variables: readonly string[],
@@ -851,7 +993,10 @@ export function mapOperation(op: Operation, _doc: OpenApiDocument): MappedOperat
   const merged = mergeParameters(op.pathParameters, readOwnParameters(detail.data.parameters, c));
   const parameters = mapParameters(merged, c);
   const properties = mapBody(detail.data.requestBody, op.method, c);
-  checkPathParameterAgreement(variables, merged, c);
+  // Skipped when the path could not be read: the agreement check compares against the set of
+  // variables the template names, and an unreadable template has no such set — only an absence
+  // that would be reported as "the template never names it" about parameters that are correct.
+  if (variables !== undefined) checkPathParameterAgreement(variables, merged, c);
 
   const args: Record<string, ArgDecl> = {};
   const owners = new Map<string, string>();

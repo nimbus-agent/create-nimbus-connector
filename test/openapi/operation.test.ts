@@ -814,6 +814,25 @@ describe("refusals", () => {
     ]);
   });
 
+  it("says nothing about the path parameters of a path it could not read", () => {
+    // An unreadable template names no variables, and reading that absence as "the template names
+    // nothing" told the user that a correctly declared parameter was one "the path template never
+    // names" — advice that deletes something right. Each case below declares `widgetId` properly.
+    const declared = [{ name: "widgetId", in: "path", required: true, schema: { type: "string" } }];
+    const cases: Record<string, string> = {
+      "widgets/{widgetId}": "path-not-absolute",
+      "/widgets/{+widgetId}": "path-templating",
+      "/widgets/:widgetId": "path-templating",
+      "/widgets/${arg.widgetId}": "path-templating",
+      "/widgets/{widgetId": "path-templating",
+    };
+    for (const [path, kind] of Object.entries(cases)) {
+      const refusals = mustRefuse(onePath(path, "get", { parameters: declared }));
+      expect(kindsOf(refusals)).toEqual([kind]);
+      expect(kindsOf(refusals)).not.toContain("unused-path-parameter");
+    }
+  });
+
   it("refuses an operation whose raw value is not an object", () => {
     // listOperations can never produce this — it parses each operation with
     // OpenApiOperationSchema first — but `Operation` is an exported type, so a hand-built one is
@@ -833,23 +852,27 @@ describe("refusals", () => {
 });
 
 describe("reporting", () => {
-  it("reports every refusal, not the first", () => {
-    const refusals = mustRefuse(
-      onePath("/widgets", "post", {
-        parameters: [
-          { name: "X-Request-Id", in: "header", schema: { type: "string" } },
-          { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
-        ],
-        requestBody: {
-          content: {
-            "application/x-www-form-urlencoded": {
-              schema: { properties: { note: { type: "string" } } },
-            },
-          },
+  /** One operation with three independent problems, one per mapping stage. */
+  const THREE_PROBLEMS = onePath("/widgets", "post", {
+    parameters: [
+      { name: "X-Request-Id", in: "header", schema: { type: "string" } },
+      { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
+    ],
+    requestBody: {
+      content: {
+        "application/x-www-form-urlencoded": {
+          schema: { properties: { note: { type: "string" } } },
         },
-      }),
-    );
-    expect(kindsOf(refusals)).toEqual(["parameter-location", "schema-type", "media-type"]);
+      },
+    },
+  });
+
+  it("reports every refusal, not the first", () => {
+    expect(kindsOf(mustRefuse(THREE_PROBLEMS))).toEqual([
+      "parameter-location",
+      "schema-type",
+      "media-type",
+    ]);
   });
 
   it("returns no tool at all when anything is refused — a partial map is never returned", () => {
@@ -866,11 +889,12 @@ describe("reporting", () => {
   });
 
   it("names the operation in every refusal detail", () => {
-    const refusals = mustRefuse(
-      onePath("/widgets", "post", {
-        parameters: [{ name: "X-Request-Id", in: "header", schema: { type: "string" } }],
-      }),
-    );
+    // Pointed at the three-refusal document deliberately. Against a one-refusal document the loop
+    // body runs once, so the test would read as asserting a property of every refusal while
+    // asserting it of one — the same "passes without checking what it says it checks" shape this
+    // file is otherwise built against.
+    const refusals = mustRefuse(THREE_PROBLEMS);
+    expect(refusals).toHaveLength(3);
     for (const refusal of refusals) expect(refusal.detail).toContain("POST /widgets");
   });
 });
@@ -1014,6 +1038,99 @@ describe("notes", () => {
     });
     expect(notesFor(paths)).toContain("org");
     expect(argsOf(mustMap(paths))).toEqual({ org: { type: "string" } });
+  });
+
+  it("does not read an exclusive bound as an inclusive one in silence", () => {
+    // OpenAPI 3.0: `minimum` + the BOOLEAN exclusiveMinimum. The document says > 5; the spec
+    // language's "min" says >= 5, so the generated tool would accept a 5 the API rejects.
+    const three = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: { type: "integer", minimum: 5, exclusiveMinimum: true },
+        },
+      ],
+    });
+    expect(argsOf(mustMap(three))).toEqual({
+      count: { type: "number", optional: true, min: 5, int: true },
+    });
+    expect(notesFor(three)).toContain("exclusiveMinimum");
+  });
+
+  it("reads OpenAPI 3.1's numeric exclusive bounds, which are a different keyword shape", () => {
+    // 3.1 spells `> 5` as the NUMBER exclusiveMinimum: 5, with no `minimum` at all —
+    // assertSupportedVersion accepts any 3.x, so both dialects reach the mapper.
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: { type: "number", exclusiveMinimum: 5, exclusiveMaximum: 20 },
+        },
+      ],
+    });
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, min: 5, max: 20 },
+    });
+    const notes = notesFor(paths);
+    expect(notes).toContain("exclusiveMinimum");
+    expect(notes).toContain("exclusiveMaximum");
+  });
+
+  it("takes the tighter of a numeric exclusive bound and an inclusive one, per JSON Schema", () => {
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: {
+            type: "integer",
+            minimum: 3,
+            exclusiveMinimum: 5,
+            maximum: 90,
+            exclusiveMaximum: 40,
+          },
+        },
+      ],
+    });
+    // Every keyword in a schema must hold, so the effective range is (5, 40).
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, min: 5, max: 40, int: true },
+    });
+  });
+
+  it("records the constraint keywords the spec language cannot carry", () => {
+    const notes = notesFor(
+      onePath("/widgets", "get", {
+        parameters: [
+          {
+            name: "slug",
+            in: "query",
+            schema: { type: "string", pattern: "^[a-z]+$", minLength: 2, maxLength: 40 },
+          },
+        ],
+      }),
+    );
+    for (const keyword of ["pattern", "minLength", "maxLength"]) {
+      expect(notes).toContain(keyword);
+    }
+  });
+
+  it("says outright that a readOnly body property cannot be sent", () => {
+    const notes = notesFor(
+      onePath("/widgets", "post", {
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: { properties: { id: { type: "string", readOnly: true } } },
+            },
+          },
+        },
+      }),
+    );
+    expect(notes).toContain("readOnly");
+    expect(notes).toContain("rejects it on a write");
   });
 
   it("records minimum/maximum dropped from a non-numeric argument", () => {

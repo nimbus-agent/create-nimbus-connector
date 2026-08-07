@@ -313,9 +313,24 @@ export const SearchFilterSchema = z
  * missing guard — `searchParams.set` receives a value that can be `undefined`, which is
  * `TS2345` for a string arg (the wrapped-in-`String()` cases compile, but send the literal
  * query value `"undefined"` on the wire, since `String(undefined) === "undefined"`).
+ *
+ * **Exported for a third consumer**, on the same reasoning `parsePathTemplate` and
+ * `resolveKeyedShape` are: `src/openapi/operation.ts` decides whether a query parameter it maps
+ * gets an `omitWhen`, and it must reach exactly this answer or emit a spec these very refines
+ * reject. A private copy there would be a restatement that can drift, and the direction that
+ * drifts silently is the one where the copy is too permissive.
+ *
+ * The parameter is structural rather than `z.infer<typeof ArgSchema>` so a caller holding a
+ * partially-built argument can ask. `optional` is compared to `true` rather than used for its
+ * truthiness, which is identical for the schema's own output (where `.default(false)` makes it a
+ * boolean) and correct for a caller whose field is absent.
  */
-function canOmitQueryValue(arg: z.infer<typeof ArgSchema>): boolean {
-  return arg.optional && arg.default === undefined && arg.type !== "boolean";
+export function canOmitQueryValue(arg: {
+  readonly optional?: boolean;
+  readonly default?: string | number | boolean;
+  readonly type: "string" | "number" | "boolean";
+}): boolean {
+  return arg.optional === true && arg.default === undefined && arg.type !== "boolean";
 }
 
 /**

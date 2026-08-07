@@ -112,8 +112,9 @@ export const OpenApiOperationDetailSchema = z.looseObject({
  *
  * `in` is a plain string rather than an enum: `header` and `cookie` are valid OpenAPI that this
  * generator cannot express, and a `z.enum` here would report them as a shape error rather than
- * letting the mapper refuse `parameter-location` and say why. `content` is modelled only so the
- * content-encoded form can be named — it is never read.
+ * letting the mapper refuse `parameter-location` and say why. `content` is modelled so that its
+ * PRESENCE can be tested: a parameter with `content` and no `schema` is content-encoded, which is
+ * a different refusal message from one that declares neither, and the value itself is never read.
  */
 export const OpenApiParameterSchema = z.looseObject({
   name: z.string().min(1),
@@ -131,6 +132,17 @@ export const OpenApiParameterSchema = z.looseObject({
  * of a named refusal. `minimum`/`maximum` are the exception: they have no valid non-numeric form,
  * so a non-number there is genuinely a malformed node.
  *
+ * `exclusiveMinimum`/`exclusiveMaximum` must stay `unknown` because the two dialects disagree
+ * about their TYPE, and `assertSupportedVersion` accepts both: OpenAPI 3.0 spells `> 5` as
+ * `minimum: 5` plus the BOOLEAN `exclusiveMinimum: true`, while 3.1 (JSON Schema 2020-12) spells
+ * it as the NUMBER `exclusiveMinimum: 5`. Declaring either type would report the other dialect's
+ * perfectly valid document as a malformed node.
+ *
+ * The last group is read only for its PRESENCE, so that a constraint the spec language cannot
+ * carry is reported rather than dropped in silence — `applyUncarried` in
+ * `src/openapi/operation.ts` names them. `readOnly`'s value is read as well, because
+ * `readOnly: true` is the one whose consequence is a request the API will reject.
+ *
  * Property values are `unknown` rather than a recursive `z.lazy` reference: the mapper parses
  * each one with this same schema when it descends, which keeps the recursion in code that can
  * refuse by name at each level instead of inside a zod issue path.
@@ -141,22 +153,36 @@ export const OpenApiSchemaNodeSchema = z.looseObject({
   enum: z.unknown().optional(),
   minimum: z.number().optional(),
   maximum: z.number().optional(),
+  exclusiveMinimum: z.unknown().optional(),
+  exclusiveMaximum: z.unknown().optional(),
   default: z.unknown().optional(),
   properties: z.record(z.string(), z.unknown()).optional(),
   required: z.array(z.string()).optional(),
   oneOf: z.unknown().optional(),
   anyOf: z.unknown().optional(),
   allOf: z.unknown().optional(),
+  pattern: z.unknown().optional(),
+  minLength: z.unknown().optional(),
+  maxLength: z.unknown().optional(),
+  multipleOf: z.unknown().optional(),
+  nullable: z.unknown().optional(),
+  readOnly: z.unknown().optional(),
+  writeOnly: z.unknown().optional(),
 });
 
 /** One `content` entry. Only `schema` is read; `example`/`encoding` pass through untouched. */
 export const OpenApiMediaTypeSchema = z.looseObject({ schema: z.unknown().optional() });
 
-/** A request body. `content` is a record so the media types keep their document order. */
+/**
+ * A request body. `content` is a record so the media types keep their document order.
+ *
+ * `required` — the flag saying whether the body may be omitted ENTIRELY — is deliberately not
+ * modelled. It has no spec-language counterpart: a generated non-GET tool sends a body whenever
+ * the operation has body arguments and none when it has none, so there is no branch for the
+ * document's answer to select. Modelling a field nothing reads would suggest otherwise.
+ */
 export const OpenApiRequestBodySchema = z.looseObject({
   content: z.record(z.string(), z.unknown()).optional(),
-  required: z.boolean().optional(),
 });
 
-export type OpenApiParameter = z.infer<typeof OpenApiParameterSchema>;
 export type OpenApiSchemaNode = z.infer<typeof OpenApiSchemaNodeSchema>;
