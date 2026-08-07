@@ -26,7 +26,7 @@ import type { Refusal } from "./openapi/operation.ts";
 import type { OpenApiDocument } from "./openapi/schema.ts";
 import { assembleSpec } from "./openapi/spec.ts";
 import { promptForSpec } from "./prompts.ts";
-import { parseSpec } from "./spec.ts";
+import { type ConnectorSpec, parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
 
 export type CliOptions = {
@@ -491,6 +491,38 @@ async function readSpecFile(specPath: string): Promise<unknown> {
 }
 
 /**
+ * `parseSpec` for a spec FILE, with one sentence about the published JSON Schema appended when
+ * it refuses.
+ *
+ * The schema is generated from `ConnectorSpecSchema` and cannot carry its refinements — JSON
+ * Schema has no way to express them — so a spec an editor calls valid can still be refused here.
+ * That limit is stated in the schema document's own `description`, in README's *Editor support*
+ * section and in ROADMAP, and all three require the reader to already be looking. This is where
+ * they are not: they are looking at a CLI that just refused a file their editor called clean, and
+ * nothing in `parseSpec`'s message mentions a schema at all.
+ *
+ * Appended HERE rather than inside `parseSpec`, on purpose. That message is one line per issue
+ * and `test/spec.test.ts` asserts the exact line count, so a sentence added there would either
+ * break the test or be excused by widening it. It also does not belong there: `parseSpec` is
+ * called by `--from-connector`, `--from-openapi` and the interactive prompts, none of which
+ * involve a file a user hand-edited against the schema.
+ */
+async function parseSpecFile(specPath: string): Promise<ConnectorSpec> {
+  const input = await readSpecFile(specPath);
+  try {
+    return parseSpec(input);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `${message}\n\nThe published JSON Schema checks STRUCTURE only — the cross-field rules, ` +
+        "reserved identifiers and style requirements above are refinements it cannot express, " +
+        "so an editor can call this file valid while this command refuses it. See README's " +
+        '"Editor support: the published JSON Schema, and what it cannot check".',
+    );
+  }
+}
+
+/**
  * --help and --version. Handled before parseCliArgs, deliberately: both must work on their
  * own, and must not be refused by a flag-combination rule they have nothing to do with.
  *
@@ -772,9 +804,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   }
 
   const spec =
-    opts.specPath !== undefined
-      ? parseSpec(await readSpecFile(opts.specPath))
-      : promptForSpec(opts.name);
+    opts.specPath !== undefined ? await parseSpecFile(opts.specPath) : promptForSpec(opts.name);
 
   const target = opts.standalone ? "standalone" : "monorepo";
   const outDir = resolveOutDir(opts, spec.name);

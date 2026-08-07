@@ -355,6 +355,43 @@ describe("CLI surface", () => {
     });
   });
 
+  /**
+   * The published JSON Schema's false green, stated where the user meets it.
+   *
+   * It is documented in the schema document's own `description`, in README's *Editor support*
+   * section and in ROADMAP — all three of which require the reader to already be looking. The
+   * moment they are not looking is this one: the CLI has just refused a file their editor called
+   * clean, and `parseSpec`'s message says nothing about a schema.
+   */
+  it("tells a rejected --spec that the published schema cannot check the rule it broke", () => {
+    withTempDir((dir) => {
+      // `default` without `optional: true` — one of the three cases README names as green in an
+      // editor and refused here, because it is a refinement JSON Schema cannot express.
+      const spec = JSON.parse(readFileSync(specPath, "utf8")) as {
+        tools: { args?: Record<string, unknown> }[];
+      };
+      spec.tools[0]!.args = { limit: { type: "number", default: 20 } };
+      writeFileSync(join(dir, "bad-spec.json"), JSON.stringify(spec), "utf8");
+
+      const { exitCode, output } = runCli(["--spec", join(dir, "bad-spec.json")], dir);
+      expect(exitCode).toBe(1);
+      // The refusal itself is unchanged — parseSpec's message is one line per issue and
+      // test/spec.test.ts pins that count, which is why the sentence is appended out here.
+      expect(output).toContain('an argument declaring "default"');
+      expect(output).toContain("STRUCTURE only");
+      expect(output).toContain("Editor support");
+    });
+  });
+
+  it("says nothing about the schema when --spec is merely unreadable", () => {
+    // The sentence is about a spec the schema ACCEPTED and the CLI refused. Attaching it to
+    // "cannot read" or "not valid JSON" would be noise on two failures it does not explain.
+    withTempDir((dir) => {
+      const { output } = runCli(["--spec", "no-such-file.json"], dir);
+      expect(output).not.toContain("STRUCTURE only");
+    });
+  });
+
   it("refuses --gateway-wiring at a directory that is not a Nimbus checkout", () => {
     // The whole point: a typo'd path used to silently scaffold packages/gateway/src/
     // connectors/ inside whatever directory was named, and report success.
