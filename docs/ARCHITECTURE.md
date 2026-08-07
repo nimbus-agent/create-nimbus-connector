@@ -194,6 +194,9 @@ while proving nothing, is [TESTING.md](./TESTING.md).
    compiles emitted output with the real TypeScript compiler; substring assertions cannot see
    an unbalanced brace or an unused import. It also holds the **snapshot** comparison below,
    which is the only byte-level ground truth in the repo that needs no external checkout.
+   `preflight` runs **`bun test --coverage`** as a separate gate beside this one rather than in
+   place of it: Bun evaluates `bunfig.toml`'s per-file floors only on a run carrying the flag, so
+   the two fail for different reasons and a single entry covering both would conflate them.
 2. **`diff:golden`** — generate from a fixture spec, diff against the real connector in a
    Nimbus checkout. This is the acceptance test for the *template*: where the diff is
    irreducible, that is either a spec field the template must expose or an honest limitation

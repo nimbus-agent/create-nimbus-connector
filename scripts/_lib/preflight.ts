@@ -60,7 +60,7 @@ export type RunGate = (cmd: string[]) => { exitCode: number };
  * always-present root, so the type system enforces that only a `needsRoot` gate can ask for one
  * and that it cannot be handed an empty placeholder when there is none.
  */
-type Gate =
+export type Gate =
   | { name: string; needsRoot: false; command: () => string[] }
   | { name: string; needsRoot: true; command: (nimbusRoot: string) => string[] };
 
@@ -86,8 +86,21 @@ type Gate =
  * `acceptance` takes its root as a POSITIONAL, unlike the other three — see scripts/acceptance.ts's
  * `main`, which reads `argv[0]`. Passing `--nimbus-root` to it would resolve to a directory named
  * `--nimbus-root`, so the command shapes are pinned by name in test/scripts/preflight.test.ts.
+ *
+ * **Exported because the prose gate lists are graded against it.** Seven Markdown documents and
+ * one workflow comment enumerate these gates for a reader, and until test/gate-lists.test.ts
+ * existed they were unrelated text that merely happened to agree with this array — which is how
+ * `reach --baseline` came to be named in two canonical lists while four others described the
+ * local gate set without it. That test derives what each document must name from this array, and
+ * from the `needsRoot` split, rather than transcribing the names a second time.
+ *
+ * Note that test/scripts/preflight.test.ts deliberately does the OPPOSITE and transcribes them
+ * independently. The two are not in tension: that file is asking whether this module behaves as
+ * specified, where reading the list back would only prove the module agrees with itself, while
+ * the docs gate is asking whether two artifacts agree, where a third transcription is just one
+ * more thing to drift.
  */
-const GATES: readonly Gate[] = [
+export const GATES: readonly Gate[] = [
   { name: "bun test", needsRoot: false, command: () => ["bun", "test"] },
   { name: "tsc --noEmit", needsRoot: false, command: () => ["bunx", "tsc", "--noEmit"] },
   {
