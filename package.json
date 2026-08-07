@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
+    "preflight": "bun scripts/preflight.ts",
     "schema": "bun scripts/build-schema.ts",
     "diff:golden": "bun scripts/diff-golden.ts",
     "reach": "bun scripts/reach.ts",
