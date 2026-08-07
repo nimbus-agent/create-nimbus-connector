@@ -12,6 +12,9 @@ import {
 } from "./format.ts";
 import { MARKER } from "./golden/resolve.ts";
 import { MONOREPO_LICENSE, validateLicense } from "./license.ts";
+// Statically imported, unlike src/derive/, which is behind a dynamic import because it needs the
+// optional @babel/parser. This reader's only dependency is zod, already in the graph via spec.ts.
+import { listOperations, loadDocument } from "./openapi/document.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
@@ -38,6 +41,10 @@ export type CliOptions = {
    * z.strictObject) refuses by construction — see src/derive/from-connector.ts.
    */
   partial: boolean;
+  /** --from-openapi <doc>: read an OpenAPI 3 document. See src/openapi/document.ts. */
+  fromOpenapi?: string;
+  /** --list-operations: with --from-openapi, print the operations the document declares. */
+  listOperations: boolean;
 };
 
 /** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
@@ -45,9 +52,11 @@ const KNOWN_FLAGS = [
   "--dry-run",
   "--force",
   "--from-connector",
+  "--from-openapi",
   "--gateway-wiring",
   "--help",
   "--license",
+  "--list-operations",
   "--out-dir",
   "--partial",
   "--spec",
@@ -94,13 +103,20 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 
 /** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
 function parseFlags(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false, standalone: false, force: false, partial: false };
+  const opts: CliOptions = {
+    dryRun: false,
+    standalone: false,
+    force: false,
+    partial: false,
+    listOperations: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--standalone") opts.standalone = true;
     else if (a === "--force") opts.force = true;
     else if (a === "--partial") opts.partial = true;
+    else if (a === "--list-operations") opts.listOperations = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
@@ -108,6 +124,8 @@ function parseFlags(argv: readonly string[]): CliOptions {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
     } else if (a === "--from-connector") {
       opts.fromConnector = takeValue(argv, ++i, "--from-connector");
+    } else if (a === "--from-openapi") {
+      opts.fromOpenapi = takeValue(argv, ++i, "--from-openapi");
     } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
     else opts.name = a;
   }
@@ -156,6 +174,53 @@ function assertFlagCombination(opts: CliOptions): void {
     throw new Error(
       "--from-connector never writes files, with or without --dry-run — the two flags claim " +
         "the same thing twice. Drop --dry-run.",
+    );
+  }
+  // The --from-openapi group, checked ahead of each flag's own generic rule for exactly the
+  // reason the --from-connector group above is: this command prints a spec to stdout and writes
+  // nothing, so every flag that shapes a WRITE is dead here, and reporting "--license needs
+  // --standalone" would send the user to a flag that is equally dead. Grouped into one message
+  // rather than five checks because they all fail for one reason, and naming every dead flag at
+  // once beats three successive runs each rejecting the next one.
+  if (opts.fromOpenapi !== undefined) {
+    const dead = [
+      opts.outDir === undefined ? undefined : "--out-dir",
+      opts.standalone ? "--standalone" : undefined,
+      opts.license === undefined ? undefined : "--license",
+      opts.dryRun ? "--dry-run" : undefined,
+      opts.gatewayWiring === undefined ? undefined : "--gateway-wiring",
+    ].filter((f): f is string => f !== undefined);
+    if (dead.length > 0) {
+      throw new Error(
+        `--from-openapi reads a document and prints a spec to stdout — it generates no package, ` +
+          `so ${dead.join(", ")} would be silently ignored. Drop ${dead.length === 1 ? "it" : "them"}, ` +
+          `then generate from the printed spec with --spec.`,
+      );
+    }
+  }
+  if (opts.fromOpenapi !== undefined && opts.fromConnector !== undefined) {
+    throw new Error(
+      "--from-openapi reads an OpenAPI document and --from-connector reads a connector " +
+        "directory; both print a spec, so passing them together means one would be discarded. " +
+        "Keep one.",
+    );
+  }
+  if (opts.fromOpenapi !== undefined && opts.specPath !== undefined) {
+    throw new Error(
+      "--from-openapi derives a spec from a document and --spec reads one from a file; passing " +
+        "both means one would be discarded. Keep one.",
+    );
+  }
+  if (opts.fromOpenapi !== undefined && opts.name !== undefined) {
+    throw new Error(
+      "--from-openapi takes the connector name from the document's info.title; a positional " +
+        "name is redundant and was probably a mistake — remove one.",
+    );
+  }
+  if (opts.listOperations && opts.fromOpenapi === undefined) {
+    throw new Error(
+      "--list-operations lists the operations of an OpenAPI document, and no document was " +
+        "named. Add --from-openapi <doc>.",
     );
   }
   // A user who believes they set a license and did not is a worse outcome than an error.
@@ -301,6 +366,8 @@ Flags:
   --force                  allow --gateway-wiring to overwrite existing target files
   --from-connector <dir>   read an existing connector directory and print its spec
   --partial                with --from-connector, emit a DRAFT spec instead of a blocker report
+  --from-openapi <doc>     read an OpenAPI 3 document (JSON or YAML); requires --list-operations
+  --list-operations        with --from-openapi, print each operationId, method and path
   --dry-run                print what would be written, write nothing
   --version                print the version
   --help                   show this message
@@ -375,10 +442,47 @@ function warnIfUnformatted(outDir: string): void {
  */
 type WiringOutput = { readonly dir: string; readonly files: readonly GeneratedFile[] };
 
+/**
+ * `--from-openapi <doc> --list-operations`.
+ *
+ * One line per operation, so `--op` arguments can be copied straight off it — in the order the
+ * document declares them, which is why src/openapi/schema.ts's path item declares no method keys.
+ */
+async function listDocumentOperations(docPath: string): Promise<void> {
+  let text: string;
+  try {
+    text = await Bun.file(docPath).text();
+  } catch {
+    throw new Error(
+      `--from-openapi: cannot read ${docPath}. Check the path exists and is readable.`,
+    );
+  }
+  const { doc, source } = loadDocument(text);
+  const operations = listOperations(doc);
+  const width = Math.max(0, ...operations.map((o) => o.operationId.length));
+  for (const op of operations) {
+    console.log(`${op.operationId.padEnd(width)}  ${op.method.padEnd(6)} ${op.path}`);
+  }
+  console.error(`note: read ${operations.length} operation(s) from ${source} ${docPath}`);
+}
+
 export async function main(argv: readonly string[]): Promise<void> {
   if (await handleInfoFlags(argv)) return;
 
   const opts = parseCliArgs(argv);
+
+  if (opts.fromOpenapi !== undefined) {
+    // Assembling a spec from a document is not wired yet, so the one thing this flag can do is
+    // list what the document holds. Saying that — rather than accepting the flag and printing
+    // nothing — is the same rule assertFlagCombination applies above.
+    if (!opts.listOperations) {
+      throw new Error(
+        "--from-openapi: pass --list-operations to see the operations this document declares.",
+      );
+    }
+    await listDocumentOperations(opts.fromOpenapi);
+    return;
+  }
 
   if (opts.fromConnector !== undefined) {
     // Lazy: a static import would pull @babel/parser into the module graph for every command,

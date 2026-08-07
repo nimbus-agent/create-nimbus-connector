@@ -432,3 +432,138 @@ describe("--from-connector", () => {
     });
   });
 });
+
+/**
+ * --from-openapi / --list-operations, driven through the real binary for the same reason
+ * everything else in this file is: src/cli.ts is excluded from the coverage metric because Bun
+ * cannot instrument a child process, and spawning the shipped entry point is the stronger test.
+ * The parse-level rules live in test/cli.test.ts; these assert what reaches stdout.
+ *
+ * The document is SYNTHETIC — invented here, not copied from any published API.
+ */
+describe("--from-openapi --list-operations", () => {
+  const DOC = [
+    "openapi: 3.0.3",
+    "info:",
+    "  title: ZZ Widgets",
+    "  version: 1.0.0",
+    "servers:",
+    "  - url: https://api.zzwidgets.test/v1",
+    "paths:",
+    "  /widgets:",
+    "    get:",
+    "      operationId: listWidgets",
+    "    post:",
+    "      operationId: createWidget",
+    "  /widgets/{widgetId}:",
+    "    get:",
+    "      operationId: getWidget",
+    "",
+  ].join("\n");
+
+  function writeDoc(dir: string, text: string, name = "widgets.yaml"): string {
+    const path = join(dir, name);
+    writeFileSync(path, text, "utf8");
+    return path;
+  }
+
+  it("prints one line per operation in document order and exits 0", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, DOC);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--list-operations"],
+        dir,
+      );
+      expect(exitCode).toBe(0);
+      // Each line carries the operationId, the method and the path — everything --op needs.
+      expect(stdout.split("\n").map((l) => l.trim().split(/\s+/))).toEqual([
+        ["listWidgets", "GET", "/widgets"],
+        ["createWidget", "POST", "/widgets"],
+        ["getWidget", "GET", "/widgets/{widgetId}"],
+      ]);
+      expect(stderr).toContain("3 operation(s)");
+      expect(stderr).toContain("yaml");
+    });
+  });
+
+  it("reads the same document as JSON and reports the source it used", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(
+        dir,
+        JSON.stringify({
+          openapi: "3.0.3",
+          info: { title: "ZZ Widgets", version: "1.0.0" },
+          paths: { "/widgets": { get: { operationId: "listWidgets" } } },
+        }),
+        "widgets.json",
+      );
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--list-operations"],
+        dir,
+      );
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe("listWidgets  GET    /widgets");
+      expect(stderr).toContain("json");
+    });
+  });
+
+  // The refusal that fails quietly if it is not made at resolution: a missing lookup yields
+  // undefined, which reaches a mapper as an absent field rather than an error.
+  it("exits 1 naming a dangling $ref, printing nothing to stdout", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(
+        dir,
+        [
+          DOC.trimEnd(),
+          "      requestBody:",
+          "        content:",
+          "          application/json:",
+          "            schema:",
+          '              $ref: "#/components/schemas/NoSuchThing"',
+          "",
+        ].join("\n"),
+      );
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--list-operations"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("$ref-dangling");
+      expect(stderr).toContain("NoSuchThing");
+    });
+  });
+
+  it("exits 1 naming the file it could not read", () => {
+    withTempDir((dir) => {
+      const missing = join(dir, "nope.yaml");
+      const { exitCode, stderr } = runCliBare(
+        ["--from-openapi", missing, "--list-operations"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--from-openapi");
+      expect(stderr).toContain("nope.yaml");
+    });
+  });
+
+  // --from-openapi cannot assemble a spec yet, so the flag on its own has nothing to do. Saying
+  // so beats accepting it and printing nothing.
+  it("exits 1 directing a bare --from-openapi to --list-operations", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, DOC);
+      const { exitCode, stdout, stderr } = runCliBare(["--from-openapi", doc], dir);
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("--list-operations");
+    });
+  });
+
+  it("exits 1 for --list-operations with no document, naming the missing flag", () => {
+    withTempDir((dir) => {
+      const { exitCode, stderr } = runCliBare(["--list-operations"], dir);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--from-openapi");
+    });
+  });
+});

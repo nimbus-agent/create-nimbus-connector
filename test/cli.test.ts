@@ -14,6 +14,7 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
     });
   });
 
@@ -24,6 +25,7 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
     });
   });
 
@@ -35,6 +37,7 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
     });
   });
 
@@ -101,6 +104,7 @@ describe("parseCliArgs", () => {
         dryRun: false,
         force: false,
         partial: false,
+        listOperations: false,
       });
     });
   });
@@ -242,6 +246,76 @@ describe("parseCliArgs", () => {
 
     it("rejects --partial without --from-connector rather than ignoring it", () => {
       expect(() => parseCliArgs(["acme", "--partial"])).toThrow(/--from-connector/);
+    });
+  });
+
+  describe("--from-openapi and --list-operations", () => {
+    it("are undefined and false by default", () => {
+      expect(parseCliArgs(["acme"]).fromOpenapi).toBeUndefined();
+      expect(parseCliArgs(["acme"]).listOperations).toBe(false);
+    });
+
+    it("are set by their flags", () => {
+      const opts = parseCliArgs(["--from-openapi", "widgets.yaml", "--list-operations"]);
+      expect(opts.fromOpenapi).toBe("widgets.yaml");
+      expect(opts.listOperations).toBe(true);
+    });
+
+    it("rejects --from-openapi with no following value", () => {
+      expect(() => parseCliArgs(["--from-openapi"])).toThrow(/--from-openapi/);
+    });
+
+    it("rejects --list-operations alone, naming the flag that is missing", () => {
+      expect(() => parseCliArgs(["--list-operations"])).toThrow(/--from-openapi/);
+    });
+
+    it("rejects --from-openapi combined with --from-connector, naming both", () => {
+      const argv = ["--from-openapi", "w.yaml", "--from-connector", "/tmp/x"];
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+      expect(() => parseCliArgs(argv)).toThrow(/--from-connector/);
+    });
+
+    it("rejects --from-openapi combined with --spec, naming both", () => {
+      const argv = ["--from-openapi", "w.yaml", "--spec", "x.json"];
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+      expect(() => parseCliArgs(argv)).toThrow(/--spec/);
+    });
+
+    it("rejects --from-openapi combined with a positional name", () => {
+      expect(() => parseCliArgs(["acme", "--from-openapi", "w.yaml"])).toThrow(/info\.title/);
+    });
+
+    // The write-shaping flags are all dead here for one reason, and they are reported in one
+    // message rather than one run each — and on --from-openapi's own rule, not on the generic
+    // "--license needs --standalone" one, which would send the user to an equally dead flag.
+    it("rejects every write-shaping flag in one message that names each of them", () => {
+      const argv = [
+        "--from-openapi",
+        "w.yaml",
+        "--list-operations",
+        "--standalone",
+        "--license",
+        "MIT",
+        "--out-dir",
+        "/tmp/x",
+        "--dry-run",
+        "--gateway-wiring",
+        "C:/x",
+      ];
+      for (const flag of [
+        "--standalone",
+        "--license",
+        "--out-dir",
+        "--dry-run",
+        "--gateway-wiring",
+      ]) {
+        expect(() => parseCliArgs(argv)).toThrow(flag);
+      }
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+    });
+
+    it("still accepts --from-openapi with --list-operations on their own", () => {
+      expect(() => parseCliArgs(["--from-openapi", "w.yaml", "--list-operations"])).not.toThrow();
     });
   });
 });
