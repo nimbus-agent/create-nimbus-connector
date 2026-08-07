@@ -9,9 +9,14 @@ description: >
 
 # create-nimbus-connector — Pre-flight
 
-**There is no `preflight` script.** The gates are separate commands, four of them need a
-Nimbus checkout, and two of them answer different questions that are easy to conflate. Run
-them in this order.
+**`bun run preflight --nimbus-root <path>` runs all eight in order** and is the fastest way to
+answer "is this ready to push". It stops at the first failure, and — this is the part that
+matters — **without `--nimbus-root` it reports the four monorepo gates as `SKIP` by name and
+refuses to print its fully-verified sentence.** A skip is never dressed up as a pass.
+
+The gate list below is what it runs, and is still worth reading: four of the eight need a
+Nimbus checkout, and two of them answer different questions that are easy to conflate. Run an
+individual gate directly when you are iterating on the thing it checks.
 
 ## 1. The gates CI also runs
 
