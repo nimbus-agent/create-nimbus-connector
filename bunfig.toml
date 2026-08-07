@@ -48,22 +48,40 @@ coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 # thing: that one is the raw per-file minimum across every file; this is what the minimum
 # becomes once src/cli.ts and src/prompts.ts — both already accounted for above, both
 # subprocess-tested by design — are removed from consideration. With those two excluded, the
-# floor is src/derive/manifest.ts at 89.29% lines, and src/emit/server/tools-hand.ts at 90.00%
-# functions. Aggregate is 98.99% lines / 99.56% functions.
+# floor is src/format.ts, at 90.70% lines and 90.91% functions. It sets BOTH halves. Aggregate
+# is 99.41% lines / 99.73% functions.
 #
-# manifest.ts is a small file, and a per-file floor over a small file leaves single-line
-# margins by construction: one more uncovered line there is worth a bigger percentage swing
-# than the same line would be in a 500-line file, so manifest.ts has zero slack today — the
-# next line added to it without a matching test fails THIS file's own gate, which is enough
+# format.ts is a small file, and a per-file floor over a small file leaves single-line margins
+# by construction: one more uncovered line there is worth a bigger percentage swing than the
+# same line would be in a 500-line file, so format.ts has ~0.7 points of slack on lines today —
+# the next line added to it without a matching test fails THIS file's own gate, which is enough
 # to fail the whole run, per-file enforcement being the point of this threshold at all.
 #
-# This was 0.78 / 0.81, set by src/format.ts at 78.16% / 81.82%. That gap has now genuinely
-# closed rather than been papered over: format.ts's failure-diagnosis logic was extracted into
-# the pure, exported formatterUnavailableReasonFor(), which test/format.test.ts now unit-tests
-# in-process across all six diagnosis branches. The pre-existing subprocess tests that drive
-# the same paths through mock.module were KEPT — they prove initFormatter actually routes a
-# failed import into that diagnosis, which a unit test of the pure function cannot. So both
-# layers earn their place, and format.ts rose to 90.91% functions / 90.70% lines on real
-# assurance, not on a duplicated in-process copy of a subprocess test. That is the distinction
-# the note above draws, and the floor moves only because of it.
-coverageThreshold = { lines = 0.88, functions = 0.90 }
+# The previous revision of this comment named src/derive/manifest.ts (89.29% lines) and
+# src/emit/server/tools-hand.ts (90.00% functions) as the two floor-setters. Both are at 100%
+# today, and re-measuring is the only way that was ever going to be noticed — a threshold whose
+# comment names the wrong file reads as a measurement when it is a memory. Re-measure before
+# touching the numbers below, and move the file names with them.
+#
+# WHY format.ts stops here, and why the answer is not "write more tests". Its eight remaining
+# uncovered lines are the optional-dependency load path and nothing else: initFormatter's catch,
+# formatAll's unformatted pass-through, formatAll's before-init throw, and biomeVersion's
+# "unknown" fallback. Every one of them is exercised — by a Bun.spawnSync subprocess in
+# test/format.test.ts, because reaching them needs mock.module to break "@biomejs/js-api/nodejs"
+# and mock.module's effect is process-global, so doing it in-process would poison the shared
+# formatter every other suite uses. Bun does not instrument a child process, so those tests
+# prove the behaviour without moving the number. That is the SAME trade the src/cli.ts note
+# above describes, and it is why the honest floor is 0.90 rather than something higher.
+#
+# src/derive/ast.ts (91.18% lines) is the same shape one file down — the @babel/parser load
+# path, subprocess for the same reason — so closing format.ts entirely would move this to 0.91
+# and no further. Do not raise either number for headroom: 0.90 is what the tree supports.
+#
+# This was 0.88 / 0.90. Lines move because src/golden/resolve-root.ts reached 100% (a sibling
+# directory that exists but carries no marker file is now tested, which is the arm that falls
+# THROUGH rather than throwing) and src/derive/search-filter.ts rose from 94.91% to 97.74% (its
+# triple no-type-alias blocker collapsed into one lookup; two of the three copies were
+# unreachable, which is exactly how they read in this report). Neither came from an in-process
+# copy of a subprocess test — that is the distinction the note above draws, and the floor moves
+# only because of it.
+coverageThreshold = { lines = 0.90, functions = 0.90 }

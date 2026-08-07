@@ -241,6 +241,53 @@ describe("formatAll before init", () => {
   });
 });
 
+describe("formatAll without a formatter", () => {
+  // THE optionalDependency contract, and it had no test in either direction: formatterAvailable()
+  // was asserted false above, but nothing checked what formatAll then DOES. The docstring on
+  // formatterUnavailableReasonFor promises "the generated files are unformatted; they are valid
+  // TypeScript and compile as-is" — a promise about bytes, which only this assertion makes.
+  //
+  // Subprocess for the reason every mocking test in this file is: mock.module's effect is
+  // process-global, and this one must leave the shared formatter of the rest of the suite alone.
+  // It therefore does NOT move the coverage metric — Bun cannot instrument a child — and that is
+  // the trade bunfig.toml describes: the assurance is real even though the number does not move.
+  it("returns every file unchanged, as new objects rather than the caller's own", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/js-api/nodejs", () => {' +
+      "  const e = new Error(\"Cannot find module '@biomejs/js-api/nodejs' from '/x'\");" +
+      '  e.code = "ERR_MODULE_NOT_FOUND";' +
+      '  e.specifier = "@biomejs/js-api/nodejs";' +
+      "  throw e;" +
+      "});" +
+      'const f = await import("./src/format.ts");' +
+      "await f.initFormatter();" +
+      'if (f.formatterAvailable()) throw new Error("expected the formatter to be unavailable");' +
+      'const input = [{ path: ["a.ts"], content: "const  x =1\\n" },' +
+      '  { path: ["nimbus.extension.json"], content: "{\\"a\\" :1}" }];' +
+      "const out = f.formatAll(input);" +
+      "console.log(JSON.stringify({ out, aliased: out[0] === input[0] }));";
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: `${import.meta.dir}/..`,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.stderr.toString()).toBe("");
+    expect(r.exitCode).toBe(0);
+    const { out, aliased } = JSON.parse(r.stdout.toString()) as {
+      out: { path: string[]; content: string }[];
+      aliased: boolean;
+    };
+    // Byte-identical, and a .ts file specifically — the pass-through must not be mistaken for
+    // the extension filter, which would leave the same bytes for a different reason.
+    expect(out[0]).toEqual({ path: ["a.ts"], content: "const  x =1\n" });
+    expect(out[1]).toEqual({ path: ["nimbus.extension.json"], content: '{"a" :1}' });
+    // A copy, not the caller's object: writeFiles and the golden harness both hold the input
+    // array, and handing back its own members would alias the two.
+    expect(aliased).toBe(false);
+  });
+});
+
 describe("formatAll", () => {
   it("formats TypeScript to the Nimbus house style", () => {
     const [out] = formatAll([{ path: ["src", "server.ts"], content: "const x = {a:1,b:2}\n" }]);
@@ -325,5 +372,28 @@ describe("formatAll", () => {
 describe("biomeVersion", () => {
   it("reports the resolved backend version", () => {
     expect(biomeVersion()).toMatch(/^2\.5\./);
+  });
+
+  // The documented fallback, which nothing asserted. It is not cosmetic: scripts/diff-golden.ts
+  // and scripts/reach.ts both print this string in the header that says which Biome produced the
+  // bytes they are comparing, so a throw here would take down a whole gate run on a machine that
+  // could not install the wasm backend — the one platform optionalDependencies exist to keep
+  // working. Subprocess, because mock.module is process-global.
+  it("reports 'unknown' rather than throwing when the backend cannot be resolved", () => {
+    const script =
+      'const { mock } = await import("bun:test");' +
+      'mock.module("@biomejs/wasm-nodejs/package.json", () => {' +
+      '  throw new Error("Cannot find module");' +
+      "});" +
+      'const f = await import("./src/format.ts");' +
+      "console.log(f.biomeVersion());";
+    const r = Bun.spawnSync(["bun", "-e", script], {
+      cwd: `${import.meta.dir}/..`,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.stderr.toString()).toBe("");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString().trim()).toBe("unknown");
   });
 });
