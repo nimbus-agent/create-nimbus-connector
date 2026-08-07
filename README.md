@@ -14,11 +14,12 @@ bunx create-nimbus-connector acme --standalone
 
 ## Documentation
 
-**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. This README is the *reference*: what the spec language can express, and the rules that reject a spec.
+**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. **Looking up a field? [`docs/SPEC.md`](./docs/SPEC.md)** is the complete field reference: every field `ConnectorSpecSchema` accepts, with its type, its default and the constraints on it, generated from that schema so it cannot drift from it. This README is the *prose* reference — how the fields work together, and the rules that reject a spec, which are the part no field-by-field table can carry.
 
 | | |
 | --- | --- |
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
+| [SPEC.md](./docs/SPEC.md) | Every spec field, generated from the schema |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
 | [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |

@@ -1,7 +1,8 @@
 # Using create-nimbus-connector
 
-A start-to-finish guide to generating a Nimbus MCP connector. For the spec language as
-reference material see the [README](../README.md); for how the generator is built see
+A start-to-finish guide to generating a Nimbus MCP connector. To look a spec field up, see
+[SPEC.md](./SPEC.md); for the rules that reject a spec, and how the fields work together, see
+the [README](../README.md); for how the generator is built see
 [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 **Bun is required.** The CLI carries a `#!/usr/bin/env bun` shebang, so it needs Bun however

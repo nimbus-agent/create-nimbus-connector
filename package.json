@@ -37,6 +37,7 @@
     "test": "bun test",
     "preflight": "bun scripts/preflight.ts",
     "schema": "bun scripts/build-schema.ts",
+    "build:spec-doc": "bun scripts/build-spec-doc.ts",
     "diff:golden": "bun scripts/diff-golden.ts",
     "reach": "bun scripts/reach.ts",
     "reach:baseline": "bun scripts/reach-baseline.ts",

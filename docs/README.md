@@ -8,7 +8,8 @@ package byte-identical to a hand-written one.
 | If you want to | Read |
 | --- | --- |
 | Generate a connector | [USAGE.md](./USAGE.md) |
-| Look up a spec field | the [README](../README.md) — the spec language reference |
+| Look up a spec field | [SPEC.md](./SPEC.md) — every field, generated from the schema |
+| Understand how the fields work together | the [README](../README.md) — the rules that reject a spec |
 | Understand how it is built | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Know what a green check actually proves | [TESTING.md](./TESTING.md) |
 | Know where it is going | [ROADMAP.md](./ROADMAP.md) |
