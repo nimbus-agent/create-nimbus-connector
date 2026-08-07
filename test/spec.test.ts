@@ -1840,3 +1840,131 @@ describe("strings the emitter splices raw into generated source", () => {
     expect(accepted).toBe(!emitterLeavesLiveInterpolation(base));
   });
 });
+
+/**
+ * The rest of the raw-splice carrier set, guarded field by field with a message that names the
+ * field. `test/raw-splice.test.ts` is what says this set is COMPLETE — it derives the carriers
+ * from the emitters — and these are what say each rejection reads usefully when it fires.
+ */
+describe("the raw-splice carriers the first version of the guard missed", () => {
+  const withEnv = (over: Record<string, unknown>) => ({
+    ...MINIMAL,
+    env: [
+      { vars: ["NEW_RELIC_API_KEY"], local: "apiKey", bindings: ["k"], required: true, ...over },
+    ],
+  });
+  const withTool = (over: Record<string, unknown>) => ({
+    ...MINIMAL,
+    tools: [{ ...MINIMAL.tools[0], ...over }],
+  });
+
+  // The CRITICAL. `wrapped()` splices prefix into a template literal, and renderBasic splices
+  // that template into the username ARGUMENT of encodeBasicAuthHeader — an expression position.
+  const IIFE = '${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}';
+
+  it("rejects a self-contained interpolation in env[].prefix, naming the field", () => {
+    expect(() => parseSpec(withEnv({ prefix: IIFE }))).toThrow(/env\[\]\.prefix.*interpolation/s);
+  });
+
+  it("rejects a self-contained interpolation in env[].suffix, naming the field", () => {
+    expect(() => parseSpec(withEnv({ suffix: IIFE }))).toThrow(/env\[\]\.suffix.*interpolation/s);
+  });
+
+  it("rejects a backtick in env[].prefix, which has no `return` in front of it in renderBasic", () => {
+    expect(() => parseSpec(withEnv({ prefix: "a` + evil() + `" }))).toThrow(
+      /env\[\]\.prefix.*backtick/s,
+    );
+  });
+
+  it("still accepts the affixes the byte-locked fixtures declare", () => {
+    // datadog writes prefix "api.", sentry suffix "/api/0", zendesk suffix "/token". Guarding
+    // these two fields is measured at zero cost, and this is where that is pinned.
+    expect(parseSpec(withEnv({ prefix: "api." })).env[0]!.prefix).toBe("api.");
+    expect(parseSpec(withEnv({ suffix: "/api/0" })).env[0]!.suffix).toBe("/api/0");
+  });
+
+  it("accepts an EMPTY affix, which is what --from-connector records for the unused side", () => {
+    // classifyPlainReturn (src/derive/server/env.ts) reads both from the template's cooked
+    // quasis unconditionally. A .min(1) here would reject a spec this repo's own deriver writes.
+    expect(parseSpec(withEnv({ prefix: "", suffix: "/token" })).env[0]!.prefix).toBe("");
+  });
+
+  it("rejects a block-comment terminator in tools[].name, which closes the wiring docstring", () => {
+    expect(() => parseSpec(withTool({ name: 'a*/;(globalThis as never).x="t";/*b_list' }))).toThrow(
+      /tools\[\]\.name.*block comment/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in tools[].path", () => {
+    expect(() => parseSpec(withTool({ path: "/v2/*/applications.json*/" }))).toThrow(
+      /tools\[\]\.path.*block comment/s,
+    );
+  });
+
+  it("leaves tools[].path's OWN ${…} to parsePathTemplate, which names the modes", () => {
+    // The path DSL is the one carrier whose interpolation is a documented feature, so the
+    // raw-splice guard supplies only the terminator half here — and the arg reference below
+    // still parses rather than being caught by a second, vaguer rule.
+    expect(
+      parseSpec(withTool({ path: "/v2/${arg.id|enc}", args: { id: { type: "string" } } })).tools[0]!
+        .path,
+    ).toBe("/v2/${arg.id|enc}");
+  });
+
+  // I1: not a terminator but an ESCAPE, and the only sequence in the set that changes the
+  // meaning of what comes AFTER it rather than ending what came before.
+  it("rejects a trailing backslash in fetchHelper.base, which un-interpolates ${path}", () => {
+    // Reproduced: `https://api.zz.test/v1\` emitted `` `https://api.zz.test/v1\${path}` ``,
+    // whose VALUE is the literal text "https://api.zz.test/v1${path}" — verified by evaluating
+    // the emitted template. The connector then requests that URL verbatim.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        fetchHelper: { ...MINIMAL.fetchHelper, base: "https://a.test/v1\\" },
+      }),
+    ).toThrow(/fetchHelper\.base.*backslash/s);
+  });
+
+  it("rejects a backslash in serviceLabel too, per the field-not-site rule", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: String.raw`New\Relic` })).toThrow(
+      /serviceLabel.*backslash/s,
+    );
+  });
+
+  it("rejects a non-identifier env binding, which is emitted as a const NAME", () => {
+    expect(() => parseSpec(withEnv({ bindings: ["k = evil(); const j"] }))).toThrow(/identifier/);
+  });
+
+  it("rejects a non-identifier fetchHelper.headers, which is emitted as a CALL", () => {
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        fetchHelper: {
+          local: "nrGet",
+          base: "https://api.newrelic.com",
+          headers: "((): Record<string, string> => { globalThis.x = 1; return h(); })",
+        },
+      }),
+    ).toThrow(/identifier/);
+  });
+
+  it("rejects a non-identifier rows, which is emitted as a const NAME three times", () => {
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        style: "read-only-kit",
+        fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", headers: "apiKey" },
+        tools: [
+          {
+            name: "nr_search",
+            description: "S.",
+            impl: "search",
+            path: "/v2/x",
+            rows: "data-items",
+            filter: { export: "nrFilter", fields: ["id"] },
+          },
+        ],
+      }),
+    ).toThrow(/identifier/);
+  });
+});

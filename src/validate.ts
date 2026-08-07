@@ -1,5 +1,5 @@
 import type { ConnectorSpec, PathSegment } from "./spec.ts";
-import { needsExtractor, parsePathTemplate, registrarName } from "./spec.ts";
+import { needsExtractor, parsePathTemplate, registrarName, titleIdentifier } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -155,12 +155,41 @@ function claimEnvIdentifiers(seen: Map<string, string>, spec: ConnectorSpec): vo
   }
 }
 
+/**
+ * Four emitted names are built by wrapping `titleIdentifier(spec.title)` — `register<X>Tool`,
+ * `create<X>Syncable`, `map<X>ItemToItem` and `<X>SearchMatchOptions` — so the stripped title
+ * has to be usable as the middle of an identifier.
+ *
+ * Checked here rather than on `title` in the schema because the field is OPTIONAL: `parseSpec`
+ * fills it from `capitalize(spec.name)`, so a schema-level refine would leave the defaulted
+ * value unchecked, which is the half a user never writes and therefore never suspects.
+ *
+ * Stripping rescues "Google Meet" and "Google-meet". It cannot rescue a title whose first
+ * character is a digit ("1Password" yields `register1PasswordTool`) or one with no alphanumeric
+ * character at all (which yields the empty string, and `export type SearchMatchOptions =
+ * SearchMatchOptions` — a circular alias, TS2456). No corpus connector directory name begins
+ * with a digit, so this rejects nothing `--from-connector` can produce.
+ */
+function validateTitleIdentifier(spec: ConnectorSpec): void {
+  const id = titleIdentifier(spec.title);
+  if (/^[A-Za-z][A-Za-z0-9]*$/.test(id)) return;
+  throw new Error(
+    `"title" ${JSON.stringify(spec.title)} yields ${JSON.stringify(id)} once non-alphanumeric ` +
+      "characters are stripped, which cannot be part of an emitted identifier — the generator " +
+      'builds "register<X>Tool", "create<X>Syncable", "map<X>ItemToItem" and ' +
+      '"<X>SearchMatchOptions" from it. Give "title" a value starting with a letter and ' +
+      "containing at least one letter or digit.",
+  );
+}
+
 export function validateSpec(spec: ConnectorSpec): void {
   const seen = new Map<string, string>();
 
   for (const r of RESERVED_IDENTIFIERS) {
     seen.set(r, "a reserved emitter identifier");
   }
+
+  validateTitleIdentifier(spec);
 
   if (spec.style === "rest-kit") {
     claim(seen, registrarName(spec), "the rest-kit tool registrar");
@@ -197,6 +226,34 @@ function claimHoistedArgs(seen: Map<string, string>, t: ToolLike): void {
   }
 }
 
+/**
+ * `rows` names a const `renderSearchTool` declares inside ONE search handler, so it is checked
+ * against every name already claimed and then deliberately NOT claimed itself.
+ *
+ * Not claimed, because two search tools may legitimately use the same `rows` — `zzextract`'s two
+ * tools both say `"rows": "items"`, and each declaration is function-scoped to its own handler.
+ * Claiming would reject that fixture.
+ *
+ * Checked, because everything in the enclosing module scope IS reachable from inside the handler
+ * and a `const` there shadows it for the whole block. Three failures, each reproduced before this
+ * check existed: `"root"` emits `const root = await zzGet(…)` immediately followed by
+ * `const root = (root as …)` — a duplicate `const` in one block, which Biome formats happily;
+ * `"p"` redeclares the handler parameter and then passes the rows array where the search params
+ * belong; and the fetch helper's own name shadows the function the line above it just called.
+ * `RESERVED_IDENTIFIERS` already lists `root` and `p` — with a comment on `root` citing this very
+ * emitter — and `rows` was the one field that could collide with them and never reached the list.
+ */
+function checkRowsIdentifier(seen: Map<string, string>, t: ToolLike): void {
+  if (t.rows === undefined) return;
+  const prior = seen.get(t.rows);
+  if (prior === undefined) return;
+  throw new Error(
+    `Identifier collision: tool ${t.name}'s "rows": "${t.rows}" names a const the search ` +
+      `handler declares, and "${t.rows}" is already ${prior} — the declaration would shadow ` +
+      `it inside the handler. Rename it, or plumb the response through a differently named key.`,
+  );
+}
+
 /** Tool names are unique, and every name a tool contributes to module scope is claimed. */
 function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
   const toolNames = new Set<string>();
@@ -213,6 +270,9 @@ function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
     }
 
     claimHoistedArgs(seen, t);
+    // After this tool's own filter export and hoisted args are claimed, so a collision with
+    // either of them is visible; before the next tool's, which are in a different scope.
+    checkRowsIdentifier(seen, t);
 
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);

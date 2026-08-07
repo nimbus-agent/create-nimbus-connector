@@ -569,3 +569,102 @@ describe("at most one extractor-branch search filter per connector", () => {
     expect(() => validateSpec(spec)).not.toThrow();
   });
 });
+
+/**
+ * `rows` names a const the search handler declares, and it was the one field that could collide
+ * with `root` and `p` — both already on RESERVED_IDENTIFIERS, `root`'s entry citing this exact
+ * emitter — while never being checked against the list.
+ */
+describe('a search tool\'s "rows"', () => {
+  function searchSpec(rows: string, over: Record<string, unknown> = {}) {
+    return parseSpec({
+      name: "zzrows",
+      displayName: "ZZ Rows",
+      description: "d.",
+      serviceLabel: "ZZ Rows",
+      style: "read-only-kit",
+      env: [{ vars: ["ZZROWS_TOKEN"], local: "headers", auth: "bearer" }],
+      fetchHelper: { local: "zzGet", base: "https://api.zzrows.test", headers: "headers" },
+      tools: [
+        {
+          name: "zz_search",
+          description: "S.",
+          impl: "search",
+          path: "/v1/items",
+          rows,
+          filter: { export: "zzFilter", fields: ["id"] },
+        },
+      ],
+      ...over,
+    });
+  }
+
+  it('rejects "root", which the handler already declares one line above', () => {
+    // Reproduced before this check existed: `const root = await zzGet("/v1/items");` followed by
+    // `const root = (root as { root?: unknown[] } | null)?.root;` — a duplicate `const` in one
+    // block that Biome formatted without complaint.
+    expect(() => validateSpec(searchSpec("root"))).toThrow(/"root"[\s\S]*reserved/);
+  });
+
+  it('rejects "p", the handler parameter', () => {
+    expect(() => validateSpec(searchSpec("p"))).toThrow(/"p"[\s\S]*reserved/);
+  });
+
+  it("rejects the fetch helper's own name, which the declaration would shadow", () => {
+    expect(() => validateSpec(searchSpec("zzGet"))).toThrow(/zzGet/);
+  });
+
+  it("accepts an ordinary envelope key", () => {
+    expect(() => validateSpec(searchSpec("items"))).not.toThrow();
+  });
+
+  it("lets two search tools use the SAME rows name, since each is function-scoped", () => {
+    // fixtures/zzextract.spec.json does exactly this. Claiming `rows` in the shared map — the
+    // obvious fix, and the one the review suggested — would reject that fixture.
+    const spec = parseSpec({
+      name: "zzrows",
+      displayName: "ZZ Rows",
+      description: "d.",
+      serviceLabel: "ZZ Rows",
+      style: "read-only-kit",
+      env: [{ vars: ["ZZROWS_TOKEN"], local: "headers", auth: "bearer" }],
+      fetchHelper: { local: "zzGet", base: "https://api.zzrows.test", headers: "headers" },
+      tools: [0, 1].map((i) => ({
+        name: `zz_search_${i}`,
+        description: "S.",
+        impl: "search",
+        path: `/v1/items${i}`,
+        rows: "items",
+        filter: { export: `zzFilter${i}`, fields: ["id"] },
+      })),
+    });
+    expect(() => validateSpec(spec)).not.toThrow();
+  });
+});
+
+/**
+ * Four emitted names are built by wrapping the stripped title. Stripping rescues a two-word
+ * title; it cannot rescue one that starts with a digit or has no alphanumeric character at all.
+ */
+describe("the identifier derived from title", () => {
+  it("accepts a two-word title, which strips to a usable identifier", () => {
+    expect(() => validateSpec(specWith({ title: "Google Meet" }))).not.toThrow();
+  });
+
+  it("rejects a title starting with a digit, which stripping cannot rescue", () => {
+    expect(() => validateSpec(specWith({ title: "1Password" }))).toThrow(/"1Password"/);
+  });
+
+  it("rejects a title with no alphanumeric character, which strips to nothing", () => {
+    // Emits `export type SearchMatchOptions = SearchMatchOptions;` — a circular alias, TS2456.
+    expect(() => validateSpec(specWith({ title: "!!!" }))).toThrow(/""/);
+  });
+
+  it("checks the DEFAULTED title too, which is the half a user never writes", () => {
+    // parseSpec fills `title` from capitalize(spec.name), so a refine on the optional field
+    // would leave this case unchecked. `name` is lower-kebab, so this needs a leading digit.
+    expect(() => validateSpec(specWith({ name: "1password", title: undefined }))).toThrow(
+      /1password/,
+    );
+  });
+});

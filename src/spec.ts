@@ -133,6 +133,172 @@ export function parsePathTemplate(tpl: string): PathSegment[] {
   return out;
 }
 
+/**
+ * The sequences that break out of the construct a raw-spliced spec string is emitted into.
+ *
+ * **The rule this list serves: every spec string an emitter splices into generated source
+ * unquoted goes through `rawSplicedString`.** This docstring used to open by counting the
+ * fields that do — "Two fields are spliced with no quoting or escaping" — and the count was
+ * wrong when it was written. Six more carried the same splice, one of them (`env[].prefix`)
+ * putting an attacker-supplied IIFE into the Authorization header of every request. A number in
+ * prose is precisely the artefact that makes the next reader stop looking, so there is no number
+ * here now and there must not be one again. `test/raw-splice.test.ts` DERIVES the carrier set by
+ * probing the emitters with a marker no quoting scheme leaves intact, and fails when a new
+ * carrier appears; that census, not this comment, is the authority on which fields are raw.
+ *
+ * Every sequence below is rejected in EVERY guarded field, including where the field does not
+ * reach that construct today. The rule belongs to the field rather than to the splice site,
+ * because splice sites are what emitter changes add: `serviceLabel`'s own comment site
+ * (src/emit/wiring.ts, Stage C) arrived a day after its two template sites, and nothing about
+ * that change would have prompted anyone to revisit a per-site rule.
+ *
+ * The backslash is not a terminator, and it is here because the omission of an ESCAPE is the
+ * same hole one step sideways: it changes the meaning of the character after it rather than
+ * ending anything. A `base` of `https://api.zz.test/v1\` emits
+ * `` `https://api.zz.test/v1\${path}` ``, in which `\$` is an escape — so the template's value
+ * is the literal text `https://api.zz.test/v1${path}`, the path is never interpolated, and the
+ * connector requests that URL verbatim. Valid TypeScript, clean under Biome and under the
+ * generated package's own tsc, and silent until the connector is pointed at a real API: exactly
+ * the failure class `FOREIGN_PLACEHOLDER` above exists for.
+ */
+const RAW_SPLICE_TERMINATORS = [
+  { seq: "`", named: "a backtick", effect: "ends a template literal" },
+  { seq: "*/", named: "a block comment terminator", effect: "ends a block comment" },
+  {
+    seq: "\\",
+    named: "a backslash",
+    effect:
+      "escapes the character after it, so a ${…} that follows is emitted as literal text " +
+      "instead of an interpolation",
+  },
+] as const;
+
+/**
+ * The one `${…}` shape an emitter RESOLVES, so that it stops being interpolation before it
+ * reaches generated source.
+ *
+ * This mirrors `resolveEnvRefs` (src/emit/server/fetch-helper.ts) — the function that performs
+ * the rewrite, and therefore the authority on which references are not live. `baseExpr` is the
+ * exported entry point that runs it, and "accepts %j exactly when the emitter resolves every
+ * interpolation in it" in test/spec.test.ts holds this rule against that function's real output
+ * rather than against a second copy of this pattern, so a `resolveEnvRefs` that widens or narrows
+ * fails there instead of quietly disagreeing with this file.
+ *
+ * Note what is NOT reused: `headerOption` (same file) tests an inline header value with an
+ * ANCHORED `/^\$\{env\.\w+\}$/`, because a header value either is one reference or is a plain
+ * string. A base is a template — `https://${env.siteHost}/api` is the shape every fixture that
+ * uses one actually writes — so the question here is per-occurrence, "is every `${` in this
+ * string one of these", not "is this string one of these".
+ */
+const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
+
+/**
+ * How a raw-spliced field's `${…}` is disposed of, which is the one thing the guarded fields do
+ * not share.
+ *
+ * A `RegExp` is the shape an EMITTER rewrites before emission, stripped before the residue is
+ * scanned. `undefined` means the field takes no interpolation at all. `"path-template"` means the
+ * field is a path template, where `${…}` is the DSL's own and `parsePathTemplate` — not this
+ * refinement — decides which spellings are legal; it already refuses every `${` it did not
+ * consume, with a message naming the modes, so restating that here would produce two rejections
+ * for one mistake and one of them would be the vaguer.
+ */
+type SpliceInterpolation = RegExp | undefined | "path-template";
+
+/** One issue as the raw-splice refinement raises it: a message, at the field zod is checking. */
+type AddSpliceIssue = (message: string) => void;
+
+/**
+ * The terminator half, factored out because `tools[].path` needs it WITHOUT the interpolation
+ * half — see `SpliceInterpolation`. Splitting the two is what lets the terminator set stay one
+ * list applied uniformly to every carrier, which is the whole claim `RAW_SPLICE_TERMINATORS`
+ * makes about itself.
+ */
+function refuseTerminators(field: string, sites: string, v: string, add: AddSpliceIssue): void {
+  for (const t of RAW_SPLICE_TERMINATORS) {
+    if (!v.includes(t.seq)) continue;
+    add(
+      `"${field}" contains ${t.named} (${JSON.stringify(t.seq)}), which ${t.effect}. ` +
+        `This field is spliced raw into generated source (${sites}), so the sequence stops ` +
+        "being text: what follows it is emitted as something other than what was written, and " +
+        "the result still compiles, lints and typechecks, so nothing downstream reports it. " +
+        "Every sequence in this set is refused in every raw-spliced field, including where the " +
+        "field does not reach that construct today.",
+    );
+  }
+}
+
+/**
+ * A spec string the emitter splices RAW into generated source, refused if it can end the
+ * construct it lands in, or if it opens an interpolation nothing resolves.
+ *
+ * This is the only place that catches either. The emitters quote nothing (proved on the emitter
+ * itself by "splices `base` raw" in test/emit/server/fetch-helper.test.ts), and the resulting
+ * file is VALID TypeScript — `"https://api.zz.test/v1` + String(Date.now()) + `"` as a base emits
+ * a call expression between two literals, which Biome reformats and `tsc --noEmit --strict`
+ * accepts. Every gate downstream of the schema therefore reports green. Rejecting at the schema
+ * rather than at the splice sites is also what covers all three ways a spec is authored at once —
+ * hand-written, `--from-connector`, `--from-openapi`.
+ *
+ * `resolves` is what makes the two fields differ, and they differ because the EMITTERS do.
+ * `serviceLabel` passes `undefined`: nothing rewrites anything in it, so every `${` it carries is
+ * live. `fetchHelper.base` passes `RESOLVED_ENV_REF`, because `${env.X}` there is a documented
+ * feature — it appears in 7 of the 22 fixtures, three of them the byte-locked datadog, grafana and
+ * sentry, so banning `${` outright would fail diff:golden on the first run, and `bun run reach
+ * --baseline` says the same of the specs the deriver reconstructs from the corpus. Every OTHER
+ * `${` in a base is refused: the residue left once the resolved shape is removed is exactly what
+ * survives into the emitted template literal.
+ *
+ * **An earlier version of this rule admitted `${` in both fields**, on the grounds that an
+ * unresolved one produces an UNDEFINED IDENTIFIER the generated package's own `tsc --noEmit`
+ * reports. That is true of `${x}` and of nothing else. An interpolation whose expression is
+ * self-contained — `${(() => { … })()}`, which names nothing outside itself — leaves no identifier
+ * to be undefined: it compiles, lints and typechecks clean and then RUNS, in `base` on every
+ * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
+ * to draw the rule on, because it is a property of one payload rather than of the field.
+ *
+ * Measured across the 22 fixtures: no guarded field carries a backtick, a block-comment
+ * terminator or a backslash — which this docstring cannot spell out literally, the hazard in
+ * miniature — and `${` appears only in `fetchHelper.base`, always as `${env.X}`.
+ *
+ * `emptyIsMeaningful` exists for one carrier pair. `wrapped()` (src/emit/server/env.ts)
+ * substitutes `?? ""` for whichever of `prefix`/`suffix` is unset, so `""` and omitted emit
+ * identical bytes — and `classifyPlainReturn` (src/derive/server/env.ts) reads both from the
+ * template's cooked quasis unconditionally, which means `--from-connector` genuinely produces
+ * `""` for the unused side. A `.min(1)` on those two would reject a spec this repository's own
+ * deriver writes, and `reach --baseline` is where that would have been found.
+ */
+function rawSplicedString(
+  field: string,
+  sites: string,
+  resolves: SpliceInterpolation,
+  emptyIsMeaningful = false,
+) {
+  return (emptyIsMeaningful ? z.string() : z.string().min(1)).superRefine((v, ctx) => {
+    const add: AddSpliceIssue = (message) => ctx.addIssue({ code: "custom", message });
+    refuseTerminators(field, sites, v, add);
+
+    if (resolves === "path-template") return;
+
+    // Named for the claim it gates — an interpolation still live in the generated package —
+    // rather than for the residue that reveals it.
+    const hasLiveInterpolation = (resolves === undefined ? v : v.replaceAll(resolves, "")).includes(
+      "${",
+    );
+    if (!hasLiveInterpolation) return;
+    add(
+      `"${field}" opens an interpolation (\${…}) that no emitter resolves. This field is ` +
+        `spliced raw into generated source (${sites}), so the expression inside it is emitted ` +
+        "as an expression and evaluated at runtime. A self-contained one names nothing " +
+        "outside itself, so it compiles, lints and typechecks clean — nothing downstream " +
+        "reports it. " +
+        (resolves === undefined
+          ? "This field takes no interpolation at all: no emitter rewrites a reference in it."
+          : "The only interpolation this field takes is ${env.NAME}, which resolveEnvRefs " +
+            "(src/emit/server/fetch-helper.ts) rewrites to an accessor call before emission."),
+    );
+  });
+}
 export const ArgSchema = z
   .strictObject({
     type: z.enum(["string", "number", "boolean"]),
@@ -456,7 +622,18 @@ function checkQueryEntryArg(
 
 export const ToolSchema = z
   .strictObject({
-    name: z.string().min(1),
+    /**
+     * Quoted almost everywhere it is emitted — and raw in one place, which is the whole reason
+     * it is guarded: `renderMapping` (src/emit/wiring.ts) writes it into the `/** … *\/`
+     * docstring of the generated `<name>-mapping.ts`, where a name ending in `_list` and
+     * containing a block-comment terminator closes the docstring early and everything after it
+     * is emitted as statements.
+     */
+    name: rawSplicedString(
+      "tools[].name",
+      "the Gateway wiring mapping stub's block comment",
+      undefined,
+    ),
     description: z.string().min(1),
     args: z
       .record(
@@ -466,7 +643,25 @@ export const ToolSchema = z
         ArgSchema,
       )
       .default({}),
-    path: z.string().optional(),
+    /**
+     * `renderPath` (src/emit/server/path-template.ts) splices every literal segment into a
+     * template literal, escaping a backslash and a backtick as it goes — so those two are
+     * neutralised at the splice site and this guard is the second line rather than the only
+     * one. It is applied anyway, on `RAW_SPLICE_TERMINATORS`'s stated rule: the terminator set
+     * belongs to the field, and the block-comment terminator is neutralised nowhere. A path is
+     * the one carrier whose `${…}` is a documented DSL, so `parsePathTemplate` keeps that half
+     * — see `SpliceInterpolation`.
+     *
+     * No `.min(1)` here, deliberately: `path` was `z.string().optional()` and an empty path is
+     * already rejected by the checks that read it (a query tool's leading-`/` rule), so adding
+     * one would move where an existing rejection comes from without changing what is accepted.
+     */
+    path: rawSplicedString(
+      "tools[].path",
+      "the fetch helper's path argument template literal",
+      "path-template",
+      true,
+    ).optional(),
     query: z
       .array(QueryParamSchema)
       .min(1, "a query must declare at least one parameter")
@@ -486,8 +681,17 @@ export const ToolSchema = z
     effect: z.enum(["read", "write", "delete"]).default("read"),
     /** arg name -> API field name. Omitted means "the args object is the body". */
     body: z.record(z.string().min(1), z.string().min(1)).optional(),
-    /** Property plucked from the response envelope. Omitted means the response IS the array. */
-    rows: z.string().min(1).optional(),
+    /**
+     * Property plucked from the response envelope. Omitted means the response IS the array.
+     *
+     * An identifier, not a free string, because `renderSearchTool` (src/emit/server/search.ts)
+     * splices it into three code positions in one line — `const <rows> = (root as { <rows>?:
+     * unknown[] } | null)?.<rows>;`. An ordinary envelope key like `data-items` emits
+     * `const data-items = …`, which fails as a Biome PARSE error against the generator's own
+     * output rather than as a named spec error. `validateSpec` then checks it against every
+     * claimed name — see `checkRowsIdentifier` there for why it is checked and not claimed.
+     */
+    rows: identifierField().optional(),
     /** Per-connector result cap. Corpus: 100 ×24, 200 ×12, 2000 ×2, 50 ×1. */
     maxLimit: z.number().int().positive().default(100),
     filter: SearchFilterSchema.optional(),
@@ -592,8 +796,15 @@ export const EnvSchema = z
     vars: z.array(z.string().min(1)).min(1),
     /** Accessor function name. */
     local: identifierField(),
-    /** Internal variable name per var. Cosmetic; defaults to camelCase(var). */
-    bindings: z.array(z.string().min(1)).optional(),
+    /**
+     * Internal variable name per var. Cosmetic; defaults to camelCase(var).
+     *
+     * An identifier for the same reason `local` is, and it was not one: `readLines`
+     * (src/emit/server/env.ts) emits `const <binding> = process.env[…]?.trim();`, so a binding
+     * of `t = ((): string => { … })(); const junk` emits a second declaration whose initializer
+     * runs on every call to the accessor.
+     */
+    bindings: z.array(identifierField()).optional(),
     required: z.boolean().default(false),
     default: z.string().optional(),
     /**
@@ -607,8 +818,27 @@ export const EnvSchema = z
      * template.
      */
     transform: z.enum(["stripTrailingSlash", "trimTrailingSlashFn"]).optional(),
-    prefix: z.string().optional(),
-    suffix: z.string().optional(),
+    /**
+     * Text placed either side of the accessor's value, spliced RAW into `wrapped()`'s template
+     * literal (src/emit/server/env.ts) — and, for `auth: "basic"`, into the username ARGUMENT
+     * of `encodeBasicAuthHeader`, which is an expression position with no `return` in front of
+     * it. Reproduced before this guard existed: a `prefix` of
+     * `${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}` on zendesk's basic entry
+     * emitted that IIFE into the Authorization header built for every request. Both fields take
+     * no interpolation of their own — no emitter rewrites a reference in either.
+     */
+    prefix: rawSplicedString(
+      "env[].prefix",
+      "the env accessor's value template, and the username argument to encodeBasicAuthHeader",
+      undefined,
+      true,
+    ).optional(),
+    suffix: rawSplicedString(
+      "env[].suffix",
+      "the env accessor's value template, and the username argument to encodeBasicAuthHeader",
+      undefined,
+      true,
+    ).optional(),
     auth: z.enum(["bearer", "basic", "headers", "client-credentials"]).optional(),
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
@@ -704,119 +934,6 @@ export const EnvSchema = z
       "same module",
   });
 
-/**
- * The sequences that END the construct a raw-spliced spec string is emitted into.
- *
- * Two fields are spliced with no quoting or escaping: `fetchHelper.base` goes into the fetch
- * helper's URL template (`renderFetchHelper`, `renderWriteHelper` and `renderRestKitFetchHelper`
- * in src/emit/server/fetch-helper.ts all render `` `<base>${path}` ``), and `serviceLabel` goes
- * into the error message of the first two, into `renderTokenFunction`'s (src/emit/server/env.ts)
- * and into a block comment in src/emit/wiring.ts.
- *
- * Both sequences are rejected in BOTH fields even though `base` reaches no block comment today.
- * The rule belongs to the field rather than to the splice site, because splice sites are what
- * emitter changes add: `serviceLabel`'s own comment site (src/emit/wiring.ts, Stage C) arrived a
- * day after its two template sites, and nothing about that change would have prompted anyone to
- * revisit a per-site rule.
- */
-const RAW_SPLICE_TERMINATORS = [
-  { seq: "`", named: "a backtick", ends: "a template literal" },
-  { seq: "*/", named: "a block comment terminator", ends: "a block comment" },
-] as const;
-
-/**
- * The one `${…}` shape an emitter RESOLVES, so that it stops being interpolation before it
- * reaches generated source.
- *
- * This mirrors `resolveEnvRefs` (src/emit/server/fetch-helper.ts) — the function that performs
- * the rewrite, and therefore the authority on which references are not live. `baseExpr` is the
- * exported entry point that runs it, and "accepts %j exactly when the emitter resolves every
- * interpolation in it" in test/spec.test.ts holds this rule against that function's real output
- * rather than against a second copy of this pattern, so a `resolveEnvRefs` that widens or narrows
- * fails there instead of quietly disagreeing with this file.
- *
- * Note what is NOT reused: `headerOption` (same file) tests an inline header value with an
- * ANCHORED `/^\$\{env\.\w+\}$/`, because a header value either is one reference or is a plain
- * string. A base is a template — `https://${env.siteHost}/api` is the shape every fixture that
- * uses one actually writes — so the question here is per-occurrence, "is every `${` in this
- * string one of these", not "is this string one of these".
- */
-const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
-
-/**
- * A spec string the emitter splices RAW into generated source, refused if it can end the
- * construct it lands in, or if it opens an interpolation nothing resolves.
- *
- * This is the only place that catches either. The emitters quote nothing (proved on the emitter
- * itself by "splices `base` raw" in test/emit/server/fetch-helper.test.ts), and the resulting
- * file is VALID TypeScript — `"https://api.zz.test/v1` + String(Date.now()) + `"` as a base emits
- * a call expression between two literals, which Biome reformats and `tsc --noEmit --strict`
- * accepts. Every gate downstream of the schema therefore reports green. Rejecting at the schema
- * rather than at the splice sites is also what covers all three ways a spec is authored at once —
- * hand-written, `--from-connector`, `--from-openapi`.
- *
- * `resolves` is what makes the two fields differ, and they differ because the EMITTERS do.
- * `serviceLabel` passes `undefined`: nothing rewrites anything in it, so every `${` it carries is
- * live. `fetchHelper.base` passes `RESOLVED_ENV_REF`, because `${env.X}` there is a documented
- * feature — it appears in 7 of the 22 fixtures, three of them the byte-locked datadog, grafana and
- * sentry, so banning `${` outright would fail diff:golden on the first run, and `bun run reach
- * --baseline` says the same of the specs the deriver reconstructs from the corpus. Every OTHER
- * `${` in a base is refused: the residue left once the resolved shape is removed is exactly what
- * survives into the emitted template literal.
- *
- * **An earlier version of this rule admitted `${` in both fields**, on the grounds that an
- * unresolved one produces an UNDEFINED IDENTIFIER the generated package's own `tsc --noEmit`
- * reports. That is true of `${x}` and of nothing else. An interpolation whose expression is
- * self-contained — `${(() => { … })()}`, which names nothing outside itself — leaves no identifier
- * to be undefined: it compiles, lints and typechecks clean and then RUNS, in `base` on every
- * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
- * to draw the rule on, because it is a property of one payload rather than of the field.
- *
- * Measured across the 22 fixtures: a backtick appears 0 times in either field and a block-comment
- * terminator 0 times — which this docstring cannot spell out literally, the hazard in miniature —
- * and `${` appears 0 times in `serviceLabel`, so refusing it there costs nothing that exists.
- */
-function rawSplicedString(field: string, sites: string, resolves: RegExp | undefined) {
-  return z
-    .string()
-    .min(1)
-    .superRefine((v, ctx) => {
-      for (const t of RAW_SPLICE_TERMINATORS) {
-        if (!v.includes(t.seq)) continue;
-        ctx.addIssue({
-          code: "custom",
-          message:
-            `"${field}" contains ${t.named} (${JSON.stringify(t.seq)}), which ends ${t.ends}. ` +
-            `This field is spliced raw into generated source (${sites}), so a sequence that ` +
-            "closes the construct it lands in stops being text: everything after it is emitted " +
-            "as code, and the result still compiles, lints and typechecks, so nothing " +
-            "downstream reports it. Both sequences are refused in every raw-spliced field, " +
-            "including where the field does not reach that construct today.",
-        });
-      }
-
-      // Named for the claim it gates — an interpolation still live in the generated package —
-      // rather than for the residue that reveals it.
-      const hasLiveInterpolation = (
-        resolves === undefined ? v : v.replaceAll(resolves, "")
-      ).includes("${");
-      if (!hasLiveInterpolation) return;
-      ctx.addIssue({
-        code: "custom",
-        message:
-          `"${field}" opens an interpolation (\${…}) that no emitter resolves. This field is ` +
-          `spliced raw into generated source (${sites}), so the expression inside it is emitted ` +
-          "as an expression and evaluated at runtime. A self-contained one names nothing " +
-          "outside itself, so it compiles, lints and typechecks clean — nothing downstream " +
-          "reports it. " +
-          (resolves === undefined
-            ? "This field takes no interpolation at all: no emitter rewrites a reference in it."
-            : "The only interpolation this field takes is ${env.NAME}, which resolveEnvRefs " +
-              "(src/emit/server/fetch-helper.ts) rewrites to an accessor call before emission."),
-      });
-    });
-}
-
 export const FetchHelperSchema = z
   .strictObject({
     local: identifierField(),
@@ -833,8 +950,15 @@ export const FetchHelperSchema = z
      * newrelic/datadog/grafana/sentry do.
      */
     baseConst: identifierField().optional(),
-    /** Name of an env accessor returning the header record. */
-    headers: z.string().min(1).optional(),
+    /**
+     * Name of an env accessor returning the header record.
+     *
+     * An identifier, because `headerOption` (src/emit/server/fetch-helper.ts) emits it as a CALL
+     * — `headers: <name>()` — with nothing between the spec string and the emitted expression.
+     * A value of `((): Record<string, string> => { globalThis.__PWNED__ = "x"; return headers();
+     * })` emitted an IIFE the fetch helper invokes on every request, and it typechecked.
+     */
+    headers: identifierField().optional(),
     /** Literal header object, values may reference ${env.X}. Mutually exclusive with `headers`. */
     inlineHeaders: z.record(z.string(), z.string()).optional(),
     normalizeLeadingSlash: z.boolean().default(false),
@@ -1028,9 +1152,28 @@ export function capitalize(s: string): string {
   return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * The PascalCase identifier fragment every emitted name built from `title` is derived from —
+ * `register<X>Tool`, `create<X>Syncable`, `map<X>ItemToItem`, `<X>SearchMatchOptions`.
+ *
+ * Exported and shared because it was restated at three call sites and TWO of them stripped.
+ * `src/emit/search-filter.ts` spliced `title` in raw, so the ordinary two-word title every
+ * hyphenated connector defaults to — `capitalize("google-meet")` is `"Google-meet"` — emitted
+ * `export type Google-meetSearchMatchOptions`, and the generator failed with a Biome PARSE
+ * error against its own output. No search fixture has a multi-word title, which is why every
+ * gate stayed green; `google-meet`, `google-photos` and `github-actions` are exactly the corpus
+ * connectors a future search fixture would come from.
+ *
+ * `validateSpec` checks the RESULT is a usable identifier — stripping cannot rescue a title
+ * whose first character is a digit, and it can produce the empty string.
+ */
+export function titleIdentifier(title: string): string {
+  return title.replaceAll(/[^A-Za-z0-9]/g, "");
+}
+
 /** Module-scope registrar constant emitted for `style: "rest-kit"` connectors. */
 export function registrarName(spec: ConnectorSpec): string {
-  return `register${spec.title.replaceAll(/[^A-Za-z0-9]/g, "")}Tool`;
+  return `register${titleIdentifier(spec.title)}Tool`;
 }
 
 function preflightOutOfScope(input: unknown): void {
