@@ -256,10 +256,17 @@ export function loadDocument(text: string): LoadedDocument {
   const { value, source } = parseText(text);
   if (Array.isArray(value)) {
     if (source === "yaml") {
+      // Deliberately does NOT say `separated by "---"`. Bun.YAML.parse returns an array for a
+      // multi-document stream AND for a single document whose root is a sequence, and this
+      // function cannot tell them apart from the parsed value alone — so naming the separator
+      // would assert a construct that is absent from half the inputs that land here. That is the
+      // same wrong-claim shape the JSON branch below was corrected for; stating the observation
+      // (an array where an object belongs) rather than the cause is what makes it true for both.
       refuse(
         "multi-document-stream",
-        `this YAML holds ${value.length} documents separated by "---"; pass one document per ` +
-          "file so the one being read is the one you chose.",
+        `this YAML parsed to a sequence of ${value.length} items where a single OpenAPI ` +
+          "document object was expected — a multi-document stream, or a document whose root is " +
+          "a list. Pass one document per file so the one being read is the one you chose.",
       );
     }
     refuse("not-an-object", "the document root is a JSON array, not an object.");
@@ -319,7 +326,13 @@ function skipDetailFor(reason: SkippedOperation["reason"], key: string): string 
   return `OpenAPI method keys are lower-case; write "${key.toLowerCase()}:" instead of "${key}:".`;
 }
 
-/** Both listings come from one walk, so they can never disagree about what the document holds. */
+/**
+ * Both listings come from one walk DEFINITION, so they can never disagree about what the document
+ * holds — `collect` is pure and each key resolves to exactly one of skipped, listed, or ignored.
+ * Note the precision: `collect` *executes* once per exported call, so a full listing walks the
+ * document twice. Non-divergence follows from purity, not from single execution, and saying "one
+ * walk" unqualified would claim a mechanism that is not the one actually holding.
+ */
 type Listing = { operations: Operation[]; skipped: SkippedOperation[] };
 
 /**
