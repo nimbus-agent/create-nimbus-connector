@@ -31,17 +31,24 @@ const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  *
  * **Derived by generating, not written from memory.** The candidate universe was extracted from
  * two installed packages rather than typed out: every `createKeyword("…")` and
- * `createKeywordLike("…")` in `@babel/parser`'s lib (37 hard keywords, 45 contextual ones,
- * including every TypeScript soft keyword), plus the `keyword`/`strict`/`strictBind` tables in
- * `@babel/helper-validator-identifier` — which is where `package`, `private`, `protected`,
- * `public`, `eval` and `arguments` come from, none of which the parser's own tables carry — plus
- * twenty TypeScript type-space spellings added as controls. 102 words in all. Each was then put
- * through the real generator in each of the ten identifier positions the spec language has, for
- * both targets, and the emitted files were handed to the real Biome. A word is here if and only
- * if Biome refused to parse the result.
+ * `createKeywordLike("…")` in `@babel/parser`'s lib, plus the `keyword`/`strict`/`strictBind`
+ * tables in `@babel/helper-validator-identifier` — which is where `package`, `private`,
+ * `protected`, `public`, `eval` and `arguments` come from, six words neither of the parser's own
+ * keyword tables carries because strict mode, not the tokenizer, is what reserves them — plus
+ * twenty TypeScript type-space spellings added as controls. Each was then put through the real
+ * generator in each of the ten identifier positions the spec language has, for both targets, and
+ * the emitted files were handed to the real Biome. A word is here if and only if Biome refused to
+ * parse the result.
+ *
+ * **95 candidates, 48 of them here**, measured against @babel/parser 8.0.4 and
+ * @babel/helper-validator-identifier 8.0.4 — the versions are stated because the count moves with
+ * them, and a count with nothing to date it is what this repository's own rule forbids.
+ * test/reserved-words.test.ts re-derives the answer on every run and asserts floors rather than
+ * these numbers, so a version that adds a contextual keyword updates the rule instead of
+ * failing it.
  *
  * The 48 below broke in NINE of the ten positions — every declaration position there is — and
- * the tenth (a tool argument key) is discussed at its own call site. The other 54 emitted clean
+ * the tenth (a tool argument key) is discussed at its own call site. The other 47 emitted clean
  * and are deliberately absent: `type`, `as`, `any`, `namespace`, `declare`, `readonly`,
  * `satisfies`, `keyof`, `infer`, `is`, `out`, `override`, `accessor`, `using`, `async`, `of`,
  * `from`, `get`, `set`, `global`, `module`, `require`, `assert`, `unique` and the rest are
