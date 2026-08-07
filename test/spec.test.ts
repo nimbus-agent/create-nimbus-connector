@@ -1931,6 +1931,40 @@ describe("the raw-splice carriers the first version of the guard missed", () => 
     );
   });
 
+  it("rejects two vars in one entry sharing a binding, which emits a duplicate const", () => {
+    // Found while auditing the carriers, not in the review: `readLines` emits one
+    // `const <binding> = …` per var into a SINGLE accessor body, so ["t", "t"] emitted
+    // `const t = process.env["A_K"]…; const t = process.env["A_S"]…;` in one block.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        env: [
+          {
+            vars: ["A_K", "A_S"],
+            local: "h",
+            bindings: ["t", "t"],
+            auth: "headers",
+            headerNames: ["X-A", "X-B"],
+          },
+        ],
+        fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", headers: "h" },
+      }),
+    ).toThrow(/repeats a name/);
+  });
+
+  it("lets two DIFFERENT env entries share a binding, since each is its own function scope", () => {
+    // Twelve fixtures write bindings: ["t"], several of them alongside another entry.
+    expect(() =>
+      parseSpec({
+        ...MINIMAL,
+        env: [
+          { vars: ["A_ONE"], local: "one", bindings: ["t"], required: true },
+          { vars: ["A_TWO"], local: "two", bindings: ["t"], required: true },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects a non-identifier env binding, which is emitted as a const NAME", () => {
     expect(() => parseSpec(withEnv({ bindings: ["k = evil(); const j"] }))).toThrow(/identifier/);
   });

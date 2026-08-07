@@ -896,6 +896,16 @@ export const EnvSchema = z
   .refine((e) => e.bindings === undefined || e.bindings.length === e.vars.length, {
     message: '"bindings" must have exactly one entry per "vars" entry',
   })
+  // Within ONE entry, not across entries: `readLines` emits `const <binding> = …` once per var
+  // into a single accessor body, so two vars sharing a binding emit two `const`s of that name in
+  // one block — the generator failing against its own output instead of with a named spec error.
+  // Two DIFFERENT entries may share a binding freely; each is a separate function scope, and
+  // several fixtures do (bindings: ["t"] appears in twelve of them).
+  .refine((e) => e.bindings === undefined || new Set(e.bindings).size === e.bindings.length, {
+    message:
+      '"bindings" repeats a name — each var in one entry is read into its own const in the ' +
+      "same accessor body, so two vars cannot share one",
+  })
   .refine((e) => e.auth !== "headers" || e.headerNames?.length === e.vars.length, {
     message: '"headerNames" must have one entry per "vars" entry when auth is "headers"',
   })
