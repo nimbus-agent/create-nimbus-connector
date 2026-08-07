@@ -29,15 +29,20 @@ Three repos, three roles, and the split is load-bearing:
 repository.** Not into `src/`, not into `test/`, not into `fixtures/`. That is a licensing
 violation, not a style preference.
 
-**The one carve-out: description strings.** All ten real-connector fixtures reproduce that
+**The one carve-out: description strings.** All eleven real-connector fixtures reproduce that
 connector's `nimbus.extension.json` description and its tool descriptions verbatim — roughly
-7,363 characters across the corpus. This is required, not sloppiness: `nimbus.extension.json`
+8,452 characters across the corpus. This is required, not sloppiness: `nimbus.extension.json`
 and `src/server.ts` cannot byte-match the real connector without the exact string, and the
 four protected 6/6 fixtures (`newrelic`, `datadog`, `grafana`, `sentry`) depend on it. Both
 repositories are `nimbus-agent`-owned, which is what makes this a carve-out rather than an
 exception to the rule above. It is bounded strictly to these description strings — it does
 not extend to connector code, `shared/` source, or filter-file bodies, all of which stay
 hand-written.
+
+**`--from-connector` reads a connector directory and prints the spec that would regenerate
+it — an authoring aid, not a vendoring path.** [`docs/LICENSING.md`](./docs/LICENSING.md) is
+the full answer: why deriving a spec locally is not vendoring, and the one thing that stays
+forbidden — a spec derived from a real Nimbus connector may never be committed to `fixtures/`.
 
 This shapes the whole test strategy and explains things that otherwise look like
 over-engineering:
@@ -73,6 +78,8 @@ worth before quoting it as evidence.
 | `bunx tsc --noEmit` | This repo typechecks | — |
 | `bunx biome check src/ test/ scripts/` | This repo lints | — |
 | `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
+| `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
+| `bun run reach --baseline --nimbus-root <path>` | No connector lost a tier against `fixtures/reach-baseline.json` | Nimbus checkout |
 | `bun run acceptance <nimbus-root>` | A generated connector survives inside the monorepo | Nimbus checkout |
 | `bun run wiring:conformance --nimbus-root <path>` | The wiring skeleton still matches Nimbus's real sync interface | Nimbus checkout |
 | `bun run standalone-acceptance <sdk-root>` | A standalone package builds and serves MCP, against an **unreleased SDK branch** | SDK checkout, built |
@@ -93,6 +100,9 @@ worth before quoting it as evidence.
 - **`diff:golden` and `wiring:conformance` cannot run in CI** — both need the AGPL monorepo.
   They are local pre-merge gates. Do not add a CI job that skips when the root is absent; a
   silently-skipping gate is the failure mode this repo keeps removing.
+- **`reach` measures the spec language's coverage of the corpus and proves nothing about any
+  individual generated connector that `diff:golden` does not already prove.** It too needs the
+  AGPL monorepo and cannot run in CI.
 - **Coverage floors are per-file, not aggregate**, and `src/cli.ts` / `src/prompts.ts` are
   excluded from the metric because they are driven through `Bun.spawnSync` on the real binary,
   which Bun cannot instrument. Do **not** "raise coverage" by adding in-process tests that
@@ -131,9 +141,11 @@ list in the same change. Two waves have been missed already, and both were found
 ## Layout
 
 ```
-src/spec.ts        zod schema + parseSpec — the spec language
+src/spec.ts        zod schema + parseSpec, and the spec language's own parsers
+                   (parsePathTemplate, resolveKeyedShape) that emit/ and derive/ share
 src/validate.ts    identifier collision rules, RESERVED_IDENTIFIERS
 src/emit/          one module per emitted file; emit/server/ splits by concern
+src/derive/        the spec deriver — the inverse of src/emit/
 src/format.ts      the Biome integration
 src/golden/        fixture resolution, expectations, snapshots
 src/cli.ts         arg parsing, prompts, writeFiles
@@ -149,3 +161,8 @@ measured and rejected are its *Considered and declined*; harness behaviour is
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). Corpus measurements sit in the README next to
 the field they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a
 document repeating it goes stale silently.
+
+The **one** exception is *The measured ceiling* in `docs/ROADMAP.md`, which states the corpus
+regeneration counts on purpose. It earns it by carrying the date and the `packages/mcp-connectors`
+tree it was measured against, so a reader can tell when it was true; a number without those two
+is what the rule above forbids. If you re-measure it, move the date and the tree with it.

@@ -12,6 +12,9 @@ const SHARED = "../../shared/search-filter.ts";
 const SEARCH_TOOL = "../../shared/mcp-search-tool.ts";
 const KIT = "@nimbus-dev/sdk/connector-kit";
 
+/** The `fieldsFromKeys`-expressible shape of one filter's entries. */
+type KeyedShape = { keys: readonly string[]; tags: boolean };
+
 /** Sort key ignoring the `type ` prefix, which Biome does not consider when ordering. */
 function byBareName(a: string, b: string): number {
   return a.replace("type ", "").localeCompare(b.replace("type ", ""));
@@ -35,7 +38,7 @@ function renderStringArray(values: readonly string[]): string {
  * convergence rule, shared with the schema's own superRefine and validateSpec's at-most-one-
  * extractor rule, so the three call sites cannot drift apart.
  */
-function keyedShape(tool: ToolSpec): { keys: readonly string[]; tags: boolean } | undefined {
+function keyedShape(tool: ToolSpec): KeyedShape | undefined {
   const resolved = resolveKeyedShape(tool.filter!.fields!);
   if (resolved === undefined) return undefined;
   return { keys: resolved.keys, tags: tool.filter!.tags || resolved.trailingTagText };
@@ -80,7 +83,7 @@ function primitivesFor(entries: readonly FieldEntry[]): string[] {
   return [...names];
 }
 
-function keyedFilter(tool: ToolSpec, shape: { keys: readonly string[]; tags: boolean }): string {
+function keyedFilter(tool: ToolSpec, shape: KeyedShape): string {
   const keys = renderStringArray(shape.keys);
   const opts = shape.tags ? ", { tags: true }" : "";
   return [
@@ -113,26 +116,15 @@ function stubFilter(tool: ToolSpec): string {
   ].join("\n");
 }
 
-export function emitSearchFilter(
-  spec: ConnectorSpec,
-  target: GenerateTarget,
-): GeneratedFile | undefined {
-  const tools = spec.tools.filter((t) => t.impl === "search");
-  if (tools.length === 0) return undefined;
-
-  const shapes = new Map<ToolSpec, { keys: readonly string[]; tags: boolean } | undefined>();
-  for (const t of tools) {
-    shapes.set(t, t.filter!.fields === undefined ? undefined : keyedShape(t));
-  }
-
-  const keyedTools = tools.filter((t) => shapes.get(t) !== undefined);
-  const extractorTools = tools.filter(
-    (t) => t.filter!.fields !== undefined && shapes.get(t) === undefined,
-  );
-  const anyStub = tools.some((t) => t.filter!.fields === undefined);
-
-  // Only the symbols something in this file actually names — an unused import is a
-  // noUnusedLocals error in the generated package, and biome's own lint rejects it too.
+/**
+ * Only the symbols something in the emitted file actually names — an unused import is a
+ * noUnusedLocals error in the generated package, and biome's own lint rejects it too.
+ * Returned already sorted by `byBareName`, the order both import forms print in.
+ */
+function filterImportNames(
+  keyedTools: readonly ToolSpec[],
+  extractorTools: readonly ToolSpec[],
+): string[] {
   const filterNames: string[] = [];
   if (keyedTools.length > 0) filterNames.push("fieldsFromKeys");
   if (keyedTools.length > 0 || extractorTools.length > 0) filterNames.push("makeQueryFilter");
@@ -143,37 +135,68 @@ export function emitSearchFilter(
   }
   filterNames.push("type SearchMatchOptions");
   filterNames.sort(byBareName);
+  return filterNames;
+}
 
-  const importLines =
-    target === "standalone"
-      ? // One barrel, so one import: the SDK's connector-kit re-exports SearchFilter
-        // alongside the rest (Task 12). Gated on anyStub for the same reason as the
-        // monorepo branch below — a standalone spec whose search tool(s) are all keyed
-        // never names SearchFilter in its body, so importing it unconditionally would be
-        // an unused import under the generated package's own noUnusedLocals.
-        [
-          renderBlockImport(
-            (anyStub ? [...filterNames, "type SearchFilter"] : filterNames).sort(byBareName),
-            KIT,
-          ),
-        ]
-      : // Two modules in the monorepo, and the split is not cosmetic: SearchFilter is
-        // declared in shared/mcp-search-tool.ts, NOT in shared/search-filter.ts. Emitting it
-        // from the latter is an unresolved import that fails the connector's own tsc.
-        // Both specifiers are relative, and "mcp-search-tool" sorts before "search-filter".
-        [
-          ...(anyStub ? [renderBlockImport(["type SearchFilter"], SEARCH_TOOL)] : []),
-          renderBlockImport(filterNames, SHARED),
-        ];
+/** The emitted file's import prologue: one barrel standalone, two modules in the monorepo. */
+function renderImportLines(
+  target: GenerateTarget,
+  filterNames: readonly string[],
+  anyStub: boolean,
+): string[] {
+  if (target === "standalone") {
+    // One barrel, so one import: the SDK's connector-kit re-exports SearchFilter
+    // alongside the rest (Task 12). Gated on anyStub for the same reason as the
+    // monorepo branch below — a standalone spec whose search tool(s) are all keyed
+    // never names SearchFilter in its body, so importing it unconditionally would be
+    // an unused import under the generated package's own noUnusedLocals.
+    const names = anyStub ? [...filterNames, "type SearchFilter"] : [...filterNames];
+    return [renderBlockImport(names.toSorted(byBareName), KIT)];
+  }
+  // Two modules in the monorepo, and the split is not cosmetic: SearchFilter is
+  // declared in shared/mcp-search-tool.ts, NOT in shared/search-filter.ts. Emitting it
+  // from the latter is an unresolved import that fails the connector's own tsc.
+  // Both specifiers are relative, and "mcp-search-tool" sorts before "search-filter".
+  return [
+    ...(anyStub ? [renderBlockImport(["type SearchFilter"], SEARCH_TOOL)] : []),
+    renderBlockImport(filterNames, SHARED),
+  ];
+}
+
+/** Which of the three filter forms one search tool emits: stub, bespoke extractor, or keyed. */
+function renderToolFilter(tool: ToolSpec, shape: KeyedShape | undefined): string {
+  if (tool.filter!.fields === undefined) return stubFilter(tool);
+  return shape === undefined ? extractorFilter(tool) : keyedFilter(tool, shape);
+}
+
+export function emitSearchFilter(
+  spec: ConnectorSpec,
+  target: GenerateTarget,
+): GeneratedFile | undefined {
+  const tools = spec.tools.filter((t) => t.impl === "search");
+  if (tools.length === 0) return undefined;
+
+  const shapes = new Map<ToolSpec, KeyedShape | undefined>();
+  for (const t of tools) {
+    shapes.set(t, t.filter!.fields === undefined ? undefined : keyedShape(t));
+  }
+
+  const keyedTools = tools.filter((t) => shapes.get(t) !== undefined);
+  const extractorTools = tools.filter(
+    (t) => t.filter!.fields !== undefined && shapes.get(t) === undefined,
+  );
+  const anyStub = tools.some((t) => t.filter!.fields === undefined);
+
+  const importLines = renderImportLines(
+    target,
+    filterImportNames(keyedTools, extractorTools),
+    anyStub,
+  );
 
   const sections = [
     importLines.join("\n"),
     `export type ${spec.title}SearchMatchOptions = SearchMatchOptions;`,
-    ...tools.map((t) => {
-      if (t.filter!.fields === undefined) return stubFilter(t);
-      const shape = shapes.get(t);
-      return shape === undefined ? extractorFilter(t) : keyedFilter(t, shape);
-    }),
+    ...tools.map((t) => renderToolFilter(t, shapes.get(t))),
   ];
 
   return { path: ["src", "search-filter.ts"], content: `${sections.join("\n\n")}\n` };

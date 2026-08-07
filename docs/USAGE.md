@@ -191,7 +191,52 @@ incompatible with `--standalone`, since a standalone connector has no Gateway to
 
 ---
 
-## 8. Flag reference
+## 8. Deriving a spec from an existing connector
+
+`--from-connector <dir>` runs the pipeline in reverse: point it at a directory holding
+`src/server.ts` and `nimbus.extension.json` — a connector this tool generated, or one you
+already maintain — and it prints the `ConnectorSpec` JSON that would regenerate it, instead of
+writing anything.
+
+```bash
+bunx create-nimbus-connector my-service --standalone
+bunx create-nimbus-connector --from-connector my-service > my-service.spec.json
+```
+
+This is an authoring aid, not a second output format: the printed JSON goes back through
+`--spec` to regenerate the package, and is meant to be read, edited and diffed like any
+other spec in this repo's `fixtures/`. **One field is recovered but not guaranteed**, and it is
+worth knowing before you trust a derived spec unread: for `style: "rest-kit"`, `title` is
+recovered by inverting the registrar name, and that sanitization is many-to-one — a title with a
+space regenerates the same `src/server.ts` and a different `README.md`. Check `title` by eye;
+[ROADMAP.md's Known limitations](./ROADMAP.md#known-limitations) has the entry.
+[`docs/LICENSING.md`](./LICENSING.md) is the full answer
+on what that is and is not — the short version is that running this against a checkout you
+already have is not vendoring, but a spec derived from a **real Nimbus connector** may never be
+committed to this project's own `fixtures/`.
+
+**Two outcomes, not one.** A connector this generator's spec language cannot fully describe is
+`blocked`, not silently approximated: the CLI prints which constructs stopped the read, in the
+same vocabulary `bun run reach --verbose` uses, and exits non-zero. This includes a spec that
+reads back cleanly but then trips `RESERVED_IDENTIFIERS` (`src/validate.ts`) — e.g. a
+hand-authored connector whose fetch helper happens to be named `token` or `url` — reported as a
+`rejected-by-validate` blocker rather than printed as if it were a success: every spec that
+reaches stdout on exit 0 has already passed `parseSpec` and `validateSpec`, which is what makes
+the round-trip claim below true rather than aspirational. Add `--partial` to get a draft instead
+of only the report — the draft carries a `$partial` marker key that `ConnectorSpecSchema` refuses
+by construction, so it cannot be generated until you resolve every blocker and delete the key by
+hand. Either way, watch stderr: an `effect` (`read`/`write`/`delete`) that could not be pinned to
+one tool is printed as a note asking you to confirm it, because the manifest's `hitlRequired` set
+alone does not always say which tool earned it.
+
+`--from-connector` is mutually exclusive with a positional name, `--spec`, `--gateway-wiring`,
+`--out-dir`, `--standalone`, `--license` and `--dry-run` — it takes the connector's name and
+target from the directory it reads (the target is printed as a stderr note, not asked for), and
+it only ever prints to stdout, so none of the flags that shape a write have anything to act on.
+
+---
+
+## 9. Flag reference
 
 | Flag | Effect |
 | --- | --- |
@@ -202,6 +247,8 @@ incompatible with `--standalone`, since a standalone connector has no Gateway to
 | `--license <spdx>` | SPDX identifier for the generated `package.json`. **`--standalone` only** — a monorepo-target connector is AGPL-3.0-only unconditionally, since it lives in the AGPL repo and imports AGPL code. Rejects npm's `SEE LICENSE IN <file>` form, which is not SPDX |
 | `--gateway-wiring <root>` | Also emit the Gateway wiring skeleton and checklist. Monorepo target only |
 | `--force` | Allow overwriting existing **wiring** files. Only valid with `--gateway-wiring` |
+| `--from-connector <dir>` | Read an existing connector directory and print its derived spec. Excludes a positional name, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run` |
+| `--partial` | With `--from-connector`, print a draft spec (marked so it cannot be generated) instead of only a blocker report. Only valid with `--from-connector` |
 | `--help` | Usage |
 | `--version` | Version |
 
@@ -209,7 +256,7 @@ An unrecognised flag is an error with a did-you-mean suggestion rather than bein
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 **`command not found` / the shebang fails.** The CLI is Bun-only. Install Bun; `npx` will not
 work.
@@ -225,6 +272,15 @@ list.
 **Standalone `bun install` cannot resolve `@nimbus-dev/sdk`.** The generated floor may name a
 release that is not published yet. Check the version in the generated `package.json` against
 what is on npm.
+
+**`--from-connector` says `@babel/parser is not installed`.** It is an `optionalDependency`,
+needed only to read an existing connector's source, not to generate one. Run
+`bun add @babel/parser` and try again.
+
+**`--from-connector` reports `cannot read <dir> into a spec`.** The directory uses a construct
+the spec language does not model. Each line names the construct; [ROADMAP.md's Known
+limitations](./ROADMAP.md#known-limitations) lists the ones that are permanent. Add `--partial`
+for a draft to work from instead of only the report.
 
 **The generated connector typechecks but a tool fails at runtime.** Credentials come from the
 environment only. Confirm every `env.vars` name is exported; the accessor throws by design

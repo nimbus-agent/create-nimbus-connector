@@ -30,16 +30,26 @@ export type CliOptions = {
    * (a hand-authored real connector, or Gateway wiring already filled in) unless this is set.
    */
   force: boolean;
+  /** --from-connector <dir>: read an existing connector directory and print its derived spec. */
+  fromConnector?: string;
+  /**
+   * --partial: with --from-connector, emit a DRAFT spec instead of only a blocker report when
+   * derivation fails. The draft carries PARTIAL_MARKER, which ConnectorSpecSchema (a
+   * z.strictObject) refuses by construction — see src/derive/from-connector.ts.
+   */
+  partial: boolean;
 };
 
 /** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
 const KNOWN_FLAGS = [
   "--dry-run",
   "--force",
+  "--from-connector",
   "--gateway-wiring",
   "--help",
   "--license",
   "--out-dir",
+  "--partial",
   "--spec",
   "--standalone",
   "--version",
@@ -84,17 +94,20 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
 
 /** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
 function parseFlags(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = { dryRun: false, standalone: false, force: false };
+  const opts: CliOptions = { dryRun: false, standalone: false, force: false, partial: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--standalone") opts.standalone = true;
     else if (a === "--force") opts.force = true;
+    else if (a === "--partial") opts.partial = true;
     else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
     else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
     else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
     else if (a === "--gateway-wiring") {
       opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
+    } else if (a === "--from-connector") {
+      opts.fromConnector = takeValue(argv, ++i, "--from-connector");
     } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
     else opts.name = a;
   }
@@ -112,6 +125,39 @@ function assertFlagCombination(opts: CliOptions): void {
         "and was probably a mistake — remove one.",
     );
   }
+  // --from-connector only ever reads a directory and prints its derived spec to stdout — it
+  // generates nothing and writes nothing, so every flag that shapes a WRITE is dead weight
+  // rather than merely redundant. Checked as its own group, ahead of each flag's own generic
+  // rule below (e.g. --license normally only needs --standalone), so a combination like
+  // --from-connector --standalone --license MIT — where BOTH flags are dead — reports the
+  // reason specific to --from-connector rather than "add --standalone", which would be actively
+  // wrong advice here since --standalone itself is refused two checks below.
+  if (opts.fromConnector !== undefined && opts.outDir !== undefined) {
+    throw new Error(
+      "--from-connector always prints its derived spec to stdout; --out-dir names a directory " +
+        "to WRITE a package into, and this command writes no package. Drop --out-dir.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.standalone) {
+    throw new Error(
+      "--from-connector reads its target (monorepo or standalone) FROM the connector directory " +
+        "and prints it as a stderr note — it does not generate a package for --standalone to " +
+        "shape. Drop --standalone.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.license !== undefined) {
+    throw new Error(
+      "--license sets the SPDX field of a package this command would generate, and " +
+        "--from-connector generates no package — it only reads one and prints its spec. Drop " +
+        "--license.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.dryRun) {
+    throw new Error(
+      "--from-connector never writes files, with or without --dry-run — the two flags claim " +
+        "the same thing twice. Drop --dry-run.",
+    );
+  }
   // A user who believes they set a license and did not is a worse outcome than an error.
   if (opts.license !== undefined && !opts.standalone) {
     throw new Error(
@@ -124,6 +170,11 @@ function assertFlagCombination(opts: CliOptions): void {
   if (opts.force && opts.gatewayWiring === undefined) {
     throw new Error("--force only applies to --gateway-wiring output. Add it, or drop --force.");
   }
+  if (opts.partial && opts.fromConnector === undefined) {
+    throw new Error(
+      "--partial only applies to --from-connector output. Add it, or drop --partial.",
+    );
+  }
   // --gateway-wiring is monorepo-target only, as the README says, and it was the one flag
   // conflict here that was silently accepted instead. It is not merely ineffective under
   // --standalone: it would still write two files into the Nimbus checkout, importing
@@ -135,6 +186,24 @@ function assertFlagCombination(opts: CliOptions): void {
         "<name>-sync.ts and <name>-mapping.ts into the Nimbus Gateway, which a --standalone " +
         "connector does not live in and is not registered with. Drop --standalone, or drop " +
         "--gateway-wiring.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.specPath !== undefined) {
+    throw new Error(
+      "--from-connector derives a spec from an existing connector and --spec reads one from a " +
+        "file; passing both means one would be discarded. Keep one.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.name !== undefined) {
+    throw new Error(
+      "--from-connector takes the connector name from the directory it reads; a positional " +
+        "name is redundant and was probably a mistake — remove one.",
+    );
+  }
+  if (opts.fromConnector !== undefined && opts.gatewayWiring !== undefined) {
+    throw new Error(
+      "--from-connector prints a spec and writes nothing, so --gateway-wiring has nothing to " +
+        "attach to. Derive the spec first, then generate from it with --spec.",
     );
   }
 }
@@ -230,6 +299,8 @@ Flags:
   --license <id>           SPDX licence for --standalone output (default: UNLICENSED)
   --gateway-wiring <root>  also emit Nimbus Gateway sync/mapping skeletons (monorepo only)
   --force                  allow --gateway-wiring to overwrite existing target files
+  --from-connector <dir>   read an existing connector directory and print its spec
+  --partial                with --from-connector, emit a DRAFT spec instead of a blocker report
   --dry-run                print what would be written, write nothing
   --version                print the version
   --help                   show this message
@@ -308,6 +379,35 @@ export async function main(argv: readonly string[]): Promise<void> {
   if (await handleInfoFlags(argv)) return;
 
   const opts = parseCliArgs(argv);
+
+  if (opts.fromConnector !== undefined) {
+    // Lazy: a static import would pull @babel/parser into the module graph for every command,
+    // so a consumer without the optionalDependency could not even run --dry-run. Task 3's
+    // step 6 is the check that this stays true.
+    const { initParser, parserAvailable, parserUnavailableReason } = await import(
+      "./derive/ast.ts"
+    );
+    const { deriveFromDirectory, renderBlockers } = await import("./derive/from-connector.ts");
+    await initParser();
+    if (!parserAvailable())
+      throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
+
+    const result = await deriveFromDirectory(opts.fromConnector, { partial: opts.partial });
+    if (!result.ok) {
+      // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
+      // Error as one prefixed line, which would mangle a multi-line report and repeat the
+      // program name. The throw below is only how this process exits non-zero.
+      console.error(renderBlockers(opts.fromConnector, result.blockers));
+      throw new Error(`--from-connector: ${opts.fromConnector} could not be read into a spec.`);
+    }
+    console.log(JSON.stringify(result.spec, null, 2));
+    for (const note of result.notes) console.error(`note: ${note}`);
+    if (result.target === "standalone") {
+      console.error("note: read from a standalone package — generate with --standalone.");
+    }
+    return;
+  }
+
   const spec =
     opts.specPath !== undefined
       ? parseSpec(await readSpecFile(opts.specPath))

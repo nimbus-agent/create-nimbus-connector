@@ -13,6 +13,7 @@ describe("parseCliArgs", () => {
       dryRun: false,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -22,6 +23,7 @@ describe("parseCliArgs", () => {
       dryRun: true,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -32,6 +34,7 @@ describe("parseCliArgs", () => {
       dryRun: false,
       standalone: false,
       force: false,
+      partial: false,
     });
   });
 
@@ -97,6 +100,7 @@ describe("parseCliArgs", () => {
         standalone: true,
         dryRun: false,
         force: false,
+        partial: false,
       });
     });
   });
@@ -146,6 +150,98 @@ describe("parseCliArgs", () => {
 
     it("rejects --force without --gateway-wiring rather than ignoring it", () => {
       expect(() => parseCliArgs(["acme", "--force"])).toThrow(/--gateway-wiring/);
+    });
+  });
+
+  describe("--from-connector", () => {
+    it("is undefined by default", () => {
+      expect(parseCliArgs(["acme"]).fromConnector).toBeUndefined();
+    });
+
+    it("is set by the flag", () => {
+      expect(parseCliArgs(["--from-connector", "/tmp/some-connector"]).fromConnector).toBe(
+        "/tmp/some-connector",
+      );
+    });
+
+    it("rejects --from-connector with no following value", () => {
+      expect(() => parseCliArgs(["--from-connector"])).toThrow(/--from-connector/);
+    });
+
+    it("still accepts --from-connector on its own", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x"])).not.toThrow();
+    });
+
+    it("rejects --from-connector combined with --spec, naming both flags", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--spec", "x.json"])).toThrow(
+        /--from-connector/,
+      );
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--spec", "x.json"])).toThrow(
+        /--spec/,
+      );
+    });
+
+    it("rejects --from-connector combined with a positional name", () => {
+      expect(() => parseCliArgs(["acme", "--from-connector", "/tmp/x"])).toThrow(
+        /--from-connector/,
+      );
+    });
+
+    it("rejects --from-connector combined with --gateway-wiring", () => {
+      expect(() =>
+        parseCliArgs(["--from-connector", "/tmp/x", "--gateway-wiring", "C:/gitrep/Nimbus"]),
+      ).toThrow(/--gateway-wiring/);
+    });
+
+    // I4 (final whole-branch review): --out-dir, --standalone, --license and --dry-run were
+    // accepted alongside --from-connector with zero effect — silently ignored, which
+    // assertFlagCombination's own docstring calls a worse outcome than a loud rejection. Each
+    // is checked the same way the three refusals above already are.
+    it("rejects --from-connector combined with --out-dir, since it writes nothing to redirect", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--out-dir", "/tmp/y"])).toThrow(
+        /--out-dir/,
+      );
+    });
+
+    it("rejects --from-connector combined with --standalone, since the target comes from the directory read", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--standalone"])).toThrow(
+        /--standalone/,
+      );
+    });
+
+    // The worst pair the review named: BOTH flags are dead here, and --license exists only to
+    // be gated on --standalone — so this must fail on --from-connector's own rule, not on the
+    // generic "--license needs --standalone" one two flags away from what the user actually
+    // typed. Asserted on the exact combination, not just --license alone, in case a future edit
+    // reorders the checks and this pair starts throwing the wrong message again.
+    it("rejects --from-connector --standalone --license MIT — the worst pair, both flags dead", () => {
+      expect(() =>
+        parseCliArgs(["--from-connector", "/tmp/x", "--standalone", "--license", "MIT"]),
+      ).toThrow(/--from-connector/);
+    });
+
+    it("rejects --from-connector combined with --license alone (no --standalone)", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--license", "MIT"])).toThrow(
+        /--from-connector/,
+      );
+    });
+
+    it("rejects --from-connector combined with --dry-run, since it never writes files either way", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--dry-run"])).toThrow(/--dry-run/);
+    });
+  });
+
+  describe("--partial", () => {
+    it("defaults to false", () => {
+      expect(parseCliArgs(["acme"]).partial).toBe(false);
+    });
+
+    it("is set by the flag when combined with --from-connector", () => {
+      expect(parseCliArgs(["--from-connector", "/tmp/x", "--partial"]).partial).toBe(true);
+    });
+
+    it("rejects --partial without --from-connector rather than ignoring it", () => {
+      expect(() => parseCliArgs(["acme", "--partial"])).toThrow(/--from-connector/);
     });
   });
 });

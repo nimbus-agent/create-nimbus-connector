@@ -4,6 +4,7 @@ import {
   formatAll,
   formatterAvailable,
   formatterUnavailableReason,
+  formatterUnavailableReasonFor,
   initFormatter,
 } from "../src/format.ts";
 
@@ -47,7 +48,7 @@ describe("initFormatter", () => {
       'if (!formatterAvailable()) throw new Error("formatterAvailable() was false");' +
       'console.log("ok");';
     const r = Bun.spawnSync(["bun", "-e", script], {
-      cwd: import.meta.dir + "/..",
+      cwd: `${import.meta.dir}/..`,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -76,7 +77,7 @@ describe("initFormatter surfaces configuration bugs", () => {
       'const { initFormatter } = await import("./src/format.ts");' +
       "await initFormatter();";
     const r = Bun.spawnSync(["bun", "-e", script], {
-      cwd: import.meta.dir + "/..",
+      cwd: `${import.meta.dir}/..`,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -150,6 +151,75 @@ describe("initFormatter distinguishes an absent optional dependency from a broke
   });
 });
 
+describe("formatterUnavailableReasonFor", () => {
+  // The subprocess tests above prove the WIRING — that initFormatter routes a failed import
+  // into this diagnosis. These cover the diagnosis itself, in-process, because the subprocess
+  // form cannot: Bun does not instrument child processes, so every branch below read as
+  // uncovered while being, in fact, exercised. Both layers are kept deliberately — deleting
+  // the subprocess tests would leave the wiring unproven, and deleting these would leave the
+  // branch table unable to show a regression in the misdiagnosis guard.
+  function resolutionError(code: string, extra: Record<string, unknown>): unknown {
+    return Object.assign(new Error("Cannot find module 'x' from '/y'"), { code, ...extra });
+  }
+
+  it("says 'not installed' when the missing specifier is js-api itself", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("ERR_MODULE_NOT_FOUND", { specifier: "@biomejs/js-api/nodejs" }),
+    );
+    expect(reason).toMatch(/is not installed/);
+    expect(reason).toMatch(/optionalDependency/);
+  });
+
+  it("accepts the MODULE_NOT_FOUND spelling as well as ERR_MODULE_NOT_FOUND", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("MODULE_NOT_FOUND", { specifier: "@biomejs/js-api/nodejs" }),
+    );
+    expect(reason).toMatch(/is not installed/);
+  });
+
+  it("blames the backend, not js-api, when a SIBLING specifier is what is missing", () => {
+    const reason = formatterUnavailableReasonFor(
+      resolutionError("ERR_MODULE_NOT_FOUND", { specifier: "@biomejs/wasm-nodejs" }),
+    );
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/installed but failed to load/);
+    expect(reason).toMatch(/@biomejs\/wasm-nodejs/);
+  });
+
+  it("falls back to the message when a runtime omits the structured specifier field", () => {
+    const err = Object.assign(new Error("Cannot find module '@biomejs/js-api/nodejs' from '/x'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    expect(formatterUnavailableReasonFor(err)).toMatch(/is not installed/);
+  });
+
+  it("does not claim 'not installed' when neither specifier nor message names js-api", () => {
+    const err = Object.assign(new Error("Cannot find module 'something-else' from '/x'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    expect(formatterUnavailableReasonFor(err)).toMatch(/installed but failed to load/);
+  });
+
+  it("treats a non-resolution error code as a load failure", () => {
+    const reason = formatterUnavailableReasonFor(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+    );
+    expect(reason).not.toMatch(/is not installed/);
+    expect(reason).toMatch(/EACCES: permission denied/);
+  });
+
+  it.each([
+    ["a plain string", "boom"],
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 42],
+  ])("stringifies %s rather than throwing on a non-Error rejection", (_label, thrown) => {
+    const reason = formatterUnavailableReasonFor(thrown);
+    expect(reason).toMatch(/installed but failed to load/);
+    expect(reason).toMatch(new RegExp(`Underlying error: ${String(thrown)}`));
+  });
+});
+
 describe("formatAll before init", () => {
   // Run in a subprocess with a pristine module registry. A query-string import
   // (`../src/format.ts?x=1`) does currently give a fresh module in Bun 1.3.14 — verified —
@@ -164,7 +234,7 @@ describe("formatAll before init", () => {
         'const { formatAll } = await import("./src/format.ts");' +
           'formatAll([{ path: ["a.ts"], content: "const x=1\\n" }]);',
       ],
-      { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" },
+      { cwd: `${import.meta.dir}/..`, stdout: "pipe", stderr: "pipe" },
     );
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toMatch(/initFormatter/);

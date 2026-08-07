@@ -18,6 +18,18 @@
 export type Check = { name: string; ok: boolean; output: string; skipped?: boolean };
 
 /**
+ * The three-state label for one check.
+ *
+ * `skipped` is tested FIRST and wins outright: a skipped check deliberately carries `ok: true`
+ * (see the `Check` docstring) so the exit gate does not fail the run, so reading `ok` first
+ * would print every skip as PASS and hide the hole in the gate.
+ */
+function verdictLabel(c: Check): string {
+  if (c.skipped === true) return "SKIP";
+  return c.ok ? "PASS" : "FAIL";
+}
+
+/**
  * The report lines for a check list, in the order they are printed.
  *
  * A check's output is shown when it FAILED or was SKIPPED and there is something to show: a
@@ -27,7 +39,7 @@ export type Check = { name: string; ok: boolean; output: string; skipped?: boole
 export function formatCheckLines(checks: readonly Check[]): string[] {
   const lines: string[] = [];
   for (const c of checks) {
-    lines.push(`${c.skipped === true ? "SKIP" : c.ok ? "PASS" : "FAIL"}  ${c.name}`);
+    lines.push(`${verdictLabel(c)}  ${c.name}`);
     if ((c.skipped === true || !c.ok) && c.output !== "") lines.push(c.output);
   }
   return lines;

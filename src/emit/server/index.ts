@@ -7,8 +7,16 @@ import { renderHandRolledTools } from "./tools-hand.ts";
 import { renderRestKitTools } from "./tools-rest.ts";
 
 const KIT = "@nimbus-dev/sdk/connector-kit";
+const MCP_TOOL_KIT = "../../shared/mcp-tool-kit.ts";
 const RUN_READ_ONLY = "../../shared/run-read-only-mcp-connector.ts";
 const SEARCH_TOOL = "../../shared/mcp-search-tool.ts";
+const ZOD_IMPORT = 'import { z } from "zod";';
+
+/** Lexicographic order of two strings, as a `sort` comparator result. */
+function compareStrings(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
 
 function isHandStyle(spec: ConnectorSpec): boolean {
   return spec.style === "hand-rolled" || spec.style === "read-only-kit";
@@ -165,9 +173,7 @@ function filterImport(spec: ConnectorSpec, target: GenerateTarget): string | und
 type RelativeImportBlock = { readonly from: string; readonly lines: readonly string[] };
 
 function sortedRelativeImportLines(blocks: readonly RelativeImportBlock[]): string[] {
-  return [...blocks]
-    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
-    .flatMap((b) => b.lines);
+  return [...blocks].sort((a, b) => compareStrings(a.from, b.from)).flatMap((b) => b.lines);
 }
 
 /**
@@ -198,7 +204,7 @@ function biomeNamedImportOrder(names: readonly string[]): string[] {
     const lb = kb.local.charAt(0).toLowerCase();
     if (la !== lb) return la < lb ? -1 : 1;
     if (ka.isType !== kb.isType) return ka.isType ? -1 : 1;
-    return ka.local < kb.local ? -1 : ka.local > kb.local ? 1 : 0;
+    return compareStrings(ka.local, kb.local);
   });
 }
 
@@ -220,79 +226,106 @@ function usesZod(spec: ConnectorSpec, target: GenerateTarget): boolean {
   return spec.tools.some((t) => t.impl !== "search" || Object.keys(t.args).length > 0);
 }
 
-function imports(spec: ConnectorSpec, target: GenerateTarget): string {
-  const zodNeeded = usesZod(spec, target);
+/**
+ * The package-specifier import group the emitted server opens with — empty for the one shape
+ * that has none: monorepo read-only-kit, whose McpServer/StdioServerTransport wiring lives in
+ * the shared runReadOnlyMcpConnector helper rather than in the emitted file.
+ */
+function packageImportHead(spec: ConnectorSpec, target: GenerateTarget): string[] {
+  if (spec.style === "read-only-kit" && target === "monorepo") return [];
+  return [
+    'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
+    'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
+  ];
+}
 
-  const zodImport = 'import { z } from "zod";';
-  const head =
-    spec.style === "read-only-kit" && target === "monorepo"
-      ? []
-      : [
-          'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";',
-          'import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";',
-        ];
+/**
+ * Everything after the @modelcontextprotocol group on the standalone target.
+ *
+ * One barrel export, so one import regardless of style. Unlike the monorepo target's trailing
+ * `../../shared/*` import — a relative specifier, which Biome sorts into its own group behind
+ * a blank line — the kit is a package specifier, and "@nimbus-dev/sdk/connector-kit" sorts
+ * after the "@modelcontextprotocol/*" entries but BEFORE "zod". It therefore belongs inside
+ * the first group, in that position.
+ *
+ * Deduped: a standalone read-only-kit spec with a zero-arg search tool reaches
+ * "type ZodObjectSchema" twice — once for the runReadOnly glue's ZodToolRegistrar, once for
+ * the searchToolInputSchema glue's return type. Two identical names in one clause is a TS2300
+ * duplicate-identifier error, not merely untidy. zzsearch is that spec.
+ */
+function standaloneImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
+  const kitNames = biomeNamedImportOrder([
+    ...new Set([...kitImportNames(spec, true, target), ...searchKitNames(spec, target)]),
+  ]);
+  const lines = renderNamedImport(kitNames, KIT);
+  if (usesZod(spec, target)) lines.push(ZOD_IMPORT);
+  const filters = filterImport(spec, target);
+  if (filters !== undefined) lines.push("", filters);
+  return lines;
+}
+
+/**
+ * The relative-import group of a monorepo read-only-kit server.
+ *
+ * No blank line precedes it: unlike hand-rolled/rest-kit (which precede the McpServer/
+ * StdioServerTransport package group), read-only-kit's package group is "zod" alone, and
+ * real connectors (mercury, bitrise, testflight, dbt, zoom, flagsmith, …) run it straight
+ * into the relative-import group with no separating blank line.
+ */
+function readOnlyKitImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
+  const kit = kitImportNames(spec, false, target);
+  const search = searchKitNames(spec, target);
+  const filters = filterImport(spec, target);
+  const blocks: RelativeImportBlock[] = [];
+  if (kit.length > 0)
+    blocks.push({ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) });
+  blocks.push({
+    from: RUN_READ_ONLY,
+    lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
+  });
+  if (search.length > 0) {
+    blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
+  }
+  if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
+  return sortedRelativeImportLines(blocks);
+}
+
+/** The relative-import group of a monorepo hand-rolled server. */
+function handRolledImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
+  const search = searchKitNames(spec, target);
+  const filters = filterImport(spec, target);
+  const blocks: RelativeImportBlock[] = [
+    {
+      from: MCP_TOOL_KIT,
+      lines: renderNamedImport(kitImportNames(spec, false, target), MCP_TOOL_KIT),
+    },
+  ];
+  if (search.length > 0) {
+    blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
+  }
+  if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
+  return sortedRelativeImportLines(blocks);
+}
+
+function imports(spec: ConnectorSpec, target: GenerateTarget): string {
+  const head = packageImportHead(spec, target);
 
   if (target === "standalone") {
-    // One barrel export, so one import regardless of style. Unlike the monorepo target's
-    // trailing `../../shared/*` import — a relative specifier, which Biome sorts into its
-    // own group behind a blank line — the kit is a package specifier, and
-    // "@nimbus-dev/sdk/connector-kit" sorts after the "@modelcontextprotocol/*" entries but
-    // BEFORE "zod". It therefore belongs inside the first group, in that position.
-    // Deduped: a standalone read-only-kit spec with a zero-arg search tool reaches
-    // "type ZodObjectSchema" twice — once for the runReadOnly glue's ZodToolRegistrar, once
-    // for the searchToolInputSchema glue's return type. Two identical names in one clause is
-    // a TS2300 duplicate-identifier error, not merely untidy. zzsearch is that spec.
-    const kitNames = biomeNamedImportOrder([
-      ...new Set([...kitImportNames(spec, true, target), ...searchKitNames(spec, target)]),
-    ]);
-    head.push(...renderNamedImport(kitNames, KIT));
-    if (zodNeeded) head.push(zodImport);
-    const filters = filterImport(spec, target);
-    if (filters !== undefined) head.push("", filters);
+    head.push(...standaloneImportLines(spec, target));
     return head.join("\n");
   }
 
   // monorepo — unchanged from Stage A
-  if (zodNeeded) head.push(zodImport);
-
-  const search = searchKitNames(spec, target);
-  const filters = filterImport(spec, target);
-  const MCP_TOOL_KIT = "../../shared/mcp-tool-kit.ts";
+  if (usesZod(spec, target)) head.push(ZOD_IMPORT);
 
   if (spec.style === "read-only-kit") {
-    // No blank line here: unlike hand-rolled/rest-kit (which precede the McpServer/
-    // StdioServerTransport package group), read-only-kit's package group is "zod" alone, and
-    // real connectors (mercury, bitrise, testflight, dbt, zoom, flagsmith, …) run it straight
-    // into the relative-import group with no separating blank line.
-    const kit = kitImportNames(spec, false, target);
-    const blocks: RelativeImportBlock[] = [];
-    if (kit.length > 0)
-      blocks.push({ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) });
-    blocks.push({
-      from: RUN_READ_ONLY,
-      lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
-    });
-    if (search.length > 0) {
-      blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
-    }
-    if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
-    head.push(...sortedRelativeImportLines(blocks));
+    head.push(...readOnlyKitImportLines(spec, target));
     return head.join("\n");
   }
 
   head.push("");
   if (spec.style === "hand-rolled") {
-    const blocks: RelativeImportBlock[] = [
-      {
-        from: MCP_TOOL_KIT,
-        lines: renderNamedImport(kitImportNames(spec, false, target), MCP_TOOL_KIT),
-      },
-    ];
-    if (search.length > 0) {
-      blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
-    }
-    if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
-    head.push(...sortedRelativeImportLines(blocks));
+    head.push(...handRolledImportLines(spec, target));
   } else {
     head.push(
       'import { createRegisterSimpleTool, createZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
