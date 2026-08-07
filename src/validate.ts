@@ -66,6 +66,30 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   // here rather than beside "root" above: the conditional-query branch's `const u = new
   // URL(<path>)` calls the global directly, the same shadow risk as "fetch" or "JSON", not
   // the use-before-declaration risk "root" is reserved for.
+  //
+  // The four at the end of this block were MISSING while their siblings were listed, and the
+  // gap is what the standing rule in CLAUDE.md exists to prevent. They were found by scanning
+  // every emitted `.ts` file — all 22 fixtures, both targets, plus the Gateway wiring and the
+  // branch shapes no fixture reaches — for FREE identifiers: names a module references without
+  // declaring or importing them. That scan ships as test/emitted-globals.test.ts, so the next
+  // emitter to reach for a global fails there instead of arriving as a missing entry here.
+  //
+  //   Date Math Number   renderTokenFunction (env.ts) writes `Date.now()`, `Math.min`,
+  //                      `Math.floor` and `Number.POSITIVE_INFINITY`. A `local` of any of the
+  //                      three shadows the global with the accessor function and every one of
+  //                      those property reads becomes TS2339 — compiled, not reasoned about.
+  //   undefined          broader than the other three, and not a client-credentials matter at
+  //                      all: `guardLines` writes `<binding> === undefined` in EVERY branch that
+  //                      guards. A module-scope declaration of that name makes the comparison
+  //                      TS2367 ("no overlap") in both the plain and the client-credentials
+  //                      shapes. `accessorReferences` below already refuses it as a BINDING;
+  //                      nothing refused it as a `local`.
+  //
+  // `Record` is free in the emitted output too and is deliberately NOT here: it is a type-space
+  // name, `function Record(): Record<string, string>` declares a value and resolves the
+  // annotation in the other namespace, and it compiles clean under --strict. Measured, the same
+  // way `<X>SearchMatchOptions` was — a name that only looks like a collision is not one, and
+  // reserving it would reject a spec that works.
   "fetch",
   "process",
   "JSON",
@@ -76,6 +100,10 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   "console",
   "RequestInit",
   "URL",
+  "Date",
+  "Math",
+  "Number",
+  "undefined",
   // Stage E's extractor branch. src/server.ts imports the filter export from
   // ./search-filter.ts, so that name lands in server.ts's module scope beside the fetch
   // helper; the rest are declared or imported by src/search-filter.ts itself.
