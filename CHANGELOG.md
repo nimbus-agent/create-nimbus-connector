@@ -20,6 +20,77 @@ left here read as unreleased long after they shipped, which is exactly what happ
 
 * **openapi:** author a spec from an OpenAPI document, and close Stage F ([#68](https://github.com/nimbus-agent/create-nimbus-connector/issues/68)) ([da03f46](https://github.com/nimbus-agent/create-nimbus-connector/commit/da03f469f0c7088032ef9539f0107c0a532ff8a8))
 
+### Breaking (spec validation)
+
+Written by hand, after the release, because the generated subject line above says nothing about
+any of it. Every entry moves a failure **earlier**: each shape below previously produced a
+package that failed its own parse or typecheck, or — in two of them — one that compiled and then
+behaved wrongly. **No package that already generated correctly changes by a byte**; the four
+byte-locked fixtures are untouched, and every rule here is a refusal at parse or validate time
+rather than an emitter change.
+
+* **spec:** six fields spliced verbatim into generated source — `serviceLabel`,
+  `fetchHelper.base`, `tools[].name`, `tools[].path`, `env[].prefix` and `env[].suffix` — now
+  reject a backtick and a block-comment terminator, and reject interpolation their splice site
+  does not resolve. `fetchHelper.base` still takes `${env.NAME}`, `tools[].path` still takes the
+  path-template DSL, and the other four take no interpolation at all.
+
+  **This closes a code-injection hole.** A backtick, or a `${…}` whose expression referenced
+  nothing outside itself, stopped being text and became executable code in the generated
+  connector — running on every request in `fetchHelper.base` and `env[].prefix`, and on every
+  non-2xx response in `serviceLabel`. It compiled, it linted, `tsc --noEmit --strict` passed it,
+  and Biome reformatted it into place. Nothing downstream reported it.
+
+  A trailing backslash in `fetchHelper.base` is refused for a quieter reason: it escaped the
+  interpolation that followed it, so the connector requested a literal `${path}`.
+
+* **validate:** JavaScript reserved words are rejected in every identifier-valued field —
+  `fetchHelper.local`, `fetchHelper.baseConst`, `fetchHelper.headers`, `env[].local`,
+  `env[].bindings[]`, `env[].tokenLocal`, `filter.export`, `tools[].rows`, an argument's `local`,
+  and tool argument keys. `bindings: ["class"]` previously emitted `const class = …`, a parse
+  error against the generator's own output.
+
+  The refused set is **derived, not transcribed**: each candidate was run through the real
+  generator in all ten identifier positions and the output handed to the real Biome, so the list
+  is what actually breaks emitted source rather than what a table says is reserved.
+  **TypeScript's soft keywords stay legal** — `type`, `as`, `any`, `namespace`, `from` and `of`
+  are ordinary identifiers and a spec using one is unaffected. `package`, `private`, `protected`,
+  `public`, `eval` and `arguments` are refused despite being absent from the tokenizer's
+  keyword list: they are reserved in strict mode, which every emitted module is.
+
+* **validate:** four more identifiers are reserved — `Date`, `Math`, `Number` and `undefined`.
+  The first three are globals the client-credentials token exchange calls directly, and were the
+  missing half of a list that already reserved their siblings. **`undefined` is the one worth
+  reading twice:** an env accessor named `undefined` typechecks cleanly and turns its own guard
+  into `undefined === undefined`, so it throws "not set" however the variable is configured — a
+  connector that fails identically whether or not anything is wrong.
+
+* **validate:** `tools[].rows` and `env[].bindings[]` are now checked against the other
+  identifiers the same package emits. `rows: "root"` emitted a second `const root`; a binding
+  naming what its own accessor reads produced a self-referential initializer. The `bindings` rule
+  is **entry-scoped** — `token`/`cachedToken`/`tokenExpiresAt` refused only on a
+  `client-credentials` entry, `trimTrailingSlash` only alongside
+  `transform: "trimTrailingSlashFn"` — because a flat check against every emitted name would
+  reject `bindings: ["u"]` and `bindings: ["token"]`, both correct and byte-locked today.
+
+* **spec:** an env entry with no `auth`, no `default`, and `required` left at its schema default
+  of `false` is refused rather than emitted. It is the one shape for which no guard is emitted,
+  so the accessor returns `process.env[…]?.trim()` — `string | undefined` — from a function the
+  emitter declares as `(): string`. **An entry setting any one of the three is unaffected**, which
+  is every entry in the fixture corpus.
+
+  Three of its six variants failed the generated package's own typecheck (TS2322, or
+  TS18048/TS2345 once `transform` is set). The other three — those setting `prefix`, `suffix` or
+  both — **typechecked cleanly and returned the eight characters `"undefined"` at runtime**,
+  because the value lands in a template literal, so the fetch helper requested
+  `https://undefined/…`. Set `required: true`, or give the variable a `default`.
+
+* **openapi:** `--from-openapi` refuses an operation whose parameter name is a reserved word,
+  where it previously mapped it. This is the one change here with a real cost, and the only one
+  not measured: the argument name is spec-internal and never reaches the URL, so renaming it
+  would be lossless, and `claimArgument` records that as the thing to revisit. No gate currently
+  measures OpenAPI reach, so the size of the cost is argued rather than known.
+
 ## [0.10.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.9.0...create-nimbus-connector-v0.10.0) (2026-08-07)
 
 
