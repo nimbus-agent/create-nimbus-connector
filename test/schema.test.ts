@@ -20,6 +20,7 @@ import {
   SCHEMA_PATH,
 } from "../scripts/_lib/build-schema.ts";
 import { parseSpec } from "../src/spec.ts";
+import { validateSpec } from "../src/validate.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -40,8 +41,17 @@ const repoRoot = join(import.meta.dir, "..");
  * The unmodelled-keyword throw is what stops this from quietly becoming a check of nothing. A
  * checker that shrugged at a keyword it did not understand would keep returning `true` as the spec
  * language grew, and the gap tests would go on passing while asserting less and less each time —
- * the exact false green the tests are written to expose one level up. "throws on a keyword it does
- * not model" below is what makes that guard fail if it is removed.
+ * the exact false green the tests are written to expose one level up.
+ *
+ * That guard runs at MODULE LOAD, over every subschema in the document, and this is the second
+ * version of it. The first checked keywords inside `accepts()`, which iterates the *spec value's*
+ * entries — so it only ever visited the subschemas a test's own values descend into. Measured:
+ * injecting `oneOf: []` into `properties.filesystem.properties.read` and into
+ * `tools.items.properties.filter` — neither traversed by any value here — left all sixteen tests
+ * green, while the comment claimed document-wide reach. `assertNoUnmodelledKeyword` below walks
+ * the whole document once instead, so an unrecognised keyword anywhere fails this FILE rather
+ * than one test; and "sweeps the whole published document" pins the walk's own reach, since a
+ * walk that descended nowhere would be exactly as blind as the guard it replaces.
  * ------------------------------------------------------------------------------------------ */
 
 type JsonSchema = Record<string, unknown>;
@@ -119,16 +129,24 @@ function acceptsObject(schema: JsonSchema, value: Record<string, unknown>): bool
   return true;
 }
 
+/** The keywords of one subschema that neither list names. Empty is the only acceptable answer. */
+function unmodelledKeywords(schema: JsonSchema): string[] {
+  return Object.keys(schema).filter((k) => !ENFORCED_KEYWORDS.has(k) && !IGNORED_KEYWORDS.has(k));
+}
+
+function unmodelledKeywordError(keyword: string, where: string): Error {
+  return new Error(
+    `schemaWouldAccept: unmodelled keyword ${JSON.stringify(keyword)} at ${where}. The spec ` +
+      "language grew a construct this checker does not understand; model it or add it to " +
+      "IGNORED_KEYWORDS deliberately, rather than letting the check pass on it silently.",
+  );
+}
+
 function accepts(schema: JsonSchema, value: unknown): boolean {
-  for (const keyword of Object.keys(schema)) {
-    if (!ENFORCED_KEYWORDS.has(keyword) && !IGNORED_KEYWORDS.has(keyword)) {
-      throw new Error(
-        `schemaWouldAccept: unmodelled keyword ${JSON.stringify(keyword)}. The spec language ` +
-          "grew a construct this checker does not understand; model it or add it to " +
-          "IGNORED_KEYWORDS deliberately, rather than letting the check pass on it silently.",
-      );
-    }
-  }
+  // Still checked per call, because `accepts` is also handed schemas built inline by the tests
+  // below, which the module-load sweep never sees. The document-wide claim is the sweep's.
+  const unmodelled = unmodelledKeywords(schema)[0];
+  if (unmodelled !== undefined) throw unmodelledKeywordError(unmodelled, "the subschema given");
 
   const branches = schema["anyOf"];
   if (Array.isArray(branches) && !branches.some((b) => accepts(b as JsonSchema, value))) {
@@ -156,6 +174,55 @@ function accepts(schema: JsonSchema, value: unknown): boolean {
 
 /** The published document itself — parsed from the built bytes, not rebuilt from zod. */
 const publishedSchema = JSON.parse(buildSchema()) as JsonSchema;
+
+function isSchemaObject(value: unknown): value is JsonSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Every subschema in the document, each paired with the path it sits at.
+ *
+ * The descent is by SCHEMA-VALUED POSITION, and only those: `properties`' values, `items`,
+ * `additionalProperties` and `propertyNames` when they are objects, and each `anyOf` branch.
+ * `enum`, `required` and `default` hold DATA, not schemas, and are deliberately not entered —
+ * walking into an `enum` member would report a spec author's string as an unmodelled keyword.
+ */
+function allSubschemas(schema: JsonSchema, where: string): Array<readonly [string, JsonSchema]> {
+  const found: Array<readonly [string, JsonSchema]> = [[where, schema]];
+  const descend = (child: unknown, at: string): void => {
+    if (isSchemaObject(child)) found.push(...allSubschemas(child, at));
+  };
+
+  const properties = schema["properties"];
+  if (isSchemaObject(properties)) {
+    for (const [key, sub] of Object.entries(properties)) {
+      descend(sub, `${where}.properties.${key}`);
+    }
+  }
+  descend(schema["items"], `${where}.items`);
+  descend(schema["additionalProperties"], `${where}.additionalProperties`);
+  descend(schema["propertyNames"], `${where}.propertyNames`);
+  const branches = schema["anyOf"];
+  if (Array.isArray(branches)) {
+    for (const [i, branch] of branches.entries()) descend(branch, `${where}.anyOf[${i}]`);
+  }
+  return found;
+}
+
+const ALL_SUBSCHEMAS = allSubschemas(publishedSchema, "(root)");
+
+/**
+ * Run at module load, over the whole document, so a keyword this checker does not model fails
+ * the FILE rather than waiting for a test value to happen to descend onto it. See the header.
+ */
+function assertNoUnmodelledKeyword(subschemas: readonly (readonly [string, JsonSchema])[]): void {
+  for (const [where, sub] of subschemas) {
+    const unmodelled = unmodelledKeywords(sub)[0];
+    if (unmodelled !== undefined) throw unmodelledKeywordError(unmodelled, where);
+  }
+}
+
+assertNoUnmodelledKeyword(ALL_SUBSCHEMAS);
 
 function schemaWouldAccept(spec: unknown): boolean {
   return accepts(publishedSchema, spec);
@@ -246,9 +313,11 @@ describe("the checked-in schema document", () => {
 
   it("describes the INPUT shape, so an author's file is what it validates", () => {
     // `{ io: "input" }` vs `{ unrepresentable: "any" }`: in the input document, `impl` is the
-    // four-value union a spec may WRITE. The output document has only the three `parseSpec`
-    // returns, "get" having been transformed away — a schema that would reject the spelling
-    // fixtures/*.spec.json are allowed to use.
+    // four-value union a spec may WRITE. In the output document it collapses to `{}` — measured,
+    // not inferred: the `.transform(v => v === "get" ? "rest" : v)` is unrepresentable, so
+    // `unrepresentable: "any"` erases the ENUM ENTIRELY rather than narrowing it. That document
+    // therefore rejects NOTHING for `impl`, and the completion list a user would most want is the
+    // one thing missing from it. The cost is completion, not validation.
     const impl = subSchema(publishedSchema, "properties", "tools", "items", "properties", "impl");
     expect(impl["enum"]).toEqual(["rest", "get", "stub", "search"]);
 
@@ -327,6 +396,24 @@ describe("the gap between the published schema and the generator", () => {
       expect(schemaWouldAccept(spec)).toBe(true);
     });
   }
+
+  it("accepts an env local named `token`, which validateSpec — not parseSpec — rejects", () => {
+    // README names three specs that are green in an editor and refused by the CLI; the table
+    // above pins two. This is the third, and it cannot join them: every case there asserts
+    // `parseSpec` itself throws, and this one gets PAST `parseSpec` entirely.
+    //
+    // Which is why it is the one most worth a test. RESERVED_IDENTIFIERS lives in
+    // src/validate.ts and is checked by `validateSpec`, a pass of its own — the distinction the
+    // schema's `description` deviates from the brief's wording to draw, and the gap here is
+    // therefore wider than "the published schema is more permissive than parseSpec": it is more
+    // permissive than the whole acceptance path the CLI runs.
+    const spec = specWith((s) => {
+      (s["env"] as JsonSchema[])[0]!["local"] = "token";
+    });
+    expect(() => parseSpec(spec)).not.toThrow();
+    expect(() => validateSpec(parseSpec(spec))).toThrow(/Identifier collision: "token"/);
+    expect(schemaWouldAccept(spec)).toBe(true);
+  });
 });
 
 describe("the structural checker the gap tests are built on", () => {
@@ -372,5 +459,21 @@ describe("the structural checker the gap tests are built on", () => {
   it("throws on a keyword it does not model, rather than passing the value", () => {
     expect(() => accepts({ oneOf: [] }, {})).toThrow("unmodelled keyword");
     expect(() => accepts({ type: "sausage" }, "x")).toThrow('unmodelled "type"');
+  });
+
+  it("sweeps the whole published document, not only the parts a test value descends into", () => {
+    // `assertNoUnmodelledKeyword` runs at module load and throws, so it cannot itself be a test —
+    // this is what stops the WALK it runs over from going vacuous. A `allSubschemas` that
+    // descended nowhere would return one entry, sweep the root object, and be exactly as blind as
+    // the per-call guard it replaced.
+    expect(ALL_SUBSCHEMAS.length).toBeGreaterThan(50);
+
+    // The two the per-call guard could not reach, named because they are the ones measured: with
+    // the guard inside `accepts`, injecting `oneOf: []` into either left all sixteen tests green,
+    // since `validSpec` declares no `filesystem` and its one tool declares no `filter`, so no
+    // value here ever descends onto those subschemas.
+    const visited = new Set(ALL_SUBSCHEMAS.map(([where]) => where));
+    expect(visited).toContain("(root).properties.filesystem.properties.read");
+    expect(visited).toContain("(root).properties.tools.items.properties.filter");
   });
 });

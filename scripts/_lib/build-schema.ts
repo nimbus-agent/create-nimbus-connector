@@ -54,9 +54,15 @@ export const SCHEMA_PATH = join(
 );
 
 /**
- * The URL the checked-in document is served from, and therefore the string a spec file names in
- * its own `"$schema"` key. README.md quotes it; test/schema.test.ts asserts the two agree, so the
- * instructions cannot come to point somewhere the `$id` does not.
+ * The URL the checked-in document is served from, and therefore the URL an EDITOR-SIDE mapping
+ * points at — README.md's `.vscode/settings.json` block quotes it, and test/schema.test.ts asserts
+ * the two agree, so the instructions cannot come to point somewhere the `$id` does not.
+ *
+ * NOT the string a spec file names in its own `"$schema"` key. `ConnectorSpecSchema` is a
+ * `z.strictObject`, so a spec carrying that key is refused — `Unrecognized key: "$schema"`, pinned
+ * by "cannot be referenced from inside a spec file" in test/schema.test.ts. That route is the one
+ * this change exists to warn against: it would make a file validate in the editor and fail at the
+ * CLI, which is the inversion the published schema's stated limits are about.
  */
 export const SCHEMA_ID =
   "https://raw.githubusercontent.com/nimbus-agent/create-nimbus-connector/main/schema/connector-spec.schema.json";

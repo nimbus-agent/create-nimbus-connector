@@ -64,41 +64,58 @@ function rendersAsNothing(ch: string): boolean {
 }
 
 /**
- * Every source file under the directories this project's own gates cover — tracked, staged, or
- * merely written.
+ * The directories this gate is told to sweep — named, so the sweep and the check that the sweep
+ * SAW them read from one list.
  *
- * `--others --exclude-standard` is the second correction this gate has needed, and it comes from
- * the same place the widened set above does: a plain `git ls-files` lists only what is already in
- * the index, so a BRAND NEW file is invisible to this check until it is `git add`ed. That is
- * precisely the moment the check exists for — the defect it was written for was authored into a
- * new file and caught by eye before the commit. The hole was found the same way: a U+200B written
- * into an unstaged `src/openapi/spec.ts` left this gate GREEN. With the flags, the same injection
- * fails it, naming the file and the offset — which is how a gate fix is confirmed.
+ * This is the gate's third correction, and the first one aimed at the class rather than the
+ * instance. `schema/` was on this list and contributing ZERO files, because `.gitignore` ignores
+ * every top-level directory by a catch-all and re-admits the ones this repo owns by name — a
+ * brand-new `schema/` was ignored, so `--exclude-standard` dropped it and the sweep saw none of it.
+ * Every gate stayed green. Measured per path today: src 58, test 77, scripts 22, schema 1 — so
+ * `src` ALONE clears the aggregate floor below, and any one of the other three could go to zero
+ * without moving a single assertion. `git ls-files` exits 0 and prints nothing for a path that
+ * matches nothing, so silence is the failure mode, not an error.
+ */
+const SWEPT_PATHS = ["src", "test", "scripts", "schema"] as const;
+
+const repoRoot = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+
+/**
+ * The files git can see under ONE swept path — tracked, staged, or merely written.
+ *
+ * Per path rather than one call for all four, so the count each path contributes is observable.
+ * That is what detects the mismatch between "paths I was told to sweep" and "paths I actually
+ * saw", which is the property all three of this gate's failures lacked.
+ *
+ * `--others --exclude-standard` is the second correction this gate needed, and it comes from the
+ * same place the widened set above does: a plain `git ls-files` lists only what is already in the
+ * index, so a BRAND NEW file is invisible to this check until it is `git add`ed. That is precisely
+ * the moment the check exists for — the defect it was written for was authored into a new file and
+ * caught by eye before the commit. The hole was found the same way: a U+200B written into an
+ * unstaged `src/openapi/spec.ts` left this gate GREEN. With the flags, the same injection fails
+ * it, naming the file and the offset — which is how a gate fix is confirmed.
  *
  * `--exclude-standard` is what keeps `node_modules/` and other ignored output out; without it,
- * `--others` would sweep them in and this would be a scan of a dependency tree.
+ * `--others` would sweep them in and this would be a scan of a dependency tree. It is also
+ * exactly what hid `schema/`, which is why the per-path assertion below exists.
  */
-function trackedSourceFiles(): string[] {
+function filesUnder(path: string): string[] {
   const out = Bun.spawnSync(
-    [
-      "git",
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "src",
-      "test",
-      "scripts",
-      "schema",
-    ],
-    { cwd: new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1") },
+    ["git", "ls-files", "--cached", "--others", "--exclude-standard", path],
+    {
+      cwd: repoRoot,
+    },
   );
-  if (out.exitCode !== 0) throw new Error(`git ls-files failed: ${out.stderr.toString()}`);
+  if (out.exitCode !== 0) throw new Error(`git ls-files ${path} failed: ${out.stderr.toString()}`);
   return out.stdout
     .toString()
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
+
+function trackedSourceFiles(): string[] {
+  return SWEPT_PATHS.flatMap(filesUnder);
 }
 
 describe("source hygiene", () => {
@@ -131,6 +148,16 @@ describe("source hygiene", () => {
     // renamed folder — would make the check above pass while inspecting zero bytes. That is the
     // failure mode the check itself was written to catch, one level up.
     expect(trackedSourceFiles().length).toBeGreaterThan(50);
+  });
+
+  it("sees files under EVERY path it is told to sweep, not just enough of them in total", () => {
+    // The aggregate guard above closes the instance; this closes the class. Measured per path:
+    // src 58, test 77, scripts 22, schema 1 — so `src` alone clears 50, and a directory that
+    // contributes nothing (added to SWEPT_PATHS but swallowed by .gitignore's top-level catch-all,
+    // which is exactly what happened to `schema/`) leaves every other assertion here green. `git
+    // ls-files` exits 0 and prints nothing for a path it cannot match, so nothing else complains.
+    const empty = SWEPT_PATHS.filter((p) => filesUnder(p).length === 0);
+    expect(empty).toEqual([]);
   });
 });
 
