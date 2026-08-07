@@ -106,8 +106,13 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
   skipped run deliberately does **not** print the sentence a fully-verified run prints.
 - **Generated `test/sandbox.test.ts` proves nothing.** It is wrapped in
   `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])`, and that variable is set nowhere in
-  Nimbus. All 79 such tests skip on every CI run. "The generated connector passes its tests"
-  is not an acceptance bar. The real bar is `tsc --noEmit` + `biome check` + a byte-diff.
+  Nimbus, so every such test in the monorepo is collected and skipped on every CI run. (The 79
+  in `src/emit/sandbox-test.ts`'s header is a different number — the corpus connectors whose
+  copy of the file is byte-identical, 79 of 94.) In THIS repository the three copies under
+  `fixtures/snapshots/` are not collected at all; `bunfig.toml`'s `pathIgnorePatterns` keeps
+  them out, and discovered they would fail rather than skip. "The generated connector passes
+  its tests" is not an acceptance bar. The real bar is `tsc --noEmit` + `biome check` + a
+  byte-diff.
 - **Four gates can never run in CI** — `diff:golden`, `reach --baseline`, `wiring:conformance`
   and `acceptance`, each of which needs a checkout of the AGPL monorepo. They are local
   pre-merge gates, and `preflight` is the one command that names all four whether or not it

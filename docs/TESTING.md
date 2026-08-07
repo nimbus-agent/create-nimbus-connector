@@ -195,10 +195,18 @@ A skipped run deliberately does **not** print the sentence a fully-verified run 
 
 `src/emit/sandbox-test.ts` emits it wrapped in
 `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])`, and that variable is set **nowhere in
-Nimbus**. Every such test skips on every CI run, in this repo and in the monorepo. "The
+Nimbus**. So in the monorepo every such test is collected and skipped, on every CI run. "The
 generated connector passes its tests" is not an acceptance bar and never has been. The real bar
 for a generated package is `tsc --noEmit` + `biome check` + a byte-diff — which is exactly what
 `acceptance` and `standalone-acceptance` run.
+
+The `skipIf` is not what happens **in this repository**, and the difference is worth stating
+because the two are easy to conflate. The three checked-in copies — `fixtures/snapshots/zzwrite/`,
+`.../zzwriteonly/` and `.../zzwriterest/` — are never collected at all: `bunfig.toml`'s
+`pathIgnorePatterns = ["fixtures/**"]` keeps them out of discovery, because they import
+`@nimbus-dev/sdk/testing`, which is not a dependency here. Discovered, they would **fail** with
+"Cannot find module" rather than skip. That exclusion is the one described under *What the
+coverage gate structurally cannot see* above.
 
 The file is still emitted byte-for-byte because the real connectors carry it, and
 `fixtures/expectations.json` counts it among the files a locked fixture must reproduce.
