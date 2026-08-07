@@ -213,14 +213,16 @@ the histogram at all, because the connectors carrying them are blocked earlier. 
 reads a shape the emitter does not write moves a connector to `emits` and never to
 `server-identical` — legitimate, but say so up front.
 
-The design documents behind the shipped work are
-[`docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md`](../../docs/superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-and
-[`docs/superpowers/specs/2026-08-05-roadmap-completion-design.md`](../../docs/superpowers/specs/2026-08-05-roadmap-completion-design.md),
-with the plans that executed them in `docs/superpowers/plans/`. They are history now, not a
-backlog — where a plan and the code disagree, the code is authoritative, and several of those
-documents' predictions were measured wrong on the way (see the ceiling's own note on reading what
-the code does rather than trusting a prediction).
+**The design documents behind this work have been retired**, and their durable half is on the
+pages that stay: the case-1 / case-2 rule that governs when a recognizer may read a shape the
+emitter does not write is
+[`docs/GLOSSARY.md` § Reach and derivation](../../docs/GLOSSARY.md#reach-and-derivation); the
+per-construct ceiling is *The measured ceiling* above; the two-list frame contract is
+`src/derive/server/frame.ts`'s own header; the guarded-accessor type rule is `src/derive/read.ts`'s.
+Git history has the originals. Do not go looking for a backlog in them — where a retired plan and
+the code disagree, the code is authoritative, and several of those documents' predictions were
+measured wrong on the way (see the ceiling's own note on reading what the code does rather than
+trusting a prediction).
 
 ## Before you claim a deriver change works
 

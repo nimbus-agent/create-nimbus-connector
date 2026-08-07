@@ -47,9 +47,12 @@ under [Known limitations](./ROADMAP.md#known-limitations), a measured-and-reject
 under [Considered and declined](./ROADMAP.md#considered-and-declined), and a measurement that
 justifies a default goes in the README beside the field it justifies.
 
-Earlier stages produced long standalone design documents. Those have been retired into the
-pages above — reasoning that lives only in a dated document nobody opens again is reasoning
-that gets re-litigated.
+Earlier stages produced long standalone design documents. **All of them have been retired** into
+the pages above — reasoning that lives only in a dated document nobody opens again is reasoning
+that gets re-litigated. The rule that leaves is: a design document is the right artifact while a
+stage is being built and the wrong one afterwards, so the durable half moves to a page that stays
+and the document goes to git history. [docs/README.md](./README.md)'s *Where the reasoning lives*
+records where each kind of thing went.
 
 **Changes that move locked bytes** need explicit justification in the PR, plus a `diff:golden`
 run showing the four locked fixtures still at 6/6.

@@ -181,13 +181,20 @@ test/              mirrors src/, plus test/scripts/ and the repo-wide gates
 docs/              ARCHITECTURE, ROADMAP, USAGE, and the project docs
 ```
 
-**Where the reasoning lives.** Four long per-stage design documents were retired once their
-durable conclusions were folded into the docs above; git history has them. What the generator
-cannot do and why is [`docs/ROADMAP.md`](./docs/ROADMAP.md)'s *Known limitations*; proposals
-measured and rejected are its *Considered and declined*; harness behaviour is
-[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). Corpus measurements sit in the README next to
-the field they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a
-document repeating it goes stale silently.
+**Where the reasoning lives.** Every per-stage design document and implementation plan has been
+retired, `docs/superpowers/` with them, once their durable conclusions were folded into the docs
+above and into the source comments that enforce them; git history has the originals, and nothing
+tracked cites them. **Do not resurrect that directory and do not cite a document that is not on
+disk** — a citation to a file nobody can open is worse than none, because it reads as evidence.
+[`docs/README.md`](./docs/README.md)'s *Where the reasoning lives* is the map of where each kind
+of thing went. In short: what the generator cannot do and why is
+[`docs/ROADMAP.md`](./docs/ROADMAP.md)'s *Known limitations*; proposals measured and rejected are
+its *Considered and declined*; harness behaviour is
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); what a green check proves is
+[`docs/TESTING.md`](./docs/TESTING.md); the deriver's vocabulary is
+[`docs/GLOSSARY.md`](./docs/GLOSSARY.md). Corpus measurements sit in the README next to the field
+they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a document
+repeating it goes stale silently.
 
 The **one** exception is *The measured ceiling* in `docs/ROADMAP.md`, which states the corpus
 regeneration counts on purpose. It earns it by carrying the date and the `packages/mcp-connectors`

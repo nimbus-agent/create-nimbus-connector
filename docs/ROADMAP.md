@@ -763,9 +763,8 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   one level down — `matchesResult` does `Array.isArray(rows) ? … : []`, so `undefined`, `null`
   and any non-array already yield an empty match set. The coercion would be dead code that
   changes a byte-exact fixture's bytes.
-- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening (see
-  [the roadmap-completion design](./superpowers/specs/2026-08-05-roadmap-completion-design.md)'s
-  *Application: the rows pluck*): corpus connectors commonly hoist
+- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening — the rule
+  is in [GLOSSARY § Reach and derivation](./GLOSSARY.md#reach-and-derivation): corpus connectors commonly hoist
   `function <name>From(root: unknown): unknown[]` above their registrations and pluck the row
   array there, so a recognizer could read that key back as `rows` even though `renderSearchTool`
   writes the narrowing inline. The proposal drew a careful line between the pluck bodies that are
@@ -776,11 +775,13 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   limit: p.limit }); return jsonResult({ matches });` — and `recognizeSearchTool` requires
   `matchesResult` before it inspects a handler body at all. Every corpus `matchesResult` call
   site instead passes a bare identifier, `root` or the narrowed const, which
-  `recognizeNoRowsBody` and `recognizeRowsBody` already read. That same design document's trap
-  list had measured this from the other side — a connector that carries `src/search-filter.ts`
-  without calling `matchesResult` builds its own envelope and is "out of the recognizer's reach
-  by construction, not by omission" — so that proposal and that trap could not both be true, and
-  the trap is the half backed by a measurement.
+  `recognizeNoRowsBody` and `recognizeRowsBody` already read. The proposal was made in a document
+  whose own trap list had measured this from the other side — a connector that carries
+  `src/search-filter.ts` without calling `matchesResult` builds its own envelope and is out of the
+  recognizer's reach *by construction, not by omission* — so the proposal and the trap could not
+  both be true, and the trap is the half backed by a measurement. Recorded because that is the
+  useful part: two halves of one document contradicting each other is what a design document does
+  when it is read once and never re-read.
 
   Recognizing the **hand-written result tail** instead would be a legitimate case-2 widening —
   `matchesResult`'s own docstring calls it the verbatim equivalent of that tail — and is declined
@@ -821,6 +822,61 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   everywhere; beyond those, a field that changes only appearance is refused and the difference
   is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a
   generator whose input is harder to write than its output is a failed generator.
+
+  The bar is sharper than "no cosmetic fields", because `handlerStyle`, `argsSchemaStyle` and
+  `staticPathStyle` are exactly that and were each admitted. It is **no cosmetic field without a
+  fixture that byte-matches *because of* it** — which is why the frame idiom axes get none: no
+  such fixture can exist until what sits behind those frames has itself been measured.
+
+### On the `query` design
+
+Six alternatives, each measured while conditional query parameters were being designed.
+
+- **Extending the path-string DSL** with optionality and default markers (`${arg.after|enc?}`,
+  `${arg.limit|num=50}`). Declined: it encodes control flow as punctuation, `?` and `=` would
+  each mean two things, and query-versus-path would stop being structurally distinguishable. The
+  DSL already rejects `{id}` and `/:id` because ambiguous path syntax caused real bugs.
+- **Setting every parameter unconditionally**, letting absent ones render empty. Declined
+  because it changes the request: `?after=` is not `after` omitted, several APIs treat an empty
+  cursor differently from no cursor, and every corpus connector guards.
+- **A `default` field on the query entry.** Declined as a second source of truth for a value the
+  argument already carries.
+- **An "inline this default" knob** to reach `google-meet`'s form. Declined as a formatting
+  reproduction knob, consistent with the extractor guard/form/name decisions above.
+- **Adding `!== null` to the `omitWhen: "empty"` guard.** Declined because `null` is
+  unreachable: `ArgSchema` types an argument `string`, `number` or `boolean`, and zod's
+  `.optional()` widens to `| undefined`, never `| null` — a JSON `null` fails the schema before a
+  handler runs. Every corpus entry using the `"empty"` predicate guards on exactly
+  `!== undefined && !== ""`. That is a claim about the `"empty"` entries specifically, not about
+  all guarded entries: `circleci` and `github-actions` guard other args on `!== undefined` alone,
+  which is the separate `"absent"` predicate, not this one with a clause missing. A third clause
+  would emit a check that can never fire *and* forfeit every byte match it was added to protect.
+- **Renaming the emitted URL local from `u`** to something less collision-prone (`urlObj`,
+  `__url`). Declined, though the concern is fair. The corpus is genuinely split — across all
+  connectors the name is `search` ×23, `u` ×20, `params` ×15, `qs` ×10, `body` ×2, `q` ×1 — so
+  any choice matches some files and not others, exactly like the registrar naming and the
+  transport tail. `u` is what `discord` and `google-meet` write, the two connectors this branch
+  targets. Reserving it costs a spec author one rename of their own identifier.
+
+### On the search-filter field entries
+
+- **A tagged discriminated union for field entries** — `{ "type": "nested", "path": [...] }`
+  rather than `{ "path": [...] }`. Declined: the required-key sets are already disjoint under
+  `strictObject`, so the untagged form is unambiguous today and stays extensible — a future
+  coercion kind is either a new disjoint shape or an optional key on an existing one. The cost
+  would be paid on every entry an author writes. If union error messages prove poor in practice,
+  the fix is a `superRefine` naming the unrecognised entry shape, not a keyword on every entry.
+- **A deprecation warning on legacy `tags: true`.** Declined, and it would have been actively
+  harmful. `tags: true` is not superseded — it is the *only* spelling that reaches the
+  `fieldsFromKeys` form, which is what `zendesk` byte-matches on today. Steering authors off it
+  would push them to the `fieldsOf` form and break byte matches.
+- **Numeric or boolean extraction primitives** (`nestedNumber`, `booleanField`). Declined on two
+  grounds. `stringField` and `nestedString` do not coerce — both are
+  `typeof v === "string" ? v : ""` — and the connectors that need coercion (`databricks`, `dbt`,
+  `flagsmith`) are among the 14 already out of reach. More decisively,
+  `shared/search-filter.ts` exports no such primitive, and **the emitter may only compose helpers
+  that already ship**: adding one means a change to the AGPL Nimbus repo *and* a release of the
+  MIT SDK, neither of which this repository can make unilaterally.
 
 ## Non-goals
 

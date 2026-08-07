@@ -29,60 +29,38 @@ package byte-identical to a hand-written one.
 ## Where the reasoning lives
 
 This project was built in stages, each with a long design document and implementation plan
-recording what was measured in the Nimbus corpus and what was decided. Stages A-D's four
-documents have been retired — their durable conclusions are folded into the pages above, and
-git history has the originals. What remains under `docs/superpowers/` is kept for one of two
-reasons, and the difference matters before you start work.
+recording what was measured in the Nimbus corpus and what was decided. **All of them have now
+been retired.** Their durable conclusions are folded into the pages above and into the source
+comments named below; git history has the originals, and nothing else cites them.
 
-**Still-live specification — not a historical record.**
+That is a deliberate policy rather than tidying, and [GOVERNANCE.md](./GOVERNANCE.md) states it:
+*reasoning that lives only in a dated document nobody opens again is reasoning that gets
+re-litigated.* A design document is the right artifact while a stage is being built and the wrong
+one afterwards, because it freezes predictions beside conclusions — and several of these
+documents' predictions were measured wrong on the way. Where a retired plan and the code
+disagree, the code is authoritative.
 
-- [Completing the deriver's recognizer set](./superpowers/specs/2026-08-04-completing-the-recognizer-set-design.md)
-  specifies a seven-commit sequence, and every commit in it has now shipped — including the body
-  recognizer (`recognizeBodyExpr`), the hand-rolled write helper, the rest-kit init callback and
-  the optional client-credentials env shape. `test/derive/round-trip.test.ts`'s `BLOCKED` map is
-  consequently empty: every fixture in `fixtures/` round-trips or carries a named partial gap.
-  What is still live here is the document's *reasoning* — why each recognizer is shaped the way
-  it is, and what it deliberately refuses — not its checklist.
-  [Its review](./superpowers/specs/2026-08-04-completing-the-recognizer-set-review.md) leaves
-  two questions open against work that has since been built.
-- [Guarded accessors and the two missing frames](./superpowers/plans/2026-08-04-guarded-accessors-and-frames.md)
-  executed those first three commits and carries the plan-1 / plan-2 boundary: which of the
-  design's remaining work is deferred, to what, and with what connector counts. Plan 2 has not
-  been written.
-
-**Historical record, kept because each still holds something the pages above do not.**
-
-- [Search-filter field extractors](./superpowers/specs/2026-08-02-search-filter-extractors-design.md)
-  records the entry-kind options measured and declined, and the 12 → 7 → 9 corpus split that
-  [ROADMAP § Measuring reach](./ROADMAP.md#measuring-reach) later corrected again, to 26;
-  [its plan](./superpowers/plans/2026-08-02-search-filter-extractors.md) records the task
-  breakdown.
-- [Conditional query parameters](./superpowers/specs/2026-08-02-conditional-query-params-design.md)
-  records six alternatives measured and declined — a path-DSL optionality marker, setting every
-  parameter unconditionally, a `default` field on the query entry, an inline-default knob, a
-  `!== null` clause on the `"empty"` guard, and renaming the emitted `u` local — plus the
-  caution against publishing its six-connector figure as a corpus number without reading every
-  file. [Its plan](./superpowers/plans/2026-08-02-conditional-query-params.md) records two
-  review suggestions declined with precedent rather than preference.
-- [Corpus reach measurement](./superpowers/specs/2026-08-03-from-connector-reach-design.md) is
-  the design the recognizer-set work follows from. Its *Not built — plan 2's territory*
-  paragraph names the five recognizer modules it deferred and is kept as a record of what that
-  plan built, so it is amended rather than rewritten as those modules land.
-  [Its plan](./superpowers/plans/2026-08-03-reach-measurement-harness.md) is the only tracked
-  account of how the harness was built — the fix ledger from its execution is gitignored and
-  does not ship — and its *Refinement of the spec* section records the one deliberate deviation
-  the design above still states the old way (`Derivation.spec` is `Record<string, unknown>`,
-  not `ConnectorSpec`).
-
-**Everything else that was folded out** lives on the pages above:
+**Where each kind of thing went:**
 
 - **What the generator cannot do, and why** → [ROADMAP.md § Known limitations](./ROADMAP.md#known-limitations)
-- **Proposals measured and rejected** → [ROADMAP.md § Considered and declined](./ROADMAP.md#considered-and-declined)
+- **Proposals measured and rejected** → [ROADMAP.md § Considered and declined](./ROADMAP.md#considered-and-declined),
+  which now carries the `query` design's six declined alternatives and the search-filter entry
+  design's three, each with the measurement that settled it
+- **How the corpus reach number is arrived at, and the three earlier counts that were wrong**
+  → [ROADMAP.md § Measuring reach](./ROADMAP.md#measuring-reach)
 - **How each harness works and what it proves** → [ARCHITECTURE.md § The verification layers](./ARCHITECTURE.md#the-verification-layers)
 - **Which emitted shape each check actually covers, and which gates can pass while asserting
   nothing** → [TESTING.md](./TESTING.md)
+- **The deriver's vocabulary — tiers, blockers, the totality rule, case 1 vs case 2**
+  → [GLOSSARY.md § Reach and derivation](./GLOSSARY.md#reach-and-derivation)
 - **Corpus measurements behind a default** → the [README](../README.md), next to the field they justify
 - **The traps that bite an agent working here** → [CLAUDE.md](../CLAUDE.md)
+
+Three arguments were folded into **source comments** rather than a page, because each is a rule
+about one module and belongs where it is enforced: why an unguarded AST field read is a compile
+error (`src/derive/read.ts`), why the read-only-kit frame splices the callback's body in rather
+than claiming the wrapper (`src/derive/server/frame.ts`), and why an aggregator over these gates
+is the most dangerous thing in the repository (`scripts/_lib/preflight.ts`).
 
 **Live numbers are written down in exactly one place.** Fixture counts and pass rates move with
 the corpus; `bun run diff:golden --nimbus-root <path>` is the answer, and a document restating it
