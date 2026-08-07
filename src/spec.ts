@@ -725,10 +725,29 @@ const RAW_SPLICE_TERMINATORS = [
 ] as const;
 
 /**
- * A spec string the emitter splices RAW into generated source, refused if it can end the
- * construct it lands in.
+ * The one `${…}` shape an emitter RESOLVES, so that it stops being interpolation before it
+ * reaches generated source.
  *
- * This is the only place that catches it. The emitters quote nothing (proved on the emitter
+ * This mirrors `resolveEnvRefs` (src/emit/server/fetch-helper.ts) — the function that performs
+ * the rewrite, and therefore the authority on which references are not live. `baseExpr` is the
+ * exported entry point that runs it, and "accepts %j exactly when the emitter resolves every
+ * interpolation in it" in test/spec.test.ts holds this rule against that function's real output
+ * rather than against a second copy of this pattern, so a `resolveEnvRefs` that widens or narrows
+ * fails there instead of quietly disagreeing with this file.
+ *
+ * Note what is NOT reused: `headerOption` (same file) tests an inline header value with an
+ * ANCHORED `/^\$\{env\.\w+\}$/`, because a header value either is one reference or is a plain
+ * string. A base is a template — `https://${env.siteHost}/api` is the shape every fixture that
+ * uses one actually writes — so the question here is per-occurrence, "is every `${` in this
+ * string one of these", not "is this string one of these".
+ */
+const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
+
+/**
+ * A spec string the emitter splices RAW into generated source, refused if it can end the
+ * construct it lands in, or if it opens an interpolation nothing resolves.
+ *
+ * This is the only place that catches either. The emitters quote nothing (proved on the emitter
  * itself by "splices `base` raw" in test/emit/server/fetch-helper.test.ts), and the resulting
  * file is VALID TypeScript — `"https://api.zz.test/v1` + String(Date.now()) + `"` as a base emits
  * a call expression between two literals, which Biome reformats and `tsc --noEmit --strict`
@@ -736,23 +755,28 @@ const RAW_SPLICE_TERMINATORS = [
  * rather than at the splice sites is also what covers all three ways a spec is authored at once —
  * hand-written, `--from-connector`, `--from-openapi`.
  *
- * **`${` is deliberately NOT rejected, on two independent grounds.**
+ * `resolves` is what makes the two fields differ, and they differ because the EMITTERS do.
+ * `serviceLabel` passes `undefined`: nothing rewrites anything in it, so every `${` it carries is
+ * live. `fetchHelper.base` passes `RESOLVED_ENV_REF`, because `${env.X}` there is a documented
+ * feature — it appears in 7 of the 22 fixtures, three of them the byte-locked datadog, grafana and
+ * sentry, so banning `${` outright would fail diff:golden on the first run, and `bun run reach
+ * --baseline` says the same of the specs the deriver reconstructs from the corpus. Every OTHER
+ * `${` in a base is refused: the residue left once the resolved shape is removed is exactly what
+ * survives into the emitted template literal.
  *
- * Measured across the 22 fixtures: a backtick appears 0 times in either field, and a block-comment
- * terminator 0 times — which this docstring cannot spell out literally, the hazard in miniature.
- * So this refinement moves nothing — but `${` appears in 7, three of them the byte-locked
- * datadog, grafana and sentry, because `${env.X}` in `base` is a documented feature
- * (`resolveEnvRefs` rewrites it to an accessor call). Rejecting it would fail diff:golden on the
- * first run. `bun run reach --baseline` is what says the same of the specs the deriver
- * reconstructs from the corpus.
+ * **An earlier version of this rule admitted `${` in both fields**, on the grounds that an
+ * unresolved one produces an UNDEFINED IDENTIFIER the generated package's own `tsc --noEmit`
+ * reports. That is true of `${x}` and of nothing else. An interpolation whose expression is
+ * self-contained — `${(() => { … })()}`, which names nothing outside itself — leaves no identifier
+ * to be undefined: it compiles, lints and typechecks clean and then RUNS, in `base` on every
+ * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
+ * to draw the rule on, because it is a property of one payload rather than of the field.
  *
- * And it does not need rejecting. A `${` the emitter does not resolve produces an UNDEFINED
- * IDENTIFIER in the generated package, which that package's own `tsc --noEmit` reports. A
- * backtick is the silent one precisely because what it produces still compiles — loud versus
- * silent is the line this rule is drawn on, and a later widening should be argued on that line
- * rather than on which characters look dangerous.
+ * Measured across the 22 fixtures: a backtick appears 0 times in either field and a block-comment
+ * terminator 0 times — which this docstring cannot spell out literally, the hazard in miniature —
+ * and `${` appears 0 times in `serviceLabel`, so refusing it there costs nothing that exists.
  */
-function rawSplicedString(field: string, sites: string) {
+function rawSplicedString(field: string, sites: string, resolves: RegExp | undefined) {
   return z
     .string()
     .min(1)
@@ -770,6 +794,26 @@ function rawSplicedString(field: string, sites: string) {
             "including where the field does not reach that construct today.",
         });
       }
+
+      // Named for the claim it gates — an interpolation still live in the generated package —
+      // rather than for the residue that reveals it.
+      const hasLiveInterpolation = (
+        resolves === undefined ? v : v.replaceAll(resolves, "")
+      ).includes("${");
+      if (!hasLiveInterpolation) return;
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `"${field}" opens an interpolation (\${…}) that no emitter resolves. This field is ` +
+          `spliced raw into generated source (${sites}), so the expression inside it is emitted ` +
+          "as an expression and evaluated at runtime. A self-contained one names nothing " +
+          "outside itself, so it compiles, lints and typechecks clean — nothing downstream " +
+          "reports it. " +
+          (resolves === undefined
+            ? "This field takes no interpolation at all: no emitter rewrites a reference in it."
+            : "The only interpolation this field takes is ${env.NAME}, which resolveEnvRefs " +
+              "(src/emit/server/fetch-helper.ts) rewrites to an accessor call before emission."),
+      });
     });
 }
 
@@ -777,7 +821,11 @@ export const FetchHelperSchema = z
   .strictObject({
     local: identifierField(),
     /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
-    base: rawSplicedString("fetchHelper.base", "the fetch helper's URL template literal"),
+    base: rawSplicedString(
+      "fetchHelper.base",
+      "the fetch helper's URL template literal",
+      RESOLVED_ENV_REF,
+    ),
     /**
      * Hoist `base` to a module-scope `const <name> = "<base>";` and reference that const
      * from the emitted helper(s) instead of inlining the literal. mercury spells it `BASE`,
@@ -826,6 +874,7 @@ export const ConnectorSpecSchema = z
     serviceLabel: rawSplicedString(
       "serviceLabel",
       "an emitted error message's template literal and a block comment in the Gateway wiring",
+      undefined,
     ),
     style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
     /**

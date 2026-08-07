@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PARTIAL_MARKER } from "../src/derive/from-connector.ts";
-import { parseSpec } from "../src/spec.ts";
+import { baseExpr } from "../src/emit/server/fetch-helper.ts";
+import { type ConnectorSpec, parseSpec } from "../src/spec.ts";
 
 const MINIMAL = {
   name: "newrelic",
@@ -1559,22 +1560,92 @@ describe("strings the emitter splices raw into generated source", () => {
     );
   });
 
+  /*
+   * The `${` half of the same hole. This suite used to carry the opposite claim — that a `${`
+   * needs no rejection because it "produces an UNDEFINED IDENTIFIER the generated package's own
+   * tsc reports". That holds for a BARE IDENTIFIER and for nothing else: an interpolation whose
+   * expression is self-contained names nothing outside itself, so there is no identifier left to
+   * be undefined. Verified end to end on both fields before this suite was written — parseSpec
+   * accepted it, generate() spliced it, Biome only reformatted it, `tsc --noEmit --strict` passed
+   * it clean, and the IIFE was present in the emitted src/server.ts. In `serviceLabel` it lands in
+   * the fetch helper's error template, where it runs on every non-2xx response.
+   */
+  const SELF_CONTAINED_IIFE = '${(() => { globalThis.__PWNED__ = "yes"; return ""; })()}';
+
+  it("rejects a self-contained interpolation in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase(`https://api.zz.test/v1${SELF_CONTAINED_IIFE}`))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
+  });
+
+  it("rejects a self-contained interpolation in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: `ZZ${SELF_CONTAINED_IIFE}` })).toThrow(
+      /serviceLabel.*interpolation/s,
+    );
+  });
+
+  // The two messages differ because the two FIELDS do, and an author who reads only the message
+  // has to be told which of the two rules they hit. Asserted rather than left to coverage: both
+  // arms execute either way, so nothing else fails if they are swapped.
+  it("tells a base author which single interpolation the field does take", () => {
+    expect(() => parseSpec(withBase("https://${host}/v1"))).toThrow(/\$\{env\.NAME\}/);
+  });
+
+  it("tells a serviceLabel author the field takes none at all", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "Zz ${host}" })).toThrow(
+      /takes no interpolation at all/,
+    );
+  });
+
+  // The bare-identifier form, refused HERE rather than left to the generated package's tsc.
+  // Relying on a different tool, run at a different time, on a different package to report an
+  // injection is what made the self-contained payload above reachable: the argument was about
+  // one shape and the field admitted every shape.
+  it("rejects a bare identifier interpolation in fetchHelper.base", () => {
+    expect(() => parseSpec(withBase("https://${host}/v1"))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
+  });
+
+  // serviceLabel resolves NOTHING: no emitter rewrites a reference in it, so the env form that
+  // `base` documents is just another live interpolation here.
+  it("rejects ${env.X} in serviceLabel, which no emitter resolves", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "Zz ${env.siteHost}" })).toThrow(
+      /serviceLabel.*interpolation/s,
+    );
+  });
+
   // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 22
-  // fixtures use it, three of them byte-locked — and a `${` produces an UNDEFINED IDENTIFIER
-  // in the generated package rather than working code, which that package's own tsc reports.
-  // A later tightening that folded `${` into the rejection above would break the feature, so
-  // it fails here instead of in diff:golden.
+  // fixtures use it, three of them byte-locked — so the refinement above has to admit exactly
+  // that shape and refuse the rest. A tightening that folded it into the rejection would break
+  // the feature; it fails here, in milliseconds, instead of in diff:golden.
+  const withEnvBase = (base: string) => ({
+    ...MINIMAL,
+    env: [{ vars: ["ZZ_SITE"], local: "siteHost", bindings: ["h"], required: true }],
+    fetchHelper: { local: "nrGet", base, inlineHeaders: { Accept: "application/json" } },
+  });
+
   it("still accepts ${env.X} in fetchHelper.base", () => {
-    const spec = parseSpec({
-      ...withBase("https://${env.siteHost}/api"),
-      env: [{ vars: ["ZZ_SITE"], local: "siteHost", bindings: ["h"], required: true }],
-      fetchHelper: {
-        local: "nrGet",
-        base: "https://${env.siteHost}/api",
-        inlineHeaders: { Accept: "application/json" },
-      },
-    });
-    expect(spec.fetchHelper.base).toBe("https://${env.siteHost}/api");
+    expect(parseSpec(withEnvBase("https://${env.siteHost}/api")).fetchHelper.base).toBe(
+      "https://${env.siteHost}/api",
+    );
+  });
+
+  // The shape the fixtures actually use is a reference EMBEDDED in surrounding text, not a value
+  // that is one reference and nothing else — `${env.X}` alone is what `headerOption` matches with
+  // its anchored test, and reusing that anchoring here would reject every fixture base there is.
+  it("accepts ${env.X} embedded in surrounding text, and more than one of them", () => {
+    const base = "https://${env.siteHost}.zz.test/${env.apiVersion}/api";
+    expect(parseSpec(withEnvBase(base)).fetchHelper.base).toBe(base);
+  });
+
+  // A `${` that OPENS an env reference but never closes it as one. The removal pass leaves the
+  // opener behind, which is the point of scanning the residue rather than testing whether an
+  // env reference appears somewhere in the string.
+  it("rejects an interpolation that only begins like an env reference", () => {
+    expect(() => parseSpec(withBase("https://${env.siteHost${Date.now()}}/api"))).toThrow(
+      /fetchHelper\.base.*interpolation/s,
+    );
   });
 
   // diff:golden proves this too, but only against an AGPL checkout and only as part of a full
@@ -1589,4 +1660,51 @@ describe("strings the emitter splices raw into generated source", () => {
       expect(() => parseSpec(JSON.parse(raw))).not.toThrow();
     },
   );
+
+  /*
+   * What makes the `base` predicate a MIRROR of the emitter rather than a second opinion about
+   * which characters look dangerous. `resolveEnvRefs` (src/emit/server/fetch-helper.ts) is the
+   * authority on which references stop being interpolation; `baseExpr` is the exported function
+   * that runs it, so the two rules are held against each other through real emitter output here
+   * instead of by two copies of one regex agreeing with themselves.
+   *
+   * The stripper below is the emitter's OUTPUT shape — `${NAME()}`, what `resolveEnvRefs` writes
+   * for a reference it resolved — deliberately not the schema's input pattern. Removing it leaves
+   * exactly the interpolations the emitter did NOT resolve, which is the set the schema must
+   * refuse; so a `resolveEnvRefs` that stops resolving `${env.X}`, or starts resolving something
+   * else, fails this test rather than silently disagreeing with `src/spec.ts`.
+   *
+   * The one base it cannot judge is one that already reads `${NAME()}` before the emitter sees it
+   * — a live call the stripper cannot tell from a resolved reference. The schema refuses it (it is
+   * not an `env.` reference), which is the safe verdict; it is left out of the table below rather
+   * than asserted, because this test's model genuinely cannot see it.
+   */
+  const RESOLVED_CALL = /\$\{\w+\(\)\}/g;
+  const emitterLeavesLiveInterpolation = (base: string) =>
+    baseExpr({ fetchHelper: { base } } as unknown as ConnectorSpec)
+      .replaceAll(RESOLVED_CALL, "")
+      .includes("${");
+
+  it.each([
+    "https://api.zz.test/v1",
+    "https://${env.siteHost}/api",
+    "https://${env.siteHost}.zz.test/${env.apiVersion}/api",
+    `https://api.zz.test/v1${SELF_CONTAINED_IIFE}`,
+    "https://${host}/v1",
+    // A reference in the same DOTTED shape naming something other than `env` — the difference
+    // between mirroring `resolveEnvRefs` and merely resembling it.
+    "https://${cfg.host}/api",
+    "https://${env.}/api",
+    // The reference NEVER CLOSES as one: a rule that asked whether an env reference appears
+    // anywhere in the string, or that matched its name loosely, would accept this.
+    "https://${env.siteHost${Date.now()}}/api",
+  ])("accepts %j exactly when the emitter resolves every interpolation in it", (base) => {
+    let accepted = true;
+    try {
+      parseSpec(withEnvBase(base));
+    } catch {
+      accepted = false;
+    }
+    expect(accepted).toBe(!emitterLeavesLiveInterpolation(base));
+  });
 });
