@@ -10,6 +10,7 @@ package byte-identical to a hand-written one.
 | Generate a connector | [USAGE.md](./USAGE.md) |
 | Look up a spec field | the [README](../README.md) — the spec language reference |
 | Understand how it is built | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Know what a green check actually proves | [TESTING.md](./TESTING.md) |
 | Know where it is going | [ROADMAP.md](./ROADMAP.md) |
 | Work on it with Claude Code | [CLAUDE.md](../CLAUDE.md) |
 | Look up a term | [GLOSSARY.md](./GLOSSARY.md) |
@@ -76,6 +77,8 @@ reasons, and the difference matters before you start work.
 - **What the generator cannot do, and why** → [ROADMAP.md § Known limitations](./ROADMAP.md#known-limitations)
 - **Proposals measured and rejected** → [ROADMAP.md § Considered and declined](./ROADMAP.md#considered-and-declined)
 - **How each harness works and what it proves** → [ARCHITECTURE.md § The verification layers](./ARCHITECTURE.md#the-verification-layers)
+- **Which emitted shape each check actually covers, and which gates can pass while asserting
+  nothing** → [TESTING.md](./TESTING.md)
 - **Corpus measurements behind a default** → the [README](../README.md), next to the field they justify
 - **The traps that bite an agent working here** → [CLAUDE.md](../CLAUDE.md)
 
