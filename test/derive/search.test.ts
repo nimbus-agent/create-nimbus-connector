@@ -219,6 +219,13 @@ describe("recognizeSearchTool", () => {
     expect(recognizeSearchTool(call as AstNode, "zzGet")).toBeUndefined();
   });
 
+  it("has schemas to refuse", () => {
+    // `it.each` over an empty table runs no test and reports no failure, so deleting rows from
+    // REFUSED_MERGED_SCHEMAS quietly shrinks what this suite covers. The same guard
+    // test/gate-lists.test.ts puts on `MATCHER_CASES`, for the same reason.
+    expect(REFUSED_MERGED_SCHEMAS.length).toBeGreaterThan(2);
+  });
+
   it("refuses a body with an unrecognized statement count (neither 1 nor 3)", () => {
     refused([
       '    const root = await zzGet("/v1/items");',

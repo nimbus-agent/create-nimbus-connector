@@ -151,7 +151,9 @@ The emitter declares module-scope names in the output, so a spec may not reuse t
 parse-time error rather than a generated package that fails its own typecheck.
 
 When you add an emitter path that declares or imports a new module-scope name, add it to that
-list in the same change. Two waves have been missed already, and both were found late.
+list in the same change. Three waves have been missed already — the count
+`test/emitted-globals.test.ts`'s header records — and each was found late, which is why that
+test asks the emitters rather than enumerating the names by hand.
 
 ## Conventions
 

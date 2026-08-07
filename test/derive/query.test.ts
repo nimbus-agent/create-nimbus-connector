@@ -333,6 +333,13 @@ describe("recognizeQueryBlock", () => {
     expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
+  it("has rows to refuse", () => {
+    // `it.each` over an empty table runs no test and reports no failure, so deleting rows from
+    // REFUSED_BLOCKS quietly shrinks what this suite covers. The same guard test/gate-lists.test.ts
+    // puts on `MATCHER_CASES`, for the same reason.
+    expect(REFUSED_BLOCKS.length).toBeGreaterThan(3);
+  });
+
   it("refuses a URL const under any name but `u`", () => {
     const renamed = corrupt(PRISTINE, "const u = new URL(", "const v = new URL(")
       .replaceAll("u.searchParams", "v.searchParams")

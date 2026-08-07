@@ -92,11 +92,6 @@ function matchTitleAlias(stmt: AstNode): string | undefined {
 }
 
 /**
- * `stringField(row, "<key>")` / `nestedString(row, [...])` / `tagText(row)` /
- * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
- * `renderEntry`.
- */
-/**
  * A literal array whose every element is a string literal, or `undefined` if either half fails.
  *
  * The two callers — `matchEntryCall`'s `nestedString` path segments and `matchKeyedFilter`'s
@@ -115,6 +110,11 @@ function stringArrayElements(node: AstNode | undefined): string[] | undefined {
   return out;
 }
 
+/**
+ * `stringField(row, "<key>")` / `nestedString(row, [...])` / `tagText(row)` /
+ * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
+ * `renderEntry`.
+ */
 function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const stringArgs = callTo(node, "stringField", 2);
   if (stringArgs !== undefined) {

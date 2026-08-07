@@ -34,10 +34,16 @@ are not equally checked.
 | --- | --- | --- | --- | --- |
 | `hand-rolled` × monorepo | nothing in `bun test` | `test/emit/server/tools-hand.test.ts`, `body.test.ts`, `fetch-helper.test.ts`, `env.test.ts`, `test/emit/generate.test.ts` | `test/derive/round-trip.test.ts` — emit → derive → re-emit, against itself | `diff:golden` (`newrelic`, `datadog`, `grafana`, `sentry` against the real connectors); `acceptance` (the monorepo's own `tsc`/`biome`). **Neither runs in CI.** |
 | `hand-rolled` × standalone | nothing in `bun test` | `test/emit/generate.test.ts`; `emitted-typecheck.test.ts`'s *read helper emission is conditional on a call site* block, which is substring-only by its own admission | `test/golden/snapshots.test.ts` against `fixtures/snapshots/zzwrite/` and `.../zzwriteonly/` | `standalone-acceptance` (`zzstandalonehand`, `zzwrite`, `zzwriteonly` — the package's own `tsc` and `lint`); `runtime:acceptance`. Both run in `acceptance.yml`, **not** the merge gate. |
-| `rest-kit` × monorepo | nothing in `bun test` | `test/emit/server/tools-rest.test.ts`, `fetch-helper.test.ts`, `env.test.ts`, `test/emit/generate.test.ts`, `test/cli-main.test.ts` (the real binary on `zzstandalone`, via `Bun.spawnSync`) | `test/derive/round-trip.test.ts` — `discord` and `zzstandalone` fully, `google-meet` all files but `README.md` | `diff:golden` (`discord`, `google-meet`). **Does not run in CI.** |
+| `rest-kit` × monorepo | nothing in `bun test` | `test/emit/server/tools-rest.test.ts`, `fetch-helper.test.ts`, `env.test.ts`, `test/emit/generate.test.ts`, `test/cli-main.test.ts` (the real binary on `zzstandalone`, via `Bun.spawnSync`) | `test/derive/round-trip.test.ts` — `discord`, `zzstandalone` and `zzwriterest` (the rest-kit write path) fully, `google-meet` all files but `README.md` | `diff:golden` (`discord`, `google-meet`). **Does not run in CI.** |
 | `rest-kit` × standalone | nothing in `bun test` | `test/emit/generate.test.ts`, `test/cli-main.test.ts` (`--standalone`, real binary) | `test/golden/snapshots.test.ts` against `fixtures/snapshots/zzwriterest/` | `standalone-acceptance` (`zzstandalone`, `zzwriterest`); `runtime:acceptance`. `acceptance.yml`, not the merge gate. |
-| `read-only-kit` × monorepo | **`test/emit/emitted-typecheck.test.ts`** — real `tsc --noEmit` under Nimbus's own `compilerOptions`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor, conditional query parameter | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `env.test.ts`, `test/emit/search-filter.test.ts` | `test/derive/round-trip.test.ts` — `mercury`, `netlify`, `zendesk`, `dependencytrack`, `bitrise`, `zzreadonly`, `zzsearch`, `zzsearchstub`, `zzextract` | `diff:golden` (`mercury`, `zendesk`, `bitrise`, `dependencytrack`, `netlify`). **Does not run in CI.** |
+| `read-only-kit` × monorepo | **`test/emit/emitted-typecheck.test.ts`** — real `tsc --noEmit`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor, conditional query parameter. Each spreads `NIMBUS_COMPILER_OPTIONS` and then overrides `types` and `lib`, a local-only deviation the file names; only the wiring row below uses the constant unmodified | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `env.test.ts`, `test/emit/search-filter.test.ts` | `test/derive/round-trip.test.ts` — `mercury`, `netlify`, `zendesk`, `dependencytrack`, `bitrise`, `zzreadonly`, `zzsearch`, `zzsearchstub`, `zzextract` | `diff:golden` (`mercury`, `zendesk`, `bitrise`, `dependencytrack`, `netlify`). **Does not run in CI.** |
 | `read-only-kit` × standalone | **nothing, anywhere.** `test/emit/emitted-typecheck.test.ts` runs a real `biome check src/` under the emitted `biome.json` — a **lint**, not a typecheck | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `test/emit/search-filter.test.ts` | **nothing.** No read-only-kit fixture declares a write tool, so none has a snapshot; `round-trip` runs at the monorepo target | `standalone-acceptance` (`zzsearch`, `zzsearchstub`, `zzextract`). `acceptance.yml`, not the merge gate. |
+
+**The *substring-asserts* column is target-agnostic where it names a fragment renderer.**
+`env.test.ts`, `fetch-helper.test.ts`, `body.test.ts`, `tools-hand.test.ts` and
+`tools-rest.test.ts` contain neither the string "monorepo" nor "standalone": each calls a
+fragment renderer directly, and those fragments are spliced into both targets. They are listed
+against the monorepo rows for brevity, and cover the standalone row of the same style equally.
 
 One emitted artifact is not a style × target cell and belongs beside them:
 
@@ -57,8 +63,11 @@ and it exists because that list had been kept by hand and had drifted three time
 ### How to read the four columns
 
 - **Compiles** means a real TypeScript compiler ran over the emitted file and had to resolve
-  its imports. It is the only column that sees a type error, and — with `noUnusedLocals` —
-  the only one in `bun test` that sees a declaration nothing reads.
+  its imports. It is the only column that sees a **type** error. It is not the only thing that
+  sees a declaration nothing reads: `src/emit/biome-json.ts` emits
+  `correctness: { noUnusedVariables: "error" }`, so the standalone `biome check` case catches
+  an unread declaration too — which is why `emitted-typecheck.test.ts`'s header scopes its
+  "fails four of them" to the `TS6133` diagnostic specifically.
 - **Substring-asserts** means `toContain` / `not.toContain` over emitted text. A substring
   assertion cannot see an identifier that is declared and never read, an unbalanced brace, or
   a type that does not fit. That blindness is the reason `emitted-typecheck.test.ts` exists at
@@ -132,9 +141,12 @@ explains each at length. Three things it cannot express, each of which has misle
 
 **1. A file no test imports never enters the report at all.** Coverage is measured over
 modules the run loaded. A module nothing imports is not at 0% — it is absent, and the per-file
-floor has nothing to compare. This is why `scripts/` splits every harness into a thin driver
+floor has nothing to compare. This is why most harnesses in `scripts/` split into a thin driver
 plus a `scripts/_lib/` module: logic left inline behind an `import.meta.main` guard is logic no
-floor is measuring. `scripts/_lib/build-spec-doc.ts` and `scripts/_lib/preflight.ts` both state
+floor is measuring. It is a convention, not an invariant — `scripts/snapshot-update.ts` imports
+no `_lib` module at all and exports `loadExistingSnapshot` from the driver, and `reach.ts`,
+`acceptance.ts`, `runtime-acceptance.ts` and `wiring-conformance.ts` each keep some exported
+logic there too. `scripts/_lib/build-spec-doc.ts` and `scripts/_lib/preflight.ts` both state
 this in their own headers (`scripts/_lib/build-schema.ts`'s states the *convention*, and its
 own second load is a different one — a drift argument about regenerating by two routes), and
 `scripts/_lib/preflight.ts` is the sharpest example: `verdict` is the one sentence a reader
@@ -149,7 +161,10 @@ proves the shipped entry point works, which an in-process call does not — so t
 excluded from the **metric**, not from testing. `bunfig.toml` is explicit that the fix for this
 is *not* to add in-process tests duplicating the subprocess ones: that moves the number without
 adding assurance, which is the false-green pattern this repo keeps removing. Raise the floor
-only when a real gap closes, as it did for `src/format.ts`. `test/coverage-gate.test.ts` pins
+only when a real gap closes, as it did for `src/golden/resolve-root.ts` and
+`src/derive/search-filter.ts` — the two that carried 0.88 → 0.90. `src/format.ts` is the file
+that then **sets** the floor, and bunfig explains why its last eight lines cannot be closed
+in-process. `test/coverage-gate.test.ts` pins
 the exclusion list at exactly those two, so adding a third is a reviewed change to a test
 rather than a quiet edit to a config nobody re-reads.
 
@@ -234,7 +249,12 @@ into decoration.
 ## CI's permanent ceiling
 
 `ci.yml` — the merge gate — runs three commands: `bun test --coverage`, `bun run typecheck`,
-`bun run lint`. `acceptance.yml` runs `standalone-acceptance --registry` and
+`bun run lint`. It is not the only workflow that runs the suite: `sonar.yml` runs
+`bun test --coverage --coverage-reporter=lcov` on every push to `main` and every same-repo pull
+request, which is exactly why `test/coverage-gate.test.ts` grades the workflow **directory**
+rather than `ci.yml` alone — a second workflow running the suite without `--coverage` would
+execute it with the per-file floor silently switched off. `acceptance.yml` runs
+`standalone-acceptance --registry` and
 `runtime:acceptance --registry`, but it is deliberately **not** part of the merge gate and not
 a required check: both install from npm, and a registry outage must not red-X a pull request
 that changed nothing related. It is also path-filtered to `src/`, `scripts/`, `fixtures/`,
