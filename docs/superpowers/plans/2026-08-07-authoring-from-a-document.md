@@ -187,6 +187,10 @@ Add refusals, each proving it corrupted something first (`expect(bad).not.toBe(Y
   generated fallback would be a name the document does not contain;
 - an **external** `$ref` (`./other.yaml#/X`) — refused by name; only internal `#/...` refs resolve;
 - a **circular** internal `$ref` — refused rather than recursing forever;
+- a **dangling** internal `$ref` (`#/components/schemas/NoSuchThing`) — refused by name. This is the
+  one that fails quietly if unhandled: a missing lookup yields `undefined`, which then flows into a
+  mapper as an absent field rather than an error, and the operation maps with a silently missing
+  schema. Refuse at resolution, where the reference is still in hand;
 - an unsupported `openapi` major version (`2.0` / Swagger) — refused by name.
 
 - [ ] **Step 2: Run it — must FAIL on the missing module**
@@ -289,6 +293,28 @@ What must map, per the design:
   (`required: false`), `default`, `min`/`max` (`minimum`/`maximum`), and `int`
   (`type: integer`).
 - **`body`** — from a **flat** `requestBody` JSON schema: one level of properties, each a scalar.
+  **Select the media type explicitly.** `requestBody.content` is keyed by media type; take
+  `application/json` or a `+json` suffix type (`application/problem+json`). A body offering only
+  `application/x-www-form-urlencoded`, `multipart/form-data` or `text/*` is **refused by name** —
+  `renderBodyExpr` writes `JSON.stringify(...)` and the fetch helper sends
+  `Content-Type: application/json`, so a form-encoded body is not a formatting difference, it is a
+  different request this generator cannot emit.
+
+**Argument names must be valid JS identifiers, and OpenAPI's are frequently not.** `ToolSchema`
+constrains `args` keys with `/^[A-Za-z_$][A-Za-z0-9_$]*$/` ("argument name must be a valid JS
+identifier"), while `{widget-id}` and `{widget.id}` are ordinary in real documents.
+
+**Slugify to camelCase rather than refusing** — `{widget-id}` → `widgetId` — because the argument
+name is spec-internal and never reaches the URL: the path template interpolates the *value* at that
+segment's position, so `/widgets/{widget-id}` becomes `/widgets/${arg.widgetId|enc}` and the request
+is byte-identical either way. Refusing here would cost real reach for a name nobody observes.
+
+Two rules make that safe, and both need tests:
+- **The slug must be injective across the operation.** If two parameters slugify onto one name
+  (`widget-id` and `widget_id`), **refuse by name** — silently collapsing them would drop an
+  argument, and the tool would then send one value where the API expects two.
+- **A slug that lands on a `RESERVED_IDENTIFIERS` entry refuses**, for the reason Task 3 states
+  about connector names: a spec that fails its own `validateSpec` is worse than a refusal.
 
 Assert each, then the refusals — every one **by name**:
 - a nested (non-flat) request body;
@@ -344,10 +370,29 @@ git commit -m "feat(openapi): map one operation onto a tool, refusing what it ca
 What the *document* supplies:
 - **`fetchHelper.base` and `network`** from `servers[0].url` — origin into `network`, full URL into
   `base`. More than one server is a refusal by name, not a silent first-wins.
-- **the env auth mode** from `components.securitySchemes`: HTTP bearer → `auth: "bearer"`; API key
-  in header → `auth: "headers"` with the header name. Anything else — OAuth2 flows, OpenID, an API
-  key in a query or cookie — refused by name. **`credentialsIn` is never inferred**; the design lists
-  it as unfillable.
+
+  **Three server cases refuse rather than placeholder, and the distinction is the point.** A
+  `servers` array that is **absent**, **empty**, or whose first entry has **no `url`**; and a URL
+  carrying OpenAPI **server-variable templating** (`https://{tenant}.api.example/v1`, with a
+  `variables` block). All four are refused by name.
+
+  This is a different category from the placeholders below, and the plan should not blur them. A
+  placeholder stands in for a *Nimbus convention the document cannot express* — `style`,
+  `syncInterval` — where any value is provisional and the author knows to set it. A base URL is a
+  **fact about the API that an OpenAPI document is supposed to carry**; inventing one emits a spec
+  that points at an endpoint nobody chose, and `network` would then declare a host the connector
+  never contacts. Refuse, and say which of the four cases it was.
+- **the env auth mode** from `components.securitySchemes`:
+  - `type: http`, `scheme: bearer` → `auth: "bearer"`
+  - `type: http`, `scheme: basic` → `auth: "basic"` — `EnvSchema` supports it natively, and
+    `EnvSchema`'s own refine requires **exactly two vars** for basic, so emit two placeholder var
+    names (a username and a secret). Refusing a scheme the spec language models would be a gap in
+    this mapper, not a limit of the generator.
+  - `type: apiKey`, `in: header` → `auth: "headers"` with the header name.
+
+  Anything else — OAuth2 flows, OpenID Connect, mutual TLS, an API key `in: query` or `in: cookie` —
+  refused by name. **`credentialsIn` is never inferred**; the design lists it as unfillable, and it
+  is a fact about the token endpoint that `securitySchemes` does not carry.
 - **`name`** slugified from `info.title`.
 
 What gets a **placeholder that parses**, with the reason stated in the test's name:
@@ -674,3 +719,64 @@ methods, arguments, bodies, base URL, network, auth mode — and cannot fill the
 the effect of a non-GET operation. The output is a **starting point a human edits**, and the `TODO:`
 markers are how it says so. Anyone expecting a finished connector from a document will be
 disappointed, and the README should make sure they are not surprised.
+
+---
+
+## Review responses
+
+[`2026-08-07-authoring-from-a-document-review.md`](./2026-08-07-authoring-from-a-document-review.md)
+raised five items. **All five are accepted**, which is itself worth noting: every one is a mapping
+edge case in the half of the plan that reads a foreign document, and that is exactly where a plan
+written from a design's prose under-specifies. Both of the review's factual premises were checked
+against `src/spec.ts` before ruling, and both hold.
+
+### R1 — non-identifier path parameter names · **accepted, slugify rather than refuse**
+
+The premise is exact: `ToolSchema` constrains `args` keys with
+`/^[A-Za-z_$][A-Za-z0-9_$]*$/` and the message "argument name must be a valid JS identifier", while
+`{widget-id}` is ordinary in real documents.
+
+Slugifying is the right call **and it is lossless**, which the review suggested without stating why:
+the argument name is spec-internal and never reaches the URL. The path template interpolates the
+*value* at that segment's position, so the emitted request is byte-identical whichever name the spec
+uses. Refusing would cost real reach for a name nobody observes.
+
+Two guards make it safe, and Task 2 now carries both: the slug must be **injective across the
+operation** (two parameters collapsing onto one name refuses, because silently merging them would
+drop an argument and send one value where the API expects two), and a slug landing on a
+`RESERVED_IDENTIFIERS` entry refuses.
+
+### R2 — missing, empty or templated `servers` · **accepted, refuse in all four cases**
+
+A real gap: the plan said only that *more than one* server refuses. Absent, empty, no `url`, and
+server-variable templating are now all refusals by name.
+
+The review offered "refuse or placeholder" and the answer is refuse, for a reason worth writing
+down: a placeholder stands in for a **Nimbus convention the document cannot express**, where any
+value is provisional and the author knows to set it. A base URL is a **fact the document is supposed
+to carry**. Inventing one emits a spec pointing at an endpoint nobody chose, and `network` would then
+declare a host the connector never contacts — a placeholder that looks like data.
+
+### R3 — HTTP Basic · **accepted, map it**
+
+The premise is exact: `EnvSchema`'s `auth` enum includes `"basic"`. Refusing a scheme the spec
+language natively models would have been a gap in this mapper mistaken for a limit of the generator.
+
+One detail the review could not have known and Task 3 now states: `EnvSchema`'s own refine requires
+**exactly two vars** for `auth: "basic"`, so the mapping emits two placeholder var names rather than
+one.
+
+### R4 — request-body media type · **accepted**
+
+`requestBody.content` is keyed by media type and the plan never said which to take. Task 2 now
+requires `application/json` or a `+json` suffix, and refuses form-encoded and multipart by name —
+not as a formatting difference but because `renderBodyExpr` writes `JSON.stringify(...)` and the
+fetch helper sends `Content-Type: application/json`, so those are a different request this generator
+cannot emit.
+
+### R5 — dangling internal `$ref` · **accepted**
+
+Task 1 covered external refs and cycles and missed the dangling case. It is the one that fails
+*quietly*: a missing lookup yields `undefined`, which flows into a mapper as an absent field rather
+than an error, and the operation maps with a silently missing schema. Refused at resolution, where
+the reference is still in hand to name.
