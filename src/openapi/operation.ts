@@ -42,11 +42,11 @@
  *    incidental: parameters before body properties, path-item parameters before the operation's
  *    own, an override in the position it overrode, and document order within each group.
  *
- * **What this deliberately does not decide.** No `effect` — the design lists it as unfillable
- * (the corpus is emphatic that deriving HITL from the method is wrong for a third of connectors),
- * so a non-GET operation carries a note asking for it instead. No `description` when the
- * operation supplies no `summary`; Task 3 owns the `TODO:` placeholder for that, and `notes` is
- * what it folds into the description it writes.
+ * **What this deliberately does not decide.** No `effect` — an OpenAPI document carries nothing
+ * that answers it, and the corpus is emphatic that deriving HITL from the HTTP method is wrong
+ * for a third of connectors, so a non-GET operation carries a note asking for it instead.
+ * No `description` when the operation supplies no `summary`; Task 3 owns the `TODO:` placeholder
+ * for that, and `notes` is what it folds into the description it writes.
  *
  * **On `$ref` siblings.** `resolveRefs` replaces a referenced node whole, dropping any
  * `summary`/`description` sibling, and its docstring calls that acceptable *because no mapper

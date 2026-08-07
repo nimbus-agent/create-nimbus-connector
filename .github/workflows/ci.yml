@@ -62,9 +62,10 @@ jobs:
 # and `bun run acceptance`.
 #
 # All three need a checkout of the Nimbus monorepo, a separate AGPL-3.0-only
-# repository that is not on this runner. Vendoring it into this MIT repo was
-# rejected in decision D4 of the design doc, so they remain local pre-merge
-# gates rather than CI checks.
+# repository that is not on this runner. This repository is MIT, so vendoring
+# that monorepo here was refused; the harnesses read it at runtime from a path
+# you pass instead, and a CI runner has no such path. They remain local
+# pre-merge gates rather than CI checks.
 #
 # That is a real limitation, not an oversight: the project's most valuable
 # check does not run here. Run these before merging:

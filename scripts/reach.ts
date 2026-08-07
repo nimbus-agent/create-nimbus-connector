@@ -92,9 +92,9 @@ export function git(root: string, args: string[]): { value: string; error: strin
  * the module-level comment on that file's import gives: two copies would let the baseline and
  * the check that reads it disagree.
  *
- * The read (walkConnector) is wrapped here, not left to throw: the design states "One malformed
- * connector must never abort a 94-connector run," and an unwrapped call took the whole sweep
- * down on a single dangling symlink or permissions error before this wrap existed. Everything
+ * The read (walkConnector) is wrapped here, not left to throw: one malformed connector must
+ * never abort a 94-connector run, and an unwrapped call took the whole sweep down on a single
+ * dangling symlink or permissions error before this wrap existed. Everything
  * after a successful read is decidable from (name, files) alone and lives in _lib/reach.ts's
  * measure(), which is what makes it unit-testable without a Nimbus checkout.
  */

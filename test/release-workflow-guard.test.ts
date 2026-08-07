@@ -316,10 +316,11 @@ describe("the release workflow", () => {
     // entire value of the binding, so the absence of a token is a property worth
     // asserting rather than a thing to remember.
     //
-    // bootstrap-publish.yml deliberately DOES carry a token — it is the one-time
-    // publish that claims the name so the binding can exist at all. That file is
-    // temporary and is deleted once the trusted publisher is configured; this
-    // assertion is scoped to release.yml on purpose.
+    // The one-time bootstrap publish that claimed the name on npm deliberately DID
+    // carry a token — a trusted-publisher binding cannot be configured for a package
+    // that does not exist yet. That workflow was deleted once the binding was in
+    // place, so no such file is in .github/workflows/ today; this assertion is scoped
+    // to release.yml, the only workflow that publishes.
     // Structural, not textual. release.yml *documents* its own absence of a token in a
     // comment ("No NODE_AUTH_TOKEN: the trusted-publisher binding authenticates ..."),
     // so a `toContain` on the file body matches the explanation and fails on a correct

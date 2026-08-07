@@ -68,8 +68,8 @@
  * diagnosis than the schema's own is available; the backstop covers everything else, including
  * rules added to the spec language later.
  *
- * **What is deliberately NOT inferred, and what is not READ at all.** `credentialsIn` — the design
- * lists it as unfillable, and an oauth2 `clientCredentials` flow carries a `tokenUrl` but says
+ * **What is deliberately NOT inferred, and what is not READ at all.** `credentialsIn` — the
+ * document cannot fill it: an oauth2 `clientCredentials` flow carries a `tokenUrl` but says
  * nothing about whether the secret goes in a Basic header or in the body, which `EnvSchema`
  * requires. `effect` — Task 2 notes each non-GET instead, because the corpus is emphatic that
  * deriving HITL from the method is wrong for a third of connectors. `title` — it reaches emitted

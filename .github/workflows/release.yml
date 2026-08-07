@@ -145,10 +145,12 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile --ignore-scripts
 
-      # THE Bun-only exception. This project is Bun-only by design (design doc
-      # decisions B6/B7): no Node, npm or pnpm path exists in src/, scripts/,
-      # test/ or the connectors it generates. This job is the single documented
-      # exception, and it is narrow: `npm publish --provenance` is the only way
+      # THE Bun-only exception. This project is Bun-only by design: no Node,
+      # npm or pnpm path exists in src/, scripts/, test/ or the connectors it
+      # generates — src/cli.ts carries a `#!/usr/bin/env bun` shebang, emitted
+      # manifests declare `"runtime": "bun"`, and emitted tests import
+      # `bun:test`. This job is the single documented exception, and it is
+      # narrow: `npm publish --provenance` is the only way
       # to attach a sigstore provenance attestation to an npm tarball — Bun's
       # `bun publish` does not produce one. Node exists here solely to carry
       # that npm. Nothing built, tested or shipped runs on it, and the artifact

@@ -54,7 +54,11 @@ function renderEntry(e: FieldEntry): string {
 
 /**
  * The bespoke-extractor form. The guard is always asObjectish; argocd's asRecord is not
- * derivable from the field list and stays a documented difference (Stage E design).
+ * derivable from the field list — nothing in a list of field names says which of the two
+ * narrowings the connector chose, and they differ semantically (asObjectish admits arrays,
+ * asRecord rejects them). It stays a documented difference rather than a spec knob: see
+ * docs/ROADMAP.md's *Known limitations*, under "Expressible is not the same as
+ * byte-identical".
  */
 function extractorFilter(tool: ToolSpec): string {
   const entries = tool.filter!.fields!;
@@ -99,7 +103,8 @@ function keyedFilter(tool: ToolSpec, shape: KeyedShape): string {
  * stylistic. makeQueryFilter returns a closure that defers to filterByQuery, which calls
  * options.fields(item) once per row — so a throwing extractor never fires on an empty
  * result set and the tool reports `{ matches: [] }` as success. Throwing from the filter
- * position fires on every invocation. See Stage D design §4.3.1.
+ * position fires on every invocation, which is the only placement that makes an unimplemented
+ * filter impossible to mistake for a working one.
  */
 function stubFilter(tool: ToolSpec): string {
   // Deliberately does not name makeQueryFilter/fieldsFromKeys in this string: a stub-only

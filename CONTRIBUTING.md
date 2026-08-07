@@ -34,7 +34,7 @@ bunx biome check src/ test/ scripts/
 
 The most valuable test in this project **does not run in CI**, and that is a deliberate, documented limitation rather than an oversight.
 
-`diff:golden` generates connector packages from the specs in `fixtures/` and byte-compares every file against the real connector in the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was rejected in design decision D4, so the harness reads it at runtime from a local checkout — which a CI runner does not have.
+`diff:golden` generates connector packages from the specs in `fixtures/` and byte-compares every file against the real connector in the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harness reads it at runtime from a local checkout, which a CI runner does not have.
 
 ```bash
 bun run diff:golden --nimbus-root /path/to/Nimbus

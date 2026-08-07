@@ -27,9 +27,10 @@ export type Comparison = {
  *
  * This is intentionally NOT an allow-list: a fixture that matches *more* than declared is
  * a failure ("improved"), not a pass. The harness's job is to assert that the checked-in
- * gap report (expectations.json + the design doc's criterion-2 section) matches reality —
- * in either direction. A silent improvement would let the design doc's documented-gap
- * prose drift out of date without anyone noticing.
+ * gap report matches reality — in either direction. That report is two things kept in step:
+ * this file's declared set, and the prose in docs/ROADMAP.md's *Known limitations* naming
+ * why each omitted file cannot match. A silent improvement would let that prose drift out
+ * of date without anyone noticing.
  *
  * When files are both lost and gained the verdict is "changed": neither "regressed" nor
  * "improved" describes it, and collapsing it into either would mislabel the failure.
