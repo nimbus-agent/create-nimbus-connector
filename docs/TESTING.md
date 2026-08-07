@@ -134,10 +134,13 @@ explains each at length. Three things it cannot express, each of which has misle
 modules the run loaded. A module nothing imports is not at 0% — it is absent, and the per-file
 floor has nothing to compare. This is why `scripts/` splits every harness into a thin driver
 plus a `scripts/_lib/` module: logic left inline behind an `import.meta.main` guard is logic no
-floor is measuring. `scripts/_lib/preflight.ts` and `scripts/_lib/build-schema.ts` both state
-this in their own headers, and `scripts/_lib/preflight.ts`'s `verdict` is the sharpest example
-— the one sentence a reader quotes back as evidence, deliberately placed where a test can
-reach it.
+floor is measuring. `scripts/_lib/build-spec-doc.ts` and `scripts/_lib/preflight.ts` both state
+this in their own headers (`scripts/_lib/build-schema.ts`'s states the *convention*, and its
+own second load is a different one — a drift argument about regenerating by two routes), and
+`scripts/_lib/preflight.ts` is the sharpest example: `verdict` is the one sentence a reader
+quotes back as evidence, and `toCheck` — the PASS/FAIL/SKIP label for each gate — sat in the
+driver until it was measured, where a constant `skipped: false` printed four never-run gates as
+`PASS` with the whole suite green. Both are in `_lib` now, and both are asserted.
 
 **2. Subprocess execution is invisible.** `src/cli.ts` and `src/prompts.ts` are driven through
 `Bun.spawnSync` on the **real binary**, and Bun does not instrument child processes, so every

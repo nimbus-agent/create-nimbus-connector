@@ -38,10 +38,11 @@
  *
  * Everything decidable from the arguments alone lives here, where a test reaches it with an
  * injected `run` and nothing spawns; `scripts/preflight.ts` keeps only the parts that need a
- * subprocess. That is this directory's standing convention, and `scripts/_lib/build-schema.ts`'s
- * header explains the second reason it matters: a driver no test imports never enters the
- * coverage report at all, so logic left inline behind an `import.meta.main` guard is logic no
- * per-file floor is measuring.
+ * subprocess. That is this directory's standing convention — `scripts/_lib/build-schema.ts`'s
+ * header states it, and gives the drift reason a `_lib` split carries there. The second reason,
+ * the one that applies here, is `scripts/_lib/build-spec-doc.ts`'s: a driver no test imports never
+ * enters the coverage report at all, so logic left inline behind an `import.meta.main` guard is
+ * logic no per-file floor is measuring.
  *
  * The rule is easier to state than to hold to. `verdict` was moved here on it and `toCheck` was
  * left behind, which put the whole PASS/FAIL/SKIP label mapping — the eight lines a reader
@@ -201,7 +202,7 @@ export function runPreflight(opts: { nimbusRoot?: string; run: RunGate }): Prefl
  * It lives here rather than in the driver for exactly that reason. Choosing between "fully
  * verified" and "skipped four" IS the false-green decision this module exists to make, and left
  * inline behind the driver's `import.meta.main` guard it would be a decision no test could reach
- * and no coverage floor could see — scripts/_lib/build-schema.ts's header makes the same argument
+ * and no coverage floor could see — scripts/_lib/build-spec-doc.ts's header makes that argument
  * for the same reason. Written here, `test/scripts/preflight.test.ts` can assert the thing that
  * matters most: that the success sentence is unreachable from any report that is not
  * `fullyVerified`, whatever the reason.
