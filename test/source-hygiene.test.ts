@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * A gate that exists because a real defect passed every other one.
@@ -78,7 +80,27 @@ function rendersAsNothing(ch: string): boolean {
  */
 const SWEPT_PATHS = ["src", "test", "scripts", "schema"] as const;
 
-const repoRoot = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+/**
+ * This gate's FIFTH hole, and the first one that was in the path handling rather than the file
+ * listing.
+ *
+ * It used to read `new URL("..", import.meta.url).pathname`, with a regex to strip the leading
+ * slash off a Windows drive letter. `URL.pathname` is PERCENT-ENCODED, so on any checkout whose
+ * absolute path contains a space, a `#`, a `%` or a non-ASCII character — `C:\Users\First
+ * Last\…`, a OneDrive path, most Windows home directories with a full name in them — every
+ * `readFileSync` below threw ENOENT, the sweep's `catch { continue }` swallowed it, and the gate
+ * passed having inspected ZERO bytes. Both non-vacuity tests stayed green, because they count the
+ * LISTING and the sweep counts the INSPECTION, and nothing connected the two.
+ *
+ * `fileURLToPath` decodes and handles the drive letter, and it is a function rather than an
+ * inline expression so the decoding can be asserted directly against a path that has a space in
+ * it — which no checkout of this repository is guaranteed to have.
+ */
+function repoRootFrom(moduleUrl: string): string {
+  return fileURLToPath(new URL("..", moduleUrl));
+}
+
+const repoRoot = repoRootFrom(import.meta.url);
 
 /**
  * The files git can see under ONE swept path — tracked, staged, or merely written.
@@ -118,29 +140,65 @@ function trackedSourceFiles(): string[] {
   return SWEPT_PATHS.flatMap(filesUnder);
 }
 
-describe("source hygiene", () => {
-  it("contains no character that renders as nothing, beyond tab, newline and carriage return", () => {
-    const root = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-    const offenders: string[] = [];
+/**
+ * What one sweep saw: the offenders, and — the part four earlier versions of this gate did not
+ * have — how much it actually looked at.
+ *
+ * `charsRead` is the quantity that matters and the one nothing was counting. "Listed 158 files"
+ * and "read 158 files" are different claims, and every previous non-vacuity guard here asserted
+ * the first while the sweep depended on the second.
+ */
+type Sweep = { offenders: string[]; filesRead: number; charsRead: number };
 
-    for (const rel of trackedSourceFiles()) {
-      let text: string;
-      try {
-        text = readFileSync(`${root}/${rel}`, "utf8");
-      } catch {
-        continue; // deleted between listing and read; not this test's concern
-      }
-      for (let i = 0; i < text.length; i++) {
-        const ch = text[i]!;
-        if (rendersAsNothing(ch)) {
-          const code = ch.codePointAt(0)!;
-          offenders.push(`${rel}: U+${code.toString(16).padStart(4, "0")} at offset ${i}`);
-          break; // one report per file is enough to act on
-        }
+function sweep(): Sweep {
+  const offenders: string[] = [];
+  let filesRead = 0;
+  let charsRead = 0;
+
+  for (const rel of trackedSourceFiles()) {
+    // No try/catch, deliberately. It used to be here for "deleted between listing and read", and
+    // that is a real race — but it also swallowed the ENOENT that a percent-encoded root threw
+    // for EVERY file, which is how this gate came to pass while reading nothing. A race that
+    // loses one file to a loud failure is a better trade than a silence that can lose all of
+    // them, and the count assertion below would not be able to tell the two apart anyway.
+    const text = readFileSync(join(repoRoot, rel), "utf8");
+    filesRead += 1;
+    charsRead += text.length;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]!;
+      if (rendersAsNothing(ch)) {
+        const code = ch.codePointAt(0)!;
+        offenders.push(`${rel}: U+${code.toString(16).padStart(4, "0")} at offset ${i}`);
+        break; // one report per file is enough to act on
       }
     }
+  }
+  return { offenders, filesRead, charsRead };
+}
 
-    expect(offenders).toEqual([]);
+describe("source hygiene", () => {
+  it("contains no character that renders as nothing, beyond tab, newline and carriage return", () => {
+    expect(sweep().offenders).toEqual([]);
+  });
+
+  it("reads every file it listed, so a path it cannot open fails instead of being skipped", () => {
+    // THE guard this gate was missing, and the one the other two below cannot stand in for: they
+    // count what `git ls-files` printed, this counts what `readFileSync` returned. A root that
+    // resolves to nothing readable now fails here rather than reporting an empty offender list.
+    const seen = sweep();
+    expect(seen.filesRead).toBe(trackedSourceFiles().length);
+    // And bytes, not just files: a listing of empty files would satisfy the count above while
+    // the predicate ran against nothing. This repository's sources are hundreds of kilobytes.
+    expect(seen.charsRead).toBeGreaterThan(200_000);
+  });
+
+  it("derives the repository root by DECODING the file URL, not by reading its pathname", () => {
+    // The bug this replaced, pinned on an input this checkout is not guaranteed to have.
+    // `new URL("..", …).pathname` returns "/C:/a%20b/repo/" here, so the old derivation handed
+    // readFileSync a directory name containing a literal "%20" and every read threw ENOENT.
+    const root = repoRootFrom("file:///C:/a%20b/repo/test/source-hygiene.test.ts");
+    expect(root).not.toContain("%20");
+    expect(root).toContain("a b");
   });
 
   it("lists a non-trivial number of files, so an empty sweep cannot pass vacuously", () => {
