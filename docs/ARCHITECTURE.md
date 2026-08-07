@@ -145,6 +145,34 @@ Three properties hold it honest, and each exists because its absence produced a 
   comparing rendered text against observed source would make a renderer bug self-consistent and
   invisible to every gate.
 
+### `src/openapi/` — the document reader
+
+`assembleSpec(doc, ops)` turns an OpenAPI 3 document plus a selection of its operations into a
+spec, or into named refusals. It is what `--from-openapi` runs, and it writes nothing.
+
+```text
+schema.ts     the zod boundary — the SUBSET of OpenAPI this tool reads, in loose objects so
+              parameters, requestBody and vendor extensions survive the parse
+document.ts   text -> document: JSON or YAML, every internal $ref resolved, operations listed
+operation.ts  one operation -> one tool: path, method, args, query, body — or its refusals
+spec.ts       document + selected operations -> a whole spec, with its placeholders
+```
+
+**It is the structural mirror of `src/derive/`:** both produce a spec from something that is not
+one, and both **refuse by name** rather than approximate — one reads a foreign document, the other
+reads this generator's own emitted source. The mirror is deliberate and so is the one place it
+breaks: there is no counterpart to `derive/read.ts`, because a Babel AST has a hundred node types
+and an index signature made eight wrong claims possible, while an OpenAPI document is plain JSON
+that `OpenApiDocumentSchema` has already proved the shape of — **the schema is the guard**.
+
+The two differ in what a quiet mis-read costs, which is why the reader's rule is stricter. A
+deriver that under-reads re-emits different bytes and `diff:golden` catches it; a mapper that
+drops the one parameter it could not express produces a connector that compiles, passes every
+gate and sends the wrong request. So an operation maps completely or not at all, every refusal in
+a run is collected rather than only the first, and `assembleSpec` puts its own output through the
+real `parseSpec` and `validateSpec` before returning it — the spec it prints has already been
+accepted by the pipeline that will consume it.
+
 ### `src/golden/` — fixture machinery
 
 Root resolution (`resolve.ts`, `resolve-root.ts`, `sdk-root.ts`), the expectations file

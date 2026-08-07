@@ -214,18 +214,43 @@ its denominator and which of those causes are permanent.
       corpus tree and a named cause for every connector under it, is
       [The measured ceiling](#the-measured-ceiling).
 
-### Stage F — authoring experience `[ ]`
+### Stage F — authoring experience `[x]`
 
-- [ ] **Spec authoring from an OpenAPI document.** The largest reduction in effort available:
-      most of a spec is endpoints, arguments and descriptions that an OpenAPI file already has.
+**Closed, and each bullet judged on its own.** Two of the four close with a limit stated on the
+bullet rather than silently, because in both cases the gap is permanent and no further work here
+removes it: an OpenAPI document does not carry Nimbus's conventions, and JSON Schema cannot
+express a cross-field refinement. A limit that cannot be closed is a limitation, not an unfinished
+task — `[~]` is for work that is genuinely half-done, which is why [Stage E](#stage-e--the-corpus-tail-)
+still carries it and this stage does not.
+
+- [x] **Spec authoring from an OpenAPI document.** `--from-openapi` reads an OpenAPI 3 document
+      (JSON or YAML, `$ref`s resolved), `--list-operations` prints what it found, and each `--op`
+      selects an operation to become a tool. It fills what the document actually states —
+      endpoints, methods, arguments, request bodies, base URL, network permission, auth mode — and
+      **refuses by name** every construct the spec language cannot express, since an operation maps
+      completely or not at all. What it cannot fill is the part of a connector that encodes *Nimbus*
+      conventions rather than API facts, and that part is placeholders and notes, not omissions. See
+      [What `--from-openapi` cannot fill](#known-limitations) for the constructs, and the
+      [README](../README.md#what-an-openapi-document-can-and-cannot-supply) for the full refusal
+      vocabulary.
 - [x] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
       make regeneration coverage measurable in bulk rather than one hand-written fixture at a
       time. Shipped, with `--partial` for a draft from a module that blocks; `bun run reach` is
       the bulk half, running the same deriver over a whole checkout. See
       [Known limitations](#known-limitations) for what its report does and does not carry.
-- [ ] **Better validation errors**, pointing at the JSON path rather than naming the field.
-- [ ] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
-      file.
+- [x] **Better validation errors**, pointing at the JSON path rather than naming the field. Every
+      `parseSpec` issue now renders as `tools[0].args.limit.max: <why> (received "ten")` — the whole
+      path with bracketed indices, and the value that was actually there. `validateSpec`'s
+      whole-spec rules still locate by name — `Tool "widgets_list" path references "${arg.id}", but
+      declares no arg named "id"` — and that is deliberate: an identifier collision or a dangling
+      reference is a relation between two places, so a single path would name only one end of it.
+- [x] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
+      file — **structurally**, which is as far as the format reaches.
+      `schema/connector-spec.schema.json` is generated from `ConnectorSpecSchema` itself and
+      byte-compared against a fresh build on every test run, so it cannot drift from the language it
+      describes. It does **not** carry the refinements, and therefore accepts specs the generator
+      rejects. Closed with that limit stated rather than left open, because nothing on this side
+      closes it — see [Known limitations](#known-limitations).
 
 ### Stage G — consolidation `[ ]`
 
@@ -636,6 +661,66 @@ cost of closing each is named; none is proposed.**
   catch, printed as one line with none of `renderBlockers`'s formatting. `missing()`'s own
   comment in that file claims "one report shape covers every failure"; this is the failure that
   report shape doesn't cover.
+
+**What `--from-openapi` cannot fill.**
+
+The mechanical majority of a spec is in the document — endpoints, methods, arguments, request
+bodies, the base URL, the network host, the auth mode — and the reader takes all of it. What is
+left is not remaining work on this side: it is the part of a connector that encodes *Nimbus*
+conventions rather than API facts, and no document states it. The output is a **starting point a
+human edits**, and the `TODO:` markers are how it says so.
+
+- **The connector's own identity and shape are placeholders.** `style`, `syncInterval`,
+  `minNimbusVersion`, `displayName`, `serviceLabel`, the connector `description`, and a tool
+  description for an operation carrying no `summary`. Each prose one carries a `TODO:` marker;
+  `style` is an enum and `syncInterval` a positive integer, so neither can hold prose and both
+  carry a value that parses and is obviously provisional instead. They live in one `PLACEHOLDER`
+  const (`src/openapi/spec.ts`) so the set is readable at a glance rather than scattered.
+- **`effect` is never guessed from the HTTP method.** It is left unset on every operation — which
+  means `"read"`, so the manifest asks for no confirmation — and each non-GET carries a note asking
+  for it. The corpus does not support deriving human-in-the-loop confirmation from the verb, and a
+  wrong default here is worse than an absent one, because it is the one field whose error ships a
+  mutating tool that runs unconfirmed.
+- **Search tools do not come from a document.** `impl: "search"`, `filter`, `rows` and `maxLimit`
+  describe how a connector presents results to an agent; an OpenAPI operation describes a request.
+  Every mapped operation becomes a plain tool.
+- **Tool names are `operationId`s verbatim, and that collides with the Gateway wiring's one
+  convention.** `mapOperation` (`src/openapi/operation.ts`) sets `name: op.operationId`, while
+  `emitWiring`'s `findListTool` (`src/emit/wiring.ts`) selects the tool whose name
+  `endsWith("_list")` and **throws** when none does — the same corpus convention `src/prompts.ts`
+  defaults a hand-authored tool name to, as `${name}_list`. So a document declaring
+  `operationId: listWidgets` produces a spec `--gateway-wiring` **refuses outright**, not one that
+  merely wires the wrong tool. Rename the tool before wiring it.
+- **A refusal names its operation by method and path, not by `operationId`.** `mapOperation` builds
+  its refusal context as `` where: `${op.method} ${op.path}` ``, and every refusal routes through
+  the one `refuse()` sink, so selecting `--op listWidgets` produces refusals headed `GET /widgets`.
+  Correct, and worth knowing before reading the output.
+- **An exclusive bound is widened to an inclusive one, with a note.** `exclusiveMinimum` /
+  `exclusiveMaximum` have no counterpart in the spec language, so they become `min` / `max` and the
+  note records the widening. This is the one knowing divergence in the whole path — the tool will
+  accept a value the API rejects — and the note is the entirety of its honesty.
+- **Everything else it cannot express is refused by name**, per document and per operation: a
+  header or cookie parameter, an `array` or `object` argument, `oneOf`/`anyOf`/`allOf`, a body that
+  is not flat `application/json`, an absent or ambiguous `servers` entry, a security scheme with no
+  env auth mode. The [README](../README.md#what-an-openapi-document-can-and-cannot-supply) carries
+  the full vocabulary; what belongs here is the rule behind it. **An operation maps completely or
+  not at all** — a tool missing the one parameter that could not be expressed is a connector that
+  compiles, passes every gate, and sends the wrong request.
+
+**The published JSON Schema.**
+
+- **It cannot express the refinements, so it accepts specs the generator rejects.**
+  `schema/connector-spec.schema.json` is generated from `ConnectorSpecSchema` and byte-compared
+  against a fresh build by `test/schema.test.ts`, so it cannot drift from the *shape* of the spec
+  language. The rules that are not shape have no JSON Schema expression and are simply absent from
+  the document: cross-field requirements, `RESERVED_IDENTIFIERS`, style-specific constraints, and
+  the string-safety refinements that stop a spec value becoming executable code in the generated
+  package. An editor therefore reports green on a spec the CLI refuses — a false green in the
+  direction this repository normally removes, kept because the alternative is not publishing a
+  schema at all. It is a property of the format rather than unfinished work: completion and
+  structural checking are what it buys, and `bun src/cli.ts --spec <path> --dry-run` is what says a
+  spec is actually accepted. The README states the same limit beside the editor setup, where
+  somebody wiring it up will meet it.
 
 ## Considered and declined
 

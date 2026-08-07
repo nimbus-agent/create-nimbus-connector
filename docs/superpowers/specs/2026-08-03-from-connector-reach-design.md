@@ -103,10 +103,15 @@ paths; a connector that uses them blocks today, by design — see *No escape hat
 
 Plan 2 is [`2026-08-04-completing-the-recognizer-set-design.md`](./2026-08-04-completing-the-recognizer-set-design.md).
 
-**The deriver lives under `scripts/_lib/`, not `src/`.** `package.json`'s `files` is
-`["src", "README.md"]`, so anything under `src/` ships to npm; a dev-only deriver there would put
-unreachable code and an unresolvable `@babel/parser` import into every published tarball. Keeping
-it in `scripts/` also keeps the parser out of the runtime dependency graph.
+**~~The deriver lives under `scripts/_lib/`, not `src/`.~~ Superseded — it lives under
+`src/derive/` and ships.** `package.json`'s `files` is `["src", "README.md"]`, so anything under
+`src/` ships to npm; a dev-only deriver there would put unreachable code and an unresolvable
+`@babel/parser` import into every published tarball. That reasoning expired when `--from-connector`
+made the code reachable: it moved to `src/derive/` deliberately, and `@babel/parser` is an
+`optionalDependency` that `src/derive/ast.ts` imports dynamically, so a consumer without it loses
+that one flag and nothing else. The current rule is in
+[`.claude/commands/cnc-reach-deriver.md`](../../../.claude/commands/cnc-reach-deriver.md); struck
+rather than deleted, per this document's amend-don't-rewrite convention.
 
 Only `src/server.ts`, `src/search-filter.ts` and `nimbus.extension.json` get recognizers. The
 other emitted files — `README.md`, `package.json`, `tsconfig.json`, `biome.json`,
