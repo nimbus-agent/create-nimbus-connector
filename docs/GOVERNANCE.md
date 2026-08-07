@@ -65,6 +65,36 @@ is advisory: a finding is verified against the code before it is implemented or 
 the reasoning is recorded in the thread. Neither a bot's approval nor its objection decides
 anything on its own.
 
+## Keeping the unattended checks running
+
+This repository is built to sit quiet for long stretches. Two of its checks are the ones that
+matter most in exactly that state, and both are the kind that stop running without turning
+anything red. **A maintainer who checks in twice a year should read this section first.**
+
+**The two scheduled workflows are auto-disabled after 60 days of repository inactivity.** That
+is a GitHub platform behaviour, not a setting in this repository, and it applies to
+`acceptance.yml`'s daily `--registry` run and `codeql.yml`'s weekly scan. Those two are
+precisely the unattended safety nets: the daily acceptance run exists because the published
+`@nimbus-dev/sdk` can change without a single commit here, and the weekly CodeQL run exists so a
+newly published query finds existing code rather than waiting for someone to touch it. The thing
+that keeps the window open today is incidental — Dependabot's weekly branch pushes count as
+activity — which means the protection lapses exactly when nothing needs updating, the case it
+was for.
+
+GitHub emails the repository admins before disabling them, so the instruction is short and it is
+the whole of the mitigation: **re-enable them, and do not read a green Actions tab as proof they
+ran.** A disabled schedule shows no failure. Check the workflow's last run date, not its last
+result. A keep-alive workflow was considered and declined — it would manufacture activity to
+defeat a mechanism whose purpose is to detect its absence, which is the same shape as a gate
+that passes while asserting nothing.
+
+**The `sonar` workflow can go red for a reason no commit fixes.** SonarCloud's quality gate
+includes `new_security_hotspots_reviewed`, which is satisfied by a human reviewing the hotspot
+in the SonarCloud UI and recording a verdict — not by changing code. A red `sonar` check is
+therefore not automatically a defect in the pull request. Read the finding first: if it is an
+unreviewed hotspot, review it there and say so in the thread, the same way any other advisory
+finding is verified before being implemented or dismissed.
+
 ## Compatibility
 
 Pre-1.0, so the version number does not carry the usual semver promise. In practice:

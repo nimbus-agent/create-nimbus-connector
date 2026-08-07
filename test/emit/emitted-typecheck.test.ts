@@ -80,7 +80,14 @@ const BIOME_BIN = join(
  * (The full `bun test` does notice that particular probe, but through the deriver's round-trip
  * and the checked-in snapshots — byte comparisons. A type-level defect that leaves the bytes
  * derivable would pass.) Those two styles are typechecked only by `bun run standalone-acceptance`
- * and `bun run diff:golden`, neither of which runs in CI.
+ * and `bun run diff:golden`, NEITHER OF WHICH IS IN THE MERGE GATE — and the two are not absent
+ * for the same reason, which is why this used to say "neither of which runs in CI" and was wrong
+ * about one of them. `diff:golden` needs the AGPL Nimbus monorepo and can never run in Actions at
+ * all. `standalone-acceptance --registry` DOES run in Actions, in .github/workflows/acceptance.yml,
+ * daily and on pull requests touching src/, scripts/ or fixtures/; it is kept out of ci.yml and off
+ * the required-checks list deliberately, because it installs from npm and a registry outage must
+ * not red-X an unrelated pull request. So a defect these two styles carry can survive a merge in
+ * either case, but only one of them is unfixable.
  *
  * Why the gap is not closed by simply adding two more cases. Measured across all six style x
  * target combinations: read-only-kit x monorepo is the ONLY one whose `server.ts` does not
@@ -97,7 +104,7 @@ const BIOME_BIN = join(
  * `bun run standalone-acceptance` installs the real dependencies and runs the package's own
  * `tsc --noEmit` and `bun run lint`; the `zzwriteonly` fixture there exists for this defect
  * specifically. `bun run diff:golden` covers hand-rolled and rest-kit monorepo output by byte
- * comparison. Neither runs in CI.
+ * comparison. Neither is in the merge gate — see above for the two different reasons.
  */
 
 const tmp = tempDirs();

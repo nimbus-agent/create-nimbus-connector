@@ -271,7 +271,11 @@ must not have. It deliberately does not sniff for a sibling `Nimbus/` checkout, 
 ## Two gaps worth naming
 
 Recorded here rather than implied, because both are places where a green run means less than it
-looks like it does.
+looks like it does. They are also entered in
+[ROADMAP § Known limitations](./ROADMAP.md#known-limitations), under *What the byte gates do not
+reach*, alongside a third — that `read-only-kit` × standalone is byte-compared nowhere, which is
+the last row of the matrix above stated as a limitation. That is the standing list; this is the
+measurement behind it.
 
 ### No real-connector fixture declares a write tool
 

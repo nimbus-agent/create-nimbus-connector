@@ -635,6 +635,41 @@ cost of closing each is named; none is proposed.**
 - **A connector with no `test/sandbox.test.ts`.** 15 of the 94 lack one; the generator always
   emits it, so the harness reports `MISSING` rather than `DIFF`.
 
+**What the byte gates do not reach.**
+
+Gaps in *verification* rather than in the generator, recorded here because each is a place where
+the fixture list implies coverage that does not exist — and "the write path is byte-verified" is
+the specific belief that is not true. [TESTING.md](./TESTING.md) carries the per-shape matrix and
+the probes behind these; what belongs here is that they are known, and why none is closable from
+this side.
+
+- **No real-connector fixture declares a write tool, so `diff:golden` has zero purchase on the
+  Stage C emitter paths.** Verified at HEAD by reading every `fixtures/*.spec.json`: not one of
+  the fixtures transcribed from a real Nimbus connector declares a tool with `effect: "write"`
+  or a non-`GET` `method`. `method`, `effect`, `body`, `hitlRequired` and the `<local>Send` write
+  helper are exercised only by the synthetic `zz*` fixtures, which byte-match nothing — no
+  `packages/mcp-connectors/zz*` directory exists, so their `fixtures/expectations.json` entries
+  are empty lists and every generated file reports MISSING. That is a pass that compared against
+  nothing, by design. Holding those paths in place instead: `fixtures/snapshots/`,
+  `test/derive/round-trip.test.ts`, and `standalone-acceptance` / `runtime:acceptance` — all
+  real, none ground truth. **No corpus connector closes this**, and *The write helper* above is
+  why: no corpus connector declares `<local>Send` at all, so there is nothing to transcribe a
+  fixture from.
+- **`read-only-kit` + `client-credentials` is documented and has no fixture.** The
+  [README](../README.md)'s *OAuth: `client-credentials`* section documents the pairing; every
+  `read-only-kit` fixture uses `bearer`, `basic` or plain headers, and the one fixture declaring
+  `client-credentials` is `hand-rolled`. The single check on the combination is the standalone
+  KIT-import ordering case in `test/emit/emitted-typecheck.test.ts`, and that case is a
+  `biome check`, not a compile.
+- **`read-only-kit` × standalone is byte-compared nowhere in this repository.** Both byte
+  comparisons inside `bun test` miss it by construction: `listWriteFixtures`
+  (`src/golden/snapshots.ts`) selects snapshot fixtures on `effect !== "read"` and no
+  `read-only-kit` fixture has a write tool, while `test/derive/round-trip.test.ts` runs at the
+  monorepo target. Measured rather than reasoned — a plain `TS2322` emitted into that file passes
+  the entire suite with zero failures, including the real `biome check`, because an exported const
+  is read by definition and Biome has no type information. `standalone-acceptance` catches it, in
+  `acceptance.yml`, which is outside the merge gate.
+
 **`--from-connector`'s report shape.**
 
 - **`--partial` prints less than the report it replaces.** `partialResult`

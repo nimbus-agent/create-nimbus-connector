@@ -22,32 +22,52 @@ bun install
 
 ## The gates
 
-These three run in CI on every pull request:
+One command runs the whole local sequence:
 
 ```bash
-bun test
-bunx tsc --noEmit
-bunx biome check src/ test/ scripts/
+bun run preflight --nimbus-root /path/to/Nimbus
 ```
 
-## The gate CI cannot run — please run it yourself
+It executes eight gates in order, stops at the first failure, and — the part that matters — when you give it no `--nimbus-root` it reports the four gates that need the Nimbus monorepo as **`SKIP`, by name**, and deliberately does not print the sentence a fully-verified run prints. A preflight that quietly omitted four gates would be the exact false green this project exists to remove.
 
-The most valuable test in this project **does not run in CI**, and that is a deliberate, documented limitation rather than an oversight.
+The eight, in the order it runs them:
 
-`diff:golden` generates connector packages from the specs in `fixtures/` and byte-compares every file against the real connector in the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harness reads it at runtime from a local checkout, which a CI runner does not have.
+| Gate | Needs a Nimbus checkout |
+| --- | --- |
+| `bun test` | no |
+| `bunx tsc --noEmit` | no |
+| `bunx biome check src/ test/ scripts/` | no |
+| `bun test --coverage` — the per-file floors, which a bare `bun test` never evaluates | no |
+| `bun run diff:golden --nimbus-root <path>` | **yes** |
+| `bun run reach --baseline --nimbus-root <path>` | **yes** |
+| `bun run wiring:conformance --nimbus-root <path>` | **yes** |
+| `bun run acceptance <path>` | **yes** |
 
-```bash
-bun run diff:golden --nimbus-root /path/to/Nimbus
-bun run acceptance  /path/to/Nimbus
-```
+Run an individual gate directly when you are iterating on the thing it checks.
 
-If you change anything under `src/emit/`, run these before opening a PR and say in the PR that you did. The harness fails on divergence **in either direction**: a fixture that starts matching *more* files is as much a failure as one that matches fewer, because both mean the recorded expectation in `fixtures/expectations.json` is now stale.
+## CI's permanent ceiling — the four gates you have to run yourself
 
-The standalone harness generates a package, installs it, builds it, and drives a real MCP `tools/list` handshake against both `src/server.ts` and the bundled `dist/server.js`:
+**CI runs three of those eight, and that will never change.** The four in the table above need a checkout of the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harnesses read it at runtime from a path you pass, and a CI runner has no such path.
+
+**This is not a backlog item, and the tempting fix is refused explicitly**: do not add a CI job that skips when the root is absent. A job that is green because it did nothing is worse than a job that is absent, because the absent one is visible. [`docs/TESTING.md`](./docs/TESTING.md) states, per emitted shape, exactly what a green CI run does and does not prove.
+
+What each of the four answers that nothing else can:
+
+| Gate | The question only it answers |
+| --- | --- |
+| `diff:golden` | Do the emitted bytes match a real hand-written connector? |
+| `reach --baseline` | Has any connector in the 94-connector corpus lost a derivation tier? |
+| `wiring:conformance` | Does the emitted Gateway skeleton still match Nimbus's real `Syncable`? |
+| `acceptance` | Does a generated connector survive the monorepo's own `tsc`, `biome` and README audit? |
+
+If you change anything under `src/emit/`, run them before opening a PR and say in the PR that you did. `diff:golden` fails on divergence **in either direction**: a fixture that starts matching *more* files is as much a failure as one that matches fewer, because both mean the recorded expectation in `fixtures/expectations.json` is now stale. `reach --baseline` behaves the same way about `fixtures/reach-baseline.json` — a tier that *improved* is a result to state, not to quietly re-record.
+
+Two further harnesses need the npm registry rather than the monorepo, so they **do** run in CI — in `acceptance.yml`, daily and on pull requests touching `src/`, `scripts/` or `fixtures/` — but neither is a required check, because a registry outage must not red-X an unrelated pull request. Run them yourself when you change standalone emission:
 
 ```bash
 bun run standalone-acceptance --registry          # against the published @nimbus-dev/sdk
 bun run standalone-acceptance /path/to/nimbus-sdk # against a local SDK checkout
+bun run runtime:acceptance --registry             # what the connectors actually send
 ```
 
 ## The licensing boundary

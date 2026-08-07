@@ -184,11 +184,16 @@ genuinely needs subprocesses.
 ## The verification layers
 
 Four harnesses, each answering a question the others cannot. They are layered, and the
-ordering is by how much of the world they need.
+ordering is by how much of the world they need. **`bun run preflight --nimbus-root <path>` is
+the runner over all of them** — `scripts/_lib/preflight.ts` holds the gate sequence as data and
+the decision of whether a run may call itself fully verified; `scripts/preflight.ts` is the
+driver that spawns. Which emitted shape each layer actually covers, and which of them can pass
+while proving nothing, is [TESTING.md](./TESTING.md).
 
 1. **`bun test`** — emitters called directly. Includes `emitted-typecheck.test.ts`, which
    compiles emitted output with the real TypeScript compiler; substring assertions cannot see
-   an unbalanced brace or an unused import.
+   an unbalanced brace or an unused import. It also holds the **snapshot** comparison below,
+   which is the only byte-level ground truth in the repo that needs no external checkout.
 2. **`diff:golden`** — generate from a fixture spec, diff against the real connector in a
    Nimbus checkout. This is the acceptance test for the *template*: where the diff is
    irreducible, that is either a spec field the template must expose or an honest limitation
@@ -219,6 +224,31 @@ while the tree did not made `--baseline` refuse a corpus that had not actually c
 `bun run reach --baseline` refuses to compare across a moved or dirty checkout and otherwise
 fails when a connector has regressed a tier. Like `diff:golden` and `wiring:conformance`, it
 needs the AGPL monorepo and so cannot run in CI.
+
+### 1a. `fixtures/snapshots/` — checked-in ground truth for the shapes no real connector has
+
+`fixtures/snapshots/<fixture>/` holds a complete generated **standalone** package, checked in
+file by file, and `test/golden/snapshots.test.ts` regenerates it and byte-compares the tree.
+It exists because `diff:golden`'s ground truth is the corpus, and the corpus does not contain
+every shape this generator emits: no real connector fixture declares a write tool, so `method`,
+`effect`, `body` and the `<local>Send` helper have no hand-written file to be diffed against.
+A snapshot is the substitute — weaker than a real connector, because it only proves the bytes
+did not *change*, but it is a byte comparison and it runs in CI.
+
+**Which fixtures get one is derived, never listed.** `listWriteFixtures` (`src/golden/snapshots.ts`)
+selects every fixture with at least one non-`read`-effect tool, and both the test and the update
+script import that one definition — a script that snapshots fixtures the test never checks, or
+the reverse, would defeat either. Adding a write fixture therefore adds a snapshot requirement
+automatically, and `loadSnapshot` refuses an absent **or empty** directory rather than comparing
+against nothing.
+
+```bash
+bun run snapshot:update            # regenerate every snapshot tree
+```
+
+Run it after any change that legitimately moves standalone write output, and **read the diff it
+produces before committing it** — this is the one gate in the repo whose expected value is
+rewritten by a command, which is exactly the shape `fixtures/expectations.json` warns about.
 
 ### 2. The golden-fixture harness, in detail
 

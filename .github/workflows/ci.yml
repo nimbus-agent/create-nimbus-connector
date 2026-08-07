@@ -58,19 +58,24 @@ jobs:
       - name: Lint and format
         run: bun run lint
 
-# Deliberately NOT run here: `bun run diff:golden`, `bun run wiring:conformance`
-# and `bun run acceptance`.
+# Deliberately NOT run here: `bun run diff:golden`, `bun run reach --baseline`,
+# `bun run wiring:conformance` and `bun run acceptance`.
 #
-# All three need a checkout of the Nimbus monorepo, a separate AGPL-3.0-only
+# All FOUR need a checkout of the Nimbus monorepo, a separate AGPL-3.0-only
 # repository that is not on this runner. This repository is MIT, so vendoring
 # that monorepo here was refused; the harnesses read it at runtime from a path
 # you pass instead, and a CI runner has no such path. They remain local
 # pre-merge gates rather than CI checks.
 #
 # That is a real limitation, not an oversight: the project's most valuable
-# check does not run here. Run these before merging:
+# check does not run here. `bun run preflight --nimbus-root <path>` runs all
+# eight local gates in order and reports by name any it could not run, which is
+# the whole reason it exists — a gate no list names is a gate that silently
+# stops being run, and `reach --baseline` was in no checklist but one. Or run
+# the four individually before merging:
 #
 #   bun run diff:golden --nimbus-root /path/to/Nimbus
+#   bun run reach --baseline --nimbus-root /path/to/Nimbus
 #   bun run wiring:conformance --nimbus-root /path/to/Nimbus
 #   bun run acceptance  /path/to/Nimbus
 #

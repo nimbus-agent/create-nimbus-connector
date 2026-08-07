@@ -11,17 +11,24 @@ Conventional Commits drive the release. The PR title becomes the squashed subjec
 
 ## Gates
 
-CI cannot run the three gates that need a Nimbus checkout. Run them locally and paste the real
+CI cannot run the **four** gates that need a Nimbus checkout. Run them locally and paste the real
 output — not a summary, and not copied from a plan.
 
+`bun run preflight --nimbus-root <path>` runs the first eight boxes in order and names any it
+could not run. Tick that one and paste its verdict, or tick them individually.
+
+- [ ] `bun run preflight --nimbus-root <path>` — and it printed the **fully verified** sentence
 - [ ] `bun test`
 - [ ] `bunx tsc --noEmit`
 - [ ] `bunx biome check src/ test/ scripts/`
+- [ ] `bun test --coverage` (the per-file floors; a bare `bun test` does not evaluate them)
 - [ ] `bun run diff:golden --nimbus-root <path>` — **`newrelic`, `datadog`, `grafana` and
       `sentry` still `6/6`**
+- [ ] `bun run reach --baseline --nimbus-root <path>` — no connector lost a tier
+- [ ] `bun run wiring:conformance --nimbus-root <path>` (if the wiring skeleton changed)
 - [ ] `bun run acceptance <nimbus-root>` (if emission changed)
 - [ ] `bun run standalone-acceptance --registry` (if standalone emission changed)
-- [ ] `bun run wiring:conformance --nimbus-root <path>` (if the wiring skeleton changed)
+- [ ] `bun run runtime:acceptance --registry` (if auth, bodies or path encoding changed)
 
 <details><summary>Output</summary>
 
