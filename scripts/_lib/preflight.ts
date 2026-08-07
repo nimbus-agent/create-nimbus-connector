@@ -1,6 +1,7 @@
 /**
  * The local gate sequence, as a decision rather than a script: which gate runs, in what order,
- * and whether the run may call itself fully verified.
+ * whether the run may call itself fully verified, and which of PASS/FAIL/SKIP each gate is
+ * printed as.
  *
  * ## Why an aggregator is the most dangerous thing in this repository
  *
@@ -41,9 +42,15 @@
  * header explains the second reason it matters: a driver no test imports never enters the
  * coverage report at all, so logic left inline behind an `import.meta.main` guard is logic no
  * per-file floor is measuring.
+ *
+ * The rule is easier to state than to hold to. `verdict` was moved here on it and `toCheck` was
+ * left behind, which put the whole PASS/FAIL/SKIP label mapping — the eight lines a reader
+ * actually scans — back in the driver where nothing could reach it. See `toCheck`'s docstring for
+ * what that cost when it was measured.
  */
 
 import { takeValue } from "../../src/cli.ts";
+import type { Check } from "./checks.ts";
 
 export type GateStatus = "pass" | "fail" | "skip";
 
@@ -230,6 +237,32 @@ export function verdict(report: PreflightReport): string {
     `Preflight fully verified: all ${GATE_COUNT} gates ran and passed, including the four that` +
     " need the Nimbus monorepo."
   );
+}
+
+/**
+ * The other half of the false-green decision: which of PASS / FAIL / SKIP a gate's result is
+ * PRINTED as.
+ *
+ * `verdict` above decides the closing sentence; this decides the eight lines above it, which is
+ * what a reader scans and what gets pasted into a pull request. The two are computed from the
+ * report independently — nothing makes the list agree with the sentence — so leaving this in the
+ * driver left the aggregator's per-gate report on the untested side of the seam this file's header
+ * draws. It was measured, not supposed: rewriting `skipped` to a constant `false` printed
+ * `PASS  diff:golden` for four gates that never ran, with the whole suite green, because a skip
+ * deliberately carries `ok: true` (see `Check`'s docstring) so the exit gate does not fail the
+ * run. `formatCheckLines` reads `skipped` before `ok` for exactly that reason, and this is the
+ * function that has to hand it something true.
+ *
+ * Reuses scripts/_lib/checks.ts's three-state record rather than printing a second one, so a SKIP
+ * looks the same here as it does in the acceptance harnesses.
+ */
+export function toCheck(r: GateResult): Check {
+  return {
+    name: r.name,
+    ok: r.status !== "fail",
+    output: r.reason ?? "",
+    skipped: r.status === "skip",
+  };
 }
 
 /**

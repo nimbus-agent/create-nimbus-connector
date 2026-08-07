@@ -6,11 +6,12 @@
  * memory or a list, which means the failure mode is not a gate going red but a gate quietly not
  * being run at all.
  *
- * This is the driver only. Which gate runs, in what order, and whether the run may call itself
- * fully verified is decided in scripts/_lib/preflight.ts, where a test reaches it with an
- * injected `run` and nothing spawns — read that file's header for why an AGGREGATOR is the most
- * dangerous shape in this repository, and what stops it printing a whole run's words over a half
- * run.
+ * This is the driver only. Which gate runs, in what order, whether the run may call itself fully
+ * verified, and which of PASS/FAIL/SKIP each gate is printed as are all decided in
+ * scripts/_lib/preflight.ts, where a test reaches them with an injected `run` and nothing spawns
+ * — read that file's header for why an AGGREGATOR is the most dangerous shape in this repository,
+ * and what stops it printing a whole run's words over a half run. `toCheck` in particular used to
+ * live here, which put the SKIP-vs-PASS label on the untested side of that seam.
  *
  * What stays here is what needs subprocesses: spawning each command with inherited stdio, so the
  * gate's own output — `diff:golden`'s per-fixture counts above all — reaches the screen as it
@@ -20,24 +21,10 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Check, formatCheckLines } from "./_lib/checks.ts";
-import { GATE_COUNT, type GateResult, parseArgs, runPreflight, verdict } from "./_lib/preflight.ts";
+import { formatCheckLines } from "./_lib/checks.ts";
+import { GATE_COUNT, parseArgs, runPreflight, toCheck, verdict } from "./_lib/preflight.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/**
- * Reuses scripts/_lib/checks.ts's three-state report rather than printing a second one, so a SKIP
- * looks the same here as it does in the acceptance harnesses. Its `verdictLabel` reads `skipped`
- * before `ok`, which is the ordering that keeps a skip from printing as PASS.
- */
-function toCheck(r: GateResult): Check {
-  return {
-    name: r.name,
-    ok: r.status !== "fail",
-    output: r.reason ?? "",
-    skipped: r.status === "skip",
-  };
-}
 
 function main(argv: readonly string[]): void {
   const { nimbusRoot } = parseArgs(argv);

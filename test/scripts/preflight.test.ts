@@ -15,7 +15,14 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { parseArgs, runPreflight, verdict } from "../../scripts/_lib/preflight.ts";
+import { formatCheckLines } from "../../scripts/_lib/checks.ts";
+import {
+  parseArgs,
+  type RunGate,
+  runPreflight,
+  toCheck,
+  verdict,
+} from "../../scripts/_lib/preflight.ts";
 
 const ok = () => ({ exitCode: 0 });
 
@@ -206,6 +213,62 @@ describe("the verdict sentence", () => {
     });
     expect(verdict(report)).toContain("tsc --noEmit");
     expect(verdict(report)).toContain("not run");
+  });
+});
+
+/**
+ * The eight lines above the sentence — the part a reader actually scans, and the part that gets
+ * pasted into a pull request as evidence.
+ *
+ * `verdict` and this report are computed independently: nothing makes the list agree with the
+ * sentence, so a correct sentence is not a guard on a wrong list. `toCheck` lived in
+ * `scripts/preflight.ts` until it was measured, and nothing imports that driver, so it was reached
+ * by no test at all: rewriting `skipped` to a constant `false` — which reads as a simplification,
+ * because a skip already carries `ok: true` — made `bun run preflight` with no `--nimbus-root`
+ * print `PASS  diff:golden` for four gates that never ran, with the whole suite green.
+ */
+describe("the per-gate report", () => {
+  const linesFor = (opts: { nimbusRoot?: string; run: RunGate }): string[] =>
+    formatCheckLines(runPreflight(opts).results.map(toCheck));
+
+  it("renders a skipped gate as SKIP, never as PASS", () => {
+    const lines = linesFor({ run: ok });
+    expect(lines.filter((l) => l.startsWith("SKIP  ")).map((l) => l.slice(6))).toEqual([
+      "diff:golden",
+      "reach --baseline",
+      "wiring:conformance",
+      "acceptance",
+    ]);
+    for (const gate of ["diff:golden", "reach --baseline", "wiring:conformance", "acceptance"]) {
+      expect(
+        lines.some((l) => l === `PASS  ${gate}`),
+        `${gate} must not print as PASS`,
+      ).toBe(false);
+    }
+  });
+
+  it("still renders a gate that ran and passed as PASS, so SKIP is not the constant", () => {
+    // The other direction, and not decoration: `skipped: true` for everything would satisfy the
+    // assertion above while reporting a fully verified run as eight skips.
+    const lines = linesFor({ nimbusRoot: "/x", run: ok });
+    expect(lines.filter((l) => l.startsWith("PASS  ")).length).toBe(8);
+    expect(lines.some((l) => l.startsWith("SKIP"))).toBe(false);
+  });
+
+  it("renders a failed gate as FAIL, and carries its exit code onto the screen", () => {
+    const lines = linesFor({
+      nimbusRoot: "/x",
+      run: (cmd) => ({ exitCode: cmd.includes("tsc") ? 3 : 0 }),
+    });
+    expect(lines).toContain("FAIL  tsc --noEmit");
+    expect(lines.some((l) => l.includes("exited 3"))).toBe(true);
+  });
+
+  it("puts every skip's reason on screen, rather than a bare label", () => {
+    // `formatCheckLines` prints the output line only when there is one, so a `toCheck` that
+    // dropped `reason` would print four unexplained SKIPs and fail nothing else here.
+    const lines = linesFor({ run: ok });
+    expect(lines.filter((l) => l.includes("--nimbus-root")).length).toBe(4);
   });
 });
 
