@@ -13,6 +13,7 @@ package byte-identical to a hand-written one.
 | Understand how it is built | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Know what a green check actually proves | [TESTING.md](./TESTING.md) |
 | Know where it is going | [ROADMAP.md](./ROADMAP.md) |
+| Know why the org still ships two scaffolders | [CONSOLIDATION.md](./CONSOLIDATION.md) — the four preconditions, and what each blocks |
 | Work on it with Claude Code | [CLAUDE.md](../CLAUDE.md) |
 | Look up a term | [GLOSSARY.md](./GLOSSARY.md) |
 

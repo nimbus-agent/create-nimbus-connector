@@ -34,9 +34,9 @@ Stuck on how to express a service as a spec, or wondering whether a change would
 The org ships two, and they do different jobs:
 
 - **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package in the shape the hand-written Nimbus connectors share, formatted by the same Biome. Reach for it when you are wrapping a REST API and want output that matches the corpus. Byte-identity is the bar it is held to, not a blanket guarantee across the corpus — [*The measured ceiling*](./docs/ROADMAP.md#the-measured-ceiling) is how much of it regenerates today, and why.
-- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`, which performs the contract-version handshake before serving MCP. Reach for it when you want a blank project to write by hand, or when you need Python.
+- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project that performs the SDK's contract-version handshake on stdio before serving MCP through the same `McpServer` and `StdioServerTransport` this generator emits. Reach for it when you want a blank project to write by hand, or when you need Python.
 
-[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool and the three capabilities that must land first.
+The intent is to converge these into one tool. [CONSOLIDATION.md](./docs/CONSOLIDATION.md) is what has to be true first — four preconditions, only one of which is a checkbox on this side — and because each of them describes another repository's state, each carries the commit and the date it was checked against.
 
 ## The two targets
 

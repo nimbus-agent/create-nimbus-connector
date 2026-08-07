@@ -75,37 +75,26 @@ see [Consolidation](#consolidation).
 
 ## Consolidation
 
-The org currently ships two connector scaffolders:
-
-| | [`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector) | `create-nimbus-connector` (here) |
-| --- | --- | --- |
-| Approach | fixed templates | JSON spec → emitted source |
-| Languages | TypeScript, Python | TypeScript |
-| Output shape | `NimbusExtensionServer` handshake, then MCP | MCP over stdio, the existing corpus shape |
-| Starting point | greenfield project | a described connector |
-| Verified by | CI generates, installs, builds and runs it | byte-diff against 94 real connectors |
+The org currently ships two connector scaffolders: this one, and
+[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)
+in the SDK repository, which templates a greenfield TypeScript or Python project from fixed
+templates rather than emitting source from a spec.
 
 **The intent is that this repository becomes the single scaffolder** and
 `@nimbus-dev/create-connector` is eventually retired. Two tools with near-identical names is a
 choice users should not have to make.
 
-That is a destination, and it has a price. This generator cannot absorb the other until it can
-do three things it currently cannot:
+That is a destination, and it has a price: **four preconditions**, only one of which is a
+checkbox on this side. One is an emitter change this repository could make, one is a thing this
+repository has decided not to do, one belongs to the SDK repository, and one is owned by
+neither. What each is, what it costs, what it blocks and — since each rests on another
+repository's state — the commit and date it was last checked against are in
+**[CONSOLIDATION.md](./CONSOLIDATION.md)**, which also carries the side-by-side comparison of
+the two tools.
 
-- **[ ] Emit Python.** The whole emitter layer is TypeScript-shaped. This is the largest single
-  item on this roadmap and needs its own design.
-- **[ ] Emit the handshake shape.** The template tool produces a connector built on
-  `NimbusExtensionServer`, which performs contract-version negotiation before serving MCP.
-  This generator emits a connector that serves MCP over stdio directly. These are different
-  products, not different formatting — supporting both means a second target on the existing
-  `GenerateTarget` seam.
-- **[ ] Answer `npm create`.** `npm create @nimbus-dev/connector` is a published entry point
-  with users. Retiring it means either owning that name or providing a migration that does not
-  silently change what people get.
-
-Until all three land, both tools ship and the READMEs cross-link so an author can tell which
-one they want. **Nothing here is a deprecation announcement**; it is a stated direction with
-its conditions attached.
+Until they are met, both tools ship and the READMEs cross-link so an author can tell which one
+they want. **Nothing here is a deprecation announcement**; it is a stated direction with its
+conditions attached.
 
 ---
 
@@ -254,8 +243,17 @@ still carries it and this stage does not.
 
 ### Stage G — consolidation `[ ]`
 
-The three items under [Consolidation](#consolidation), then retiring
-`@nimbus-dev/create-connector` with a migration path.
+**Scoped, not started — and scoping is not building.** Its preconditions are now recorded and
+checked rather than guessed at, and one of them turned out to be materially smaller than this
+document used to claim. But none is closed and no emitter path has moved toward any of them, so
+the marker stays `[ ]`. It is not `[~]`: by the test [Stage F](#stage-f--authoring-experience-x)
+states, `[~]` is for work genuinely half-done, and no half of this stage exists yet. Nor is it
+`[x]`-with-a-limit — that form is for a gap no further work *here* closes, and the largest of
+these four is a change to this repository's own emitter.
+
+**[CONSOLIDATION.md](./CONSOLIDATION.md) is the stage**: the four preconditions, what each one
+blocks, what each would cost, and — since every one of them rests on another repository's state
+— the commit and date each was checked against.
 
 ---
 
