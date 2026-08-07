@@ -19,10 +19,11 @@
  * release.yml — and what this file guards is that the step still exists and still runs
  * before the publish.
  *
- * The last three describes are not release facts. They are the repository-wide workflow
- * invariants that had no other home: one Bun pin everywhere, harden-runner first in every
- * job, every action SHA-pinned, and the license-boundary gate. They read the workflow
- * DIRECTORY rather than a list of filenames, so a workflow added later inherits them
+ * Not every describe below is a release fact. This file is also where the repository-wide
+ * workflow invariants live, having no other home: one Bun pin everywhere, harden-runner first
+ * in every job, every action SHA-pinned, the license-boundary gate, the CLA token's narrowing,
+ * and the two static-analysis gates that fail open. The ones that can read the workflow
+ * DIRECTORY rather than a list of filenames do, so a workflow added later inherits them
  * without anyone remembering to enrol it — which is exactly how the Bun pin came to be
  * checked in only two of the four files that state it.
  *
@@ -470,6 +471,52 @@ describe("the CLA workflow", () => {
       )?.with?.["remote-repository-name"],
       "the narrowing above is only sound while the signatures live in a remote repository",
     ).toBe(".github");
+  });
+});
+
+/** The CodeQL config both the workflow and the assertions below must be talking about. */
+const CODEQL_CONFIG = ".github/codeql/codeql-config.yml";
+
+const stepsOf = (file: string, prefix: string): Step[] =>
+  Object.values(workflows.find((w) => w.file === file)?.workflow.jobs ?? {})
+    .flatMap((j) => j.steps ?? [])
+    .filter((s) => s.uses?.startsWith(prefix));
+
+describe("the static-analysis gates", () => {
+  // Both settings asserted here FAIL OPEN. Delete either and every workflow stays green
+  // while analysing less — no red check, no diff anyone has to argue with. That is the
+  // property worth a test: a weakening that produces a failure needs no guard, and a
+  // weakening that produces silence is the only kind this repository has ever shipped.
+
+  it("makes SonarCloud's verdict fail the workflow rather than only a web page", () => {
+    // Without `sonar.qualitygate.wait` the scanner uploads its report and exits 0 whatever
+    // the gate then concludes, so the workflow is green while findings pile up unread. They
+    // reached 87 that way once. The bound gate ("Sonar way") grades `new_*` metrics only, so
+    // this blocks a pull request that makes its own diff worse — not one that merely fails to
+    // fix the backlog.
+    const scan = stepsOf("sonar.yml", "SonarSource/sonarqube-scan-action@")[0];
+    expect(scan, "sonar.yml must run the SonarSource scan action").toBeDefined();
+    expect(scan?.with?.args ?? "").toContain("-Dsonar.qualitygate.wait=true");
+  });
+
+  it("runs CodeQL's security-extended suite without dropping the default one", () => {
+    const config = Bun.YAML.parse(read(CODEQL_CONFIG)) as {
+      queries?: { uses?: string }[];
+      "disable-default-queries"?: boolean;
+    };
+    expect(config.queries?.map((q) => q.uses)).toContain("security-extended");
+    // `disable-default-queries` REPLACES the default suite rather than extending it. Set
+    // alongside the line above, the config would read as "more queries" while running fewer.
+    expect(config["disable-default-queries"]).toBeUndefined();
+  });
+
+  it("grades the CodeQL config the workflow actually loads", () => {
+    // The assertion above reads CODEQL_CONFIG by path. Point codeql.yml's `config-file` input
+    // at anything else and it grades a file no scan reads — the same "a guard that reads only
+    // the file agreeing with it" failure that let release.yml run a bare `bun test` for the
+    // whole life of a rule requiring --coverage.
+    const init = stepsOf("codeql.yml", "github/codeql-action/init@")[0];
+    expect(init?.with?.["config-file"]).toBe(CODEQL_CONFIG);
   });
 });
 

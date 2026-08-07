@@ -1,6 +1,19 @@
 {
   "name": "create-nimbus-connector",
   "version": "0.11.0",
+  "description": "Generate a Nimbus MCP connector package from a small JSON spec — for the Nimbus monorepo, or standalone.",
+  "keywords": [
+    "nimbus",
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "connector",
+    "generator",
+    "scaffold",
+    "codegen",
+    "cli",
+    "bun"
+  ],
   "type": "module",
   "license": "MIT",
   "repository": {

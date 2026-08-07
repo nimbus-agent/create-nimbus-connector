@@ -180,8 +180,14 @@ jobs:
       - name: Lint and format
         run: bun run lint
 
+      # --coverage, the same as ci.yml. bunfig.toml's per-file coverageThreshold is only
+      # evaluated when the flag is present, so the bare `bun test` this used to run executed
+      # the suite with the floor silently switched off — on the one tree that is about to be
+      # published, and npm cannot unpublish after 72h. test/coverage-gate.test.ts now grades
+      # every workflow that runs the suite rather than ci.yml alone, which is what makes this
+      # line unable to drift back.
       - name: Test
-        run: bun test
+        run: bun test --coverage
         env:
           CI: "true"
 
