@@ -14,16 +14,67 @@ import { readFileSync } from "node:fs";
  * the value the key was built from — none of them is looking at the bytes. So this looks at the
  * bytes.
  *
- * Scope is every tracked source file, taken from git rather than a directory walk so a file added
- * outside `src/` cannot escape by living somewhere the glob does not reach.
+ * Scope is every source file git can see under those directories — written, staged or committed —
+ * taken from git rather than a directory walk so a file added outside `src/` cannot escape by
+ * living somewhere the glob does not reach. `trackedSourceFiles` says why "written" is in that
+ * list rather than just "committed".
+ *
+ * **The set below is wider than "control character", and the widening came from the same failure
+ * happening again.** Writing `src/openapi/spec.ts` produced a literal U+200B ZERO WIDTH SPACE
+ * inside a docstring. It is not a control character — `code < 0x20` does not see it — so this gate
+ * as first written would have passed it, exactly as `tsc`, Biome, the suite and coverage all did.
+ * The property that matters is not "is it a control character" but "does it occupy no space on
+ * screen", so the check is written against that property instead: the zero-width family, the
+ * soft hyphen, the byte-order mark, and the bidirectional overrides that make source read
+ * differently from how it executes.
  */
 const ALLOWED_CONTROL = new Set(["\t", "\n", "\r"]);
 
-/** Tracked text files under the directories this project's own gates cover. */
+/**
+ * Characters that render as nothing (or as a direction change) in an editor.
+ *
+ *   U+00AD  soft hyphen
+ *   U+200B  zero width space          — the one that was actually written into this repository
+ *   U+200C  zero width non-joiner
+ *   U+200D  zero width joiner
+ *   U+2060  word joiner
+ *   U+FEFF  zero width no-break space / byte-order mark
+ *   U+202A-E, U+2066-9  the bidi embedding and isolate controls ("Trojan Source")
+ */
+const INVISIBLE = new Set([
+  0x00ad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066,
+  0x2067, 0x2068, 0x2069,
+]);
+
+/**
+ * Every source file under the directories this project's own gates cover — tracked, staged, or
+ * merely written.
+ *
+ * `--others --exclude-standard` is the second correction this gate has needed, and it comes from
+ * the same place the widened set above does: a plain `git ls-files` lists only what is already in
+ * the index, so a BRAND NEW file is invisible to this check until it is `git add`ed. That is
+ * precisely the moment the check exists for — the defect it was written for was authored into a
+ * new file and caught by eye before the commit. Verified by writing a U+200B into an unstaged
+ * `src/openapi/spec.ts` and watching this test pass.
+ *
+ * `--exclude-standard` is what keeps `node_modules/` and other ignored output out; without it,
+ * `--others` would sweep them in and this would be a scan of a dependency tree.
+ */
 function trackedSourceFiles(): string[] {
-  const out = Bun.spawnSync(["git", "ls-files", "src", "test", "scripts", "schema"], {
-    cwd: new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
-  });
+  const out = Bun.spawnSync(
+    [
+      "git",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "src",
+      "test",
+      "scripts",
+      "schema",
+    ],
+    { cwd: new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1") },
+  );
   if (out.exitCode !== 0) throw new Error(`git ls-files failed: ${out.stderr.toString()}`);
   return out.stdout
     .toString()
@@ -33,7 +84,7 @@ function trackedSourceFiles(): string[] {
 }
 
 describe("source hygiene", () => {
-  it("contains no control characters other than tab, newline and carriage return", () => {
+  it("contains no character that renders as nothing, beyond tab, newline and carriage return", () => {
     const root = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
     const offenders: string[] = [];
 
@@ -48,7 +99,7 @@ describe("source hygiene", () => {
         const ch = text[i]!;
         const code = ch.codePointAt(0)!;
         const isControl = code < 0x20 || code === 0x7f;
-        if (isControl && !ALLOWED_CONTROL.has(ch)) {
+        if ((isControl && !ALLOWED_CONTROL.has(ch)) || INVISIBLE.has(code)) {
           offenders.push(`${rel}: U+${code.toString(16).padStart(4, "0")} at offset ${i}`);
           break; // one report per file is enough to act on
         }
