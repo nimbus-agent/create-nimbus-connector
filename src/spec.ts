@@ -20,7 +20,125 @@ const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
  * JS identifier, not just a non-empty string.
  */
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const identifierField = () => z.string().regex(IDENTIFIER_RE, "must be a valid JS identifier");
+
+/**
+ * The words `IDENTIFIER_RE` matches that a declaration position will not take.
+ *
+ * `bindings: ["class"]` emitted `const class = process.env["ZZ_V"]?.trim();` — a PARSE error
+ * against the generator's own output, which surfaces as `formatAll` failing in Biome rather
+ * than as a named spec error. Same failure mode as `rows: "data-items"`, one field over, and
+ * the regex above matched every reserved word there is.
+ *
+ * **Derived by generating, not written from memory.** The candidate universe was extracted from
+ * two installed packages rather than typed out: every `createKeyword("…")` and
+ * `createKeywordLike("…")` in `@babel/parser`'s lib (37 hard keywords, 45 contextual ones,
+ * including every TypeScript soft keyword), plus the `keyword`/`strict`/`strictBind` tables in
+ * `@babel/helper-validator-identifier` — which is where `package`, `private`, `protected`,
+ * `public`, `eval` and `arguments` come from, none of which the parser's own tables carry — plus
+ * twenty TypeScript type-space spellings added as controls. 102 words in all. Each was then put
+ * through the real generator in each of the ten identifier positions the spec language has, for
+ * both targets, and the emitted files were handed to the real Biome. A word is here if and only
+ * if Biome refused to parse the result.
+ *
+ * The 48 below broke in NINE of the ten positions — every declaration position there is — and
+ * the tenth (a tool argument key) is discussed at its own call site. The other 54 emitted clean
+ * and are deliberately absent: `type`, `as`, `any`, `namespace`, `declare`, `readonly`,
+ * `satisfies`, `keyof`, `infer`, `is`, `out`, `override`, `accessor`, `using`, `async`, `of`,
+ * `from`, `get`, `set`, `global`, `module`, `require`, `assert`, `unique` and the rest are
+ * contextual in TypeScript and are ordinary identifiers in a declaration. Refusing them would
+ * reject specs that work, which is a real cost and not a safe default.
+ *
+ * `undefined`, `NaN` and `Infinity` are not here either — they parse. They are GLOBALS the
+ * emitted code reads, which is `RESERVED_IDENTIFIERS`' business (src/validate.ts), not this
+ * regex's.
+ */
+const RESERVED_WORDS: ReadonlySet<string> = new Set([
+  "arguments",
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "eval",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "new",
+  "null",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "return",
+  "static",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield",
+]);
+
+/**
+ * What every emitted identifier has to satisfy: the shape, and then the word.
+ *
+ * `regexMessage` is the only thing that varies. Tool argument keys said "argument name must be a
+ * valid JS identifier" through a second copy of `IDENTIFIER_RE` written inline in `ToolSchema`,
+ * and a second copy is how the reserved-word hole stayed open in that field after being closed
+ * everywhere else. There is one rule now, and one place to change it.
+ *
+ * `hint` closes the message with what to do instead, which differs by field: an emitted
+ * identifier is internal and can simply be renamed, while an argument key an author chose to
+ * match an API's own parameter name has a wire spelling to preserve.
+ */
+const RENAME_HINT =
+  "Rename it — an emitted identifier is internal to the generated package and appears nowhere " +
+  "on the wire.";
+
+function identifierField(
+  regexMessage = "must be a valid JS identifier",
+  hint: string = RENAME_HINT,
+) {
+  return z
+    .string()
+    .regex(IDENTIFIER_RE, regexMessage)
+    .superRefine((v, ctx) => {
+      if (!RESERVED_WORDS.has(v)) return;
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `${JSON.stringify(v)} is a JavaScript reserved word. Every identifier field is ` +
+          "spliced into a declaration position in the generated source — `const <name> = …`, " +
+          "`function <name>(…)`, `export function <name>(…)` — where a reserved word does not " +
+          "parse, so the generator fails inside its own formatter instead of reporting a spec " +
+          `error. ${hint}`,
+      });
+    });
+}
 
 /* ------------------------------------------------------------------------------------------ *
  * The path-template DSL: `${env.X}`, `${arg.X}`, `${arg.X|enc|num|bool|raw}`
@@ -666,11 +784,27 @@ export const ToolSchema = z
       undefined,
     ),
     description: z.string().min(1),
+    /**
+     * An argument key reaches a declaration position only when the argument is HOISTED —
+     * `claimHoistedArgs` (src/validate.ts) resolves the hoisted name as `arg.local ?? argName`,
+     * so a key with a `default` or of type `"boolean"` becomes `const <key> = …`. Measured:
+     * `{ "class": { "type": "string" } }` emits clean, `{ "class": { "type": "boolean" } }` is a
+     * Biome parse error.
+     *
+     * The rule is applied FLAT anyway, which over-rejects the non-hoisted case on purpose. A
+     * conditional rule would mean adding `"default": 1` to an argument that already validated
+     * flips the whole spec to invalid — the argument `RESERVED_IDENTIFIERS` (src/validate.ts)
+     * makes for itself three separate times, and it is stronger here, because the field that
+     * would decide validity sits inside the same object as the name being judged.
+     */
     args: z
       .record(
-        z
-          .string()
-          .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, "argument name must be a valid JS identifier"),
+        identifierField(
+          "argument name must be a valid JS identifier",
+          "Rename the argument. Where the API spells the parameter this way, the wire spelling " +
+            'is carried separately — by a "query" entry\'s "name", or by "body", which maps an ' +
+            "argument key to the field name the request actually sends.",
+        ),
         ArgSchema,
       )
       .default({}),
@@ -1365,12 +1499,29 @@ function formatReceived(input: unknown, path: readonly PropertyKey[]): string {
   return `received ${shown}`;
 }
 
+/**
+ * The message an issue carries — or, for a record KEY rejection, the messages of the checks the
+ * key actually failed.
+ *
+ * zod 4 wraps a key-schema failure in an `invalid_key` issue whose own message is the generic
+ * "Invalid key in record", with the real ones nested in its `issues` array. Only one field has a
+ * key schema (`tools[].args`), and everything that field's rule has to say was landing in that
+ * nested array and going nowhere: `{ "data-items": … }` reported "Invalid key in record" and not
+ * "argument name must be a valid JS identifier", which pre-dates the reserved-word rule by every
+ * release this schema has had. Unwrapped here rather than at the key schema, because the
+ * flattening is Zod's and one line at the formatter is the whole of it.
+ */
+function issueMessage(issue: z.core.$ZodIssue): string {
+  if (issue.code !== "invalid_key" || issue.issues.length === 0) return issue.message;
+  return issue.issues.map((nested) => nested.message).join("; ");
+}
+
 export function parseSpec(input: unknown): ConnectorSpec {
   preflightOutOfScope(input);
   const parsed = ConnectorSpecSchema.safeParse(input);
   if (!parsed.success) {
     const lines = parsed.error.issues.map(
-      (i) => `  ${formatIssuePath(i.path)}: ${i.message} (${formatReceived(input, i.path)})`,
+      (i) => `  ${formatIssuePath(i.path)}: ${issueMessage(i)} (${formatReceived(input, i.path)})`,
     );
     throw new Error(`Invalid connector spec:\n${lines.join("\n")}`);
   }
