@@ -193,6 +193,27 @@ const RAW_SPLICE_TERMINATORS = [
 const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
 
 /**
+ * Whether an inline header VALUE is the one shape `headerOption` (src/emit/server/fetch-helper.ts)
+ * resolves: a reference and nothing else.
+ *
+ * **Exported and CALLED by `headerOption` itself**, on the precedent `canOmitQueryValue` set —
+ * not restated beside it. That is what makes `FetchHelperSchema`'s refusal below and the
+ * emitter's branch the same test rather than two that agree today. Restating it is how the bug
+ * this closes stayed open: `headerOption` falls through to `JSON.stringify(v)` for anything this
+ * returns `false` for, so `"Bearer ${env.apiKey}"` — a value that plainly means to reference the
+ * credential — emitted `Authorization: "Bearer ${env.apiKey}"` and put those literal characters
+ * on the wire. Accepted at parse time, discarded at emit time; the connector compiles, lints,
+ * typechecks and authenticates against nothing.
+ *
+ * Anchored, unlike `RESOLVED_ENV_REF`'s per-occurrence sweep, and the difference is the two
+ * fields': a header value either IS one reference or is a plain string, while a base is a
+ * template with references embedded in surrounding text.
+ */
+export function isEnvRefHeaderValue(v: string): boolean {
+  return /^\$\{env\.\w+\}$/.test(v);
+}
+
+/**
  * How a raw-spliced field's `${…}` is disposed of, which is the one thing the guarded fields do
  * not share.
  *
@@ -977,6 +998,27 @@ export const FetchHelperSchema = z
     message:
       '"baseConst" requires a fully static "base" — a base naming ${env.X} resolves to an ' +
       "accessor call, which must not run at module-initialisation time",
+  })
+  // The "accepted then discarded" class, on the one field where the discarded thing is a
+  // CREDENTIAL — see isEnvRefHeaderValue, which is the emitter's own predicate rather than a
+  // copy of it. An anchored value keeps working; a value with no ${ at all is a plain header
+  // and is untouched; only the mixed form is refused, and it is refused because there is no
+  // spelling of it the emitter honours.
+  .superRefine((f, ctx) => {
+    for (const [name, value] of Object.entries(f.inlineHeaders ?? {})) {
+      if (!value.includes("${") || isEnvRefHeaderValue(value)) continue;
+      ctx.addIssue({
+        code: "custom",
+        path: ["inlineHeaders", name],
+        message:
+          `inline header ${JSON.stringify(name)} mixes text with an interpolation ` +
+          `(${JSON.stringify(value)}). The emitter resolves a value that is exactly ` +
+          '"${env.NAME}" and JSON-quotes everything else, so this one is emitted as those ' +
+          "literal characters and sent on the wire verbatim — for an Authorization header, " +
+          "the credential is never read. Move the surrounding text into the env accessor " +
+          '(env[].prefix / env[].suffix) and leave "${env.NAME}" alone here.',
+      });
+    }
   });
 
 /**

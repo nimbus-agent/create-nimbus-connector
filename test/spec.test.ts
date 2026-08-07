@@ -1968,3 +1968,43 @@ describe("the raw-splice carriers the first version of the guard missed", () => 
     ).toThrow(/identifier/);
   });
 });
+
+/**
+ * I6, the ledger's own deferred follow-up: an inline header value that MEANS to reference the
+ * credential and is emitted as literal characters instead.
+ */
+describe("an inline header value that mixes text with an env reference", () => {
+  const withHeaders = (inlineHeaders: Record<string, string>) => ({
+    ...MINIMAL,
+    fetchHelper: { local: "nrGet", base: "https://api.newrelic.com", inlineHeaders },
+  });
+
+  it("rejects it, naming the header and quoting the value", () => {
+    // Emitted `Authorization: "Bearer ${env.apiKey}"` before this rule: the literal characters
+    // went on the wire and the credential was never read. It compiled, linted and typechecked.
+    expect(() => parseSpec(withHeaders({ Authorization: "Bearer ${env.apiKey}" }))).toThrow(
+      /Authorization.*Bearer/s,
+    );
+  });
+
+  it("keeps the anchored form, which is what the only fixture using inlineHeaders writes", () => {
+    // fixtures/newrelic.spec.json — byte-locked at 6/6 — writes exactly this.
+    const spec = parseSpec(
+      withHeaders({ "X-Api-Key": "${env.apiKey}", Accept: "application/json" }),
+    );
+    expect(spec.fetchHelper.inlineHeaders).toEqual({
+      "X-Api-Key": "${env.apiKey}",
+      Accept: "application/json",
+    });
+  });
+
+  it("leaves a plain header with no interpolation alone", () => {
+    expect(
+      parseSpec(withHeaders({ Accept: "application/json" })).fetchHelper.inlineHeaders,
+    ).toEqual({ Accept: "application/json" });
+  });
+
+  it("rejects an interpolation that is not an env reference at all", () => {
+    expect(() => parseSpec(withHeaders({ "X-Api-Key": "${apiKey()}" }))).toThrow(/X-Api-Key/);
+  });
+});

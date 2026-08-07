@@ -1,4 +1,4 @@
-import type { ConnectorSpec } from "../../spec.ts";
+import { type ConnectorSpec, isEnvRefHeaderValue } from "../../spec.ts";
 
 /** Replace ${env.X} with X() inside a base or header template. */
 function resolveEnvRefs(tpl: string): string {
@@ -57,9 +57,10 @@ function headerOption(spec: ConnectorSpec): string {
     const fields = Object.entries(fh.inlineHeaders)
       .map(([k, v]) => {
         const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
-        const inner = /^\$\{env\.\w+\}$/.test(v)
-          ? resolveEnvRefs(v).slice(2, -1)
-          : JSON.stringify(v);
+        // isEnvRefHeaderValue lives in src/spec.ts and is what FetchHelperSchema refuses a
+        // MIXED value with — the same call, not a second copy of the pattern, so the branch
+        // taken here and the value the schema admits cannot come apart.
+        const inner = isEnvRefHeaderValue(v) ? resolveEnvRefs(v).slice(2, -1) : JSON.stringify(v);
         return `${key}: ${inner}`;
       })
       .join(", ");
