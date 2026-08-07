@@ -439,6 +439,25 @@ What the *document* supplies:
   is a fact about the token endpoint that `securitySchemes` does not carry.
 - **`name`** slugified from `info.title`.
 
+**`notes` are not decoration — one of them is the only thing making a knowing divergence honest.**
+Task 2 returns `MappedTool.notes`, and you fold them into description strings. Most say what the
+document could not express. **One says something stronger:** where an OpenAPI 3.0 operation declares
+an exclusive bound (`minimum: 5` with `exclusiveMinimum: true`), Task 2 maps it and *notes* it,
+because the spec language has only inclusive bounds — so the emitted tool says `>= 5` where the
+document says `> 5`. That was a deliberate choice of map-and-note over refuse, matching how `enum`
+and `format` are handled: all three make the schema looser, and refusing over an off-by-one costs
+more reach than the looseness costs correctness.
+
+**The note is the entire honesty of that trade.** Drop it, truncate it, or summarise the notes into
+a single "TODO: review" line and the divergence becomes silent — a generated tool that accepts a
+value the API rejects, with nothing anywhere saying so. Task 2's implementer flagged this on
+handover precisely because nothing in Task 2 can prevent it.
+
+So: **every note reaches the output, individually, and a test proves it.** Map an operation carrying
+an exclusive bound, assemble it, and assert the emitted description contains that specific note —
+not that `notes` was non-empty, and not that some TODO appeared. This is the third obligation on
+this branch handed over with no gate behind it, and like the other two, the test is the gate.
+
 What gets a **placeholder that parses**, with the reason stated in the test's name:
 `style` (`"hand-rolled"`), `syncInterval`, `minNimbusVersion`, `serviceLabel`, `displayName`, the
 connector `description`, and every tool `description` the document does not supply — each carrying a
