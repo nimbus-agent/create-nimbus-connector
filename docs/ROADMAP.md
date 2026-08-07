@@ -407,7 +407,7 @@ cost of closing each is named; none is proposed.**
   writes**, and one that would have to be optional — emitting the corpus's cache-forever shape
   by default would remove a correctness property from every connector this tool generates.
 
-#### Two follow-ups, both deliberately not built here
+#### Three follow-ups, all deliberately not built here
 
 - **The recovered rest-kit `title` should be reported per run, like `$effectAmbiguity`.** The
   limitation itself is recorded below under *A recovered rest-kit `title` is verified against
@@ -428,6 +428,18 @@ cost of closing each is named; none is proposed.**
   `body` that is byte-identical, invisible to `diff:golden`, to the round trip and to every
   other gate, while one that over-parses throws. Comparing *rendered* text against observed
   source is the opposite: it would let a renderer bug agree with itself and disappear.
+- **The property *shorthand* spelling is not pinned the way the key spelling now is.** The key
+  spelling was made structural: `objectProps` is module-private in `src/derive/read.ts`, and the
+  only exported readings are `bareKeyedProps` and `quoteMinimalProps`, so a recognizer cannot
+  obtain an unjudged key. Shorthand-ness has no such treatment. `isRestReturnStatement`
+  (`src/derive/server/fetch-helper.ts`) accepts the longhand `{ json: json }` where the emitter
+  writes the shorthand `{ json, text }` — the same wrong-claim shape, since the recovered fields
+  are identical and re-emission differs. Both the precedent and the accessor already exist:
+  `src/derive/server/body.ts`'s `bodyPairs` pins shorthand-ness through `isShorthandProperty`
+  for exactly this reason. Deferred rather than folded into the key sweep because it is a
+  different predicate over a different call-site set, and the sweep that settled the keys was
+  scoped to the keys. Whoever takes it should sweep `isShorthandProperty`'s absence the same way
+  the key sweep swept `objectProps`', rather than fixing the one site named here.
 
 **Content no spec field can derive.**
 
