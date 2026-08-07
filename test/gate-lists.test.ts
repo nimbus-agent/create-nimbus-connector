@@ -24,10 +24,11 @@
  * Here it comes from `presentsAGateList`: a document that names every gate in either half of
  * `GATES` is a gate list, whoever wrote it and whenever it arrived, and the enumeration sweeps
  * every tracked Markdown file and every tracked YAML comment block in the repository. Measured on
- * 2026-08-07 over 26 such files, exactly the eight in `CANONICAL` qualify and the next closest
- * miss is `docs/ROADMAP.md`, which names five gates scattered across 800 lines and no complete
- * half. What this does **not** catch is a new document listing a partial set — five of eight, say
- * — which is a real residual hole and the reason the halves are the threshold rather than a count.
+ * 2026-08-07 over the 38 such files `trackedProseFiles` returns (24 Markdown, 14 YAML), exactly
+ * the eight in `CANONICAL` qualify and the next closest miss is `docs/ROADMAP.md`, which names
+ * five gates scattered across 892 lines and no complete half. What this does **not** catch is a
+ * new document listing a partial set — five of eight, say — which is a real residual hole and the
+ * reason the halves are the threshold rather than a count.
  *
  * **A subset is expressed, not accommodated.** Two of the eight legitimately describe only the
  * gates that need the monorepo: `docs/RELEASING.md`'s *Before you merge a release PR*, and
@@ -50,14 +51,33 @@
  *
  * ## What is graded, and what is not
  *
- * The unit is the whole document, so this asserts that a canonical list names every gate in scope
- * *somewhere in the file* — not, in general, that it names it inside the list. That is the drift
- * that actually happened (the gate was absent, not misfiled), and a section-scoped rule would need
- * heading text transcribed here, which is one more thing to drift. The measured cost is real and
- * was demonstrated rather than assumed: deleting `bun test --coverage` from
- * `.claude/commands/cnc-preflight.md`'s **command block**, while leaving the paragraph beneath it
- * that explains the gate, fails nothing here — and a reader copies the block. `checkboxLinesOf`
- * closes that for the one document shape where the structure is unambiguous, and nowhere else.
+ * The unit is the whole document, so the base rule asserts that a canonical list names every gate
+ * in scope *somewhere in the file* — not, in general, that it names it inside the list. That is
+ * the drift that actually happened (the gate was absent, not misfiled), and a section-scoped rule
+ * would need heading text transcribed here, which is one more thing to drift.
+ *
+ * Two structural rules sharpen it where the structure is unambiguous, and both are applied
+ * wherever their shape is found rather than to a named file:
+ *
+ *   - `gatesMissingABox`, for a document made of checkboxes. The boxes ARE the gate list there: a
+ *     contributor ticks them and reports the result, so a gate in the surrounding prose with no
+ *     box is a gate that will not be run.
+ *   - `gatesMissingFromBlocks`, for a document whose fenced blocks are themselves a gate list. A
+ *     reader copies the block. This one closes a hole this docstring used to disclose as open —
+ *     deleting `bun test --coverage` from `.claude/commands/cnc-preflight.md`'s command block
+ *     while leaving the paragraph beneath it that explains the gate failed nothing, because the
+ *     document still NAMED the gate. It now fails, and only that assertion fails, which is the
+ *     evidence that the two rules are not the same rule.
+ *
+ * A naive fenced-block rule *was* tried earlier and rejected, correctly: "any document whose
+ * blocks name two or more gates must name all of them there" is refuted by `docs/ARCHITECTURE.md`,
+ * whose blocks name three. Triggering on `presentsAGateList` — a complete HALF — rather than on a
+ * count is what makes the rule pass ARCHITECTURE while still firing on the two documents that do
+ * present a sequence. See `gatesMissingFromBlocks` for the per-document measurement.
+ *
+ * What remains open, deliberately: the partial-list hole above (`docs/RELEASING.md` is canonical
+ * at four gates while `docs/ROADMAP.md` is not canonical at five, so no count threshold separates
+ * them), and a gate named in the right document under the wrong heading.
  *
  * For YAML only comment lines count: a workflow's `run:` steps are it doing its job rather than
  * describing the gate set, and test/coverage-gate.test.ts and test/release-workflow-guard.test.ts
@@ -209,6 +229,52 @@ function gatesMissingABox(prose: string, scope: Scope): string[] {
 }
 
 /**
+ * Every line inside a fenced code block — the command-block analogue of `checkboxLinesOf`.
+ *
+ * The fence lines themselves are dropped along with everything outside them, so an info string
+ * (```sh) cannot contribute text. A file with an unclosed fence reads to the end, which is the
+ * safe direction: it over-collects rather than silently collecting nothing.
+ */
+function commandBlockLinesOf(prose: string): string {
+  const lines: string[] = [];
+  let inside = false;
+  for (const line of prose.split("\n")) {
+    if (line.trimStart().startsWith("```")) {
+      inside = !inside;
+      continue;
+    }
+    if (inside) lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The in-scope gates a document's command BLOCKS omit, where those blocks are themselves a gate
+ * list — empty for every other document.
+ *
+ * This is the hole the whole-document rule discloses, closed. Deleting `bun test --coverage` from
+ * `.claude/commands/cnc-preflight.md`'s command block while leaving the paragraph beside it that
+ * explains the gate fails nothing above: the document still NAMES the gate. A reader copies the
+ * block.
+ *
+ * The trigger is `presentsAGateList` on the block text — the same half-based test the enumeration
+ * uses — rather than a count, and that is the whole reason this works where an earlier attempt did
+ * not. The naive form ("any document whose blocks name two or more gates must name all of them
+ * there") is refuted by `docs/ARCHITECTURE.md`, whose blocks name three gates and no complete
+ * half; under this rule it correctly SKIPS. Measured on 2026-08-07 over the seven Markdown
+ * canonical documents: CLAUDE.md, CONTRIBUTING.md, pull_request_template.md and docs/TESTING.md
+ * name none in a block and skip; docs/ARCHITECTURE.md names three and skips; cnc-preflight.md
+ * names all eight and is satisfied; docs/RELEASING.md names its four needs-root gates and is
+ * satisfied at that scope. Delete the coverage gate from cnc-preflight's block and its blocks
+ * still name a complete needs-root half, so the rule still fires — and reports it.
+ */
+function gatesMissingFromBlocks(prose: string, scope: Scope): string[] {
+  const named = gatesNamedIn(commandBlockLinesOf(prose));
+  if (!presentsAGateList(named)) return [];
+  return gatesInScope(scope).filter((gate) => !named.has(gate));
+}
+
+/**
  * The part of a file that is describing the gates to a reader.
  *
  * For Markdown that is the file. For YAML it is the comment lines alone — `ci.yml` RUNS
@@ -244,15 +310,18 @@ function trackedProseFiles(): string[] {
 }
 
 /**
- * Whether a document presents itself as a list of this repository's local gates.
+ * Whether a set of named gates presents itself as a list of this repository's local gates.
  *
  * Named for the claim it gates rather than for the count that decides it: the question is not "how
- * many gates does this mention" but "is this a gate list", and a document that walks a reader
- * through every gate needing the monorepo, or every gate CI can run, is one. Both halves come from
+ * many gates does this mention" but "is this a gate list", and text that walks a reader through
+ * every gate needing the monorepo, or every gate CI can run, is one. Both halves come from
  * `GATES`, so a gate that changes sides changes what qualifies.
+ *
+ * Takes the named set rather than the prose, because it is applied to two different slices of a
+ * document — the whole file, for the enumeration, and the fenced blocks alone, for
+ * `gatesMissingFromBlocks`. One threshold, two subjects.
  */
-function presentsAGateList(prose: string): boolean {
-  const named = gatesNamedIn(prose);
+function presentsAGateList(named: ReadonlySet<string>): boolean {
   return NEEDS_ROOT.every((g) => named.has(g)) || CI_RUNNABLE.every((g) => named.has(g));
 }
 
@@ -293,11 +362,28 @@ describe("the canonical gate lists", () => {
     expect(boxless).toEqual([]);
   });
 
+  it("gives every in-scope gate a command, in a document whose blocks are a gate list", () => {
+    // The command-block counterpart of the checkbox rule, and for the same reason: where a
+    // document presents a runnable sequence, the BLOCK is the gate list — a reader copies it and
+    // never reads the paragraph beside it. Applied wherever the blocks qualify rather than to a
+    // named file, so a second such page inherits it. `.claude/commands/cnc-preflight.md` and
+    // `docs/RELEASING.md` are the two members today; `docs/ARCHITECTURE.md` names three gates in
+    // its blocks, no complete half, and is skipped.
+    const uncommanded = CANONICAL.flatMap(({ path, scope }) =>
+      gatesMissingFromBlocks(proseOf(path), scope).map(
+        (gate) => `${path}'s command blocks are a gate list but omit \`${gate}\``,
+      ),
+    );
+    expect(uncommanded).toEqual([]);
+  });
+
   it("is the complete set of documents that present a gate list", () => {
     // The assertion that makes the hardcoded set above safe, and the one that fails if the matcher
     // stops matching or the enumeration stops enumerating: both collapse `present` to fewer
     // entries than `CANONICAL` has.
-    const present = trackedProseFiles().filter((path) => presentsAGateList(proseOf(path)));
+    const present = trackedProseFiles().filter((path) =>
+      presentsAGateList(gatesNamedIn(proseOf(path))),
+    );
     expect(present.sort()).toEqual(CANONICAL.map((c) => c.path).sort());
   });
 });
@@ -338,6 +424,17 @@ describe("the rule cannot pass vacuously", () => {
     );
     expect(withBoxes.length).toBeGreaterThan(0);
     expect(Math.max(...withBoxes.map((l) => l.length))).toBeGreaterThan(EVERY_GATE.length);
+  });
+
+  it("finds the command blocks the block rule is applied to", () => {
+    // The block rule skips a document whose blocks are not a gate list, so a `commandBlockLinesOf`
+    // that stopped matching — a changed fence spelling, an off-by-one on the toggle — would make
+    // it a no-op over the whole repository while still reporting green. Counts the documents the
+    // rule actually FIRES on, which is the input it has no other way to lose.
+    const firing = CANONICAL.filter(({ path }) =>
+      presentsAGateList(gatesNamedIn(commandBlockLinesOf(proseOf(path)))),
+    ).map((c) => c.path);
+    expect(firing.sort()).toEqual([".claude/commands/cnc-preflight.md", "docs/RELEASING.md"]);
   });
 
   it("reads real text from every canonical list, including the YAML comment block", () => {
@@ -440,5 +537,53 @@ describe("the checkbox rule, on a checklist that is wrong", () => {
     // and tables, and a rule that demanded boxes of them would have to be deleted rather than
     // enforced.
     expect(gatesMissingABox("no boxes here, and no `bun test` either", "all")).toEqual([]);
+  });
+});
+
+describe("the command-block rule, on a document that is wrong", () => {
+  const fullBlock = ["```sh", ...EVERY_GATE.map((g) => `bun run ${g}`), "```"].join("\n");
+
+  it("passes a block that names every gate", () => {
+    expect(gatesMissingFromBlocks(fullBlock, "all")).toEqual([]);
+  });
+
+  it("reports a gate demoted from the block into the surrounding prose", () => {
+    // The disclosed hole, run for EVERY gate rather than one, so no single choice of victim is
+    // load-bearing — and paired with the whole-document matcher on the same string, which is what
+    // makes "the block rule does work the document rule does not" an assertion rather than a hope.
+    // Removing any one gate leaves the other half complete, so the rule still fires every time.
+    const undetected = EVERY_GATE.filter((demoted) => {
+      const doc = fullBlock
+        .split("\n")
+        .filter((line) => line !== `bun run ${demoted}`)
+        .join("\n")
+        .concat(`\n\nAlso run \`${demoted}\` sometime.\n`);
+      const blockRuleCatchesIt = gatesMissingFromBlocks(doc, "all").join() === demoted;
+      const documentRuleMissesIt = gatesNamedIn(doc).has(demoted);
+      return !(blockRuleCatchesIt && documentRuleMissesIt);
+    });
+    expect(undetected).toEqual([]);
+  });
+
+  it("says nothing about a block that names a partial half", () => {
+    // `docs/ARCHITECTURE.md` in miniature, and the case that makes the trigger a HALF rather than
+    // a count. Its blocks name three of the four monorepo gates because it is explaining those
+    // gates, not listing the sequence; a count-based rule would demand it list all eight, which is
+    // how the naive form of this rule was refuted before.
+    const partial = ["```sh", "bun run diff:golden", "bun run reach --baseline", "```"].join("\n");
+    expect(gatesMissingFromBlocks(partial, "all")).toEqual([]);
+  });
+
+  it("says nothing about a document with no fenced blocks at all", () => {
+    expect(gatesMissingFromBlocks(EVERY_GATE.map((g) => `run \`${g}\``).join("\n"), "all")).toEqual(
+      [],
+    );
+  });
+
+  it("reads only inside the fences, so prose beside a block cannot satisfy it", () => {
+    // The property the whole rule rests on. An extractor that leaked the surrounding text would
+    // make this identical to the whole-document rule and close nothing.
+    const doc = `Run ${EVERY_GATE.map((g) => `\`${g}\``).join(", ")}.\n\n\`\`\`sh\nbun test\n\`\`\``;
+    expect(commandBlockLinesOf(doc).trim()).toBe("bun test");
   });
 });
