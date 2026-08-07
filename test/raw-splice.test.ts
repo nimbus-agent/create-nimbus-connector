@@ -97,11 +97,27 @@ const specDocuments = readdirSync(FIXTURES)
   .filter((f) => f.endsWith(".spec.json"))
   .map((f) => ({ file: f, doc: JSON.parse(readFileSync(join(FIXTURES, f), "utf8")) as unknown }));
 
-/** Every emitted file a spec produces, for both targets, plus the Gateway wiring when it has one. */
+/**
+ * Every emitted file a spec produces, for both targets, plus the Gateway wiring when it has one.
+ *
+ * Each emission is caught SEPARATELY, and never rethrown. The call sites used to wrap the whole
+ * function in one `try { … } catch { continue }`, so a spec the standalone target refused threw
+ * away the monorepo's files too — the census would then have reported "this field is not a
+ * carrier" on evidence it had discarded. It changes no answer today (a per-target run finds the
+ * same carrier set), which is the point: it is the failure mode, not a failure.
+ *
+ * A probe every branch refuses returns an empty list rather than throwing, so the caller has no
+ * catch left to write and nothing to skip.
+ */
 function everyEmittedFile(spec: ConnectorSpec): GeneratedFile[] {
   const out: GeneratedFile[] = [];
   for (const target of ["monorepo", "standalone"] as const) {
-    out.push(...generate(spec, { target }));
+    try {
+      out.push(...generate(spec, { target }));
+    } catch {
+      // validateSpec refused it, or this target has no emitter path for this shape. The other
+      // target's files stand on their own.
+    }
   }
   try {
     out.push(...emitWiring(spec));
@@ -145,13 +161,7 @@ function census(): Census {
         } catch {
           continue; // refused at the schema: the field cannot carry arbitrary characters
         }
-        let files: GeneratedFile[];
-        try {
-          files = everyEmittedFile(spec);
-        } catch {
-          continue; // refused by validateSpec, or no emitter path for this shape
-        }
-        for (const file of files) {
+        for (const file of everyEmittedFile(spec)) {
           inspected += 1;
           if (!file.path.at(-1)!.endsWith(".ts")) continue;
           if (!file.content.includes(RAW_MARKER)) continue;
@@ -253,7 +263,7 @@ describe("every carrier refuses every sequence that could break out of its const
             try {
               files = everyEmittedFile(parseSpec(withValueAt(doc, leaf.path, probe)));
             } catch {
-              continue; // refused before emission, which is the intended outcome
+              continue; // parseSpec refused it, which is the intended outcome
             }
             for (const f of files) {
               if (!f.path.at(-1)!.endsWith(".ts")) continue;
@@ -327,4 +337,141 @@ describe("what the 22 fixtures put in a guarded field", () => {
     // `undefined` is the disposition of the other four carriers, and none of them may appear.
     expect(counts).toEqual({ "fetchHelper.base": 7, "tools[].path": 19 });
   });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * What bounds the census: the fields the fixtures happen to set.
+ *
+ * The sweep above splices its marker into every string leaf of every fixture DOCUMENT, so a
+ * string-valued spec field no fixture writes is never probed at all — and "finds exactly the
+ * fields the emitters are known to splice unquoted" reads exactly the same whether that field is
+ * safe or is a carrier nobody looked at. Three such fields exist today (`id`,
+ * `filesystem.read[]`, `filesystem.write[]`), and nothing said so.
+ *
+ * Closed in two halves rather than written down: the schema's own string positions are enumerated
+ * and compared against what the fixtures reach, and every position that comes up short has to
+ * carry its own probe below. A new string field added to the spec language therefore fails here
+ * until someone either gives it a fixture or proves it is not a carrier.
+ * ------------------------------------------------------------------------------------------ */
+
+const SCHEMA = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "schema", "connector-spec.schema.json"), "utf8"),
+) as JsonSchema;
+
+type JsonSchema = {
+  type?: string;
+  enum?: unknown[];
+  properties?: Record<string, JsonSchema>;
+  additionalProperties?: JsonSchema | boolean;
+  items?: JsonSchema;
+  anyOf?: JsonSchema[];
+};
+
+/**
+ * Every position the published schema allows a FREE string in, as a dotted path with `[]` for an
+ * array index and `*` for a record key — the same shape `fieldOf` produces, so the two sets can be
+ * compared directly.
+ *
+ * An `enum` is excluded: its value set is fixed, so it cannot carry a terminator or an
+ * interpolation whatever an emitter does with it. Only the keywords the generated schema actually
+ * uses are handled (`properties`, `items`, `additionalProperties`, `anyOf`, `enum`), which
+ * test/schema.test.ts's drift check pins.
+ */
+function stringPositions(node: JsonSchema, path: string, out: Set<string>): void {
+  if (node.anyOf !== undefined) {
+    for (const b of node.anyOf) stringPositions(b, path, out);
+    return;
+  }
+  if (node.type === "string") {
+    if (node.enum === undefined) out.add(path);
+    return;
+  }
+  if (node.items !== undefined) {
+    stringPositions(node.items, `${path}[]`, out);
+    return;
+  }
+  for (const [k, v] of Object.entries(node.properties ?? {})) {
+    stringPositions(v, path === "" ? k : `${path}.${k}`, out);
+  }
+  if (typeof node.additionalProperties === "object") {
+    stringPositions(node.additionalProperties, path === "" ? "*" : `${path}.*`, out);
+  }
+}
+
+/** The same, for a fixture document: which schema positions its own string leaves land on. */
+function positionsReached(node: JsonSchema, doc: unknown, path: string, out: Set<string>): void {
+  if (node.anyOf !== undefined) {
+    for (const b of node.anyOf) positionsReached(b, doc, path, out);
+    return;
+  }
+  if (node.type === "string") {
+    if (node.enum === undefined && typeof doc === "string") out.add(path);
+    return;
+  }
+  if (node.items !== undefined) {
+    if (Array.isArray(doc)) for (const v of doc) positionsReached(node.items, v, `${path}[]`, out);
+    return;
+  }
+  if (typeof doc !== "object" || doc === null) return;
+  const obj = doc as Record<string, unknown>;
+  for (const [k, v] of Object.entries(node.properties ?? {})) {
+    if (Object.hasOwn(obj, k)) positionsReached(v, obj[k], path === "" ? k : `${path}.${k}`, out);
+  }
+  if (typeof node.additionalProperties === "object") {
+    for (const k of Object.keys(obj)) {
+      if (Object.hasOwn(node.properties ?? {}, k)) continue;
+      positionsReached(node.additionalProperties, obj[k], path === "" ? "*" : `${path}.*`, out);
+    }
+  }
+}
+
+/**
+ * String positions no fixture writes, each paired with the probe that stands in for the fixture.
+ *
+ * This is not an exemption list. An entry costs a value the census can splice a marker into, and
+ * the test below runs the same verbatim-survival check on it that the sweep runs on every fixture
+ * leaf — so a field is here because it was PROBED and is not a carrier, not because it was
+ * excused. All three reach only `nimbus.extension.json`, through the whole-document
+ * `JSON.stringify` in src/emit/manifest.ts.
+ */
+const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {
+  id: (m) => ({ id: `com.nimbus.zz${m}` }),
+  "filesystem.read[]": (m) => ({ filesystem: { read: [`/tmp/${m}`], write: [] } }),
+  "filesystem.write[]": (m) => ({ filesystem: { read: [], write: [`/tmp/${m}`] } }),
+};
+
+describe("the census's coverage of the spec language", () => {
+  const declared = new Set<string>();
+  stringPositions(SCHEMA, "", declared);
+  const reached = new Set<string>();
+  for (const { doc } of specDocuments) positionsReached(SCHEMA, doc, "", reached);
+
+  it("reaches every free-string position the schema declares, or probes it by hand", () => {
+    const unreached = [...declared].filter((p) => !reached.has(p)).sort();
+    expect(unreached).toEqual(Object.keys(PROBED_WITHOUT_A_FIXTURE).sort());
+  });
+
+  it("is non-vacuous: the schema walk found positions and the fixtures reached most of them", () => {
+    // A `stringPositions` that returned nothing would make the comparison above trivially pass
+    // once the list were emptied, and a `positionsReached` that returned everything would too.
+    expect(declared.size).toBeGreaterThan(20);
+    expect(reached.size).toBeGreaterThan(20);
+    expect(declared.size - reached.size).toBe(Object.keys(PROBED_WITHOUT_A_FIXTURE).length);
+  });
+
+  for (const [field, patch] of Object.entries(PROBED_WITHOUT_A_FIXTURE)) {
+    it(`probes "${field}", which no fixture sets, and finds it is not a carrier`, () => {
+      const base = specDocuments.find((s) => s.file === "zzreadonly.spec.json")!.doc as object;
+      const spec = parseSpec({ ...base, ...(patch(RAW_MARKER) as object) });
+      const files = everyEmittedFile(spec);
+      const ts = files.filter((f) => f.path.at(-1)!.endsWith(".ts"));
+      // Non-vacuity for this probe specifically: the patched value has to have reached the
+      // generator at all, which the manifest — where it is JSON-quoted — is the proof of.
+      const manifest = files.find((f) => f.path.at(-1) === "nimbus.extension.json")!;
+      expect(manifest.content).toContain('Zq\\"Zq');
+      expect(ts.filter((f) => f.content.includes(RAW_MARKER)).map((f) => f.path.join("/"))).toEqual(
+        [],
+      );
+    });
+  }
 });
