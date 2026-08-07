@@ -808,6 +808,21 @@ describe("refusals", () => {
     expect(kindsOf(refusals)).toEqual(["schema-shape"]);
   });
 
+  it("refuses a malformed exclusive bound rather than shrugging where its sibling refuses", () => {
+    // Modelled as `z.union([z.boolean(), z.number()])` — the two dialects and nothing else. Under
+    // `z.unknown()` a string here was indistinguishable from ABSENT and was dropped in silence,
+    // while `minimum: "1"` directly above earned a named refusal.
+    for (const schema of [
+      { type: "integer", exclusiveMinimum: "5" },
+      { type: "integer", exclusiveMaximum: [5] },
+    ]) {
+      const refusals = mustRefuse(
+        onePath("/widgets", "get", { parameters: [{ name: "limit", in: "query", schema }] }),
+      );
+      expect(kindsOf(refusals)).toEqual(["schema-shape"]);
+    }
+  });
+
   it("refuses a path that does not begin with a slash", () => {
     expect(kindsOf(mustRefuse({ widgets: { get: { operationId: "op" } } }))).toEqual([
       "path-not-absolute",
@@ -1098,6 +1113,85 @@ describe("notes", () => {
     expect(argsOf(mustMap(paths))).toEqual({
       count: { type: "number", optional: true, min: 5, max: 40, int: true },
     });
+    // The exclusive side won at both ends, so both are reported as widened.
+    expect(notesFor(paths)).toContain("exclusiveMinimum and exclusiveMaximum");
+  });
+
+  it("says nothing when the INCLUSIVE side is the binding one, because nothing was widened", () => {
+    // The mirror of the case above, and the one the first version got wrong: `x >= 10` already
+    // implies `x > 5`, and `x <= 10` already implies `x < 20`, so `min(10).max(10)` is EXACT and a
+    // note claiming the schema accepts a boundary value the document excludes would be false about
+    // this document — inside the code added to fix a note that was false about a document.
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: {
+            type: "integer",
+            minimum: 10,
+            exclusiveMinimum: 5,
+            maximum: 10,
+            exclusiveMaximum: 20,
+          },
+        },
+      ],
+    });
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, min: 10, max: 10, int: true },
+    });
+    expect(notesFor(paths)).toBe("");
+  });
+
+  it("treats an equal exclusive bound as binding, since >= n and > n together are > n", () => {
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: { type: "integer", minimum: 5, exclusiveMinimum: 5 },
+        },
+      ],
+    });
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, min: 5, int: true },
+    });
+    expect(notesFor(paths)).toContain("exclusiveMinimum");
+  });
+
+  it("says nothing about a 3.0 exclusive flag with no minimum beside it to modify", () => {
+    // `exclusiveMinimum: true` MODIFIES `minimum`; with none there it bounds nothing, so there is
+    // no bound to emit and nothing widened to report.
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        { name: "count", in: "query", schema: { type: "integer", exclusiveMinimum: true } },
+      ],
+    });
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, int: true },
+    });
+    expect(notesFor(paths)).toBe("");
+  });
+
+  it("still says nothing about that dangling flag when the OTHER end declares a real bound", () => {
+    // The case the test above cannot reach, found by a RED mutation that produced ZERO failures.
+    // With no bound at either end `applyBounds` returns before the note is considered at all, so
+    // that test passes whatever `widened` says. A bound at the other end gets past the early
+    // return — and a `widened` set from mere keyword presence then reports the widening of a lower
+    // bound this document does not have.
+    const paths = onePath("/widgets", "get", {
+      parameters: [
+        {
+          name: "count",
+          in: "query",
+          schema: { type: "integer", exclusiveMinimum: true, maximum: 10 },
+        },
+      ],
+    });
+    expect(argsOf(mustMap(paths))).toEqual({
+      count: { type: "number", optional: true, max: 10, int: true },
+    });
+    expect(notesFor(paths)).toBe("");
   });
 
   it("records the constraint keywords the spec language cannot carry", () => {

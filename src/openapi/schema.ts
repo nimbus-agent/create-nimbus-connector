@@ -132,11 +132,17 @@ export const OpenApiParameterSchema = z.looseObject({
  * of a named refusal. `minimum`/`maximum` are the exception: they have no valid non-numeric form,
  * so a non-number there is genuinely a malformed node.
  *
- * `exclusiveMinimum`/`exclusiveMaximum` must stay `unknown` because the two dialects disagree
- * about their TYPE, and `assertSupportedVersion` accepts both: OpenAPI 3.0 spells `> 5` as
- * `minimum: 5` plus the BOOLEAN `exclusiveMinimum: true`, while 3.1 (JSON Schema 2020-12) spells
- * it as the NUMBER `exclusiveMinimum: 5`. Declaring either type would report the other dialect's
- * perfectly valid document as a malformed node.
+ * `exclusiveMinimum`/`exclusiveMaximum` are a UNION of the two dialects' types, because
+ * `assertSupportedVersion` accepts both: OpenAPI 3.0 spells `> 5` as `minimum: 5` plus the
+ * BOOLEAN `exclusiveMinimum: true`, while 3.1 (JSON Schema 2020-12) spells it as the NUMBER
+ * `exclusiveMinimum: 5`. Declaring either type alone would report the other dialect's perfectly
+ * valid document as a malformed node.
+ *
+ * They were `z.unknown()` first, for that same reason — right about the problem, one step short
+ * on the remedy. `unknown` also accepts `exclusiveMinimum: "5"`, which then reached the mapper
+ * indistinguishable from ABSENT and was dropped in silence, while its sibling `minimum: "1"`
+ * earned a named `schema-shape` refusal. The union accepts exactly what OpenAPI allows and
+ * refuses everything else, which is how every other typed field here already behaves.
  *
  * The last group is read only for its PRESENCE, so that a constraint the spec language cannot
  * carry is reported rather than dropped in silence — `applyUncarried` in
@@ -153,8 +159,8 @@ export const OpenApiSchemaNodeSchema = z.looseObject({
   enum: z.unknown().optional(),
   minimum: z.number().optional(),
   maximum: z.number().optional(),
-  exclusiveMinimum: z.unknown().optional(),
-  exclusiveMaximum: z.unknown().optional(),
+  exclusiveMinimum: z.union([z.boolean(), z.number()]).optional(),
+  exclusiveMaximum: z.union([z.boolean(), z.number()]).optional(),
   default: z.unknown().optional(),
   properties: z.record(z.string(), z.unknown()).optional(),
   required: z.array(z.string()).optional(),

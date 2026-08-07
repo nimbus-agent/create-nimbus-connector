@@ -641,7 +641,19 @@ function applyDefault(
 }
 
 /** One end of a numeric range: the inclusive bound to emit, and whether the document meant `>`. */
-type Bound = { value: number | undefined; exclusive: boolean };
+/**
+ * One end of a numeric range: the inclusive bound to emit, and whether emitting it LOSES the
+ * document's `>` — which is the fact `applyBounds`'s note asserts.
+ *
+ * The field is named for that fact rather than for the input that produces it, and the rename is
+ * the fix for a real defect rather than a tidy-up. It was `exclusive`, meaning "an exclusive
+ * keyword was present", while the note it gated claimed "the generated schema accepts the boundary
+ * value the document excludes". For `{minimum: 10, exclusiveMinimum: 5}` the first is true and the
+ * second is false — `x >= 10` already implies `x > 5`, so `z.number().min(10)` is exact — and the
+ * note said something untrue about the document. A flag named for the input reads as correct at
+ * every call site; one named for the claim does not.
+ */
+type Bound = { value: number | undefined; widened: boolean };
 
 /**
  * One bound as `ArgSchema` can express it, which is INCLUSIVE and only inclusive.
@@ -657,19 +669,27 @@ type Bound = { value: number | undefined; exclusive: boolean };
  * must hold, so the tighter of the two is the effective bound. That is JSON Schema's own
  * semantics, not an approximation invented here — which is why `tighter` is passed in
  * (`Math.max` for a lower bound, `Math.min` for an upper one) rather than assumed.
+ *
+ * **`widened` follows which side WON, not which keywords were present.** The emitted number is
+ * correct in every combination; only the note can be wrong, and it is wrong precisely when the
+ * inclusive side is the binding one. A tie counts as widened — `x >= 5 && x > 5` is `x > 5`, so
+ * emitting `min(5)` does lose the `>`.
+ *
+ * The boolean arm carries the same rule in its degenerate form: 3.0's `exclusiveMinimum: true`
+ * MODIFIES `minimum`, so with no `minimum` beside it there is no bound to emit and nothing to
+ * widen. That leaves the invariant this function's caller relies on — `widened` is true only when
+ * `value` is a number.
  */
 function inclusiveBound(
   inclusive: number | undefined,
-  exclusive: unknown,
+  exclusive: boolean | number | undefined,
   tighter: (a: number, b: number) => number,
 ): Bound {
   if (typeof exclusive === "number") {
-    return {
-      value: inclusive === undefined ? exclusive : tighter(inclusive, exclusive),
-      exclusive: true,
-    };
+    const value = inclusive === undefined ? exclusive : tighter(inclusive, exclusive);
+    return { value, widened: value === exclusive };
   }
-  return { value: inclusive, exclusive: exclusive === true };
+  return { value: inclusive, widened: exclusive === true && inclusive !== undefined };
 }
 
 /**
@@ -691,9 +711,9 @@ function inclusiveBound(
 function applyBounds(schema: OpenApiSchemaNode, arg: ArgDecl, where: string, c: Collected): void {
   const min = inclusiveBound(schema.minimum, schema.exclusiveMinimum, Math.max);
   const max = inclusiveBound(schema.maximum, schema.exclusiveMaximum, Math.min);
-  if (min.value === undefined && max.value === undefined && !min.exclusive && !max.exclusive) {
-    return;
-  }
+  // `widened` implies `value !== undefined` (see inclusiveBound), so there is nothing to report
+  // about a node that produced neither bound.
+  if (min.value === undefined && max.value === undefined) return;
   if (arg.type !== "number") {
     note(
       c,
@@ -705,8 +725,8 @@ function applyBounds(schema: OpenApiSchemaNode, arg: ArgDecl, where: string, c: 
   }
   if (min.value !== undefined) arg.min = min.value;
   if (max.value !== undefined) arg.max = max.value;
-  if (min.exclusive || max.exclusive) {
-    const which = [min.exclusive ? "exclusiveMinimum" : "", max.exclusive ? "exclusiveMaximum" : ""]
+  if (min.widened || max.widened) {
+    const which = [min.widened ? "exclusiveMinimum" : "", max.widened ? "exclusiveMaximum" : ""]
       .filter((s) => s !== "")
       .join(" and ");
     note(
