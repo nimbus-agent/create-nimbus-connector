@@ -13,6 +13,13 @@ left here read as unreleased long after they shipped, which is exactly what happ
 
 *Nothing pending.*
 
+## [0.10.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.9.0...create-nimbus-connector-v0.10.0) (2026-08-07)
+
+
+### Features
+
+* **derive:** close the recognizer set, widen three frame idioms, and state the corpus ceiling ([#66](https://github.com/nimbus-agent/create-nimbus-connector/issues/66)) ([b27cac2](https://github.com/nimbus-agent/create-nimbus-connector/commit/b27cac2f79417f8cd9918332ec9971542cfb9815))
+
 ## [0.9.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.8.0...create-nimbus-connector-v0.9.0) (2026-08-06)
 
 
