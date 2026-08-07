@@ -12,13 +12,27 @@
  * npm cannot unpublish after 72 hours. That is the whole reason this file exists at the
  * *test* layer instead of as a step inside the release job.
  *
+ * The one thing that CANNOT live here is the changelog gate. CHANGELOG.md's Unreleased
+ * section is *supposed* to hold notes for most of a release cycle, so a test asserting it
+ * is empty would fail every pull request between writing a note and cutting the release.
+ * The emptiness check therefore has to run only on the release commit — a step inside
+ * release.yml — and what this file guards is that the step still exists and still runs
+ * before the publish.
+ *
+ * The last three describes are not release facts. They are the repository-wide workflow
+ * invariants that had no other home: one Bun pin everywhere, harden-runner first in every
+ * job, every action SHA-pinned, and the license-boundary gate. They read the workflow
+ * DIRECTORY rather than a list of filenames, so a workflow added later inherits them
+ * without anyone remembering to enrol it — which is exactly how the Bun pin came to be
+ * checked in only two of the four files that state it.
+ *
  * `Bun.YAML.parse` rather than a `yaml` dependency: this project is Bun-only and Bun has
  * shipped a YAML parser since 1.2.21 (present on the pinned 1.3.14). Adding an npm
  * package to read a file would be a strange way to guard a Bun-only project.
  */
 
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -41,7 +55,12 @@ type Job = {
   env?: Record<string, string>;
 };
 
-type Workflow = { jobs: Record<string, Job>; env?: Record<string, string> };
+type Workflow = {
+  jobs: Record<string, Job>;
+  env?: Record<string, string>;
+  on?: Record<string, unknown>;
+  permissions?: Record<string, string>;
+};
 
 /** Every environment variable name a workflow sets, at any of the three levels. */
 const envNames = (w: Workflow): string[] => [
@@ -67,12 +86,48 @@ const manifest = readJson<Record<string, string>>(".release-please-manifest.json
 const config = readJson<ReleasePleaseConfig>("release-please-config.json");
 const release = Bun.YAML.parse(read(".github/workflows/release.yml")) as Workflow;
 const ci = Bun.YAML.parse(read(".github/workflows/ci.yml")) as Workflow;
-const dependabot = Bun.YAML.parse(
-  read(".github/workflows/dependabot-auto-merge.yml"),
-) as Workflow & { on?: Record<string, unknown> };
+const dependabot = Bun.YAML.parse(read(".github/workflows/dependabot-auto-merge.yml")) as Workflow;
+const cla = Bun.YAML.parse(read(".github/workflows/cla.yml")) as Workflow;
+
+/**
+ * Every workflow in the directory, parsed — discovered rather than listed.
+ *
+ * A guard that names the files it reads goes blind to the file added after it, which is
+ * precisely how the Bun pin below came to be checked in two of the four workflows that
+ * state it. Reading the directory means a new workflow inherits the repo-wide invariants
+ * without anyone remembering to enrol it.
+ */
+const workflows: { file: string; workflow: Workflow }[] = readdirSync(
+  join(repoRoot, ".github", "workflows"),
+)
+  .filter((f) => f.endsWith(".yml"))
+  .sort()
+  .map((file) => ({
+    file,
+    workflow: Bun.YAML.parse(read(join(".github", "workflows", file))) as Workflow,
+  }));
+
+/** Every job in the repository, tagged with the workflow it came from. */
+const allJobs = workflows.flatMap(({ file, workflow }) =>
+  Object.entries(workflow.jobs).map(([jobId, job]) => ({ file, jobId, job })),
+);
+
+/** Every `oven-sh/setup-bun` step in the repository, with the Bun it pins. */
+const bunPins = allJobs.flatMap(({ file, jobId, job }) =>
+  (job.steps ?? [])
+    .filter((s) => s.uses?.startsWith("oven-sh/setup-bun@"))
+    .map((s) => ({ file, jobId, version: s.with?.["bun-version"] })),
+);
 
 /** The manifest key for a single-package repo: release-please's root path. */
 const ROOT = ".";
+
+/**
+ * The literal CHANGELOG.md's Unreleased section carries when it holds nothing, and the
+ * string release.yml's changelog gate grades that section against. Stated once here; both
+ * halves are asserted below.
+ */
+const CHANGELOG_PLACEHOLDER = "*Nothing pending.*";
 
 const releaseSteps = (jobId: string): Step[] => release.jobs[jobId]?.steps ?? [];
 
@@ -219,6 +274,39 @@ describe("the release workflow", () => {
     expect(step?.run).toContain("--access public");
   });
 
+  it("refuses to publish while the changelog's Unreleased section still holds notes", () => {
+    // CHANGELOG.md's Unreleased section is hand-written, and release-please inserts its
+    // generated section BELOW it rather than above — so the notes do not move on their own
+    // and the move is manual. It was missed on 0.4.0, 0.5.0 and 0.6.0, each of which shipped
+    // with its own notes still filed as unreleased, and nothing in the repository noticed.
+    //
+    // Matched on the placeholder literal in the step's script rather than on the step name,
+    // for the same reason the pack-and-execute assertion is: a rename must not make this
+    // guard blind to the step being deleted.
+    const gateIndex = stepIndex("publish", (s) => s.run?.includes(CHANGELOG_PLACEHOLDER) === true);
+    const publishIndex = stepIndex("publish", (s) => invokes(s, "npm publish"));
+    expect(
+      gateIndex,
+      "the publish job must check CHANGELOG.md's Unreleased section against its " +
+        `${CHANGELOG_PLACEHOLDER} placeholder`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      gateIndex,
+      "the changelog check must run BEFORE the publish — npm cannot unpublish after 72h, " +
+        "so a check that runs afterwards reports a wrong changelog instead of preventing it",
+    ).toBeLessThan(publishIndex);
+    expect(releaseSteps("publish")[gateIndex]?.run).toContain("CHANGELOG.md");
+  });
+
+  it("checks the changelog against the placeholder that file actually documents", () => {
+    // One fact in two files: rename the placeholder in CHANGELOG.md's convention header and
+    // the workflow keeps grepping for a string nothing will ever contain again — a gate that
+    // fails every release for the wrong reason, or (if inverted) never fires. The header
+    // names the literal on purpose so this assertion holds while notes ARE pending, which is
+    // the normal mid-development state and must not fail CI.
+    expect(read("CHANGELOG.md")).toContain(CHANGELOG_PLACEHOLDER);
+  });
+
   it("never authenticates with a token", () => {
     // release.yml authenticates solely through npm trusted publishing (GitHub OIDC).
     // A NODE_AUTH_TOKEN here would be a *silent* fallback: if the OIDC binding were
@@ -264,6 +352,186 @@ describe("provenance metadata", () => {
   it("the published package name is the one the verifier checks", () => {
     const step = releaseSteps("publish").find((s) => s.uses?.includes("verify-npm-provenance"));
     expect(step?.with?.package).toBe(pkg.name);
+  });
+});
+
+describe("the dependency-review gate", () => {
+  const workflow = workflows.find((w) => w.file === "dependency-review.yml")?.workflow;
+  const step = Object.values(workflow?.jobs ?? {})
+    .flatMap((j) => j.steps ?? [])
+    .find((s) => s.uses?.startsWith("actions/dependency-review-action@"));
+  const denied = (step?.with?.["deny-licenses"] ?? "").split(",").map((s) => s.trim());
+
+  it("runs on every pull request", () => {
+    // The action reads the dependency-graph diff between base and head, which only exists
+    // for a pull_request event. On any other trigger it needs base-ref/head-ref and would
+    // grade nothing here.
+    expect(workflow, ".github/workflows/dependency-review.yml must exist").toBeDefined();
+    expect(Object.keys(workflow?.on ?? {})).toContain("pull_request");
+  });
+
+  it("denies every SPDX spelling of AGPL and GPL", () => {
+    // This repository's number-one invariant is a license boundary: MIT generator, AGPL-only
+    // monorepo, and no source may cross. test/license.test.ts guards the license string the
+    // generator EMITS — it says nothing about this repo's own dependency tree, which is what
+    // an AGPL transitive dependency would poison. It matters most on Dependabot's pull
+    // requests: dependabot-auto-merge.yml merges patch and minor without a human.
+    //
+    // Both the deprecated bare ids and the -only/-or-later forms, because a package can
+    // declare either and the action compares the declared expression against this list.
+    // Every id below was checked against spdx-license-ids (current + deprecated) and parsed
+    // with spdx-expression-parse: the action THROWS on an id it cannot parse, so a typo here
+    // is loud rather than silently unmatched.
+    expect(step, "the workflow must run actions/dependency-review-action").toBeDefined();
+    for (const id of [
+      "AGPL-1.0",
+      "AGPL-1.0-only",
+      "AGPL-1.0-or-later",
+      "AGPL-3.0",
+      "AGPL-3.0-only",
+      "AGPL-3.0-or-later",
+      "GPL-1.0",
+      "GPL-1.0-only",
+      "GPL-1.0-or-later",
+      "GPL-2.0",
+      "GPL-2.0-only",
+      "GPL-2.0-or-later",
+      "GPL-3.0",
+      "GPL-3.0-only",
+      "GPL-3.0-or-later",
+    ]) {
+      expect(denied, `deny-licenses must list ${id}`).toContain(id);
+    }
+  });
+
+  it("never downgrades itself to a warning", () => {
+    // `warn-only: true` makes the action always exit 0. That is the exact false-green shape
+    // this repository keeps deleting: a required check that reports success while the thing
+    // it checks is broken.
+    expect(step?.with?.["warn-only"]).toBeUndefined();
+    // allow-licenses and deny-licenses are mutually exclusive — the action refuses both —
+    // and an allow-list would replace the denial above rather than add to it.
+    expect(step?.with?.["allow-licenses"]).toBeUndefined();
+    expect(step?.with?.["license-check"]).toBeUndefined();
+  });
+
+  it("grants nothing beyond contents: read", () => {
+    const granted = {
+      ...(workflow?.permissions ?? {}),
+      ...Object.fromEntries(
+        Object.values(workflow?.jobs ?? {}).flatMap((j) =>
+          Object.entries((j as Job & { permissions?: Record<string, string> }).permissions ?? {}),
+        ),
+      ),
+    };
+    expect(granted).toEqual({ contents: "read" });
+  });
+});
+
+describe("the CLA workflow", () => {
+  const mintStep = (cla.jobs["cla-assistant"]?.steps ?? []).find((s) =>
+    s.uses?.startsWith("actions/create-github-app-token@"),
+  );
+
+  it("mints the App token with only the permission the CLA action uses", () => {
+    // This token is handed to contributor-assistant/github-action — a third-party action —
+    // on a `pull_request_target` trigger that any external contributor can fire by opening a
+    // pull request. Without `permission-*` inputs, create-github-app-token mints a token
+    // carrying the App INSTALLATION's whole permission set, which is far wider than the one
+    // call the action makes with it.
+    //
+    // Read from the action's source at the pinned SHA rather than inferred: `getPATOctokit()`
+    // is imported in exactly one module, src/persistence/persistence.ts, where it backs
+    // `repos.getContent` and `repos.createOrUpdateFileContents` on the signatures file. Every
+    // other API call — the PR comments, the `cla` check, the workflow re-run — goes through
+    // `getDefaultOctokitClient()`, i.e. GITHUB_TOKEN, governed by this job's own
+    // `permissions:` block. So the App token needs `contents: write` and nothing else.
+    //
+    // Exact equality, not `toContain`: a permission added later should have to argue for
+    // itself here rather than arrive as a passing diff.
+    expect(mintStep, "cla-assistant must mint an App token").toBeDefined();
+    expect(
+      Object.keys(mintStep?.with ?? {})
+        .filter((k) => k.startsWith("permission-"))
+        .sort(),
+    ).toEqual(["permission-contents"]);
+    expect(mintStep?.with?.["permission-contents"]).toBe("write");
+  });
+
+  it("scopes the App token to the repository that holds the signatures, and no other", () => {
+    // `repositories` was `${{ github.event.repository.name }},.github`, which also handed
+    // this repository's contents to the third-party action. persistence.ts always addresses
+    // `input.getRemoteRepoName()` — pinned to `.github` by the `remote-repository-name`
+    // input below — so the second entry was never reachable by the token's only consumer.
+    expect(mintStep?.with?.repositories).toBe(".github");
+    expect(
+      (cla.jobs["cla-assistant"]?.steps ?? []).find((s) =>
+        s.uses?.startsWith("contributor-assistant/github-action@"),
+      )?.with?.["remote-repository-name"],
+      "the narrowing above is only sound while the signatures live in a remote repository",
+    ).toBe(".github");
+  });
+});
+
+describe("runner hardening", () => {
+  it("hardens the runner as the first step of every job in every workflow", () => {
+    // harden-runner installs an eBPF egress monitor into the runner; anything that runs
+    // before it is unobserved, so its position is part of what it is worth — not a style
+    // point. cla.yml was the only workflow without it, and the one where the audit log is
+    // worth most: it is the `pull_request_target` workflow that hands a minted App token to
+    // a third-party action, on a trigger an external contributor controls.
+    expect(
+      allJobs.length,
+      "the collector must find jobs — an empty list satisfies the loop below silently",
+    ).toBeGreaterThanOrEqual(9);
+    for (const { file, jobId, job } of allJobs) {
+      expect(job.steps?.[0]?.uses, `${file} / ${jobId}: first step`).toStartWith(
+        "step-security/harden-runner@",
+      );
+    }
+  });
+
+  it("pins every action to a full-length commit SHA", () => {
+    // The org requires it, and nothing else in the repository checked. A moving tag is a
+    // supply-chain hole that reads as a normal `uses:` line.
+    const uses = allJobs.flatMap(({ file, jobId, job }) =>
+      (job.steps ?? []).flatMap((s) =>
+        s.uses === undefined ? [] : [{ file, jobId, ref: s.uses }],
+      ),
+    );
+    expect(uses.length).toBeGreaterThanOrEqual(20);
+    for (const u of uses) {
+      expect(u.ref, `${u.file} / ${u.jobId}`).toMatch(/@[0-9a-f]{40}$/);
+    }
+  });
+});
+
+describe("the Bun pin", () => {
+  it("is one version, stated the same way in every workflow that installs Bun", () => {
+    // The pin is one fact written in four files, and until this guard existed only two of
+    // them were read — `bunVersion(release, "publish")` against `bunVersion(ci, "check")`,
+    // above. acceptance.yml runs the two harnesses that actually EXECUTE generated
+    // connectors, the strongest checks in this repo, and it could drift to a Bun no pull
+    // request was ever tested against with nothing to say so; sonar.yml computes the
+    // coverage the per-file threshold is graded on, on a Bun of its own. Verified by
+    // mutation: acceptance.yml at 1.3.13 passes every other test in this repository.
+    expect(
+      bunPins.map((p) => p.file),
+      "the collector must see every workflow that pins Bun — a collector that sees nothing " +
+        "satisfies the equality below while asserting nothing",
+    ).toEqual(expect.arrayContaining(["acceptance.yml", "ci.yml", "release.yml", "sonar.yml"]));
+
+    const canonical = bunVersion(ci, "check");
+    expect(canonical, "ci.yml's check job is the canonical pin").toBeDefined();
+    for (const pin of bunPins) {
+      // An absent `bun-version` is not the neutral case: setup-bun then resolves `latest`,
+      // which is the same drift with no line in the diff to point at.
+      expect(pin.version, `${pin.file} (${pin.jobId}) must pin bun-version`).toBeDefined();
+      expect(
+        pin.version,
+        `${pin.file} (${pin.jobId}) pins Bun ${pin.version}, ci.yml pins ${canonical}`,
+      ).toBe(canonical);
+    }
   });
 });
 

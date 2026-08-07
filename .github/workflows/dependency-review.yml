@@ -1,0 +1,93 @@
+name: dependency-review
+
+# The license boundary, applied to this repository's OWN dependency tree.
+#
+# This project's defining constraint is that an MIT generator must not absorb anything from
+# the AGPL-3.0-only Nimbus monorepo — docs/LICENSING.md is the long answer. test/license.test.ts
+# guards the license string the generator EMITS into a generated connector; nothing guarded the
+# licenses this repository itself pulls in, which is the other half of the same invariant and
+# the half a human never reads. A transitive AGPL dependency would relicense the published
+# package by operation of law, not by anyone's decision.
+#
+# It matters most on Dependabot's pull requests. dependabot-auto-merge.yml enables auto-merge
+# for patch and minor updates without a human looking, and a patch bump is exactly where a
+# dependency quietly changes its license or adds a copyleft transitive.
+#
+# ONE THING OUTSIDE THIS FILE IS REQUIRED FOR THAT TO HOLD: `dependency-review` must be added
+# to main's ruleset as a required status check. GitHub's auto-merge waits for the REQUIRED
+# checks only — currently `check`, `cla` and `Analyze (javascript-typescript)` — so until this
+# one joins them, a Dependabot patch bump that this job turns red still merges itself. The
+# job is visible on a human's pull request either way; it is the unattended path that needs
+# the ruleset entry. Update dependabot-auto-merge.yml's list of required checks when you add
+# it, so the two stop disagreeing.
+#
+# `pull_request` only: the action reads the dependency-graph diff between base and head, which
+# GitHub computes for a pull request. On any other trigger it needs base-ref/head-ref supplied
+# by hand and grades a comparison nobody chose.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # `contents: read` is the whole grant: the dependency-graph compare API needs it, and
+    # nothing else here writes. Notably NOT `pull-requests: write` — that is only required
+    # by `comment-summary-in-pr`, and a comment is not worth a write scope on a workflow
+    # that runs against every pull request. The job summary carries the same report.
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      # This org requires every action pinned to a full-length commit SHA.
+      # Tag comments record what each SHA resolves to; re-resolve before bumping.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Both the deprecated bare identifiers and the -only/-or-later forms: a package can
+      # declare either, and the action matches the declared SPDX expression against this list
+      # verbatim. Every id here was checked against spdx-license-ids (current and deprecated)
+      # and parsed with spdx-expression-parse, because the action THROWS on an identifier it
+      # cannot parse — "Invalid license(s) in deny-licenses" — rather than skipping it. That
+      # is the good direction: a typo fails the workflow instead of silently not matching.
+      #
+      # LGPL is deliberately absent. It is weak copyleft and does not carry the network-use
+      # obligation that makes AGPL the specific hazard for this repository; adding it is a
+      # separate decision with its own trade, not an oversight here.
+      #
+      # No `warn-only`, and no `fail-on-severity` override. `warn-only: true` makes this
+      # action always exit 0 — a required check reporting success while the thing it checks
+      # is broken, which is the false-green shape this repo keeps removing.
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          deny-licenses: >-
+            AGPL-1.0,
+            AGPL-1.0-only,
+            AGPL-1.0-or-later,
+            AGPL-3.0,
+            AGPL-3.0-only,
+            AGPL-3.0-or-later,
+            GPL-1.0,
+            GPL-1.0-only,
+            GPL-1.0-or-later,
+            GPL-2.0,
+            GPL-2.0-only,
+            GPL-2.0-or-later,
+            GPL-3.0,
+            GPL-3.0-only,
+            GPL-3.0-or-later

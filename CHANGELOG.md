@@ -11,6 +11,12 @@ its generated section *below* this one rather than above it, so the move is manu
 left here read as unreleased long after they shipped, which is exactly what happened to the
 0.4.0, 0.5.0 and 0.6.0 blocks now filed under those versions.
 
+That is no longer only a convention. `.github/workflows/release.yml` refuses to publish
+unless this section's last non-blank line is the placeholder `*Nothing pending.*` and the
+section carries no `###` sub-heading and no bulleted entry. The gate runs before
+`npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
+is written next to the step.
+
 *Nothing pending.*
 
 ## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)
