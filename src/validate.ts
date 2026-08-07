@@ -1,4 +1,4 @@
-import type { ConnectorSpec, PathSegment } from "./spec.ts";
+import type { ConnectorSpec, EnvSpec, PathSegment } from "./spec.ts";
 import { needsExtractor, parsePathTemplate, registrarName, titleIdentifier } from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
@@ -156,6 +156,110 @@ function claimEnvIdentifiers(seen: Map<string, string>, spec: ConnectorSpec): vo
 }
 
 /**
+ * Whether the entry's accessor emits a `throw new Error(…)`, and so references BOTH `Error` and
+ * `undefined` — the guard's own `=== undefined` test sits on the same line as the throw it gates.
+ *
+ * `renderBasic` and `renderTokenFunction` (src/emit/server/env.ts) always throw: the first guards
+ * every var unconditionally, the second on a non-2xx token response and on a response carrying no
+ * `access_token`, neither of which `default` suppresses. Every other branch throws exactly when
+ * `guardLines` emits, and the second line below is that function's condition.
+ */
+function emitsThrow(e: EnvSpec): boolean {
+  if (e.auth === "basic" || e.auth === "client-credentials") return true;
+  return e.default === undefined && (e.required || e.auth !== undefined);
+}
+
+/**
+ * The names an env entry's OWN accessor body references — which is exactly the set a `binding`
+ * declared in that body can shadow.
+ *
+ * `readLines` (src/emit/server/env.ts) emits `const <binding> = …` INSIDE an accessor whose body
+ * also names module-scope declarations and globals, and nothing checked the two against each
+ * other. The same complaint `checkRowsIdentifier` below answers, one field over.
+ *
+ * **Entry-scoped, and that is the whole design.** The obvious fix — checking `bindings` against
+ * the `seen` map the way `rows` is checked — was measured and rejected: it refuses `grafana`,
+ * `sentry`, `zzscratch` and `zzstandalonehand` (`bindings: ["u"]`, and `u` is reserved for the
+ * conditional-query branch's URL const) and `zendesk` (`bindings: ["email", "token"]` on a
+ * **basic** entry, where nothing named `token` is emitted at all). Two of those five are
+ * byte-locked. A binding is function-scoped to one accessor, so the only names it can collide
+ * with are the ones THAT accessor's own body mentions; every other module-scope name is merely
+ * shadowed, harmlessly, in a body that never reads it.
+ *
+ * Derived from the emitter branch by branch, then measured: every name below was compiled as a
+ * binding in every entry shape that reaches it, under `tsc --strict`. The failures, by branch —
+ *
+ *   process              TS7022 + TS2448, every branch (`const process = process.env[…]`)
+ *   Error                TS2351 `new Error(…)` on a string
+ *   undefined            compiles CLEAN and breaks at runtime: the guard becomes
+ *                        `if (undefined === undefined || …)`, comparing the const with itself, so
+ *                        the accessor throws "X is not set" even when X is set — confirmed by
+ *                        running the emitted accessor, not by reading it
+ *   trimTrailingSlash    TS2349, `return trimTrailingSlash(trimTrailingSlash)`
+ *   encodeBasicAuthHeader TS2349
+ *   cachedToken          TS2448 + TS2588 (read on the line above, then assigned)
+ *   tokenExpiresAt       TS2448 + TS2588
+ *   body res text parsed ttl   TS2451, a second `const` of a name the same block declares
+ *   Date URLSearchParams fetch String JSON Math Number   TS2339/TS2349/TS2351 on a shadowed global
+ *
+ * `token` is deliberately ABSENT, against the finding that prompted this check. It is the name
+ * `renderTokenFunction` gives the enclosing function, and that function's body never calls it —
+ * only the wrapper accessor below it does, from a different scope. `bindings: ["token"]` on a
+ * client-credentials entry compiles clean, so refusing it would need a reason that is not true.
+ * The reproduction that named it, `["token", "cachedToken"]`, fails on the second name.
+ */
+export function accessorReferences(e: EnvSpec): string[] {
+  // readLines emits `process.env[…]` in every branch there is.
+  const names = ["process"];
+  if (emitsThrow(e)) names.push("Error", "undefined");
+  // `transformed()` is reached only from the plain return path, and EnvSchema already refuses
+  // `transform` beside any `auth` — so this field alone implies the branch that calls it.
+  if (e.transform === "trimTrailingSlashFn") names.push("trimTrailingSlash");
+  if (e.auth === "basic" || (e.auth === "client-credentials" && e.credentialsIn === "basic")) {
+    names.push("encodeBasicAuthHeader");
+  }
+  if (e.auth === "client-credentials") {
+    // renderTokenFunction's body, in emission order: the cache check, the form body, the
+    // request, the response, the parse, the ttl computation.
+    names.push(
+      "cachedToken",
+      "tokenExpiresAt",
+      "Date",
+      "URLSearchParams",
+      "body",
+      "fetch",
+      "res",
+      "text",
+      "String",
+      "JSON",
+      "parsed",
+      "Math",
+      "ttl",
+      "Number",
+    );
+  }
+  return names;
+}
+
+/** A binding may shadow anything except what the accessor it is declared in already reads. */
+function checkEnvBindings(spec: ConnectorSpec): void {
+  for (const e of spec.env) {
+    if (e.bindings === undefined) continue;
+    const referenced = new Set(accessorReferences(e));
+    for (const b of e.bindings) {
+      if (!referenced.has(b)) continue;
+      throw new Error(
+        `Identifier collision: env accessor "${e.local}" declares "const ${b}" for ` +
+          `${e.vars.join(", ")}, and its own body already references "${b}" — the declaration ` +
+          `shadows it for the rest of the accessor. Rename the "bindings" entry. (This is scoped ` +
+          `to THIS entry's shape: another entry, or this one with different "auth"/"transform", ` +
+          `may use "${b}" freely, because each accessor is its own function scope.)`,
+      );
+    }
+  }
+}
+
+/**
  * Four emitted names are built by wrapping `titleIdentifier(spec.title)` — `register<X>Tool`,
  * `create<X>Syncable`, `map<X>ItemToItem` and `<X>SearchMatchOptions` — so the stripped title
  * has to be usable as the middle of an identifier.
@@ -196,6 +300,9 @@ export function validateSpec(spec: ConnectorSpec): void {
   }
 
   claimEnvIdentifiers(seen, spec);
+  // After the claims, before anything else: a binding collides with names inside ONE accessor,
+  // which the shared `seen` map cannot express — see accessorReferences.
+  checkEnvBindings(spec);
 
   // Module-scope `const <baseConst> = "<base>";`, claimed for the same reason.
   if (spec.fetchHelper.baseConst !== undefined) {

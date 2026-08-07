@@ -668,3 +668,160 @@ describe("the identifier derived from title", () => {
     );
   });
 });
+
+/**
+ * `bindings` had the injection guard (`identifierField()`, so no executable payload reaches the
+ * `const`) and not the collision guard — `readLines` declares the binding inside an accessor body
+ * that also reads module-scope declarations and globals, and nothing compared the two.
+ */
+describe("an env entry's bindings", () => {
+  function envSpec(entry: Record<string, unknown>) {
+    return parseSpec({
+      name: "zzbind",
+      displayName: "ZZ Bind",
+      description: "d.",
+      serviceLabel: "ZZ Bind",
+      style: "hand-rolled",
+      env: [{ ...entry }, { vars: ["ZZBIND_TOKEN"], local: "headers", auth: "bearer" }],
+      fetchHelper: { local: "zzGet", base: "https://api.zzbind.test", headers: "headers" },
+      tools: [],
+    });
+  }
+
+  it('rejects "process", whose read line would initialise the const from itself', () => {
+    // `const process = process.env["ZZBIND_V"]?.trim();` — TS7022 + TS2448.
+    expect(() =>
+      validateSpec(
+        envSpec({ vars: ["ZZBIND_V"], local: "v", required: true, bindings: ["process"] }),
+      ),
+    ).toThrow(/"const process"[\s\S]*already references "process"/);
+  });
+
+  it('rejects "trimTrailingSlash" on the entry whose transform CALLS it', () => {
+    // `return trimTrailingSlash(trimTrailingSlash);` — TS2349.
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_URL"],
+          local: "v",
+          required: true,
+          transform: "trimTrailingSlashFn",
+          bindings: ["trimTrailingSlash"],
+        }),
+      ),
+    ).toThrow(/trimTrailingSlash/);
+  });
+
+  it('rejects "cachedToken" on a client-credentials entry, read one line above the const', () => {
+    // Declared inside `async function token()` below `if (cachedToken !== null && …)` — TS2448,
+    // and TS2588 for the `cachedToken = parsed.access_token` assignment to a const.
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_ID", "ZZBIND_SECRET"],
+          local: "v",
+          auth: "client-credentials",
+          tokenUrl: "https://api.zzbind.test/oauth/token",
+          credentialsIn: "basic",
+          bindings: ["id", "cachedToken"],
+        }),
+      ),
+    ).toThrow(/cachedToken/);
+  });
+
+  it('rejects "undefined", which typechecks and then throws on every call', () => {
+    // The one in this set no compiler sees. The guard becomes `if (undefined === undefined || …)`
+    // — the const compared with itself — so the accessor reports "ZZBIND_V is not set" however it
+    // is configured. Confirmed by running the emitted accessor.
+    expect(() =>
+      validateSpec(
+        envSpec({ vars: ["ZZBIND_V"], local: "v", auth: "bearer", bindings: ["undefined"] }),
+      ),
+    ).toThrow(/undefined/);
+  });
+
+  it('rejects "res", a const the token exchange declares further down the same block', () => {
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_ID", "ZZBIND_SECRET"],
+          local: "v",
+          auth: "client-credentials",
+          tokenUrl: "https://api.zzbind.test/oauth/token",
+          credentialsIn: "body",
+          bindings: ["res", "secret"],
+        }),
+      ),
+    ).toThrow(/"res"/);
+  });
+
+  it('accepts "u", which four fixtures use and a shared-map check would reject', () => {
+    // grafana, sentry, zzscratch and zzstandalonehand all write bindings: ["u"], and "u" is on
+    // RESERVED_IDENTIFIERS for the conditional-query branch's URL const. Two of the four are
+    // byte-locked. Checking `bindings` against `seen` — the obvious fix — breaks all four.
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_URL"],
+          local: "v",
+          required: true,
+          transform: "stripTrailingSlash",
+          bindings: ["u"],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts "token" on a BASIC entry, which is what zendesk writes', () => {
+    // Nothing named `token` is emitted anywhere in renderBasic's output. `token` is reserved at
+    // module scope for the client-credentials branch, which this entry is not.
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_EMAIL", "ZZBIND_TOKEN"],
+          local: "v",
+          auth: "basic",
+          bindings: ["email", "token"],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts "token" on the client-credentials entry too, and states why', () => {
+    // `renderTokenFunction` names the enclosing function `token`, and that function's body never
+    // calls it — only the wrapper accessor beneath it does, from another scope. Compiled clean
+    // under tsc --strict. Refusing it would need a reason that is not true; the reproduction that
+    // named it, ["token", "cachedToken"], fails on the second name.
+    expect(() =>
+      validateSpec(
+        envSpec({
+          vars: ["ZZBIND_ID", "ZZBIND_SECRET"],
+          local: "v",
+          auth: "client-credentials",
+          tokenUrl: "https://api.zzbind.test/oauth/token",
+          credentialsIn: "body",
+          bindings: ["token", "secret"],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects "encodeBasicAuthHeader" for credentialsIn "basic" and accepts it for "body"', () => {
+    // The rule is entry-scoped down to `credentialsIn`. The basic form splices the binding into
+    // `Authorization: encodeBasicAuthHeader(id, secret)`; the body form puts the credentials in
+    // the form body and emits no call at all, so there is nothing there to shadow.
+    const cc = (credentialsIn: string, bindings: string[]) =>
+      envSpec({
+        vars: ["ZZBIND_ID", "ZZBIND_SECRET"],
+        local: "v",
+        auth: "client-credentials",
+        tokenUrl: "https://api.zzbind.test/oauth/token",
+        credentialsIn,
+        bindings,
+      });
+    expect(() => validateSpec(cc("basic", ["encodeBasicAuthHeader", "secret"]))).toThrow(
+      /encodeBasicAuthHeader/,
+    );
+    expect(() => validateSpec(cc("body", ["encodeBasicAuthHeader", "secret"]))).not.toThrow();
+  });
+});
