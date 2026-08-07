@@ -1047,11 +1047,54 @@ function preflightOutOfScope(input: unknown): void {
   }
 }
 
+/**
+ * Render an issue's path the way a human editing spec JSON by hand reads it: dotted keys,
+ * bracketed array indices — `tools[0].args.limit`, never `tools.0.args.limit`, in which the `0`
+ * could be an array position or an object key literally named `"0"`. JSON Pointer (`/tools/0/…`)
+ * makes the same distinction unambiguous for a machine; this string is for the person who wrote
+ * the JSON, so brackets read closer to how they typed the array index than a slash would.
+ *
+ * Module-private: `parseSpec` below is its only caller. An export is a contract, and this one
+ * has no second consumer.
+ */
+function formatIssuePath(path: readonly PropertyKey[]): string {
+  if (path.length === 0) return "(root)";
+  let out = "";
+  for (const seg of path) {
+    out +=
+      typeof seg === "number" ? `[${seg}]` : out.length === 0 ? String(seg) : `.${String(seg)}`;
+  }
+  return out;
+}
+
+/**
+ * Walk the RAW input (before Zod applies defaults or transforms) by an issue's own path, so the
+ * error line can show what was actually rejected there rather than only where. This reads the
+ * caller's input directly instead of Zod's own per-issue `input` (available via `{ reportInput:
+ * true }`) because that field reports the value at the schema level the issue's check RAN at —
+ * for a `superRefine` on `ToolSchema` that adds an issue at a relative path like
+ * `["query", 0, "arg"]`, Zod's `input` is the whole tool object, not the query entry's `arg`
+ * string. Re-resolving the issue's full (already-absolute) `path` against the original input
+ * lands on the same specific value for every issue kind, built-in or custom — verified against
+ * both in a scratch script before writing this.
+ */
+function valueAtPath(input: unknown, path: readonly PropertyKey[]): unknown {
+  let cur = input;
+  for (const seg of path) {
+    if (typeof cur !== "object" || cur === null) return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[seg];
+  }
+  return cur;
+}
+
 export function parseSpec(input: unknown): ConnectorSpec {
   preflightOutOfScope(input);
   const parsed = ConnectorSpecSchema.safeParse(input);
   if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
+    const lines = parsed.error.issues.map((i) => {
+      const received = JSON.stringify(valueAtPath(input, i.path));
+      return `  ${formatIssuePath(i.path)}: ${i.message} (received ${received})`;
+    });
     throw new Error(`Invalid connector spec:\n${lines.join("\n")}`);
   }
   const s = parsed.data;

@@ -258,7 +258,7 @@ describe("parseSpec", () => {
       ...MINIMAL,
       env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
     };
-    expect(() => parseSpec(bad)).toThrow(/env\.0\.local.*valid JS identifier/s);
+    expect(() => parseSpec(bad)).toThrow(/env\[0\]\.local.*valid JS identifier/s);
   });
 
   it("rejects an arg local that is not a valid JS identifier (F6)", () => {
@@ -307,6 +307,85 @@ describe("parseSpec", () => {
       const msg = (e as Error).message;
       expect(msg).toContain("per-page");
     }
+  });
+
+  it("points at the JSON path with bracketed indices, so an array position is distinguishable from a key", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/tools\[0\]\.args\.limit/);
+  });
+
+  it("reports every issue, not just the first", () => {
+    // Two independent bad values in unrelated subtrees — an invalid env local and an invalid
+    // arg bound — so this can only pass if parseSpec keeps collecting after the first failure.
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/env\[0\]\.local/);
+    expect(message).toMatch(/tools\[0\]\.args\.limit\.max/);
+  });
+
+  it("names the root for a top-level issue rather than printing an empty path", () => {
+    // ConnectorSpecSchema's own .refine (not a per-field one) fires here — the schema's
+    // "exactly one env entry" rule on a rest-kit spec with zero env entries — so its issue has
+    // no path segments at all, not merely a short one.
+    const bad = {
+      ...MINIMAL,
+      style: "rest-kit",
+      env: [],
+      fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+    };
+    expect(() => parseSpec(bad)).toThrow(/\(root\)/);
+  });
+
+  it("includes the received value, so a reader sees what was rejected and not only where", () => {
+    const bad = {
+      ...MINIMAL,
+      tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
+    };
+    expect(() => parseSpec(bad)).toThrow(/"ten"/);
+  });
+
+  it("keeps one line per issue, so a spec with several problems stays readable", () => {
+    const bad = {
+      ...MINIMAL,
+      env: [{ vars: ["X"], local: "probe-fetch", bindings: ["x"], required: true }],
+      tools: [
+        {
+          ...MINIMAL.tools[0],
+          args: {
+            limit: { type: "number", max: "ten" },
+            limit2: { type: "number", max: "twenty" },
+          },
+        },
+      ],
+    };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    const lines = message.split("\n");
+    // One header line ("Invalid connector spec:") plus exactly one line per issue — proves no
+    // issue's own text wraps onto a second physical line, which is what "readable at ten
+    // problems" actually requires.
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toContain("env[0].local");
+    expect(lines[2]).toContain("tools[0].args.limit.max");
+    expect(lines[3]).toContain("tools[0].args.limit2.max");
   });
 
   it("rejects auth: bearer with prefix", () => {
