@@ -704,11 +704,80 @@ export const EnvSchema = z
       "same module",
   });
 
+/**
+ * The sequences that END the construct a raw-spliced spec string is emitted into.
+ *
+ * Two fields are spliced with no quoting or escaping: `fetchHelper.base` goes into the fetch
+ * helper's URL template (`renderFetchHelper`, `renderWriteHelper` and `renderRestKitFetchHelper`
+ * in src/emit/server/fetch-helper.ts all render `` `<base>${path}` ``), and `serviceLabel` goes
+ * into the error message of the first two, into `renderTokenFunction`'s (src/emit/server/env.ts)
+ * and into a block comment in src/emit/wiring.ts.
+ *
+ * Both sequences are rejected in BOTH fields even though `base` reaches no block comment today.
+ * The rule belongs to the field rather than to the splice site, because splice sites are what
+ * emitter changes add: `serviceLabel`'s own comment site (src/emit/wiring.ts, Stage C) arrived a
+ * day after its two template sites, and nothing about that change would have prompted anyone to
+ * revisit a per-site rule.
+ */
+const RAW_SPLICE_TERMINATORS = [
+  { seq: "`", named: "a backtick", ends: "a template literal" },
+  { seq: "*/", named: "a block comment terminator", ends: "a block comment" },
+] as const;
+
+/**
+ * A spec string the emitter splices RAW into generated source, refused if it can end the
+ * construct it lands in.
+ *
+ * This is the only place that catches it. The emitters quote nothing (proved on the emitter
+ * itself by "splices `base` raw" in test/emit/server/fetch-helper.test.ts), and the resulting
+ * file is VALID TypeScript — `"https://api.zz.test/v1` + String(Date.now()) + `"` as a base emits
+ * a call expression between two literals, which Biome reformats and `tsc --noEmit --strict`
+ * accepts. Every gate downstream of the schema therefore reports green. Rejecting at the schema
+ * rather than at the splice sites is also what covers all three ways a spec is authored at once —
+ * hand-written, `--from-connector`, `--from-openapi`.
+ *
+ * **`${` is deliberately NOT rejected, on two independent grounds.**
+ *
+ * Measured across the 22 fixtures: a backtick appears 0 times in either field, and a block-comment
+ * terminator 0 times — which this docstring cannot spell out literally, the hazard in miniature.
+ * So this refinement moves nothing — but `${` appears in 7, three of them the byte-locked
+ * datadog, grafana and sentry, because `${env.X}` in `base` is a documented feature
+ * (`resolveEnvRefs` rewrites it to an accessor call). Rejecting it would fail diff:golden on the
+ * first run. `bun run reach --baseline` is what says the same of the specs the deriver
+ * reconstructs from the corpus.
+ *
+ * And it does not need rejecting. A `${` the emitter does not resolve produces an UNDEFINED
+ * IDENTIFIER in the generated package, which that package's own `tsc --noEmit` reports. A
+ * backtick is the silent one precisely because what it produces still compiles — loud versus
+ * silent is the line this rule is drawn on, and a later widening should be argued on that line
+ * rather than on which characters look dangerous.
+ */
+function rawSplicedString(field: string, sites: string) {
+  return z
+    .string()
+    .min(1)
+    .superRefine((v, ctx) => {
+      for (const t of RAW_SPLICE_TERMINATORS) {
+        if (!v.includes(t.seq)) continue;
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `"${field}" contains ${t.named} (${JSON.stringify(t.seq)}), which ends ${t.ends}. ` +
+            `This field is spliced raw into generated source (${sites}), so a sequence that ` +
+            "closes the construct it lands in stops being text: everything after it is emitted " +
+            "as code, and the result still compiles, lints and typechecks, so nothing " +
+            "downstream reports it. Both sequences are refused in every raw-spliced field, " +
+            "including where the field does not reach that construct today.",
+        });
+      }
+    });
+}
+
 export const FetchHelperSchema = z
   .strictObject({
     local: identifierField(),
     /** Template over ${env.X}, e.g. "https://api.newrelic.com" or "https://${env.siteHost}". */
-    base: z.string().min(1),
+    base: rawSplicedString("fetchHelper.base", "the fetch helper's URL template literal"),
     /**
      * Hoist `base` to a module-scope `const <name> = "<base>";` and reference that const
      * from the emitted helper(s) instead of inlining the literal. mercury spells it `BASE`,
@@ -754,7 +823,10 @@ export const ConnectorSpecSchema = z
     displayName: z.string().min(1),
     id: z.string().min(1).optional(),
     description: z.string().min(1),
-    serviceLabel: z.string().min(1),
+    serviceLabel: rawSplicedString(
+      "serviceLabel",
+      "an emitted error message's template literal and a block comment in the Gateway wiring",
+    ),
     style: z.enum(["rest-kit", "hand-rolled", "read-only-kit"]).default("rest-kit"),
     /**
      * How a REST tool's handler is written. `"concise"` is an expression-bodied arrow

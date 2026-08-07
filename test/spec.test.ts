@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PARTIAL_MARKER } from "../src/derive/from-connector.ts";
 import { parseSpec } from "../src/spec.ts";
 
@@ -1518,4 +1520,73 @@ describe("ToolSchema query parameters", () => {
     const spec = withQuery({ args: {} });
     expect(spec.tools[0]!.query).toBeUndefined();
   });
+});
+
+describe("strings the emitter splices raw into generated source", () => {
+  // The payload that reproduced the hole: it closes renderFetchHelper's URL template literal,
+  // runs a call, and reopens the literal so `${path}` still lands inside one. The emitted file
+  // is valid TypeScript, Biome reformats it happily and `tsc --noEmit --strict` passes it —
+  // test/emit/server/fetch-helper.ts's "splices `base` raw" test holds that half.
+  const CLOSES_TEMPLATE = "https://api.zz.test/v1` + String(Date.now()) + `";
+  // A serviceLabel reaches a block comment in src/emit/wiring.ts, where these two characters
+  // are the ones that end the construct rather than a backtick.
+  const CLOSES_COMMENT = "Zz */ export const pwned = 1; /*";
+
+  const withBase = (base: string) => ({
+    ...MINIMAL,
+    fetchHelper: { ...MINIMAL.fetchHelper, base },
+  });
+
+  it("rejects a backtick in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase(CLOSES_TEMPLATE))).toThrow(/fetchHelper\.base.*backtick/s);
+  });
+
+  it("rejects a backtick in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: "New `Relic`" })).toThrow(
+      /serviceLabel.*backtick/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in fetchHelper.base, naming the field", () => {
+    expect(() => parseSpec(withBase("https://api.zz.test/*/v1*/"))).toThrow(
+      /fetchHelper\.base.*block comment/s,
+    );
+  });
+
+  it("rejects a block-comment terminator in serviceLabel, naming the field", () => {
+    expect(() => parseSpec({ ...MINIMAL, serviceLabel: CLOSES_COMMENT })).toThrow(
+      /serviceLabel.*block comment/s,
+    );
+  });
+
+  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 22
+  // fixtures use it, three of them byte-locked — and a `${` produces an UNDEFINED IDENTIFIER
+  // in the generated package rather than working code, which that package's own tsc reports.
+  // A later tightening that folded `${` into the rejection above would break the feature, so
+  // it fails here instead of in diff:golden.
+  it("still accepts ${env.X} in fetchHelper.base", () => {
+    const spec = parseSpec({
+      ...withBase("https://${env.siteHost}/api"),
+      env: [{ vars: ["ZZ_SITE"], local: "siteHost", bindings: ["h"], required: true }],
+      fetchHelper: {
+        local: "nrGet",
+        base: "https://${env.siteHost}/api",
+        inlineHeaders: { Accept: "application/json" },
+      },
+    });
+    expect(spec.fetchHelper.base).toBe("https://${env.siteHost}/api");
+  });
+
+  // diff:golden proves this too, but only against an AGPL checkout and only as part of a full
+  // byte diff. This fails in milliseconds and names the fixture that stopped parsing.
+  it.each(["newrelic", "datadog", "grafana", "sentry"])(
+    "leaves the byte-locked %s fixture parseable",
+    (name) => {
+      const raw = readFileSync(
+        join(import.meta.dir, "..", "fixtures", `${name}.spec.json`),
+        "utf8",
+      );
+      expect(() => parseSpec(JSON.parse(raw))).not.toThrow();
+    },
+  );
 });
