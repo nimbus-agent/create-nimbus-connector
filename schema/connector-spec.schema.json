@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nimbus-agent/create-nimbus-connector/main/schema/connector-spec.schema.json",
+  "title": "ConnectorSpec",
+  "description": "The spec file create-nimbus-connector reads: the shape a human writes, before parseSpec applies defaults and transforms. Refinements enforced by `parseSpec` and `validateSpec` (cross-field rules, reserved identifiers, style-specific requirements) cannot be expressed in JSON Schema and are **not** represented here. A spec that validates against this schema may still be rejected by the generator.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "serviceLabel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "style": {
+      "default": "rest-kit",
+      "type": "string",
+      "enum": [
+        "rest-kit",
+        "hand-rolled",
+        "read-only-kit"
+      ]
+    },
+    "handlerStyle": {
+      "default": "concise",
+      "type": "string",
+      "enum": [
+        "concise",
+        "block"
+      ]
+    },
+    "argsSchemaStyle": {
+      "default": "inline",
+      "type": "string",
+      "enum": [
+        "inline",
+        "expanded"
+      ]
+    },
+    "network": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "syncInterval": {
+      "default": 300,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "minNimbusVersion": {
+      "default": "0.2.0",
+      "type": "string"
+    },
+    "env": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "vars": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "local": {
+            "type": "string",
+            "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+          },
+          "bindings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": {
+            "default": false,
+            "type": "boolean"
+          },
+          "default": {
+            "type": "string"
+          },
+          "transform": {
+            "type": "string",
+            "enum": [
+              "stripTrailingSlash",
+              "trimTrailingSlashFn"
+            ]
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "auth": {
+            "type": "string",
+            "enum": [
+              "bearer",
+              "basic",
+              "headers",
+              "client-credentials"
+            ]
+          },
+          "headerNames": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "tokenLocal": {
+            "type": "string",
+            "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+          },
+          "tokenUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "credentialsIn": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "body"
+            ]
+          }
+        },
+        "required": [
+          "vars",
+          "local"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "fetchHelper": {
+      "type": "object",
+      "properties": {
+        "local": {
+          "type": "string",
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+        },
+        "base": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseConst": {
+          "type": "string",
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+        },
+        "headers": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inlineHeaders": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "normalizeLeadingSlash": {
+          "default": false,
+          "type": "boolean"
+        },
+        "jsonFallbackRaw": {
+          "default": false,
+          "type": "boolean"
+        },
+        "staticPathStyle": {
+          "default": "quoted",
+          "type": "string",
+          "enum": [
+            "quoted",
+            "template"
+          ]
+        }
+      },
+      "required": [
+        "local",
+        "base"
+      ],
+      "additionalProperties": false
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "optional": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "default": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "local": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+                },
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                },
+                "int": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "path": {
+            "type": "string"
+          },
+          "query": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "arg": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "omitWhen": {
+                  "type": "string",
+                  "enum": [
+                    "absent",
+                    "empty"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "arg"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "impl": {
+            "default": "rest",
+            "type": "string",
+            "enum": [
+              "rest",
+              "get",
+              "stub",
+              "search"
+            ]
+          },
+          "method": {
+            "default": "GET",
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          },
+          "effect": {
+            "default": "read",
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "delete"
+            ]
+          },
+          "body": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "rows": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxLimit": {
+            "default": 100,
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "export": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              },
+              "fields": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "tags": {
+                          "type": "string",
+                          "enum": [
+                            "text",
+                            "objects"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "tags"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "tags": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "export"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "name",
+    "displayName",
+    "description",
+    "serviceLabel",
+    "fetchHelper"
+  ],
+  "additionalProperties": false
+}

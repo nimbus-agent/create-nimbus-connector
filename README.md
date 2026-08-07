@@ -247,6 +247,26 @@ They are reserved **unconditionally**, not only for specs that use the feature �
 - **`token`** — a spec that named an env `local` `"token"` and validated under 0.2.2 is now rejected. Rename the local; nothing else changes.
 - **`root`** — an ordinary word, and a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`. A fetch helper named `root` would emit `const root = await root(…)`, a use-before-declaration error rather than a shadow.
 
+### Editor support: the published JSON Schema, and what it cannot check
+
+The spec language is published as a JSON Schema at [`schema/connector-spec.schema.json`](./schema/connector-spec.schema.json), generated from `ConnectorSpecSchema` itself — `bun run schema` rewrites it, and `test/schema.test.ts` byte-compares the checked-in file against a fresh build, so the document cannot drift from the language it describes. It ships in the npm package too, at `node_modules/create-nimbus-connector/schema/connector-spec.schema.json`.
+
+**Reference it with an editor-side mapping, not with a `$schema` key inside the spec file.** `ConnectorSpecSchema` is a `z.strictObject`, so a spec carrying `"$schema": …` is refused with `Unrecognized key: "$schema"` — that route would make the file validate in the editor and fail at the CLI, which is the opposite of the point. In VS Code, map the glob instead:
+
+```json
+// .vscode/settings.json
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["*.spec.json"],
+      "url": "https://raw.githubusercontent.com/nimbus-agent/create-nimbus-connector/main/schema/connector-spec.schema.json"
+    }
+  ]
+}
+```
+
+**And read what it is worth before trusting it.** Refinements enforced by `parseSpec` and `validateSpec` (cross-field rules, reserved identifiers, style-specific requirements) cannot be expressed in JSON Schema and are **not** represented here. A spec that validates against this schema may still be rejected by the generator. An argument declaring `default` without `optional: true`, a `fetchHelper.base` of `https://api.acme.test/${(() => Date.now())()}` — an interpolation spliced raw into the generated source and evaluated on every request — and an env `local` named `token` are each green in an editor and refused by the CLI. Completion and structural checking are what the schema buys you; `bun src/cli.ts --spec <path> --dry-run` is what tells you the spec is actually accepted.
+
 ## CLI reference
 
 ```
