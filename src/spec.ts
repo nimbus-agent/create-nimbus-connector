@@ -1054,6 +1054,12 @@ function preflightOutOfScope(input: unknown): void {
  * makes the same distinction unambiguous for a machine; this string is for the person who wrote
  * the JSON, so brackets read closer to how they typed the array index than a slash would.
  *
+ * The first segment gets NO leading dot, and that arm needs an ANCHORED assertion to be tested
+ * at all: dropping it yields `.tools[0].args.limit.max`, which still CONTAINS
+ * `tools[0].args.limit.max`, so every unanchored `toContain`/`toMatch` in test/spec.test.ts
+ * stayed green when it was mutated out. The assertions that guard it match `/^ {2}…/` against a
+ * line, pinning the indent the line actually starts with.
+ *
  * Module-private: `parseSpec` below is its only caller. An export is a contract, and this one
  * has no second consumer.
  */
@@ -1087,14 +1093,41 @@ function valueAtPath(input: unknown, path: readonly PropertyKey[]): unknown {
   return cur;
 }
 
+/**
+ * How much of a rejected value an error line shows.
+ *
+ * A root-level issue has an EMPTY path, so the value at it is the whole spec: an unrecognized
+ * top-level key printed the entire file back on one line — 387 characters for the smallest spec
+ * this repo's tests use, 3,169 for `fixtures/dependencytrack.spec.json`, and unbounded for a
+ * spec a user wrote. The received value is here to identify what was rejected, not to reproduce
+ * it, and 120 characters is well past every scalar a spec writes (a `name`, a `local`, a `base`)
+ * while cutting an object dump down to something that still reads as one line.
+ */
+const RECEIVED_MAX_CHARS = 120;
+
+/**
+ * The `(…)` half of an error line: what was at the issue's path, rendered as JSON.
+ *
+ * The `undefined` branch is not a defensive shrug. `JSON.stringify` returns `undefined` — the
+ * value, not the string — for everything JSON cannot represent, and a MISSING REQUIRED KEY is
+ * exactly that case, and the commonest failure in a hand-written spec. Interpolated, it printed
+ * the bare token `undefined`: the one rendering on these lines that is not a JSON literal,
+ * sitting where `"ten"`, `null` and `42` all appear as themselves. It says so in words instead.
+ */
+function formatReceived(input: unknown, path: readonly PropertyKey[]): string {
+  const json = JSON.stringify(valueAtPath(input, path));
+  if (json === undefined) return "no JSON value there — usually a missing key";
+  const shown = json.length > RECEIVED_MAX_CHARS ? `${json.slice(0, RECEIVED_MAX_CHARS)}…` : json;
+  return `received ${shown}`;
+}
+
 export function parseSpec(input: unknown): ConnectorSpec {
   preflightOutOfScope(input);
   const parsed = ConnectorSpecSchema.safeParse(input);
   if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => {
-      const received = JSON.stringify(valueAtPath(input, i.path));
-      return `  ${formatIssuePath(i.path)}: ${i.message} (received ${received})`;
-    });
+    const lines = parsed.error.issues.map(
+      (i) => `  ${formatIssuePath(i.path)}: ${i.message} (${formatReceived(input, i.path)})`,
+    );
     throw new Error(`Invalid connector spec:\n${lines.join("\n")}`);
   }
   const s = parsed.data;

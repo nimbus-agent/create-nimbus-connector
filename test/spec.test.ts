@@ -314,7 +314,11 @@ describe("parseSpec", () => {
       ...MINIMAL,
       tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
     };
-    expect(() => parseSpec(bad)).toThrow(/tools\[0\]\.args\.limit/);
+    // ANCHORED, and the anchor is half the assertion. `/tools\[0\]\.args\.limit/` on its own
+    // matches ".tools[0].args.limit" just as happily — which is what formatIssuePath emits with
+    // its first-segment branch removed, and why that mutation left the whole suite green.
+    // `^ {2}` pins the two-space indent the line genuinely starts with, so a leading dot fails.
+    expect(() => parseSpec(bad)).toThrow(/^ {2}tools\[0\]\.args\.limit\.max: /m);
   });
 
   it("reports every issue, not just the first", () => {
@@ -332,8 +336,10 @@ describe("parseSpec", () => {
     } catch (e) {
       message = (e as Error).message;
     }
-    expect(message).toMatch(/env\[0\]\.local/);
-    expect(message).toMatch(/tools\[0\]\.args\.limit\.max/);
+    // Anchored for the same reason as the test above: an unanchored match cannot tell
+    // "env[0].local" from ".env[0].local".
+    expect(message).toMatch(/^ {2}env\[0\]\.local: /m);
+    expect(message).toMatch(/^ {2}tools\[0\]\.args\.limit\.max: /m);
   });
 
   it("names the root for a top-level issue rather than printing an empty path", () => {
@@ -354,7 +360,51 @@ describe("parseSpec", () => {
       ...MINIMAL,
       tools: [{ ...MINIMAL.tools[0], args: { limit: { type: "number", max: "ten" } } }],
     };
-    expect(() => parseSpec(bad)).toThrow(/"ten"/);
+    expect(() => parseSpec(bad)).toThrow(/\(received "ten"\)/);
+  });
+
+  it("says so in words when nothing is at the path, rather than printing a bare `undefined`", () => {
+    // A missing required key is the commonest failure in a hand-written spec, and it is the one
+    // value JSON.stringify cannot render: it returns `undefined` (the value, not the string), so
+    // the line used to end `(received undefined)` — a bare token where every other value appears
+    // as a JSON literal (`"ten"`, `null`, `42`).
+    const { description: _dropped, ...bad } = MINIMAL;
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(
+      /^ {2}description: .*\(no JSON value there — usually a missing key\)$/m,
+    );
+    expect(message).not.toContain("(received undefined)");
+  });
+
+  it("caps the received value, so a root-level issue does not print the whole spec back", () => {
+    // A root-level issue's path is EMPTY, so the value at it is the entire spec. An unrecognized
+    // top-level key — `$schema`, the one an author reaches for first — dumped all ~500 characters
+    // of this spec onto one line, and a real spec is larger still
+    // (fixtures/dependencytrack.spec.json is 3,169 characters once compacted).
+    const bad = { ...MINIMAL, $schema: "https://example.test/connector-spec.schema.json" };
+    let message = "";
+    try {
+      parseSpec(bad);
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/^ {2}\(root\): Unrecognized key: "\$schema" \(received \{/m);
+
+    const received = /\(received (.*)\)$/m.exec(message)?.[1];
+    // Exactly the cap plus one ellipsis. Asserting the LENGTH, not just the presence of the
+    // ellipsis, is what makes a change to the cap fail in EITHER direction: lower it and this is
+    // shorter, raise it past the ~500-character dump and nothing is truncated at all.
+    expect(received).toHaveLength(121);
+    expect(received?.endsWith("…")).toBe(true);
+    // And the cap is conditional, not a blanket slice — the short-value test above still sees
+    // `(received "ten")` whole.
   });
 
   it("keeps one line per issue, so a spec with several problems stays readable", () => {
@@ -383,9 +433,12 @@ describe("parseSpec", () => {
     // issue's own text wraps onto a second physical line, which is what "readable at ten
     // problems" actually requires.
     expect(lines).toHaveLength(4);
-    expect(lines[1]).toContain("env[0].local");
-    expect(lines[2]).toContain("tools[0].args.limit.max");
-    expect(lines[3]).toContain("tools[0].args.limit2.max");
+    // `toMatch` against a single line with `^` anchoring, not `toContain` — each of these is
+    // the first segment of its path, so the leading-dot suppression is exactly what an
+    // unanchored substring test cannot see.
+    expect(lines[1]).toMatch(/^ {2}env\[0\]\.local: /);
+    expect(lines[2]).toMatch(/^ {2}tools\[0\]\.args\.limit\.max: /);
+    expect(lines[3]).toMatch(/^ {2}tools\[0\]\.args\.limit2\.max: /);
   });
 
   it("rejects auth: bearer with prefix", () => {
