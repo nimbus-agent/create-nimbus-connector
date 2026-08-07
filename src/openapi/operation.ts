@@ -33,7 +33,8 @@
  *      body-on-get                 a GET carrying a request body
  *      argument-name               a parameter name no slug can make a JS identifier
  *      argument-name-collision     two names slugifying onto one argument
- *      reserved-argument-name      a slug landing on `RESERVED_IDENTIFIERS`
+ *      reserved-argument-name      a slug landing on `RESERVED_IDENTIFIERS`, or on a JavaScript
+ *                                  reserved word
  * 3. **Order is bytes.** `src/emit/server/args.ts` iterates `Object.entries(args)`, and
  *    `renderBodyExpr` builds its default body from `Object.keys(tool.args)`, so the order
  *    arguments are inserted here is the field order of the emitted `z.object({ … })` and of the
@@ -55,7 +56,7 @@
  * one schema is therefore enough to re-verify the condition, which a list restated here would
  * only invite going stale.
  */
-import { canOmitQueryValue } from "../spec.ts";
+import { canOmitQueryValue, isReservedWord } from "../spec.ts";
 import { RESERVED_IDENTIFIERS } from "../validate.ts";
 import type { Operation } from "./document.ts";
 import {
@@ -901,6 +902,15 @@ function mapBodyProperties(rootSchema: unknown, c: Collected): MappedProperty[] 
  * on a `RESERVED_IDENTIFIERS` entry produces a spec that fails this project's own `validateSpec`,
  * which is strictly worse than a refusal naming the parameter.
  *
+ * A slug that is a JavaScript RESERVED WORD is the same failure a field over, and it arrives by
+ * the one route `slugifyArgName` cannot see: `class`, `default`, `in`, `for` and `new` are already
+ * valid identifiers by that function's regex, so they are returned untouched and never slugified.
+ * Refused here on the same terms as its neighbour, and NOT auto-suffixed — the same choice, made
+ * for the same reason, as the collision arm below argues for itself. A rename would be lossless
+ * (the `query` entry carries the document's spelling) and it is the option to revisit if reach
+ * ever justifies it; what rules it out today is that a suffix is a name the document does not
+ * contain, and the refusal names the parameter the author actually wrote.
+ *
  * **The collision refusal is a CHOICE, and the conservative one.** It also catches a shape that is
  * legal OpenAPI — the same name once `in: "path"` and once `in: "query"` — and that case could be
  * disambiguated instead, on the same argument that justifies slugifying at all: the argument name
@@ -925,6 +935,15 @@ function claimArgument(
       "reserved-argument-name",
       `${owner} maps onto the argument name "${slug}", which the emitter itself declares at ` +
         "module scope (RESERVED_IDENTIFIERS in src/validate.ts). Rename it in the document.",
+    );
+    return;
+  }
+  if (isReservedWord(slug)) {
+    refuse(
+      c,
+      "reserved-argument-name",
+      `${owner} maps onto the argument name "${slug}", which is a JavaScript reserved word and ` +
+        "cannot be written in the `const` a hoisted argument declares. Rename it in the document.",
     );
     return;
   }

@@ -119,6 +119,20 @@ const RENAME_HINT =
   "Rename it — an emitted identifier is internal to the generated package and appears nowhere " +
   "on the wire.";
 
+/**
+ * Whether a name is one of the words above — exported for the ONE caller that has to ask before
+ * a spec exists.
+ *
+ * `src/openapi/operation.ts` builds argument names out of a document and refuses the bad ones
+ * where the document names them, so `--from-openapi` reports the parameter the user wrote rather
+ * than a path into an assembled spec they never saw. It cannot call `parseSpec` to find out — by
+ * then the position is lost. A fourth private copy of the word list is exactly the mistake the
+ * arg-key rule already made with the regex, so the list stays here and the question is exported.
+ */
+export function isReservedWord(name: string): boolean {
+  return RESERVED_WORDS.has(name);
+}
+
 function identifierField(
   regexMessage = "must be a valid JS identifier",
   hint: string = RENAME_HINT,

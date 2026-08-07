@@ -469,6 +469,32 @@ describe("argument names", () => {
     expect(detailOf(refusals, "reserved-argument-name")).toContain("url");
   });
 
+  it("refuses a parameter named for a JavaScript reserved word, where the document names it", () => {
+    // `class` is already an identifier by slugifyArgName's regex, so it is returned UNTOUCHED and
+    // reaches the spec as an args key. Before this refusal existed the document mapped, and the
+    // failure arrived from parseSpec as `tools[0].args.class` — a path into an assembled spec the
+    // author never wrote, with a remedy ("rename the argument") they cannot apply to it.
+    const refusals = mustRefuse(
+      onePath("/widgets", "get", {
+        parameters: [{ name: "class", in: "query", schema: { type: "string" } }],
+      }),
+    );
+    expect(kindsOf(refusals)).toEqual(["reserved-argument-name"]);
+    expect(detailOf(refusals, "reserved-argument-name")).toContain("class");
+    expect(detailOf(refusals, "reserved-argument-name")).toContain("reserved word");
+  });
+
+  it("still maps a parameter whose name is only a TypeScript soft keyword", () => {
+    // The other side of the rule, and the one that costs reach if it is got wrong: `type` is a
+    // perfectly ordinary parameter name and a perfectly ordinary identifier.
+    const mapped = mustMap(
+      onePath("/widgets", "get", {
+        parameters: [{ name: "type", in: "query", schema: { type: "string" } }],
+      }),
+    );
+    expect(Object.keys(argsOf(mapped))).toEqual(["type"]);
+  });
+
   it("refuses a name no slug can turn into an identifier", () => {
     const refusals = mustRefuse(
       onePath("/widgets", "get", {
