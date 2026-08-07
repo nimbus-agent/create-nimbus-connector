@@ -73,6 +73,25 @@ const BASE_SPEC = {
   ],
 };
 
+/**
+ * Merged `z.object(...)` schemas a search `reg()` call may not carry: what is wrong with the
+ * schema, and the schema line that is wrong. Everything else about the call is held fixed.
+ */
+const REFUSED_MERGED_SCHEMAS: ReadonlyArray<readonly [string, string]> = [
+  [
+    "whose trailing fields are not exactly query/limit",
+    "  z.object({ scope: z.string(), other: z.string() }),",
+  ],
+  [
+    "whose limit field does not match the fixed shape",
+    "  z.object({ scope: z.string(), query: z.string().min(1), limit: z.number().optional() }),",
+  ],
+  [
+    "recovering zero own args — the emitter would write searchToolInputSchema(N) instead",
+    "  z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(100).optional() }),",
+  ],
+];
+
 describe("recognizeSearchTool", () => {
   it("recovers rows, maxLimit and filter.export from the rows-envelope form", () => {
     const call = regCallFor(BASE_SPEC, "zzsearchunit_rows");
@@ -183,42 +202,14 @@ describe("recognizeSearchTool", () => {
     expect(recognizeSearchTool(call as AstNode, "zzGet")).toBeUndefined();
   });
 
-  it("refuses a merged z.object schema whose trailing fields are not exactly query/limit", () => {
+  // One assertion over the table above: the three differ in the schema line and nothing else, and
+  // the row's own name is the part that carries the reason.
+  it.each(REFUSED_MERGED_SCHEMAS)("refuses a merged z.object schema %s", (_name, schemaLine) => {
     const source = [
       "reg(",
       '  "t",',
       '  "d",',
-      "  z.object({ scope: z.string(), other: z.string() }),",
-      "  async (p) => {",
-      '    return matchesResult(await zzGet("/v1/items"), filterX, p);',
-      "  },",
-      ");",
-    ].join("\n");
-    const call = expressionOf(parseModule(source)[0]);
-    expect(recognizeSearchTool(call as AstNode, "zzGet")).toBeUndefined();
-  });
-
-  it("refuses a merged z.object schema whose limit field does not match the fixed shape", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ scope: z.string(), query: z.string().min(1), limit: z.number().optional() }),",
-      "  async (p) => {",
-      '    return matchesResult(await zzGet("/v1/items"), filterX, p);',
-      "  },",
-      ");",
-    ].join("\n");
-    const call = expressionOf(parseModule(source)[0]);
-    expect(recognizeSearchTool(call as AstNode, "zzGet")).toBeUndefined();
-  });
-
-  it("refuses a merged z.object schema recovering zero own args — the emitter would write searchToolInputSchema(N) instead", () => {
-    const source = [
-      "reg(",
-      '  "t",',
-      '  "d",',
-      "  z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(100).optional() }),",
+      schemaLine,
       "  async (p) => {",
       '    return matchesResult(await zzGet("/v1/items"), filterX, p);',
       "  },",

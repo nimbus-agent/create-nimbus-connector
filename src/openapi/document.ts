@@ -379,64 +379,92 @@ function collect(doc: OpenApiDocument): Listing {
   /** operationId → where it was first seen, so a duplicate can name both sites. */
   const seen = new Map<string, string>();
 
+  // The two loops classify; the two builders below construct. Keeping the construction inline made
+  // every guard in it three levels deep, which is what the nesting reads as: the decision this
+  // function makes is "skipped, listed, or ignored", and that is now all it says.
   for (const [path, item] of Object.entries(paths)) {
     const pathParameters = readPathParameters(item, path);
     for (const key of Object.keys(item)) {
       const reason = skipReasonFor(key);
       if (reason !== undefined) {
-        const operationId = skippedOperationId(item[key]);
-        skipped.push({
-          reason,
-          method: key,
-          path,
-          // Spread rather than `operationId: undefined`: exactOptionalPropertyTypes, and the key
-          // set is then the one a hand-written SkippedOperation would carry.
-          ...(operationId === undefined ? {} : { operationId }),
-          detail: skipDetailFor(reason, key),
-        });
+        skipped.push(skippedEntryFor(item[key], reason, key, path));
         continue;
       }
       if (!isMethod(key)) continue;
-
-      const method = key.toUpperCase() as Operation["method"];
-      const where = `${method} ${path}`;
-      // OpenApiPathItemSchema deliberately declares no method keys, so that document order
-      // survives the parse — see its note. The guarantee is taken here instead: the operation is
-      // validated at the moment it is selected, and `raw` stays the value the document held.
-      const raw = item[key];
-      const parsed = OpenApiOperationSchema.safeParse(raw);
-      if (!parsed.success) {
-        refuse("operation-shape", `${where}: ${parsed.error.issues[0]?.message ?? "unreadable"}.`);
-      }
-
-      const operationId = parsed.data.operationId;
-      if (operationId === undefined || operationId.trim() === "") {
-        refuse(
-          "missing-operation-id",
-          `${where} has no operationId. --op selects on it, and a generated fallback would be a ` +
-            "name this document does not contain.",
-        );
-      }
-      const first = seen.get(operationId);
-      if (first !== undefined) {
-        refuse(
-          "duplicate-operation-id",
-          `${operationId} names both ${first} and ${where}; --op could not tell them apart.`,
-        );
-      }
-      seen.set(operationId, where);
-
-      operations.push({
-        operationId,
-        method,
-        path,
-        ...(parsed.data.summary === undefined ? {} : { summary: parsed.data.summary }),
-        raw,
-        pathParameters,
-      });
+      operations.push(operationFor(item[key], key, path, pathParameters, seen));
     }
   }
   return { operations, skipped };
+}
+
+/** One skipped method key as a listing entry. */
+function skippedEntryFor(
+  raw: unknown,
+  reason: SkippedOperation["reason"],
+  key: string,
+  path: string,
+): SkippedOperation {
+  const operationId = skippedOperationId(raw);
+  return {
+    reason,
+    method: key,
+    path,
+    // Spread rather than `operationId: undefined`: exactOptionalPropertyTypes, and the key
+    // set is then the one a hand-written SkippedOperation would carry.
+    ...(operationId === undefined ? {} : { operationId }),
+    detail: skipDetailFor(reason, key),
+  };
+}
+
+/**
+ * One listable method key as an Operation, refusing where the document leaves `--op` nothing to
+ * select on.
+ *
+ * `seen` is threaded in rather than checked by the caller because the duplicate refusal names BOTH
+ * sites: the map has to be read and written at the point the second one is built.
+ */
+function operationFor(
+  raw: unknown,
+  key: string,
+  path: string,
+  pathParameters: readonly unknown[],
+  seen: Map<string, string>,
+): Operation {
+  const method = key.toUpperCase() as Operation["method"];
+  const where = `${method} ${path}`;
+  // OpenApiPathItemSchema deliberately declares no method keys, so that document order
+  // survives the parse — see its note. The guarantee is taken here instead: the operation is
+  // validated at the moment it is selected, and `raw` stays the value the document held.
+  const parsed = OpenApiOperationSchema.safeParse(raw);
+  if (!parsed.success) {
+    refuse("operation-shape", `${where}: ${parsed.error.issues[0]?.message ?? "unreadable"}.`);
+  }
+
+  const operationId = parsed.data.operationId;
+  if (operationId === undefined || operationId.trim() === "") {
+    refuse(
+      "missing-operation-id",
+      `${where} has no operationId. --op selects on it, and a generated fallback would be a ` +
+        "name this document does not contain.",
+    );
+  }
+  const first = seen.get(operationId);
+  if (first !== undefined) {
+    refuse(
+      "duplicate-operation-id",
+      `${operationId} names both ${first} and ${where}; --op could not tell them apart.`,
+    );
+  }
+  seen.set(operationId, where);
+
+  return {
+    operationId,
+    method,
+    path,
+    ...(parsed.data.summary === undefined ? {} : { summary: parsed.data.summary }),
+    raw,
+    pathParameters,
+  };
 }
 
 /**

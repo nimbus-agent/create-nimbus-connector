@@ -491,7 +491,7 @@ function collapseSecondFileBlockers(
     [second, first],
   ] as const) {
     const source = importSource(imp);
-    if (source === undefined || !source.startsWith("./")) continue;
+    if (!source?.startsWith("./")) continue;
     const names = importNames(imp);
     const calleeName = identName(calleeOf(expressionOf(call)));
     if (names === undefined || calleeName === undefined) continue;

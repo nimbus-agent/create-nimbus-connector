@@ -1470,8 +1470,11 @@ function formatIssuePath(path: readonly PropertyKey[]): string {
   if (path.length === 0) return "(root)";
   let out = "";
   for (const seg of path) {
-    out +=
-      typeof seg === "number" ? `[${seg}]` : out.length === 0 ? String(seg) : `.${String(seg)}`;
+    if (typeof seg === "number") {
+      out += `[${seg}]`;
+    } else {
+      out += out.length === 0 ? String(seg) : `.${String(seg)}`;
+    }
   }
   return out;
 }

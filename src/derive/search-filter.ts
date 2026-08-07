@@ -96,6 +96,25 @@ function matchTitleAlias(stmt: AstNode): string | undefined {
  * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
  * `renderEntry`.
  */
+/**
+ * A literal array whose every element is a string literal, or `undefined` if either half fails.
+ *
+ * The two callers — `matchEntryCall`'s `nestedString` path segments and `matchKeyedFilter`'s
+ * `fieldsFromKeys` keys — carried a byte-identical copy of this loop. They are the only two arrays
+ * the emitter writes into a filter file, so one reader covers the construct rather than a subset.
+ */
+function stringArrayElements(node: AstNode | undefined): string[] | undefined {
+  const elements = arrayElements(node);
+  if (elements === undefined) return undefined;
+  const out: string[] = [];
+  for (const el of elements) {
+    const s = stringLit(el);
+    if (s === undefined) return undefined;
+    out.push(s);
+  }
+  return out;
+}
+
 function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const stringArgs = callTo(node, "stringField", 2);
   if (stringArgs !== undefined) {
@@ -105,14 +124,8 @@ function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const nestedArgs = callTo(node, "nestedString", 2);
   if (nestedArgs !== undefined) {
     if (!isIdent(nestedArgs[0], "row")) return undefined;
-    const elements = arrayElements(nestedArgs[1]);
-    if (elements === undefined) return undefined;
-    const path: string[] = [];
-    for (const el of elements) {
-      const s = stringLit(el);
-      if (s === undefined) return undefined;
-      path.push(s);
-    }
+    const path = stringArrayElements(nestedArgs[1]);
+    if (path === undefined) return undefined;
     // SearchFilterSchema's own superRefine (src/spec.ts) rejects a "path" entry with fewer
     // than two segments — a one-segment path is indistinguishable from the plain-key form, so
     // the emitter never writes one and this recognizer must not accept it either.
@@ -233,14 +246,8 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
   const innerArgs = callToAny(outerArgs[0], "fieldsFromKeys");
   if (innerArgs === undefined || innerArgs.length < 1 || innerArgs.length > 2) return undefined;
 
-  const elements = arrayElements(innerArgs[0]);
-  if (elements === undefined) return undefined;
-  const keys: string[] = [];
-  for (const el of elements) {
-    const s = stringLit(el);
-    if (s === undefined) return undefined;
-    keys.push(s);
-  }
+  const keys = stringArrayElements(innerArgs[0]);
+  if (keys === undefined) return undefined;
 
   let tags = false;
   if (innerArgs.length === 2) {
@@ -248,7 +255,7 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
     // identical `tags` flag and re-emits the bare form.
     const props = bareKeyedProps(innerArgs[1]);
     const only = props?.length === 1 ? props[0] : undefined;
-    if (only === undefined || only.key !== "tags" || boolLit(only.value) !== true) {
+    if (only?.key !== "tags" || boolLit(only.value) !== true) {
       return undefined;
     }
     tags = true;
@@ -459,6 +466,29 @@ function matchOneFilter(statements: readonly AstNode[], i: number): FilterMatch 
  * `all-identical` byte-diff tier — a claim about round-tripping every file `generate()` produces
  * has nothing to say about a file it does not produce.
  */
+type TitleAlias = {
+  readonly index: number;
+  readonly statement: AstNode;
+  readonly titleFragment: string;
+};
+
+/**
+ * The `export type <Title>SearchMatchOptions` alias, with the index and fragment its caller needs.
+ *
+ * One pass, because `findIndex` followed by a re-read and a re-run of the same predicate needed two
+ * further `undefined` guards that `findIndex` had already ruled out — `noUncheckedIndexedAccess`
+ * forces the index one, and re-calling `matchTitleAlias` forces the other. Each returned its own
+ * copy of the identical blocker, and both copies were unreachable, which is exactly how they read
+ * in a coverage report. Returning the fragment from the pass that found it removes the question.
+ */
+function findTitleAlias(statements: readonly AstNode[]): TitleAlias | undefined {
+  for (const [index, statement] of statements.entries()) {
+    const titleFragment = matchTitleAlias(statement);
+    if (titleFragment !== undefined) return { index, statement, titleFragment };
+  }
+  return undefined;
+}
+
 export function recognizeSearchFilter(source: string): SearchFilterDerivation {
   let statements: AstNode[];
   try {
@@ -469,31 +499,18 @@ export function recognizeSearchFilter(source: string): SearchFilterDerivation {
 
   const claims = createClaimSet();
 
-  const aliasIdx = statements.findIndex((s) => matchTitleAlias(s) !== undefined);
-  if (aliasIdx === -1) {
+  const alias = findTitleAlias(statements);
+  if (alias === undefined) {
     return blocked(
       "search-filter:no-type-alias",
       "no export type <Title>SearchMatchOptions alias was found",
     );
   }
-  const aliasStmt = statements[aliasIdx];
-  if (aliasStmt === undefined) {
-    return blocked(
-      "search-filter:no-type-alias",
-      "no export type <Title>SearchMatchOptions alias was found",
-    );
-  }
-  const titleFragment = matchTitleAlias(aliasStmt);
-  if (titleFragment === undefined) {
-    return blocked(
-      "search-filter:no-type-alias",
-      "no export type <Title>SearchMatchOptions alias was found",
-    );
-  }
-  claims.claim(aliasStmt, "type-alias");
+  const titleFragment = alias.titleFragment;
+  claims.claim(alias.statement, "type-alias");
 
-  const preamble = statements.slice(0, aliasIdx);
-  const rest = statements.slice(aliasIdx + 1);
+  const preamble = statements.slice(0, alias.index);
+  const rest = statements.slice(alias.index + 1);
 
   const filters: FilterEntry[] = [];
   const claimedFilterStatements: AstNode[] = [];

@@ -289,6 +289,76 @@ function regCallParts(call: AstNode): RegCallParts | undefined {
   return { name, description, schemaNode, handlerNode };
 }
 
+/** What `recognizeQueryTool` needs from the `reg()` call its caller has already read. */
+type RegPreamble = {
+  readonly name: string;
+  readonly description: string;
+  readonly args: Readonly<Record<string, ArgFields>>;
+  readonly schemaShape: ToolShape["schemaShape"];
+};
+
+/**
+ * The query branch — `renderTool`'s `if (query !== undefined)` block (src/emit/server/
+ * tools-hand.ts). Tried only once the plain hoists-then-return reader has refused, exactly as
+ * tools-rest.ts's `recognizeOneCall` orders the same pair: the two are disjoint by construction
+ * (that reader requires exactly one statement after the hoists, this one at least four).
+ *
+ * Its own function because it is disjoint from the other two forms by that same construction, and
+ * inline it was the only part of `recognizeOne` whose guards sat a level deep.
+ *
+ * `staticStyle` is deliberately absent from what this returns — see `QueryBlock`'s docstring for
+ * why a query tool carries no evidence of the connector's `staticPathStyle` at all.
+ */
+function recognizeQueryTool(
+  body: AstNode,
+  helperLocal: string,
+  preamble: RegPreamble,
+): ToolShape | undefined {
+  const query = recognizeQueryBlock(body, preamble.args, "binds-path");
+  if (query?.returned === undefined) return undefined;
+
+  // The tail's `return` is read by the SAME reader the two non-query forms use, so a non-GET
+  // query tool recovers its `method` — and therefore its effect and the manifest's
+  // hitlRequired — exactly as a non-GET plain tool does. Its path argument must be the binding
+  // the tail's own `const path` declares, not merely any identifier: `renderTool` substitutes
+  // the literal `"path"` for the inline path expression (`callPath`), so a call fetching
+  // anything else is a shape it cannot write.
+  const fetched = fetchFromJsonResult(query.returned, helperLocal);
+  if (fetched === undefined || !isIdent(fetched.path, PATH_LOCAL)) return undefined;
+
+  const queryArgs = mergeHoistedArgs(preamble.args, query.hoistMeta);
+  if (queryArgs === undefined) return undefined;
+
+  // `query.path` still carries the fetch helper's base prefix here (rebaseQueryTools, in
+  // src/derive/index.ts, takes it off later) — harmless for the default body's exclusion set,
+  // which reads only the path's ARG placeholders, and `defaultBodyArgs` refuses rather than
+  // throws on a prefix that will not parse.
+  const readBodyResult = readBody(fetched.bodyNode, {
+    args: queryArgs,
+    path: query.path,
+    query: query.query,
+    method: fetched.method ?? "GET",
+  });
+  if (readBodyResult === undefined) return undefined;
+
+  return {
+    fields: {
+      name: preamble.name,
+      description: preamble.description,
+      args: queryArgs,
+      path: query.path,
+      ...(fetched.method === undefined ? {} : { method: fetched.method }),
+      query: query.query,
+      ...readBodyResult,
+    },
+    isBlock: true,
+    hasHoists: query.hoistMeta.size > 0,
+    votesHandlerStyle: false,
+    schemaShape: preamble.schemaShape,
+    basePrefix: query.basePrefix,
+  };
+}
+
 function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
   const parts = regCallParts(call);
   if (parts === undefined) return undefined;
@@ -338,57 +408,12 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
   // and no `jsonResult` at all.
   const block = recognizeHoistedBlock(arrow.body);
   if (block === undefined) {
-    // The query branch — `renderTool`'s `if (query !== undefined)` block (src/emit/server/
-    // tools-hand.ts). Tried only once the plain hoists-then-return reader has refused, exactly as
-    // tools-rest.ts's `recognizeOneCall` orders the same pair: the two are disjoint by
-    // construction (that reader requires exactly one statement after the hoists, this one at
-    // least four).
-    //
-    // `staticStyle` is deliberately absent from what this returns — see `QueryBlock`'s docstring
-    // for why a query tool carries no evidence of the connector's `staticPathStyle` at all.
-    const query = recognizeQueryBlock(arrow.body, argsResult.args, "binds-path");
-    if (query?.returned === undefined) return undefined;
-
-    // The tail's `return` is read by the SAME reader the two non-query forms use, so a non-GET
-    // query tool recovers its `method` — and therefore its effect and the manifest's
-    // hitlRequired — exactly as a non-GET plain tool does. Its path argument must be the binding
-    // the tail's own `const path` declares, not merely any identifier: `renderTool` substitutes
-    // the literal `"path"` for the inline path expression (`callPath`), so a call fetching
-    // anything else is a shape it cannot write.
-    const fetched = fetchFromJsonResult(query.returned, helperLocal);
-    if (fetched === undefined || !isIdent(fetched.path, PATH_LOCAL)) return undefined;
-
-    const queryArgs = mergeHoistedArgs(argsResult.args, query.hoistMeta);
-    if (queryArgs === undefined) return undefined;
-
-    // `query.path` still carries the fetch helper's base prefix here (rebaseQueryTools, in
-    // src/derive/index.ts, takes it off later) — harmless for the default body's exclusion set,
-    // which reads only the path's ARG placeholders, and `defaultBodyArgs` refuses rather than
-    // throws on a prefix that will not parse.
-    const body = readBody(fetched.bodyNode, {
-      args: queryArgs,
-      path: query.path,
-      query: query.query,
-      method: fetched.method ?? "GET",
-    });
-    if (body === undefined) return undefined;
-
-    return {
-      fields: {
-        name,
-        description,
-        args: queryArgs,
-        path: query.path,
-        ...(fetched.method === undefined ? {} : { method: fetched.method }),
-        query: query.query,
-        ...body,
-      },
-      isBlock: true,
-      hasHoists: query.hoistMeta.size > 0,
-      votesHandlerStyle: false,
+    return recognizeQueryTool(arrow.body, helperLocal, {
+      name,
+      description,
+      args: argsResult.args,
       schemaShape,
-      basePrefix: query.basePrefix,
-    };
+    });
   }
 
   const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);

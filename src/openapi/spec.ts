@@ -172,14 +172,23 @@ function refuse(c: Collected, kind: string, detail: string): undefined {
  *
  * Emptiness is the ONLY way this can fail, which is why the result is tested for `""` rather than
  * against a restated copy of the schema's `/^[a-z0-9-]+$/`: every character that regex forbids is
- * either lower-cased or collapsed into a separator here, and the separators are then trimmed off
- * both ends. A title of `"!!!"` is the case that survives all of that with nothing left.
+ * either lower-cased or becomes a split point here, and a split point contributes nothing to the
+ * join. A title of `"!!!"` is the case that survives all of that with nothing left.
+ *
+ * Split-and-join rather than the collapse-then-trim this replaced, because that trim's `/^-+|-+$/g`
+ * backtracks quadratically on a long interior run of dashes — measured, 4x per doubling of the run.
+ * It was not reachable: the collapse ran first, so the trim never saw two adjacent dashes. But the
+ * invariant that made it safe lived in a different expression, and `info.title` comes from a
+ * document the caller supplies, so the shape stops relying on it. Dropping the empty pieces is
+ * exactly what trimming both ends did — a leading, trailing or repeated separator is what
+ * produces one.
  */
 function slugifyConnectorName(title: string): string {
   return title
     .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "");
+    .split(/[^a-z0-9]+/)
+    .filter((piece) => piece !== "")
+    .join("-");
 }
 
 /**
@@ -199,12 +208,7 @@ function slugifyConnectorName(title: string): string {
  * ending in `Fetch` fails there rather than in a generated package.
  */
 function derivedIdentifier(candidate: string, owner: string, c: Collected): string | undefined {
-  const problem = !IDENTIFIER.test(candidate)
-    ? "is not a valid JS identifier, which every emitted module-scope name must be"
-    : RESERVED.has(candidate)
-      ? "is a name the emitter itself declares at module scope (RESERVED_IDENTIFIERS in " +
-        "src/validate.ts)"
-      : undefined;
+  const problem = derivedIdentifierProblem(candidate);
   if (problem === undefined) return candidate;
   return refuse(
     c,
@@ -212,6 +216,24 @@ function derivedIdentifier(candidate: string, owner: string, c: Collected): stri
     `${owner} "${candidate}" ${problem}. Rename the document's info.title, or write the spec by ` +
       "hand.",
   );
+}
+
+/**
+ * Which of `derivedIdentifier`'s two conditions the candidate trips, in priority order — split out
+ * only to keep the caller flat, as `relativeUrlDetail` below is.
+ *
+ * The reserved arm shares a statement with its `undefined` rather than getting an early return of
+ * its own, for the reason the caller's doc comment gives: no document reaches it, and a line of its
+ * own would be an uncovered line in a file that is otherwise fully covered.
+ */
+function derivedIdentifierProblem(candidate: string): string | undefined {
+  if (!IDENTIFIER.test(candidate)) {
+    return "is not a valid JS identifier, which every emitted module-scope name must be";
+  }
+  return RESERVED.has(candidate)
+    ? "is a name the emitter itself declares at module scope (RESERVED_IDENTIFIERS in " +
+        "src/validate.ts)"
+    : undefined;
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -307,21 +329,8 @@ function readServer(doc: OpenApiDocument, c: Collected): Server | undefined {
   // Named for the CLAIM rather than for the parse that produced it. "did new URL() throw" is a
   // different question from "can a connector fetch this and declare its host": `mailto:a@b.test`
   // parses cleanly and produced `"network": [""]` while this refusal's own message said there was
-  // no host to put there. One ternary, so the message names which of the two it was without
-  // leaving the second on a line of its own.
-  //
-  // The host arm is belt: measured on the pinned Bun 1.3.14, a special scheme cannot have an
-  // empty host — `new URL("http:///x")` yields host "x", hoisting the first path segment — so the
-  // protocol arm above already implies a host today. It stays because the implication is a
-  // property of WHATWG URL rather than of this code, and it shares a line so it is not an
-  // uncovered branch.
-  const unfetchable =
-    parsed.protocol !== "http:" && parsed.protocol !== "https:"
-      ? `declares the scheme "${parsed.protocol}", and a generated fetch helper issues http(s) ` +
-        "requests only"
-      : parsed.host === ""
-        ? 'names no host, so there is nothing to declare in "network"'
-        : undefined;
+  // no host to put there. The message names which of the two it was.
+  const unfetchable = unfetchableDetail(parsed);
   if (unfetchable !== undefined) {
     return refuse(
       c,
@@ -351,8 +360,38 @@ function readServer(doc: OpenApiDocument, c: Collected): Server | undefined {
   // document that writes two would otherwise emit "https://api.test/v1//widgets" — every tool
   // path begins with "/" (the mapper refuses one that does not). The two spellings of a base
   // denote the same thing, so this is normalization rather than a change worth noting.
-  const base = parsed.href.replaceAll(/\/+$/g, "");
+  //
+  // Counted rather than matched with `/\/+$/`, which backtracks quadratically on a long interior
+  // run of slashes and, unlike slugifyConnectorName's trim, could actually be handed one: the
+  // WHATWG parser does not collapse path slashes, so `https://api.test/////…/a` survives into
+  // `href` verbatim. Measured on the pinned Bun, 16k interior slashes took 63ms against the regex
+  // and quadrupled per doubling; this loop is flat.
+  let end = parsed.href.length;
+  while (end > 0 && parsed.href.charAt(end - 1) === "/") end -= 1;
+  const base = parsed.href.slice(0, end);
   return assertSafeBase(base, url, parsed.host, c);
+}
+
+/**
+ * Why a parsed server url cannot be fetched, or `undefined` when it can — the absolute-URL half of
+ * `server-url-not-fetchable`, split out for the same reason `relativeUrlDetail` below is.
+ *
+ * The host arm is belt: measured on the pinned Bun 1.3.14, a special scheme cannot have an empty
+ * host — `new URL("http:///x")` yields host "x", hoisting the first path segment — so the protocol
+ * arm above already implies a host today. It stays because the implication is a property of WHATWG
+ * URL rather than of this code, and it shares a statement with its `undefined` so it is not an
+ * uncovered line.
+ */
+function unfetchableDetail(parsed: URL): string | undefined {
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return (
+      `declares the scheme "${parsed.protocol}", and a generated fetch helper issues http(s) ` +
+      "requests only"
+    );
+  }
+  return parsed.host === ""
+    ? 'names no host, so there is nothing to declare in "network"'
+    : undefined;
 }
 
 /** The relative-URL half of `server-url-not-fetchable`, split out only to keep the caller flat. */

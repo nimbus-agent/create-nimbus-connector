@@ -513,7 +513,7 @@ function matchSplitBearerReader(
   if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
 
   const section = collectReadLines(statements);
-  if (section === undefined || section.reads.length !== 1) return undefined;
+  if (section?.reads.length !== 1) return undefined;
   const read = section.reads[0]!;
   if (read.default !== undefined) return undefined;
 
@@ -556,8 +556,8 @@ function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | und
   const properties = bareKeyedProps(arg);
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
-  if (authProp === undefined || authProp.key !== "Authorization") return undefined;
-  if (acceptProp === undefined || acceptProp.key !== "Accept") return undefined;
+  if (authProp?.key !== "Authorization") return undefined;
+  if (acceptProp?.key !== "Accept") return undefined;
   if (stringLit(acceptProp.value) !== "application/json") return undefined;
 
   const t = templateLiteral(authProp.value);
@@ -648,8 +648,8 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   const properties = bareKeyedProps(arg);
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
-  if (authProp === undefined || authProp.key !== "Authorization") return undefined;
-  if (acceptProp === undefined || acceptProp.key !== "Accept") return undefined;
+  if (authProp?.key !== "Authorization") return undefined;
+  if (acceptProp?.key !== "Accept") return undefined;
   if (stringLit(acceptProp.value) !== "application/json") return undefined;
 
   const callArguments = callArgs(authProp.value);
@@ -900,7 +900,7 @@ function tokenExchangeLabel(stmt: AstNode): string | undefined {
 
   const SUFFIX = " token exchange ";
   const head = t.quasis[0];
-  if (head === undefined || !head.endsWith(SUFFIX)) return undefined;
+  if (!head?.endsWith(SUFFIX)) return undefined;
   if (t.quasis[1] !== ": " || t.quasis[2] !== "") return undefined;
 
   const status = callTo(t.expressions[0], "String", 1);
@@ -1067,7 +1067,7 @@ function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
 
   const section = collectReadLines(body.slice(idx));
   // EnvSchema: 'auth: "client-credentials" requires exactly two "vars"'.
-  if (section === undefined || section.reads.length !== 2) return undefined;
+  if (section?.reads.length !== 2) return undefined;
   idx += section.reads.length;
   const defaultValue = section.reads[0]!.default;
 
@@ -1329,31 +1329,42 @@ export type RecognizedEnv = {
  * `(): Record<string, string>` functions, A′'s are two `let`s and two `async` functions. Nothing
  * satisfies both, so A′ needs no `consumed` check of its own.
  */
+/**
+ * Group A at `statements[i]`: the split bearer reader and the wrapper that names it, as one entry.
+ *
+ * Shaped to match `matchClientCredentials`, which the next loop in `recognizeEnv` already calls the
+ * same way — the two loops were asymmetric only because this one built its entry inline, which is
+ * also what put every guard in it a level deep. Claiming stays with the caller, as it does there.
+ */
+function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEntry | undefined {
+  const reader = matchSplitBearerReader(statements[i]!);
+  if (reader === undefined) return undefined;
+  const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
+  if (wrapperLocal === undefined) return undefined;
+
+  return {
+    vars: [reader.var],
+    local: wrapperLocal,
+    tokenLocal: reader.local,
+    bindings: [reader.binding],
+    required: false,
+    auth: "bearer",
+  };
+}
+
 export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): RecognizedEnv {
   const consumed = new Set<number>();
   const indexed: { readonly index: number; readonly entry: EnvEntry }[] = [];
   const tokenServiceLabels: string[] = [];
 
   for (let i = 0; i < statements.length - 1; i++) {
-    const reader = matchSplitBearerReader(statements[i]!);
-    if (reader === undefined) continue;
-    const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
-    if (wrapperLocal === undefined) continue;
+    const entry = matchSplitBearerPair(statements, i);
+    if (entry === undefined) continue;
 
     claims.claim([statements[i]!, statements[i + 1]!], "env");
     consumed.add(i);
     consumed.add(i + 1);
-    indexed.push({
-      index: i,
-      entry: {
-        vars: [reader.var],
-        local: wrapperLocal,
-        tokenLocal: reader.local,
-        bindings: [reader.binding],
-        required: false,
-        auth: "bearer",
-      },
-    });
+    indexed.push({ index: i, entry });
   }
 
   for (let i = 0; i + 3 < statements.length; i++) {
@@ -1384,7 +1395,7 @@ export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): 
   }
 
   return {
-    entries: indexed.sort((a, b) => a.index - b.index).map(({ entry }) => entry),
+    entries: indexed.toSorted((a, b) => a.index - b.index).map(({ entry }) => entry),
     tokenServiceLabels,
   };
 }
