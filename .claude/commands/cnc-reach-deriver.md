@@ -175,11 +175,12 @@ regression pass** — re-record with `bun run reach:baseline`, and only when the
 
 ### `deriveSpec` returns a raw object, not a `ConnectorSpec`
 
-`Derivation` is `{ ok: true; spec: Record<string, unknown> } | { ok: false; blockers: Blocker[] }`.
+`Derivation` is
+`{ ok: true; spec: Record<string, unknown>; $effectAmbiguity?: string[] } | { ok: false; blockers: Blocker[] }`.
 Validation is a **tier boundary the reporting layer crosses**, not something the deriver does —
 which is also what lets a derived spec that trips `RESERVED_IDENTIFIERS` be *counted* rather than
-thrown. The reach design still writes `spec: ConnectorSpec`; the plan's *Refinement of the spec*
-section records the deviation, and the code is authoritative.
+thrown. Returning a `ConnectorSpec` would put `parseSpec` inside the deriver and turn that
+counted near-miss into an exception, which is the measurement the histogram exists to take.
 
 ### Every fixture appears in exactly one of `ROUND_TRIP` / `PARTIAL_ROUND_TRIP` / `BLOCKED`
 
