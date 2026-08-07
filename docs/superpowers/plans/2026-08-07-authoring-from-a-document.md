@@ -289,6 +289,23 @@ What must map, per the design:
   `{id}` — its `FOREIGN_PLACEHOLDER` check names OpenAPI's form specifically — so this substitution
   is the bridge between the two conventions, not a convenience.
 - **`method`** — upper-cased; `GET` is omitted so `ToolSchema`'s default applies.
+
+**A hazard Task 1 hit, which reaches you differently: a zod object schema with declared keys
+silently REORDERS its input to schema-declaration order.** Measured:
+`z.object({ get, post }).parse({ post: 1, get: 2 })` returns keys in `get,post` order.
+`z.looseObject({})` and `z.record(...)` both preserve input order.
+
+Task 1 hit this on path items, where it destroyed the document order `--list-operations` promises.
+**It reaches you on emitted bytes.** `src/emit/server/args.ts` iterates `Object.entries(args)` in
+four places — `renderZodFieldList`, `renderHoists` and their callers — so **argument order is
+emitted order**, and `renderBodyExpr`'s default body is built from `Object.keys(tool.args)` too. A
+schema that reorders a document's property names changes the emitted `z.object({ … })` field order
+and the emitted `JSON.stringify({ … })` field order with it.
+
+OpenAPI `parameters` is an **array**, so parameter order is safe. The exposure is a request body's
+`properties` **object**: model it with `z.record(...)`, never with declared keys, and add a test
+that a body whose properties are declared `{ zebra, alpha }` maps to args in that order rather than
+alphabetically. Order is not cosmetic here — it is bytes.
 - **`args`** — from `parameters` (`in: "path"` and `in: "query"`), carrying `type`, `optional`
   (`required: false`), `default`, `min`/`max` (`minimum`/`maximum`), and `int`
   (`type: integer`).
@@ -453,6 +470,13 @@ Through the real binary via `Bun.spawnSync`:
 - A document whose every selected operation refuses: exit non-zero, every refusal printed by name.
 - `--from-openapi` with no `--op`: decide and pin one behaviour — either all mappable operations, or
   an error directing the user to `--list-operations`. **State which in the help text.**
+
+  **Task 1 left a provisional answer here and flagged it for you.** It could not assemble a spec, so
+  a bare `--from-openapi` currently exits 1 with "pass `--list-operations`…", and the help text says
+  `requires --list-operations`. That is one of the two candidate behaviours, standing by accident
+  rather than by choice. **Choose deliberately now** — a connector author who has already run
+  `--list-operations` and wants everything mappable is a real case, and so is refusing to guess at
+  a tool set. Whichever you pick, the help text must stop describing the provisional state.
 - Nothing is ever written to disk. Assert the output directory is untouched.
 
 - [ ] **Step 2: Run — must FAIL**
