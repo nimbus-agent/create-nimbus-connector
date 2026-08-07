@@ -261,16 +261,26 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  * rather than at the splice sites is also what covers all three ways a spec is authored at once —
  * hand-written, `--from-connector`, `--from-openapi`.
  *
- * `resolves` is what makes the two fields differ, and they differ because the EMITTERS do.
- * `serviceLabel` passes `undefined`: nothing rewrites anything in it, so every `${` it carries is
- * live. `fetchHelper.base` passes `RESOLVED_ENV_REF`, because `${env.X}` there is a documented
- * feature — it appears in 7 of the 22 fixtures, three of them the byte-locked datadog, grafana and
- * sentry, so banning `${` outright would fail diff:golden on the first run, and `bun run reach
- * --baseline` says the same of the specs the deriver reconstructs from the corpus. Every OTHER
- * `${` in a base is refused: the residue left once the resolved shape is removed is exactly what
- * survives into the emitted template literal.
+ * `resolves` is the one thing the guarded fields do not share, and they differ because the
+ * EMITTERS do. Three dispositions, named by `SpliceInterpolation` above:
  *
- * **An earlier version of this rule admitted `${` in both fields**, on the grounds that an
+ *   - `undefined` — nothing rewrites anything in the field, so every `${` it carries is live and
+ *     all of them are refused. `serviceLabel`, `tools[].name`, `env[].prefix`, `env[].suffix`.
+ *   - a `RegExp` — the shape an emitter resolves, stripped before the residue is scanned, so
+ *     every OTHER `${` is refused. `fetchHelper.base` and `RESOLVED_ENV_REF`, because `${env.X}`
+ *     there is a documented feature: it is what 7 of the 22 fixtures write, three of them the
+ *     byte-locked datadog, grafana and sentry, so banning `${` outright would fail diff:golden on
+ *     the first run, and `bun run reach --baseline` says the same of the specs the deriver
+ *     reconstructs from the corpus. The residue left once the resolved shape is removed is
+ *     exactly what survives into the emitted template literal.
+ *   - `"path-template"` — the field is the path DSL and `parsePathTemplate` owns the question.
+ *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 19 of the
+ *     22 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-07 over `fixtures/*.spec.json`).
+ *     Every one of those is a placeholder the DSL consumes, and `assertNoUnparsedPlaceholders`
+ *     already refuses every spelling it did not — which is why a second rule here would produce
+ *     two rejections for one mistake.
+ *
+ * **An earlier version of this rule admitted `${` wherever it appeared**, on the grounds that an
  * unresolved one produces an UNDEFINED IDENTIFIER the generated package's own `tsc --noEmit`
  * reports. That is true of `${x}` and of nothing else. An interpolation whose expression is
  * self-contained — `${(() => { … })()}`, which names nothing outside itself — leaves no identifier
@@ -280,7 +290,7 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  *
  * Measured across the 22 fixtures: no guarded field carries a backtick, a block-comment
  * terminator or a backslash — which this docstring cannot spell out literally, the hazard in
- * miniature — and `${` appears only in `fetchHelper.base`, always as `${env.X}`.
+ * miniature.
  *
  * `emptyIsMeaningful` exists for one carrier pair. `wrapped()` (src/emit/server/env.ts)
  * substitutes `?? ""` for whichever of `prefix`/`suffix` is unset, so `""` and omitted emit

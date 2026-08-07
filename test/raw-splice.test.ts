@@ -284,3 +284,47 @@ describe("every carrier refuses every sequence that could break out of its const
     expect([...reached].sort()).toEqual(Object.keys(EXPECTED_CARRIERS).sort());
   });
 });
+
+/**
+ * What the fixtures actually put in a guarded field — the measurement `rawSplicedString`'s
+ * docstring states, held here so it cannot go stale silently.
+ *
+ * It is a live number about a directory in THIS repository, which is the case CLAUDE.md's
+ * no-numbers-in-prose rule leaves room for: a corpus count cannot be re-run in CI, this can.
+ * The prose said `${` "appears only in fetchHelper.base" while it was in a `tools[].path` in
+ * nineteen of the twenty-two fixtures — the second stale count inside one docstring that had
+ * just been rewritten to remove the first.
+ */
+describe("what the 22 fixtures put in a guarded field", () => {
+  function guardedValues(): { field: string; value: string; file: string }[] {
+    const out: { field: string; value: string; file: string }[] = [];
+    for (const { file, doc } of specDocuments) {
+      const leaves: Leaf[] = [];
+      stringLeaves(doc, [], leaves);
+      for (const leaf of leaves) {
+        const field = fieldOf(leaf.path);
+        if (Object.hasOwn(EXPECTED_CARRIERS, field)) out.push({ field, value: leaf.value, file });
+      }
+    }
+    return out;
+  }
+
+  it("carries no terminator in any of them", () => {
+    const hits = guardedValues().filter(({ value }) =>
+      ["`", "*/", "\\"].some((t) => value.includes(t)),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it("opens an interpolation only in the two fields whose disposition takes one", () => {
+    // Not "how many occurrences" but "how many fixtures", which is the claim the docstring makes.
+    const byField = new Map<string, Set<string>>();
+    for (const { field, value, file } of guardedValues()) {
+      if (!value.includes("${")) continue;
+      byField.set(field, (byField.get(field) ?? new Set<string>()).add(file));
+    }
+    const counts = Object.fromEntries([...byField].map(([f, s]) => [f, s.size]));
+    // `undefined` is the disposition of the other four carriers, and none of them may appear.
+    expect(counts).toEqual({ "fetchHelper.base": 7, "tools[].path": 19 });
+  });
+});
