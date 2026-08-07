@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseSpec } from "../src/spec.ts";
 import { ZZ_WIDGETS_YAML } from "./support/openapi-doc.ts";
 import { tempDirs } from "./support/tmp.ts";
 
@@ -443,15 +444,16 @@ describe("--from-connector", () => {
  * The document is the shared synthetic one — see test/support/openapi-doc.ts, which explains why
  * it is not hand-duplicated here.
  */
+const DOC = ZZ_WIDGETS_YAML;
+
+/** Shared by both --from-openapi blocks: the listing tests and the assembly tests. */
+function writeDoc(dir: string, text: string, name = "widgets.yaml"): string {
+  const path = join(dir, name);
+  writeFileSync(path, text, "utf8");
+  return path;
+}
+
 describe("--from-openapi --list-operations", () => {
-  const DOC = ZZ_WIDGETS_YAML;
-
-  function writeDoc(dir: string, text: string, name = "widgets.yaml"): string {
-    const path = join(dir, name);
-    writeFileSync(path, text, "utf8");
-    return path;
-  }
-
   it("prints one line per operation in document order and exits 0", () => {
     withTempDir((dir) => {
       const doc = writeDoc(dir, DOC);
@@ -510,6 +512,10 @@ describe("--from-openapi --list-operations", () => {
       expect(stdout).not.toContain("head");
       expect(stderr).toContain("skipped head /widgets");
       expect(stderr).toContain("unsupported-method");
+      // The operationId is what --op names it by, so the note carries it: without it this line
+      // and the refusal `--op createWidget` produces describe one operation in two vocabularies,
+      // and connecting them is the reader's problem.
+      expect(stderr).toContain("operationId: createWidget");
     });
   });
 
@@ -553,15 +559,21 @@ describe("--from-openapi --list-operations", () => {
     });
   });
 
-  // --from-openapi cannot assemble a spec yet, so the flag on its own has nothing to do. Saying
-  // so beats accepting it and printing nothing.
-  it("exits 1 directing a bare --from-openapi to --list-operations", () => {
+  // The pinned answer to "what does a bare --from-openapi do": it refuses, because the tool set
+  // is the author's choice. Both flags that give it something to do are named, so neither half of
+  // the decision is guesswork for the reader — see src/cli.ts's own message for the reasoning.
+  it("exits 1 naming both --op and --list-operations for a bare --from-openapi", () => {
     withTempDir((dir) => {
       const doc = writeDoc(dir, DOC);
       const { exitCode, stdout, stderr } = runCliBare(["--from-openapi", doc], dir);
       expect(exitCode).toBe(1);
       expect(stdout).toBe("");
       expect(stderr).toContain("--list-operations");
+      expect(stderr).toContain("--op");
+      // The provisional wording Task 1 left behind said only "pass --list-operations to see the
+      // operations this document declares", which described a command that could not yet assemble
+      // a spec rather than a decision. It must not survive as the pinned answer.
+      expect(stderr).not.toContain("pass --list-operations to see");
     });
   });
 
@@ -570,6 +582,246 @@ describe("--from-openapi --list-operations", () => {
       const { exitCode, stderr } = runCliBare(["--list-operations"], dir);
       expect(exitCode).toBe(1);
       expect(stderr).toContain("--from-openapi");
+    });
+  });
+});
+
+/**
+ * `--from-openapi <doc> --op <id>` — the whole pipeline through the real binary: read, select,
+ * map, assemble, print.
+ *
+ * The assertion on the happy path is that the printed text PARSES and survives the real
+ * `parseSpec`, not that it contains some substring: a spec printed with a stray note in it, or
+ * with `\r\n` mangling, would pass a `toContain` and fail the only use the output has.
+ */
+describe("--from-openapi --op", () => {
+  /**
+   * The shared synthetic document, extended with the two things assembling a SPEC needs that
+   * listing operations does not:
+   *
+   * - a `securitySchemes` entry, because `assembleSpec` refuses `no-security-scheme` rather than
+   *   assume an API is anonymous;
+   * - a declaration for the `{widgetId}` the templated path carries, because an undeclared path
+   *   variable is `undeclared-path-parameter`.
+   *
+   * Appended to the shared constant rather than folded into it, for the reason
+   * `test/support/openapi-doc.ts` gives: the listing tests describe the document as it is there,
+   * and this block is exactly the difference between listing it and assembling from it.
+   */
+  const ASSEMBLABLE = [
+    DOC.trimEnd(),
+    "      parameters:",
+    "        - name: widgetId",
+    "          in: path",
+    "          required: true",
+    "          schema:",
+    "            type: string",
+    "components:",
+    "  securitySchemes:",
+    "    bearerAuth:",
+    "      type: http",
+    "      scheme: bearer",
+    "",
+  ].join("\n");
+
+  it("prints a spec the real parseSpec accepts, in the order the operations were selected", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, ASSEMBLABLE);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "listWidgets", "--op", "getWidget"],
+        dir,
+      );
+      expect(stderr).not.toContain("create-nimbus-connector:");
+      expect(exitCode).toBe(0);
+
+      // The assertion the brief asks for: parse it, then run it through the real spec language.
+      const spec = parseSpec(JSON.parse(stdout));
+      expect(spec.name).toBe("zz-widgets");
+      expect(spec.tools.map((t) => t.name)).toEqual(["listWidgets", "getWidget"]);
+      expect(spec.fetchHelper.base).toBe("https://api.zzwidgets.test/v1");
+      expect(spec.network).toEqual(["api.zzwidgets.test"]);
+
+      // What was read, and that the printed file is a draft — neither of which the spec on
+      // stdout can say about itself.
+      expect(stderr).toContain("assembled 2 operation(s) from yaml");
+      expect(stderr).toContain('"TODO:"');
+
+      // Nothing is written: this command prints a spec and generates no package. The document
+      // the test itself wrote is the only file that may be in the directory.
+      expect(readdirSync(dir)).toEqual(["widgets.yaml"]);
+    });
+  });
+
+  // The stdout/stderr split, proved on a document that produces a note: `--from-openapi … >
+  // spec.json` must leave a file that parses while the note stays visible on the terminal.
+  it("keeps notes on stderr and the spec alone on stdout", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, ASSEMBLABLE);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "createWidget"],
+        dir,
+      );
+      expect(exitCode).toBe(0);
+      // A note leaking into stdout would break this parse, which is the point of asserting it
+      // here rather than asserting stdout "starts with {".
+      const spec = parseSpec(JSON.parse(stdout));
+      expect(spec.tools.map((t) => t.name)).toEqual(["createWidget"]);
+      expect(stderr).toContain("note: ");
+      expect(stderr).toContain("createWidget");
+      expect(stderr).toContain('"effect"');
+      expect(stdout).not.toContain("note: ");
+    });
+  });
+
+  it("exits 1 naming the operationId it could not find and the ones it could", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, ASSEMBLABLE);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "listGadgets"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("listGadgets");
+      for (const available of ["listWidgets", "createWidget", "getWidget"]) {
+        expect(stderr).toContain(available);
+      }
+    });
+  });
+
+  /**
+   * The obligation Task 1 handed forward, and the only gate it has.
+   *
+   * `head`/`options`/`trace` and a mis-cased method key are REPORTED by the reader and omitted
+   * from the selectable set rather than refusing the document — so an `--op` naming one would
+   * otherwise fall through to the missing-operation path and report "no such operation" for an
+   * operation the user is looking at in their own document. Different diagnosis, different fix.
+   */
+  it("refuses an --op naming an unsupported-method operation as unsupported, not as missing", () => {
+    withTempDir((dir) => {
+      const head = ASSEMBLABLE.replace("    post:", "    head:");
+      expect(head).not.toBe(ASSEMBLABLE);
+      const doc = writeDoc(dir, head);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "createWidget"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("unsupported-method");
+      expect(stderr).toContain("createWidget");
+      expect(stderr).toContain("head /widgets");
+      // The wrong diagnosis this exists to prevent.
+      expect(stderr).not.toContain("no-such-operation");
+    });
+  });
+
+  it("refuses an --op naming a mis-cased method key by saying what to write instead", () => {
+    withTempDir((dir) => {
+      const miscased = ASSEMBLABLE.replace("    post:", "    POST:");
+      expect(miscased).not.toBe(ASSEMBLABLE);
+      const doc = writeDoc(dir, miscased);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "createWidget"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("mis-cased-method");
+      expect(stderr).toContain('"post:"');
+      expect(stderr).not.toContain("no-such-operation");
+    });
+  });
+
+  /**
+   * The second inherited obligation. `assembleSpec` refuses an empty selection with
+   * `no-operations`, whose message ends "run --list-operations and pass one or more --op" — advice
+   * that is circular for a document with no operation this reader can offer. The reason the set is
+   * empty is in hand at selection, so it is what gets printed.
+   */
+  it("names why a document offers nothing to select rather than telling the user to select", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(
+        dir,
+        JSON.stringify({
+          openapi: "3.0.3",
+          info: { title: "ZZ Widgets", version: "1.0.0" },
+          servers: [{ url: "https://api.zzwidgets.test/v1" }],
+          paths: { "/health": { head: { operationId: "ping" } } },
+          components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
+        }),
+        "health.json",
+      );
+      const { exitCode, stdout, stderr } = runCliBare(["--from-openapi", doc, "--op", "ping"], dir);
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("unsupported-method");
+      expect(stderr).toContain("head /health");
+      // assembleSpec's own no-operations advice, which would send the user back to a listing
+      // that prints nothing to select.
+      expect(stderr).not.toContain("pass one or more --op");
+    });
+  });
+
+  it("prints every refusal by name when the selected operations cannot be mapped", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(
+        dir,
+        JSON.stringify({
+          openapi: "3.0.3",
+          info: { title: "ZZ Widgets", version: "1.0.0" },
+          servers: [{ url: "https://api.zzwidgets.test/v1" }],
+          paths: {
+            "/a": {
+              get: {
+                operationId: "getA",
+                parameters: [{ name: "X-Trace", in: "header", schema: { type: "string" } }],
+              },
+            },
+            "/b": {
+              get: {
+                operationId: "getB",
+                parameters: [{ name: "shape", in: "query", schema: { type: "array" } }],
+              },
+            },
+          },
+          components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
+        }),
+        "unmappable.json",
+      );
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "getA", "--op", "getB"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      // Both, not just the first: one run names every construct standing in the way, rather than
+      // turning into a sequence of one-at-a-time discoveries.
+      //
+      // A mapper refusal identifies its operation by METHOD and PATH, not by the operationId the
+      // --op argument used — those are the second and third columns of the --list-operations line
+      // the id was copied from, so the refusal is findable, but the vocabulary is the mapper's.
+      expect(stderr).toContain("parameter-location");
+      expect(stderr).toContain("GET /a");
+      expect(stderr).toContain("schema-type");
+      expect(stderr).toContain("GET /b");
+    });
+  });
+
+  it("prints the document-level refusal by name when the document itself cannot supply a spec", () => {
+    withTempDir((dir) => {
+      // The same document the happy path uses, minus its security scheme — one construct.
+      const anonymous = ASSEMBLABLE.slice(0, ASSEMBLABLE.indexOf("components:"));
+      expect(anonymous).not.toBe(ASSEMBLABLE);
+      const doc = writeDoc(dir, anonymous);
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--op", "listWidgets"],
+        dir,
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("no-security-scheme");
+      expect(readdirSync(dir)).toEqual(["widgets.yaml"]);
     });
   });
 });

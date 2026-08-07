@@ -84,6 +84,17 @@ export type SkippedOperation = {
   /** As written in the document, so the user can find the line — not upper-cased. */
   readonly method: string;
   readonly path: string;
+  /**
+   * The name `--op` selects on, absent when the operation declares none.
+   *
+   * This is what makes the deferred refusal above possible rather than merely intended. Without
+   * it a caller can report THAT something was skipped but cannot tell whether the operation a
+   * user just named IS the skipped one — so `--op probeHealth` falls through to the generic
+   * missing-operation path and answers "no such operation" about an operation sitting in the
+   * user's own document. That is a different diagnosis from "the method is unsupported", and the
+   * wrong one is the kind a user stops believing the tool over.
+   */
+  readonly operationId?: string;
   readonly detail: string;
 };
 
@@ -316,6 +327,22 @@ function skipReasonFor(key: string): SkippedOperation["reason"] | undefined {
   return undefined;
 }
 
+/**
+ * The `operationId` of an operation that is being SKIPPED, read defensively.
+ *
+ * A listed operation is refused outright when `OpenApiOperationSchema` rejects it, and when it
+ * declares no `operationId`. Neither applies here, deliberately: a `head:` holding a string, or a
+ * mis-cased `POST:` with no `operationId`, must not take a document's other forty operations down
+ * with it — that is the whole reason these are reported rather than refused. So a value that is
+ * not usable simply yields `undefined`, and such an operation is one `--op` cannot name at all.
+ */
+function skippedOperationId(raw: unknown): string | undefined {
+  const parsed = OpenApiOperationSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const id = parsed.data.operationId;
+  return id === undefined || id.trim() === "" ? undefined : id;
+}
+
 function skipDetailFor(reason: SkippedOperation["reason"], key: string): string {
   if (reason === "unsupported-method") {
     return (
@@ -357,7 +384,16 @@ function collect(doc: OpenApiDocument): Listing {
     for (const key of Object.keys(item)) {
       const reason = skipReasonFor(key);
       if (reason !== undefined) {
-        skipped.push({ reason, method: key, path, detail: skipDetailFor(reason, key) });
+        const operationId = skippedOperationId(item[key]);
+        skipped.push({
+          reason,
+          method: key,
+          path,
+          // Spread rather than `operationId: undefined`: exactOptionalPropertyTypes, and the key
+          // set is then the one a hand-written SkippedOperation would carry.
+          ...(operationId === undefined ? {} : { operationId }),
+          detail: skipDetailFor(reason, key),
+        });
         continue;
       }
       if (!isMethod(key)) continue;

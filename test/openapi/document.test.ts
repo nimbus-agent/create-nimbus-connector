@@ -398,11 +398,43 @@ describe("listSkippedOperations", () => {
         reason: "unsupported-method",
         method: "head",
         path: "/widgets",
+        // The name `--op` selects on. Without it, a caller can report THAT something was skipped
+        // but cannot tell whether the operation a user just named is the skipped one — and
+        // "no such operation" for an operation sitting in their document is a wrong diagnosis.
+        operationId: "createWidget",
         detail: expect.stringContaining("GET, POST, PUT, PATCH or DELETE"),
       },
     ]);
     // The refusal-shaped failure this replaced took the other two operations down with it.
     expect(listOperations(doc).map((o) => o.operationId)).toEqual(["listWidgets", "getWidget"]);
+  });
+
+  /**
+   * `operationId` is optional on a skipped operation, and the key is absent rather than
+   * `undefined` when there is none.
+   *
+   * A skipped operation is NOT validated against `OpenApiOperationSchema` the way a listed one
+   * is — an unreadable `head:` must not refuse a document whose other forty operations are fine —
+   * so the id is read defensively, and an operation with none simply cannot be named by `--op`.
+   */
+  it("omits operationId for a skipped operation that declares none, or a blank one", () => {
+    const post = [
+      "    post:",
+      "      operationId: createWidget",
+      "      summary: Create a widget.",
+    ].join("\n");
+    for (const replacement of [
+      ["    head:", "      summary: Probe the collection."],
+      // Blank, for the reason `collect` refuses a blank one on a LISTED operation: `--op` selects
+      // on this string, and whitespace is not a name it can be given.
+      ["    head:", '      operationId: "   "'],
+    ]) {
+      const head = YAML_DOC.replace(post, replacement.join("\n"));
+      expect(head).not.toBe(YAML_DOC);
+      const [skipped] = listSkippedOperations(loadDocument(head).doc);
+      expect(skipped?.reason).toBe("unsupported-method");
+      expect(skipped).not.toHaveProperty("operationId");
+    }
   });
 
   // The likelier hand-authored mistake, and the one that used to vanish into the same bucket as
@@ -416,6 +448,7 @@ describe("listSkippedOperations", () => {
     expect(skipped?.reason).toBe("mis-cased-method");
     expect(skipped?.method).toBe("POST");
     expect(skipped?.path).toBe("/widgets");
+    expect(skipped?.operationId).toBe("createWidget");
     expect(skipped?.detail).toContain('"post:"');
     expect(listOperations(doc).map((o) => o.operationId)).toEqual(["listWidgets", "getWidget"]);
   });
