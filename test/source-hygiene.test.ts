@@ -47,6 +47,23 @@ const INVISIBLE = new Set([
 ]);
 
 /**
+ * The whole decision, as one named function — so it can be asserted over rather than only
+ * evaluated against files that are already clean.
+ *
+ * That is the point of factoring it out. Inlined in the sweep below, this predicate was only ever
+ * run against a repository with nothing wrong in it, so **nothing in the suite made it true**. A
+ * mistyped code point, `INVISIBLE.has(ch)` where `ch` is a string and the set holds numbers, an
+ * inverted condition — any of them and the sweep passes green forever while inspecting every byte
+ * and seeing nothing. A gate whose only verification is a manual injection someone ran once is
+ * the same shape as the defect it was written to catch.
+ */
+function rendersAsNothing(ch: string): boolean {
+  const code = ch.codePointAt(0) ?? 0;
+  const isControl = code < 0x20 || code === 0x7f;
+  return (isControl && !ALLOWED_CONTROL.has(ch)) || INVISIBLE.has(code);
+}
+
+/**
  * Every source file under the directories this project's own gates cover — tracked, staged, or
  * merely written.
  *
@@ -54,8 +71,9 @@ const INVISIBLE = new Set([
  * the same place the widened set above does: a plain `git ls-files` lists only what is already in
  * the index, so a BRAND NEW file is invisible to this check until it is `git add`ed. That is
  * precisely the moment the check exists for — the defect it was written for was authored into a
- * new file and caught by eye before the commit. Verified by writing a U+200B into an unstaged
- * `src/openapi/spec.ts` and watching this test pass.
+ * new file and caught by eye before the commit. The hole was found the same way: a U+200B written
+ * into an unstaged `src/openapi/spec.ts` left this gate GREEN. With the flags, the same injection
+ * fails it, naming the file and the offset — which is how a gate fix is confirmed.
  *
  * `--exclude-standard` is what keeps `node_modules/` and other ignored output out; without it,
  * `--others` would sweep them in and this would be a scan of a dependency tree.
@@ -97,9 +115,8 @@ describe("source hygiene", () => {
       }
       for (let i = 0; i < text.length; i++) {
         const ch = text[i]!;
-        const code = ch.codePointAt(0)!;
-        const isControl = code < 0x20 || code === 0x7f;
-        if ((isControl && !ALLOWED_CONTROL.has(ch)) || INVISIBLE.has(code)) {
+        if (rendersAsNothing(ch)) {
+          const code = ch.codePointAt(0)!;
           offenders.push(`${rel}: U+${code.toString(16).padStart(4, "0")} at offset ${i}`);
           break; // one report per file is enough to act on
         }
@@ -114,5 +131,72 @@ describe("source hygiene", () => {
     // renamed folder — would make the check above pass while inspecting zero bytes. That is the
     // failure mode the check itself was written to catch, one level up.
     expect(trackedSourceFiles().length).toBeGreaterThan(50);
+  });
+});
+
+/**
+ * The characters this gate must catch, transcribed INDEPENDENTLY of the sets above.
+ *
+ * The sweep can only ever run the predicate against a repository with nothing wrong in it, so on
+ * its own it proves the source is tidy and says nothing about whether the check works. This is
+ * what makes it true.
+ *
+ * The duplication is the point, and it is here because the first version of these tests iterated
+ * `INVISIBLE` and asked whether the predicate agreed with it — which is self-referential. Mutating
+ * `0x200b` to `0x200f` in that set failed **nothing**: the loop dutifully confirmed that whatever
+ * the set contained was caught, while the zero-width space that was actually written into this
+ * repository walked straight through. A second transcription is what makes a typo in either list
+ * fail, and it is the only defence available, since "is this character invisible" is not a
+ * question a program can ask about a number.
+ *
+ * Every entry is written as a `\\u` ESCAPE, never as the character itself. That is not tidiness:
+ * an escape is ASCII in the file, so this table cannot trip the sweep it exists to test. Writing
+ * them as literals is a mistake I made here first, and the sweep caught it — which is the most
+ * direct evidence in this file that the gate works.
+ */
+const MUST_BE_CAUGHT: readonly (readonly [string, string])[] = [
+  ["U+0000 NUL - the one that started this gate", "\u0000"],
+  ["U+000B LINE TABULATION", "\u000b"],
+  ["U+007F DELETE", "\u007f"],
+  ["U+00AD SOFT HYPHEN", "\u00ad"],
+  ["U+200B ZERO WIDTH SPACE - the one that widened it", "\u200b"],
+  ["U+200C ZERO WIDTH NON-JOINER", "\u200c"],
+  ["U+200D ZERO WIDTH JOINER", "\u200d"],
+  ["U+2060 WORD JOINER", "\u2060"],
+  ["U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM", "\ufeff"],
+  ["U+202A LEFT-TO-RIGHT EMBEDDING", "\u202a"],
+  ["U+202E RIGHT-TO-LEFT OVERRIDE", "\u202e"],
+  ["U+2066 LEFT-TO-RIGHT ISOLATE", "\u2066"],
+  ["U+2069 POP DIRECTIONAL ISOLATE", "\u2069"],
+];
+
+describe("the predicate the sweep is built on", () => {
+  it("catches every character named in the independent list, so a mistyped set member fails", () => {
+    const missed = MUST_BE_CAUGHT.filter(([, ch]) => !rendersAsNothing(ch)).map(([name]) => name);
+    expect(missed).toEqual([]);
+  });
+
+  it("agrees with the set it is built from, so a predicate bug fails as well as a set bug", () => {
+    const missed = [...INVISIBLE].filter((code) => !rendersAsNothing(String.fromCodePoint(code)));
+    expect(missed.map((c) => `U+${c.toString(16)}`)).toEqual([]);
+  });
+
+  it("is false for every character in ALLOWED_CONTROL", () => {
+    const wrong = [...ALLOWED_CONTROL].filter((ch) => rendersAsNothing(ch));
+    expect(wrong.map((c) => `U+${(c.codePointAt(0) ?? 0).toString(16)}`)).toEqual([]);
+  });
+
+  it("is false for ordinary source characters, including the non-ASCII ones this repo writes", () => {
+    // The em dash and the arrow appear in nearly every docstring here. A predicate written as
+    // "anything above ASCII" would pass every test above and reject the whole codebase.
+    for (const ch of ["a", " ", "\t", "{", "—", "→"]) {
+      expect(rendersAsNothing(ch)).toBe(false);
+    }
+  });
+
+  it("has something in every list, so no sweep above can pass vacuously", () => {
+    expect(MUST_BE_CAUGHT.length).toBeGreaterThan(10);
+    expect(INVISIBLE.size).toBeGreaterThan(10);
+    expect(ALLOWED_CONTROL.size).toBe(3);
   });
 });

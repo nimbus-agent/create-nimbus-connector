@@ -43,8 +43,10 @@
  *   empty-servers              `servers: []`
  *   multiple-servers           more than one server, so which base URL is meant is unanswered
  *   server-url-missing         a first server declaring no `url`
- *   server-url-templated       a server URL carrying OpenAPI server-variable templating
- *   server-url-not-absolute    a server URL with no origin to read a `network` host from
+ *   server-url-templated       a server URL carrying braces — templating, or a live `${`
+ *   server-url-not-fetchable   a server URL a connector cannot fetch and declare a host for
+ *   server-url-not-a-base      a server URL carrying a query string or a fragment
+ *   server-url-unsafe          a server URL that would close the emitted template literal
  *   no-security-scheme         no `components.securitySchemes` to read an auth mode from
  *   multiple-security-schemes  more than one scheme, so which credential is meant is unanswered
  *   security-scheme-shape      a scheme object missing the field its own `type` requires
@@ -66,12 +68,20 @@
  * diagnosis than the schema's own is available; the backstop covers everything else, including
  * rules added to the spec language later.
  *
- * **What is deliberately NOT inferred.** `credentialsIn` — the design lists it as unfillable, and
- * an oauth2 `clientCredentials` flow carries a `tokenUrl` but says nothing about whether the
- * secret goes in a Basic header or in the body, which `EnvSchema` requires. `effect` — Task 2
- * notes each non-GET instead, because the corpus is emphatic that deriving HITL from the method is
- * wrong for a third of connectors. `title` — it reaches emitted identifiers through
- * `registrarName` and `src/emit/wiring.ts`, and `parseSpec` already defaults it from `name`.
+ * **What is deliberately NOT inferred, and what is not READ at all.** `credentialsIn` — the design
+ * lists it as unfillable, and an oauth2 `clientCredentials` flow carries a `tokenUrl` but says
+ * nothing about whether the secret goes in a Basic header or in the body, which `EnvSchema`
+ * requires. `effect` — Task 2 notes each non-GET instead, because the corpus is emphatic that
+ * deriving HITL from the method is wrong for a third of connectors. `title` — it reaches emitted
+ * identifiers through `registrarName` and `src/emit/wiring.ts`, and `parseSpec` already defaults
+ * it from `name`.
+ *
+ * **The document's `security` requirements — root-level and per-operation — are not read.** They
+ * are what says WHICH of several declared schemes applies where, so not reading them is precisely
+ * why `multiple-security-schemes` refuses rather than choosing: the field that would answer the
+ * question is one this file ignores. Stated here rather than only in that arm's message, because a
+ * reader looking for "what does this take from the document" should find the omission in the list
+ * of omissions.
  */
 import { parseSpec } from "../spec.ts";
 import { RESERVED_IDENTIFIERS, validateSpec } from "../validate.ts";
@@ -224,6 +234,18 @@ type Server = { readonly base: string; readonly host: string };
  * `https://{tenant}.api.example/v1` with no block through — and `fetchHelper.base` has no
  * equivalent of `parsePathTemplate`'s `FOREIGN_PLACEHOLDER` guard, so those braces would be
  * emitted as literal characters and the connector would request a host that does not exist.
+ *
+ * **That check is also what keeps a `${` out of the emitted source, and it says so rather than
+ * doing it by accident.** `src/emit/server/fetch-helper.ts` splices `fetchHelper.base` RAW into a
+ * template literal (`` `${base}${path}` ``), so a `${` reaching that line is a live interpolation
+ * rather than data. Both consequences are named in its message, because the two are separable: if
+ * server-variable expansion is ever implemented, the brace refusal narrows and the injection half
+ * has to be re-established explicitly in the same change.
+ *
+ * `assertSafeBase` covers the half the brace check cannot: a backtick. Measured on the pinned Bun
+ * 1.3.14 — `new URL()` percent-encodes a backtick in the PATH (as %60) and in the fragment, but
+ * **keeps it in the host**, so a hostname containing one survives normalization intact and reaches
+ * both the emitted template literal and the `network` permission.
  */
 function readServer(doc: OpenApiDocument, c: Collected): Server | undefined {
   const servers = doc.servers;
@@ -267,8 +289,10 @@ function readServer(doc: OpenApiDocument, c: Collected): Server | undefined {
     return refuse(
       c,
       "server-url-templated",
-      `the server url "${url}" uses OpenAPI server-variable templating. A generated fetch helper ` +
-        "does not expand it, so the braces would be sent as literal characters — substitute the " +
+      `the server url "${url}" carries braces. OpenAPI server-variable templating is one thing ` +
+        "they mean, and a generated fetch helper does not expand it — the braces would be sent " +
+        "as literal characters. The other is that the fetch helper splices this base into a " +
+        "template literal, where a ${ is a live interpolation rather than data. Substitute the " +
         "variables and pass the resulting URL.",
     );
   }
@@ -277,18 +301,93 @@ function readServer(doc: OpenApiDocument, c: Collected): Server | undefined {
   try {
     parsed = new URL(url);
   } catch {
+    return refuse(c, "server-url-not-fetchable", relativeUrlDetail(url));
+  }
+
+  // Named for the CLAIM rather than for the parse that produced it. "did new URL() throw" is a
+  // different question from "can a connector fetch this and declare its host": `mailto:a@b.test`
+  // parses cleanly and produced `"network": [""]` while this refusal's own message said there was
+  // no host to put there. One ternary, so the message names which of the two it was without
+  // leaving the second on a line of its own.
+  //
+  // The host arm is belt: measured on the pinned Bun 1.3.14, a special scheme cannot have an
+  // empty host — `new URL("http:///x")` yields host "x", hoisting the first path segment — so the
+  // protocol arm above already implies a host today. It stays because the implication is a
+  // property of WHATWG URL rather than of this code, and it shares a line so it is not an
+  // uncovered branch.
+  const unfetchable =
+    parsed.protocol !== "http:" && parsed.protocol !== "https:"
+      ? `declares the scheme "${parsed.protocol}", and a generated fetch helper issues http(s) ` +
+        "requests only"
+      : parsed.host === ""
+        ? 'names no host, so there is nothing to declare in "network"'
+        : undefined;
+  if (unfetchable !== undefined) {
     return refuse(
       c,
-      "server-url-not-absolute",
-      `the server url "${url}" is not an absolute URL. A relative server url is resolved against ` +
-        "the document's own location, which a spec has no way to record, and there is no host to " +
-        'put in "network".',
+      "server-url-not-fetchable",
+      `the server url "${url}" ${unfetchable}. A connector fetches this URL over http(s) and ` +
+        'declares its host in "network"; neither is possible here.',
     );
   }
-  // A trailing slash is dropped rather than noted: every tool path begins with "/" (the mapper
-  // refuses one that does not), so keeping it would emit "https://api.test/v1//widgets", and the
-  // two spellings of the base denote the same thing.
-  return { base: url.replaceAll(/\/+$/g, ""), host: parsed.host };
+
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return refuse(
+      c,
+      "server-url-not-a-base",
+      `the server url "${url}" carries a ${parsed.search === "" ? "fragment" : "query string"}. ` +
+        "Every tool path is appended to the base, so it would land after it — " +
+        '"/v1?trace=1" + "/widgets" is "/v1?trace=1/widgets". Move it into the operations, or ' +
+        "drop it.",
+    );
+  }
+
+  // `parsed.href` rather than the document's own text, which is the structural half of the
+  // injection fix: normalization percent-encodes a backtick in the path and in the fragment, so
+  // only the host can still carry one, and `assertSafeBase` refuses that. It also lower-cases the
+  // host — matching `parsed.host`, which is what `network` gets — and resolves dot segments.
+  //
+  // Every trailing slash is dropped, not just one: `href` adds one to a bare origin, and a
+  // document that writes two would otherwise emit "https://api.test/v1//widgets" — every tool
+  // path begins with "/" (the mapper refuses one that does not). The two spellings of a base
+  // denote the same thing, so this is normalization rather than a change worth noting.
+  const base = parsed.href.replaceAll(/\/+$/g, "");
+  return assertSafeBase(base, url, parsed.host, c);
+}
+
+/** The relative-URL half of `server-url-not-fetchable`, split out only to keep the caller flat. */
+function relativeUrlDetail(url: string): string {
+  return (
+    `the server url "${url}" is not an absolute URL. A relative server url is resolved against ` +
+    "the document's own location, which a spec has no way to record, so there is no host to " +
+    'declare in "network" and nothing for the fetch helper to prefix.'
+  );
+}
+
+/**
+ * The last guard before a document-supplied string becomes emitted source.
+ *
+ * `src/emit/server/fetch-helper.ts` writes `` const url = ... : `${base}${path}`; `` with the base
+ * spliced RAW, so a backtick in it does not stay data — it closes the literal, and everything
+ * after it is executable. That reaches `tsc --noEmit --strict` clean and Biome will reformat it,
+ * which is why neither is the gate here.
+ *
+ * Only the backtick is tested, and the omission of `${` is deliberate rather than a gap: the brace
+ * refusal above rejects every brace before this runs, so a `${` cannot reach here and an arm for
+ * it would be one no test could make true. That coupling is stated in `readServer`'s docstring so
+ * that narrowing the brace check means re-establishing this one in the same change.
+ */
+function assertSafeBase(base: string, url: string, host: string, c: Collected): Server | undefined {
+  if (base.includes("`")) {
+    return refuse(
+      c,
+      "server-url-unsafe",
+      `the server url "${url}" contains a backtick. The generated fetch helper interpolates its ` +
+        "base into a template literal, so a backtick would close that literal and the rest of " +
+        "the url would be emitted as executable code rather than as part of the address.",
+    );
+  }
+  return { base, host };
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -316,8 +415,12 @@ type Credential = {
  *
  * `basic` carries TWO suffixes because `EnvSchema`'s own refine requires exactly two variables for
  * that mode — a username and a password. Refusing a scheme the spec language models natively would
- * be a gap in this mapper rather than a limit of the generator, which is the test applied to every
- * arm here.
+ * be a gap in this mapper rather than a limit of the generator, and that is the test applied to
+ * every arm here **with one stated exception**: `auth: "client-credentials"` IS modelled natively,
+ * and an oauth2 `clientCredentials` flow is still refused. The reason is not that the mode is
+ * missing but that the document is: `EnvSchema` requires `credentialsIn`, and `securitySchemes`
+ * carries the `tokenUrl` and nothing about where the secret goes. That arm's message says so
+ * rather than naming the type and stopping.
  */
 function readCredential(doc: OpenApiDocument, c: Collected): Credential | undefined {
   const declared = Object.entries(doc.components?.securitySchemes ?? {});
@@ -481,10 +584,17 @@ function foldNotes(
  * Every selected operation as a tool, in the order they were selected.
  *
  * A refusing operation contributes its refusals and no tool, and the loop continues — one run
- * names every operation standing in the way. The duplicate check is on the TOOL name rather than
- * on `operationId` because that is the name the spec carries and the one `validateSpec` rejects a
- * repeat of; it is reachable from the CLI rather than only from a hand-built list, since `--op` is
- * repeatable and naming one operation twice hands this function the same operation twice.
+ * names every operation standing in the way.
+ *
+ * **The duplicate check has exactly one reachable cause, and it is worth stating which, because
+ * the obvious one does not exist.** No slugification of `operationId` happens anywhere in this
+ * pipeline: `mapOperation` sets `name: op.operationId` verbatim (see the tool object it builds),
+ * and `listOperations` already refuses `duplicate-operation-id` before any of them reach here. So
+ * two DISTINCT operationIds can never collide onto one tool name, and a check written for that
+ * cause would be unreachable. What is reachable is the same operation arriving twice — `--op` is
+ * repeatable, so `--op x --op x` hands this function one operation in two slots. That is what the
+ * refusal is for, and what its test drives. If a later change ever does slugify tool names, this
+ * comment is the thing that has to move with it.
  */
 function assembleTools(
   doc: OpenApiDocument,

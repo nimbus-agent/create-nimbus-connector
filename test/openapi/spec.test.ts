@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { generate } from "../../src/emit/index.ts";
 import { listOperations, type Operation } from "../../src/openapi/document.ts";
 import { mapOperation, type Refusal } from "../../src/openapi/operation.ts";
 import { type Assembled, assembleSpec } from "../../src/openapi/spec.ts";
@@ -110,6 +111,15 @@ describe("the fields the document itself supplies", () => {
     expect(spec.fetchHelper).toMatchObject({ base: "https://api.zz.test/v1" });
   });
 
+  // The `+` in the strip is what this covers, and it had no test until the review found that
+  // `replace(/\/$/, "")` failed nothing: one trailing slash is what `href` itself adds to a bare
+  // origin, so a single-slash case cannot tell the two apart. Two is a thing only the document
+  // can write, and one left behind emits "/v1//widgets".
+  it("drops EVERY trailing slash, not just the one href adds to a bare origin", () => {
+    const { spec } = mustAssemble(LIST_WIDGETS, { servers: [{ url: "https://api.zz.test/v1//" }] });
+    expect(spec.fetchHelper).toMatchObject({ base: "https://api.zz.test/v1" });
+  });
+
   it("keeps the port in the network entry, because a permission without it is a different host", () => {
     const { spec } = mustAssemble(LIST_WIDGETS, { servers: [{ url: "https://api.zz.test:8443" }] });
     expect(spec.network).toEqual(["api.zz.test:8443"]);
@@ -184,8 +194,110 @@ describe("the servers array, where four absences are four different refusals", (
 
   it("refuses a relative server url, which carries no host for network to declare", () => {
     const refusals = mustRefuse(LIST_WIDGETS, { servers: [{ url: "/v1" }] });
-    expect(kindsOf(refusals)).toEqual(["server-url-not-absolute"]);
-    expect(detailOf(refusals, "server-url-not-absolute")).toContain("/v1");
+    expect(kindsOf(refusals)).toEqual(["server-url-not-fetchable"]);
+    expect(detailOf(refusals, "server-url-not-fetchable")).toContain("/v1");
+  });
+
+  // The refusal used to be predicated on "did `new URL()` throw", while its message claimed the
+  // fact it protects — that there is no host for `network`. `mailto:` parses cleanly, so it
+  // assembled and produced `"network": [""]`: the exact state the message described, without
+  // firing. Same shape as `Bound.exclusive` -> `Bound.widened` one task ago, so the predicate is
+  // now the claim: an http(s) URL with a host.
+  it("refuses a scheme a generated fetch helper cannot issue, however cleanly it parses", () => {
+    for (const url of ["mailto:a@b.test", "ftp://api.zz.test/v1", "file:///etc/hosts"]) {
+      const refusals = mustRefuse(LIST_WIDGETS, { servers: [{ url }] });
+      expect(kindsOf(refusals)).toEqual(["server-url-not-fetchable"]);
+      expect(detailOf(refusals, "server-url-not-fetchable")).toContain("http(s)");
+    }
+  });
+
+  // Assembled before this refusal existed, emitting `.../v1?trace=1/widgets` — the query string
+  // swallows every tool path appended after it.
+  it("refuses a base carrying a query string or a fragment, which a tool path lands after", () => {
+    for (const [url, word] of [
+      ["https://api.zz.test/v1?trace=1", "query string"],
+      ["https://api.zz.test/v1#frag", "fragment"],
+    ] as const) {
+      const refusals = mustRefuse(LIST_WIDGETS, { servers: [{ url }] });
+      expect(kindsOf(refusals)).toEqual(["server-url-not-a-base"]);
+      expect(detailOf(refusals, "server-url-not-a-base")).toContain(word);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * The server url as emitted source
+ * ------------------------------------------------------------------------------------------ */
+
+/**
+ * `src/emit/server/fetch-helper.ts` splices `fetchHelper.base` RAW into a template literal, so a
+ * document-supplied url is one backtick away from being executable code in the generated package.
+ *
+ * The reproduction that motivated these tests cleared every bar this repository states as the real
+ * one: `parseSpec` accepted it (`FetchHelperSchema.base` is `z.string().min(1)`), the emitter
+ * spliced it, **Biome reformatted it** — adding spaces around the `+` it had just created — and
+ * `tsc --noEmit --strict` passed it clean. Nothing downstream can be the gate; this is.
+ */
+const INJECTION = "`+String(Date.now())+`";
+
+/** The emitted `src/server.ts` for an assembled spec. `generate` is pure — no formatter needed. */
+function emittedServer(spec: Record<string, unknown>): string {
+  const file = generate(parseSpec(spec)).find((f) => f.path.join("/") === "src/server.ts");
+  if (file === undefined) throw new Error("no src/server.ts was generated");
+  return file.content;
+}
+
+describe("a server url cannot become code in the generated package", () => {
+  /*
+   * The fix has two halves, and this is the one that covers the reported reproduction. `new URL()`
+   * percent-encodes a backtick in the PATH, so the base becomes `…/v1%60+String(Date.now())+%60`
+   * — the injection is still every character the document wrote, and it is now DATA inside one
+   * template literal rather than the end of it.
+   *
+   * The assertion is on the emitted source, not on the base string, because the base string is one
+   * abstraction away from the harm. `not.toContain` on the opening sequence is what says the
+   * literal is never closed; asserting the encoded text is present is what says nothing was
+   * silently dropped instead.
+   */
+  it("neutralises the reported injection into data rather than dropping or refusing it", () => {
+    const { spec } = mustAssemble(LIST_WIDGETS, {
+      servers: [{ url: `https://api.zz.test/v1${INJECTION}` }],
+    });
+    expect(spec.fetchHelper).toMatchObject({
+      base: "https://api.zz.test/v1%60+String(Date.now())+%60",
+    });
+    const server = emittedServer(spec);
+    expect(server).toContain("https://api.zz.test/v1%60+String(Date.now())+%60");
+    expect(server).not.toContain("`+String");
+  });
+
+  // The other half. The host is the one place `new URL()` does NOT encode a backtick — measured on
+  // the pinned Bun 1.3.14, where it encodes one in the path as %60 and one in the fragment but
+  // leaves the host alone — so normalization cannot be the whole fix and this refusal is the rest.
+  it("refuses a backtick in the HOST, which url normalization does not encode", () => {
+    const refusals = mustRefuse(LIST_WIDGETS, {
+      servers: [{ url: "https://`a`.zz.test/v1" }],
+    });
+    expect(kindsOf(refusals)).toEqual(["server-url-unsafe"]);
+    expect(detailOf(refusals, "server-url-unsafe")).toContain("backtick");
+  });
+
+  // Asserted here, under this heading, rather than left to the templating tests: `${` is refused
+  // for TWO reasons and only one of them is about OpenAPI. A `${` reaching the emitted template
+  // literal is a live interpolation, and the brace check is what stops it — by statement now
+  // rather than by accident.
+  it("refuses a ${ in a url, whose braces would interpolate rather than address", () => {
+    const refusals = mustRefuse(LIST_WIDGETS, {
+      servers: [{ url: "https://api.zz.test/v1${process.env.HOME}" }],
+    });
+    expect(kindsOf(refusals)).toEqual(["server-url-templated"]);
+    expect(detailOf(refusals, "server-url-templated")).toContain("interpolation");
+  });
+
+  // The ordinary case, so the two rules above cannot pass by refusing or rewriting everything.
+  it("leaves an ordinary server url untouched all the way into emitted source", () => {
+    const { spec } = mustAssemble(LIST_WIDGETS);
+    expect(emittedServer(spec)).toContain("`https://api.zzwidgets.test/v1${path}`");
   });
 });
 
@@ -371,6 +483,29 @@ describe("the placeholders, each of which stands for something no document state
   it("keeps the document's title inside the displayName placeholder rather than discarding it", () => {
     const { spec } = mustAssemble(LIST_WIDGETS);
     expect(spec.displayName).toContain("ZZ Widgets");
+  });
+
+  /*
+   * `serviceLabel` is the one placeholder that must not carry the title, and until the review
+   * that was a claim in a docstring with nothing behind it.
+   *
+   * `src/emit/server/fetch-helper.ts` splices it RAW into a template literal and
+   * `src/emit/wiring.ts` into a block comment, and — as the server-url Critical showed — there is
+   * no backstop anywhere downstream: `parseSpec` takes any non-empty string, Biome reformats
+   * whatever the emitter produced, and `tsc` typechecks it. It is safe today only because the
+   * placeholder is a constant, so the test is that it IS one: byte-identical across two documents
+   * whose titles differ, one of them hostile.
+   */
+  it("never lets the document's title reach serviceLabel, which is spliced into emitted source", () => {
+    const hostile = mustAssemble(LIST_WIDGETS, {
+      info: { title: `ZZ \`Widgets\` \${x} *${"/"} Co`, version: "1.0.0" },
+    }).spec;
+    expect(hostile.serviceLabel).toBe(mustAssemble(LIST_WIDGETS).spec.serviceLabel);
+    expect(hostile.serviceLabel).not.toContain("`");
+    expect(hostile.serviceLabel).not.toContain("${");
+    // The title is not discarded, though — displayName and description reach the manifest through
+    // JSON.stringify, where any text is data.
+    expect(hostile.displayName).toContain("Widgets");
   });
 
   it("gives a tool with no summary the TODO: describe form src/prompts.ts already uses", () => {
