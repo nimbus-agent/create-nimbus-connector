@@ -63,6 +63,12 @@ type Factory = {
  * helper's own name, recovered here as `fetchLocal`. A fifth key, a reordering, or a
  * `registrar` bound to anything but `reg` is a shape the emitter cannot produce and is
  * rejected wholesale, not merely ignored.
+ *
+ * Each key must also be written BARE. `renderRestKitTools` writes all four as identifiers, and
+ * `objectProps` resolves `{ "fetch": … }` to the same `key` as `{ fetch: … }` — so the quoted
+ * spelling recovered the identical four fields and re-emitted the bare form: different bytes, an
+ * unchanged spec, invisible to `diff:golden`, to the round trip and to the totality rule alike.
+ * See `Prop.bareKey` (src/derive/read.ts) for why formatting does not close this.
  */
 function recognizeFactory(statement: AstNode): Factory | undefined {
   const decl = constDecl(statement);
@@ -85,6 +91,9 @@ function recognizeFactory(statement: AstNode): Factory | undefined {
   ) {
     return undefined;
   }
+  // One check for all four rather than four `&& prop.bareKey` clauses below: the emitter's rule
+  // here has no per-key exceptions, so a per-key spelling would invite one.
+  if (!props.every((p) => p.bareKey)) return undefined;
 
   if (registrarProp.key !== "registrar" || !isIdent(registrarProp.value, "reg")) return undefined;
 
@@ -211,6 +220,15 @@ const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  * `initArg` writes `{ method: ${JSON.stringify(tool.method)}${bodyPart} }`, where `bodyPart` is
  * either `""` or `, body: ${bodyExpr}` — never a third key, never `body` alone, never reordered.
  *
+ * **Both keys must be written BARE.** `initArg` interpolates the method's VALUE through
+ * `JSON.stringify` and writes both KEYS as identifiers; `objectProps` resolves `{ "method": … }`
+ * to the same `key` as `{ method: … }`, so the quoted spelling recovered the identical `method`
+ * and `body` and re-emitted the bare form — different bytes, an unchanged spec, and invisible to
+ * `diff:golden`, to the round trip and to the totality rule alike, which is the shape of every
+ * defect this branch has had to find by reading rather than by running. `body.ts`'s `fieldName`
+ * already refuses a quoted key for the same reason, one module over; this was the hole left.
+ * See `Prop.bareKey` (src/derive/read.ts) for why formatting does not close it.
+ *
  * **The parameter/body correspondence is pinned in both directions.** `renderTool`'s `initParam`
  * is `"()"` exactly when `bodyExpr` is undefined and `"(parsed)"` exactly when it is not — forced
  * by the generated package's `noUnusedParameters`, since an unreferenced `parsed` fails its own
@@ -239,7 +257,9 @@ function recognizeInitFn(
   if (props === undefined || (props.length !== 1 && props.length !== 2)) return undefined;
 
   const methodProp = props[0];
-  if (methodProp === undefined || methodProp.key !== "method") return undefined;
+  if (methodProp === undefined || methodProp.key !== "method" || !methodProp.bareKey) {
+    return undefined;
+  }
   const method = stringLit(methodProp.value);
   if (method === undefined || !WRITE_METHODS.has(method)) return undefined;
   const typedMethod = method as "POST" | "PUT" | "PATCH" | "DELETE";
@@ -254,7 +274,7 @@ function recognizeInitFn(
   // refused the same way, from the other side.
   if (arrow.params.length !== 1) return undefined;
   const bodyProp = props[1];
-  if (bodyProp === undefined || bodyProp.key !== "body") return undefined;
+  if (bodyProp === undefined || bodyProp.key !== "body" || !bodyProp.bareKey) return undefined;
 
   const body = recognizeBodyExpr(
     bodyProp.value,

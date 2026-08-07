@@ -775,6 +775,103 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
 });
 
 /**
+ * The PR-review finding on top of Finding B above, and the SEVENTH instance of this branch's
+ * defining defect class: the four matchers Finding B pinned checked `typeAnnotationName(...) ===
+ * "Record"`, and `typeAnnotationName` reports a type reference's HEAD NAME only (its own
+ * docstring). `Record<string, number>` and `Record<unknown, unknown>` satisfied that check, while
+ * `renderEnvAccessor`, `renderSplitBearer`, `renderBasic` and `renderClientCredentials`
+ * (src/emit/server/env.ts) write exactly `Record<string, string>` and no other instantiation. Such
+ * a module recovers IDENTICAL `EnvEntry` fields and re-emits `Record<string, string>` — different
+ * bytes, an unchanged spec, and nothing that could see it: `diff:golden` compares emitted output
+ * against the corpus, the round trip emits the annotation going in and coming out, and the
+ * totality rule detects statements nobody claimed, not statements claimed wrongly.
+ *
+ * `hasWriteHelperSignature` (src/derive/server/fetch-helper.ts) already pinned `Promise`'s own
+ * type argument for exactly this reason, through the `typeArguments` accessor added for it. One
+ * module pinned; its sibling did not. `isStringRecord` is now the single guard both halves of that
+ * asymmetry answer to.
+ */
+describe("recognizeEnv: Record's type arguments, not just its head name", () => {
+  const BEARER_ACCESSOR = [
+    "function authHeaders(): Record<string, string> {",
+    '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+    '  if (tok === undefined || tok === "") {',
+    '    throw new Error("GRAFANA_API_TOKEN is not set");',
+    "  }",
+    '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+    "}",
+  ].join("\n");
+
+  const BASIC_ACCESSOR = [
+    "function authHeader(): Record<string, string> {",
+    '  const user = process.env["AIRFLOW_USER"]?.trim();',
+    '  if (user === undefined || user === "") {',
+    '    throw new Error("AIRFLOW_USER is not set");',
+    "  }",
+    '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+    '  if (pass === undefined || pass === "") {',
+    '    throw new Error("AIRFLOW_PASSWORD is not set");',
+    "  }",
+    "  return {",
+    "    Authorization: encodeBasicAuthHeader(user, pass),",
+    '    Accept: "application/json",',
+    "  };",
+    "}",
+  ].join("\n");
+
+  /**
+   * Three instantiations, each typechecking and each bytes no spec produces: a wrong VALUE type,
+   * a wrong KEY type (which the head-name check missed on the left of the pair as readily as on
+   * the right), and the bare reference with no arguments at all — the arity case, which
+   * `typeArguments` reports as absent rather than as an empty list.
+   */
+  const WRONG_RECORDS: ReadonlyArray<readonly [string]> = [
+    ["Record<string, number>"],
+    ["Record<unknown, unknown>"],
+    ["Record"],
+  ];
+
+  it.each(WRONG_RECORDS)(
+    "refuses a plain auth accessor returning %s — renderEnvAccessor writes Record<string, string>",
+    (wrong) => {
+      const corrupted = BEARER_ACCESSOR.replace("Record<string, string>", wrong);
+      expect(corrupted).not.toBe(BEARER_ACCESSOR);
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+
+  it.each(WRONG_RECORDS)(
+    "refuses a basic accessor returning %s — renderBasic writes Record<string, string>",
+    (wrong) => {
+      const corrupted = BASIC_ACCESSOR.replace("Record<string, string>", wrong);
+      expect(corrupted).not.toBe(BASIC_ACCESSOR);
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+
+  it.each(WRONG_RECORDS)(
+    "refuses a split-bearer wrapper returning %s — renderSplitBearer writes Record<string, string>",
+    (wrong) => {
+      const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace("Record<string, string>", wrong);
+      expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+      const { entries, unclaimed } = run([SPLIT_BEARER_READER, "", corruptedWrapper].join("\n\n"));
+      // The same outcome the async-wrapper row above establishes, and for the same reason: the
+      // untouched READER is byte-identical to a plain required accessor, so it still derives
+      // through the plain-accessor branch, while the wrapper — matching neither
+      // matchSplitBearerWrapper nor recognizeOne — carries no tokenLocal and stays unclaimed.
+      expect(entries).toEqual([
+        { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+      ]);
+      expect(unclaimed).toHaveLength(1);
+    },
+  );
+});
+
+/**
  * `auth: "client-credentials"` — the-honest-histogram's task 8, and the largest single construct
  * in this emitter: FOUR module-scope statements (`let cachedToken`, `let tokenExpiresAt`,
  * `async function token()`, `async function <local>()`) claimed as ONE entry, the way the
@@ -1008,6 +1105,21 @@ const REFUSED_CLIENT_CREDENTIALS: [string, string][] = [
   [
     "a wrapper calling a function other than token()",
     CLIENT_CREDENTIALS.replace("await token()", "await otherToken()"),
+  ],
+  [
+    // The client-credentials half of the finding the "Record's type arguments" describe above
+    // covers for the other three matchers. This one is nested a level deeper —
+    // `renderClientCredentials` writes `Promise<Record<string, string>>` — so the outer
+    // `Promise` argument was already pinned and only the inner instantiation was not.
+    "a wrapper returning Promise<Record<string, number>> — renderClientCredentials writes Promise<Record<string, string>>",
+    CLIENT_CREDENTIALS.replace(
+      "Promise<Record<string, string>>",
+      "Promise<Record<string, number>>",
+    ),
+  ],
+  [
+    "a wrapper returning a bare Promise<Record> — the arity case, which `typeArguments` reports as absent rather than empty",
+    CLIENT_CREDENTIALS.replace("Promise<Record<string, string>>", "Promise<Record>"),
   ],
 
   // --- The emitted comment. renderTokenFunction is the only emitter that writes one into

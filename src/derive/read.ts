@@ -571,7 +571,28 @@ export function newOf(
 // Objects
 // ---------------------------------------------------------------------------
 
-export type Prop = { readonly key: string; readonly value: AstNode };
+export type Prop = {
+  readonly key: string;
+  readonly value: AstNode;
+  /**
+   * Whether the key was written as a bare identifier (`{ method: … }`) rather than as a quoted
+   * string (`{ "method": … }`) — the one thing `key` itself cannot say, since `objectProps`
+   * resolves both spellings to the same name.
+   *
+   * Handed back rather than resolved here because the right answer differs per caller, the same
+   * split `ImportName.isType` and `PropertySignature.optional` model. A fixed-key literal
+   * (`renderTool`'s `{ method, body }`, `renderRestKitTools`'s factory) is written bare and only
+   * bare, so a quoted key there is a shape the emitter cannot produce; a header object is written
+   * bare exactly when `IDENTIFIER_RE` accepts the header name (src/emit/server/env.ts's
+   * `returnLines`), so `"DD-API-KEY"` is quoted and `Accept` is not, and both are producible.
+   *
+   * Formatting settles nothing: Biome preserves a needlessly quoted key verbatim — verified
+   * 2026-08-07 by running `{ "method": "DELETE" }` through `formatAll` — so the spelling reaches
+   * the byte comparison unchanged, and a recognizer that accepts the wrong one derives a spec
+   * that re-emits different bytes while every recovered field stays identical.
+   */
+  readonly bareKey: boolean;
+};
 
 /**
  * Every property of an ObjectExpression, unfiltered — a SpreadElement, a computed key or any
@@ -643,6 +664,10 @@ export function isShorthandProperty(node: AstNode | undefined): boolean {
  * ObjectProperty — a spread, a method, or a `{ [K]: v }` computed key disqualifies the whole
  * object rather than being skipped. A shorthand `{ issueId }` reads as key "issueId" with the
  * Identifier as its value, which is the shape `renderBodyExpr` emits.
+ *
+ * `key` deliberately merges the bare and quoted spellings, and `Prop.bareKey` carries the
+ * distinction alongside it rather than a caller having to drop to `objectProperty` to recover it.
+ * Reading `key` alone is correct only where BOTH spellings are producible; see `bareKey`.
  */
 export function objectProps(node: AstNode | undefined): Prop[] | undefined {
   if (node?.type !== "ObjectExpression") return undefined;
@@ -654,10 +679,11 @@ export function objectProps(node: AstNode | undefined): Prop[] | undefined {
     if (property.type !== "ObjectProperty") return undefined;
     if (raw(property)["computed"] === true) return undefined;
     const keyNode = child(property, "key");
-    const key = identName(keyNode) ?? stringLit(keyNode);
+    const bare = identName(keyNode);
+    const key = bare ?? stringLit(keyNode);
     const value = child(property, "value");
     if (key === undefined || value === undefined) return undefined;
-    out.push({ key, value });
+    out.push({ key, value, bareKey: bare !== undefined });
   }
   return out;
 }
@@ -834,13 +860,19 @@ export function typeOperator(node: AstNode | undefined): TypeOperator | undefine
 
 /**
  * A return-type annotation that is exactly the keyword or type reference `name` — `string`,
- * `unknown`, `Record`, and so on. Returns the head name only; a generic's type arguments are NOT
- * inspected, because every position its callers check is one the emitter writes as a fixed literal:
- * `renderBasic`, `renderSplitBearer` and `renderEnvAccessor` (src/emit/server/env.ts) write exactly
- * `Record<string, string>` or `string` and never another instantiation, so the head name alone
- * distinguishes them. Needed by server/env.ts's four accessor matchers, which previously read the
- * body and the name and ignored the annotation entirely — so `(): unknown` read exactly like
+ * `unknown`, `Record`, and so on. Returns the HEAD NAME only; a generic's type arguments are not
+ * inspected here. Needed by server/env.ts's four accessor matchers, which previously read the body
+ * and the name and ignored the annotation entirely — so `(): unknown` read exactly like
  * `(): string`.
+ *
+ * **The head name alone is never sufficient for a generic, and this docstring used to argue that it
+ * was.** It reasoned that because `renderBasic`/`renderSplitBearer`/`renderEnvAccessor` write
+ * exactly `Record<string, string>` and no other instantiation, the head name distinguishes them —
+ * which confuses what the EMITTER writes with what the READER accepts. `Record<string, number>`
+ * shares the head name, recovers identical `EnvEntry` fields, and re-emits `Record<string, string>`.
+ * A caller matching a generic composes this with `typeArguments` below (server/env.ts's
+ * `isStringRecord`, server/fetch-helper.ts's `hasWriteHelperSignature`); a caller matching a
+ * keyword or a bare reference needs nothing more.
  *
  * A keyword type (`TSStringKeyword`, `TSUnknownKeyword`, …) carries no name field of its own —
  * Babel spells the keyword INTO the node's `type`, so the name is recovered from it rather than
@@ -861,12 +893,17 @@ export function typeAnnotationName(node: AstNode | undefined): string | undefine
  * A type reference's own type arguments — `Promise<unknown>`'s single `unknown` — or undefined
  * when the node is not a reference or carries none (`Promise`, `RequestInit`).
  *
- * `typeAnnotationName` above deliberately reports a reference's HEAD NAME only, which is all its
- * env.ts callers need: `renderBasic`/`renderSplitBearer`/`renderEnvAccessor` write exactly
- * `Record<string, string>` and no other instantiation, so the head name alone distinguishes them.
- * `renderWriteHelper`'s `): Promise<unknown>` is the first place the ARGUMENT is load-bearing —
- * `Promise<void>` shares the head name and is a return type the emitter never writes, so
- * accepting it would claim a whole FunctionDeclaration this generator re-emits differently.
+ * `typeAnnotationName` above reports a reference's HEAD NAME only, so every caller matching a
+ * GENERIC has to compose the two. `renderWriteHelper`'s `): Promise<unknown>` was the first place
+ * the argument was recognized as load-bearing — `Promise<void>` shares the head name and is a
+ * return type the emitter never writes, so accepting it would claim a whole FunctionDeclaration
+ * this generator re-emits differently.
+ *
+ * It was not the only place, and treating it as one was a defect: server/env.ts's four accessor
+ * matchers pinned `Record` by head name for two rounds after this accessor existed, accepting
+ * `Record<string, number>` for the `Record<string, string>` every one of them re-emits.
+ * `isStringRecord` (server/env.ts) is that composition, shared across all four rather than
+ * repeated — the asymmetry with `hasWriteHelperSignature` is what surfaced it.
  *
  * Babel spells the list `typeArguments` on a type REFERENCE, wrapped in a
  * `TSTypeParameterInstantiation` whose `params` hold the types. That is a different key and a

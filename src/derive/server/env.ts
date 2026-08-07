@@ -69,6 +69,35 @@ export type EnvEntry = {
 };
 
 /**
+ * `Record<string, string>` exactly — the head name AND both type arguments.
+ *
+ * Every accessor this module recognizes that returns a header record returns that instantiation
+ * and no other: `renderEnvAccessor`'s auth branch, `renderSplitBearer`'s wrapper, `renderBasic`,
+ * and `renderClientCredentials` inside a `Promise<…>` (all in src/emit/server/env.ts). The four
+ * matchers below used to pin it with `typeAnnotationName(...) === "Record"`, which reports the
+ * head name only — so `Record<string, number>` and `Record<unknown, unknown>` satisfied it, and a
+ * module writing either recovered IDENTICAL `EnvEntry` fields and re-emitted `Record<string,
+ * string>`. Different bytes, an unchanged spec, and nothing able to see it: `diff:golden` compares
+ * emitted output, the round trip emits the annotation on both legs, and the totality rule reports
+ * statements nobody claimed, not statements claimed wrongly.
+ *
+ * Shared across all four rather than repeated at each, because the asymmetry is exactly what
+ * surfaced the defect: `hasWriteHelperSignature` (server/fetch-helper.ts) had already pinned
+ * `Promise`'s own argument for this reason, through the `typeArguments` accessor added for it,
+ * while its sibling here still pinned by head name. A guard duplicated four times is four places
+ * for the next tightening to be applied three times.
+ */
+function isStringRecord(node: AstNode | undefined): boolean {
+  if (typeAnnotationName(node) !== "Record") return false;
+  const args = typeArguments(node);
+  return (
+    args?.length === 2 &&
+    typeAnnotationName(args[0]) === "string" &&
+    typeAnnotationName(args[1]) === "string"
+  );
+}
+
+/**
  * `process.env["VAR"]?.trim()` -> `VAR`.
  *
  * The `?.trim` step is a genuinely optional-chain node (OptionalCallExpression whose callee is
@@ -434,8 +463,14 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   // renderEnvAccessor writes `(): string` for the plain branch and `(): Record<string, string>`
   // for the auth (bearer/headers) branch — the identical `arg.type === "ObjectExpression"` split
   // made just below, so the two checks must agree or this shape is not one the emitter can write.
-  const expectedReturnType = arg.type === "ObjectExpression" ? "Record" : "string";
-  if (typeAnnotationName(functionReturnType(fn)) !== expectedReturnType) return undefined;
+  // `Record` goes through `isStringRecord`, not `typeAnnotationName`: the head name alone accepts
+  // instantiations this branch re-emits differently. See that function.
+  const returnType = functionReturnType(fn);
+  const returnTypeMatches =
+    arg.type === "ObjectExpression"
+      ? isStringRecord(returnType)
+      : typeAnnotationName(returnType) === "string";
+  if (!returnTypeMatches) return undefined;
 
   const local = functionName(fn);
   if (local === undefined) return undefined;
@@ -507,8 +542,9 @@ function matchSplitBearerReader(
  * spec can produce a layout with a statement between them.
  */
 function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
-  // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`.
-  if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "Record") {
+  // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`
+  // — both type arguments pinned, not just the head name; see `isStringRecord`.
+  if (isAsyncFunction(fn) || !isStringRecord(functionReturnType(fn))) {
     return undefined;
   }
 
@@ -587,8 +623,9 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * read/guard/read/guard never satisfies — so the two never compete for the same statement.
  */
 function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
-  // renderBasic is never async and always returns `Record<string, string>`.
-  if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "Record") {
+  // renderBasic is never async and always returns `Record<string, string>` — both type arguments
+  // pinned, not just the head name; see `isStringRecord`.
+  if (isAsyncFunction(fn) || !isStringRecord(functionReturnType(fn))) {
     return undefined;
   }
 
@@ -1115,13 +1152,17 @@ function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
  * `matchSplitBearerWrapper`: that one is pinned non-async and `(): Record<string, string>` (task
  * 1), which is exactly what stops the plain-accessor pass from claiming THIS function, and
  * widening it to accept both would give that pin away.
+ *
+ * The return type is pinned two levels deep — `Promise`'s single argument, and that argument's own
+ * two — because both levels are constants of `renderClientCredentials` and neither carries a spec
+ * field. `Promise<Record<string, number>>` is the shape the outer pin alone let through.
  */
 function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
   if (!isAsyncFunction(fn)) return undefined;
   const returnType = functionReturnType(fn);
   if (typeAnnotationName(returnType) !== "Promise") return undefined;
   const resolved = typeArguments(returnType);
-  if (resolved?.length !== 1 || typeAnnotationName(resolved[0]) !== "Record") return undefined;
+  if (resolved?.length !== 1 || !isStringRecord(resolved[0])) return undefined;
   if (functionParams(fn)?.length !== 0) return undefined;
 
   const statements = functionBody(fn);

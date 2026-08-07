@@ -207,6 +207,23 @@ describe("objectProps", () => {
   it("rejects a spread element", () => {
     expect(objectProps(initOf("({ ...rest })"))).toBeUndefined();
   });
+
+  it("reports whether each key was written bare or quoted — the distinction `key` erases", () => {
+    // `{ a: 1 }` and `{ "a": 1 }` resolve to the same `key`, and no emitter under src/emit/ writes
+    // the quoted spelling for an identifier-shaped name (src/emit/server/env.ts's `returnLines`
+    // quotes a header name exactly when `IDENTIFIER_RE` rejects it, and quotes nothing else). A
+    // recognizer that cannot tell the two apart therefore claims a module it re-emits differently.
+    // Formatting does not rescue that: `formatAll` leaves a needlessly quoted key quoted —
+    // verified 2026-08-07 by running `{ "method": "DELETE" }` through it — so the quoted spelling
+    // survives all the way to the byte comparison.
+    const props = objectProps(initOf('({ a: 1, "b": 2, "b-c": 3, d })'));
+    expect(props?.map((p) => ({ key: p.key, bareKey: p.bareKey }))).toEqual([
+      { key: "a", bareKey: true },
+      { key: "b", bareKey: false },
+      { key: "b-c", bareKey: false },
+      { key: "d", bareKey: true },
+    ]);
+  });
 });
 
 describe("literals", () => {

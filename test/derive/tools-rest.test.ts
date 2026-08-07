@@ -82,6 +82,26 @@ describe("recognizeRestRegistrar", () => {
     expectRegistrarRejected(REST.replace("registrar: reg,", "registrar: otherReg,"));
   });
 
+  /**
+   * `renderRestKitTools` writes all four keys as bare identifiers, and `objectProps` resolves a
+   * key through `identName(keyNode) ?? stringLit(keyNode)` — so a quoted spelling recovered the
+   * IDENTICAL four fields and re-emitted the bare form. Byte-different, spec-identical, and
+   * invisible to every gate: the same class as the `recognizeInitFn` rows below, one construct up.
+   * Formatting does not close it — Biome leaves a needlessly quoted key quoted.
+   */
+  const QUOTED_FACTORY_KEYS: ReadonlyArray<readonly [string, string]> = [
+    ["registrar: reg,", '"registrar": reg,'],
+    ['tokenEnv: "ZZ_TOKEN",', '"tokenEnv": "ZZ_TOKEN",'],
+    ['serviceLabel: "Zz",', '"serviceLabel": "Zz",'],
+    ["fetch: zzFetch,", '"fetch": zzFetch,'],
+  ];
+
+  it.each(QUOTED_FACTORY_KEYS)("rejects a factory whose `%s` key is quoted", (from, to) => {
+    const corrupted = REST.replace(from, to);
+    expect(corrupted).not.toBe(REST);
+    expectRegistrarRejected(corrupted);
+  });
+
   it("returns undefined and claims nothing when no factory is present at all", () => {
     expectRegistrarRejected('registerZzTool("a", "d", z.object({}), () => "/a");');
   });
@@ -345,6 +365,22 @@ describe("recognizeRestTools reads the arity-5 initFn", () => {
       "a body with no parameter — renderTool's initParam is `(parsed)` whenever body references it",
       "  (parsed) => ({",
       "  () => ({",
+    ],
+    [
+      // `renderTool`'s `initArg` interpolates the METHOD through JSON.stringify and writes the
+      // KEY as a bare identifier — `{ method: ${JSON.stringify(tool.method)}… }`. `objectProps`
+      // resolves a key through `identName(keyNode) ?? stringLit(keyNode)`, so the quoted spelling
+      // recovered the identical `method` and re-emitted the bare form: different bytes, an
+      // unchanged spec, and nothing that could see it. Biome does not normalize the quotes away,
+      // so the difference survives `formatAll` all the way to the byte comparison.
+      "a quoted `method` key — renderTool writes it bare",
+      '() => ({ method: "DELETE" }),',
+      '() => ({ "method": "DELETE" }),',
+    ],
+    [
+      "a quoted `body` key — the same hole on the other key renderTool writes",
+      '    body: JSON.stringify({ title: parsed.title, mode: parsed.mode ?? "merge" }),',
+      '    "body": JSON.stringify({ title: parsed.title, mode: parsed.mode ?? "merge" }),',
     ],
   ];
 
