@@ -80,8 +80,8 @@ describe("resolveSdkRoot", () => {
     expect(message).toMatch(/tried/i);
     expect(message).not.toMatch(/does not exist/);
     expect(message).toMatch(/marker file missing/);
-    // Both "Nimbus" and "nimbus" are probed, so a case-insensitive filesystem lists this
-    // same directory twice. Assert on content, never on how many paths were tried.
+    // The SDK resolver probes only this sibling name, so the whole diagnostic must classify
+    // the existing directory as marker-missing rather than absent.
   });
 
   it("lists every attempted path when nothing resolves", () => {
