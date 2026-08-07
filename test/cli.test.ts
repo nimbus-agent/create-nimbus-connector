@@ -233,6 +233,18 @@ describe("parseCliArgs", () => {
     it("rejects --from-connector combined with --dry-run, since it never writes files either way", () => {
       expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--dry-run"])).toThrow(/--dry-run/);
     });
+
+    // Previously this fell through to "--force only applies to --gateway-wiring. Add it, or drop
+    // --force." — and --from-connector with --gateway-wiring is refused, so the first half of
+    // that advice led nowhere. It must fail on --from-connector's own rule.
+    it("rejects --from-connector combined with --force on its own rule, not --gateway-wiring's", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--force"])).toThrow(
+        /--from-connector/,
+      );
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--force"])).not.toThrow(
+        /Add it, or drop --force/,
+      );
+    });
   });
 
   describe("--partial", () => {
@@ -312,6 +324,19 @@ describe("parseCliArgs", () => {
         expect(() => parseCliArgs(argv)).toThrow(flag);
       }
       expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+    });
+
+    // --force and --partial are each gated on a flag that is itself refused alongside
+    // --from-openapi, so their own messages ("add --gateway-wiring", "add --from-connector")
+    // point at commands this CLI would also reject. They belong in the group, not after it.
+    it("rejects --force and --partial too, rather than sending the user to a refused flag", () => {
+      const withForce = ["--from-openapi", "w.yaml", "--list-operations", "--force"];
+      expect(() => parseCliArgs(withForce)).toThrow(/--force/);
+      expect(() => parseCliArgs(withForce)).toThrow(/--from-openapi/);
+
+      const withPartial = ["--from-openapi", "w.yaml", "--list-operations", "--partial"];
+      expect(() => parseCliArgs(withPartial)).toThrow(/--partial/);
+      expect(() => parseCliArgs(withPartial)).toThrow(/--from-openapi/);
     });
 
     it("still accepts --from-openapi with --list-operations on their own", () => {

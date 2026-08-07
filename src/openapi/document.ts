@@ -14,7 +14,7 @@
  *
  *   unparseable                  the text is neither JSON nor YAML
  *   multi-document-stream        a YAML stream holding more than one document
- *   not-an-object                the root is a scalar or an array of non-documents
+ *   not-an-object                the root is a scalar, null, or a JSON array
  *   swagger-2.0                  a Swagger 2.0 document, which this reader does not model
  *   missing-openapi-version      no `openapi` field at all
  *   openapi-version-not-scalar   an `openapi` field that is not text or a number
@@ -25,10 +25,20 @@
  *   $ref-circular                a `$ref` chain that returns to a pointer already being resolved
  *   $ref-dangling                a `#/...` pointer naming a node the document does not contain
  *   no-paths                     a document declaring no `paths` object
- *   unsupported-method           `head`, `options` or `trace`, which the spec language lacks
+ *   path-parameters-shape        a path item whose `parameters` is not an array
  *   operation-shape              a method key holding something that is not an operation object
  *   missing-operation-id         an operation with no `operationId` for `--op` to select on
  *   duplicate-operation-id       two operations sharing one `operationId`
+ *
+ * Two constructs are NOT refusals — they are reported by `listSkippedOperations` and omitted
+ * from the selectable set instead, because both occur in documents that are otherwise entirely
+ * readable and refusing the document would take forty mappable operations down with one:
+ *
+ *   unsupported-method           `head`, `options` or `trace`, which the spec language lacks
+ *   mis-cased-method             `GET:` / `Post:` — OpenAPI method keys are lower-case
+ *
+ * The hard refusal for those two belongs where such an operation is actually named by `--op`,
+ * which is the same "take the guarantee one level later" move `OpenApiPathItemSchema` makes.
  */
 import { type OpenApiDocument, OpenApiDocumentSchema, OpenApiOperationSchema } from "./schema.ts";
 
@@ -41,6 +51,40 @@ export type Operation = {
   readonly summary?: string;
   /** The operation object as read, refs already resolved — Task 2 maps from this. */
   readonly raw: unknown;
+  /**
+   * The PATH ITEM's `parameters` — the ones declared beside this operation rather than inside
+   * it — empty when the item declares none. Carried separately and NOT merged into `raw`.
+   *
+   * OpenAPI's rule is that a path-level parameter applies to every operation in the item, and an
+   * operation-level parameter OVERRIDES it when both share a `(name, in)` pair. **The mapper
+   * performs that merge**, on those exact terms: only the parameter mapper knows how to read a
+   * parameter object, so merging here would hand it one flat list it could no longer tell apart,
+   * and an override would silently become a duplicate.
+   *
+   * This exists because dropping it is the expensive silent omission in this file's blast radius.
+   * `/widgets/{widgetId}` declaring `widgetId` at the path item is a CANONICAL OpenAPI shape; a
+   * mapper that never saw it would face a `{widgetId}` in the path template with nothing
+   * declaring it, and would have to either refuse a common valid document or invent a type.
+   */
+  readonly pathParameters: readonly unknown[];
+};
+
+/**
+ * An operation this reader can see but not offer for selection.
+ *
+ * Reported rather than refused, deliberately. Every refusal in this module fires on a document
+ * that is broken, foreign or unreadable; these two fire on a document that is *valid* and
+ * otherwise entirely mappable, and `--list-operations` exists precisely to pick one operation out
+ * of many — so refusing the whole file over a `HEAD /health` sitting beside forty usable
+ * operations would defeat the command. Visibility does not require refusal: the same reasoning
+ * leaves `paths: {}` printing zero lines rather than throwing.
+ */
+export type SkippedOperation = {
+  readonly reason: "unsupported-method" | "mis-cased-method";
+  /** As written in the document, so the user can find the line — not upper-cased. */
+  readonly method: string;
+  readonly path: string;
+  readonly detail: string;
 };
 
 /** Every refusal goes through here, so a label can never be attached to only half a message. */
@@ -117,6 +161,18 @@ function resolveNode(node: unknown, root: unknown, stack: readonly string[]): un
  * for a later stage: a missing lookup yields `undefined`, which reaches a mapper as an ABSENT
  * field rather than an error, and the operation then maps with a silently missing schema. Here,
  * the reference is still in hand to name.
+ *
+ * **The one thing this drops, and why that is not the silent-omission class.** A node is replaced
+ * WHOLE, so any sibling of a `$ref` goes with it. In OpenAPI 3.0 that is what the specification
+ * requires — siblings of a `$ref` are defined to be ignored — so dropping them is the correct
+ * reading rather than a loss. 3.1 permits exactly two meaningful siblings, `summary` and
+ * `description`, and `assertSupportedVersion` accepts any 3.x, so those two can in principle be
+ * dropped. They are documentation fields on a REFERENCE, and no spec field this generator emits
+ * derives from one: a tool's description comes from the operation's own `summary`/`description`,
+ * which live inside the resolved node, never on the reference pointing at it. So the drop cannot
+ * change a generated connector, which is the test that keeps it out of the refuse-don't-drop
+ * rule. If a future mapper ever reads a schema node's `description`, this stops being true and
+ * the siblings must be merged over the resolved node (3.1's rule: the reference's wins).
  */
 export function resolveRefs(doc: unknown): unknown {
   return resolveNode(doc, doc, []);
@@ -190,15 +246,23 @@ function assertSupportedVersion(root: Record<string, unknown>): void {
  * The array check is not defensive padding: a multi-document YAML stream (`---` separated)
  * parses to an ARRAY, verified against the pinned Bun 1.3.14. Taking `[0]` would read half of a
  * two-API file and report success.
+ *
+ * It is gated on `source`, because an array means two different things by route. A JSON array is
+ * simply not a document, and reporting it as `this YAML holds 2 documents separated by "---"` —
+ * for text containing neither YAML nor a `---` — describes the reader's guess rather than the
+ * input. `source` is in hand here, so the two cases are separated rather than conflated.
  */
 export function loadDocument(text: string): LoadedDocument {
   const { value, source } = parseText(text);
   if (Array.isArray(value)) {
-    refuse(
-      "multi-document-stream",
-      `this YAML holds ${value.length} documents separated by "---"; pass one document per file ` +
-        "so the one being read is the one you chose.",
-    );
+    if (source === "yaml") {
+      refuse(
+        "multi-document-stream",
+        `this YAML holds ${value.length} documents separated by "---"; pass one document per ` +
+          "file so the one being read is the one you chose.",
+      );
+    }
+    refuse("not-an-object", "the document root is a JSON array, not an object.");
   }
   if (typeof value !== "object" || value === null) {
     refuse("not-an-object", `the document root is ${value === null ? "null" : typeof value}.`);
@@ -222,11 +286,7 @@ export function loadDocument(text: string): LoadedDocument {
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
 type Method = (typeof METHODS)[number];
 
-/**
- * The HTTP methods a Nimbus tool can issue, and the three it cannot. `head`, `options` and
- * `trace` are named rather than skipped: the spec language has no `method` value for them, and
- * an operation quietly missing from the listing is one a user cannot even ask about.
- */
+/** The three HTTP methods OpenAPI allows on a path item that the spec language cannot express. */
 const UNSUPPORTED_METHODS = new Set(["head", "options", "trace"]);
 
 function isMethod(key: string): key is Method {
@@ -234,31 +294,58 @@ function isMethod(key: string): key is Method {
 }
 
 /**
- * Every operation the document declares, in document order.
+ * Why a path-item key is skipped rather than listed, or `undefined` when it is not a method key
+ * at all (`parameters`, `summary`, `servers`, `x-*` — none of which is an operation, and none of
+ * which is worth reporting).
  *
+ * The mis-cased arm is the one a hand-authored document actually hits. OpenAPI's method keys are
+ * lower-case, so `GET:` is not an operation and vanishes into the same bucket as `x-internal` —
+ * the listing simply comes up short, with no line saying which key was ignored or why.
+ */
+function skipReasonFor(key: string): SkippedOperation["reason"] | undefined {
+  const lower = key.toLowerCase();
+  if (UNSUPPORTED_METHODS.has(lower)) return "unsupported-method";
+  if (key !== lower && isMethod(lower)) return "mis-cased-method";
+  return undefined;
+}
+
+function skipDetailFor(reason: SkippedOperation["reason"], key: string): string {
+  if (reason === "unsupported-method") {
+    return (
+      `a connector tool issues GET, POST, PUT, PATCH or DELETE, and the spec language has no ` +
+      `${key} equivalent, so this operation cannot be generated.`
+    );
+  }
+  return `OpenAPI method keys are lower-case; write "${key.toLowerCase()}:" instead of "${key}:".`;
+}
+
+/** Both listings come from one walk, so they can never disagree about what the document holds. */
+type Listing = { operations: Operation[]; skipped: SkippedOperation[] };
+
+/**
  * Order is the order the METHOD KEYS appear under each path — read from `Object.keys`, not a
  * fixed get/post/put/patch/delete sweep. `--list-operations` is what a user reads their `--op`
  * arguments off, and a listing reordered away from the file they are looking at is a listing
  * they have to re-derive by hand.
  */
-export function listOperations(doc: OpenApiDocument): Operation[] {
+function collect(doc: OpenApiDocument): Listing {
   const paths = doc.paths;
   if (paths === undefined) {
     refuse("no-paths", 'the document declares no "paths" object, so it describes no operations.');
   }
 
   const operations: Operation[] = [];
+  const skipped: SkippedOperation[] = [];
   /** operationId → where it was first seen, so a duplicate can name both sites. */
   const seen = new Map<string, string>();
 
   for (const [path, item] of Object.entries(paths)) {
+    const pathParameters = readPathParameters(item, path);
     for (const key of Object.keys(item)) {
-      if (UNSUPPORTED_METHODS.has(key)) {
-        refuse(
-          "unsupported-method",
-          `${key} ${path}: a connector tool issues GET, POST, PUT, PATCH or DELETE, and the spec ` +
-            `language has no ${key} equivalent. Remove the operation or pick another document.`,
-        );
+      const reason = skipReasonFor(key);
+      if (reason !== undefined) {
+        skipped.push({ reason, method: key, path, detail: skipDetailFor(reason, key) });
+        continue;
       }
       if (!isMethod(key)) continue;
 
@@ -296,8 +383,40 @@ export function listOperations(doc: OpenApiDocument): Operation[] {
         path,
         ...(parsed.data.summary === undefined ? {} : { summary: parsed.data.summary }),
         raw,
+        pathParameters,
       });
     }
   }
-  return operations;
+  return { operations, skipped };
+}
+
+/**
+ * The path item's own `parameters`, validated where it is read for the same reason the operation
+ * is: `OpenApiPathItemSchema` claims only "this is an object", so that declaring a key cannot
+ * reorder the method keys under it.
+ */
+function readPathParameters(item: Record<string, unknown>, path: string): readonly unknown[] {
+  const declared = item["parameters"];
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) {
+    refuse(
+      "path-parameters-shape",
+      `${path}: "parameters" on a path item must be an array, found ${typeof declared}.`,
+    );
+  }
+  return declared;
+}
+
+/** Every operation the document declares and this reader can offer, in document order. */
+export function listOperations(doc: OpenApiDocument): Operation[] {
+  return collect(doc).operations;
+}
+
+/**
+ * Every operation the document declares that `listOperations` deliberately left out, so a caller
+ * can say WHICH and WHY rather than letting the listing quietly come up short. See
+ * `SkippedOperation` for why these are reported rather than refused.
+ */
+export function listSkippedOperations(doc: OpenApiDocument): SkippedOperation[] {
+  return collect(doc).skipped;
 }

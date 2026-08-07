@@ -14,7 +14,7 @@ import { MARKER } from "./golden/resolve.ts";
 import { MONOREPO_LICENSE, validateLicense } from "./license.ts";
 // Statically imported, unlike src/derive/, which is behind a dynamic import because it needs the
 // optional @babel/parser. This reader's only dependency is zod, already in the graph via spec.ts.
-import { listOperations, loadDocument } from "./openapi/document.ts";
+import { listOperations, listSkippedOperations, loadDocument } from "./openapi/document.ts";
 import { promptForSpec } from "./prompts.ts";
 import { parseSpec } from "./spec.ts";
 import { displayPath, type GeneratedFile } from "./types.ts";
@@ -176,6 +176,17 @@ function assertFlagCombination(opts: CliOptions): void {
         "the same thing twice. Drop --dry-run.",
     );
   }
+  // The gap in this group the --from-openapi group's comment claimed was closed. --force alone
+  // reports "only applies to --gateway-wiring. Add it, or drop --force." — and adding
+  // --gateway-wiring is refused four checks below, so following the first half of that advice
+  // never reaches a valid command. Wrong advice is worse than none.
+  if (opts.fromConnector !== undefined && opts.force) {
+    throw new Error(
+      "--force lets --gateway-wiring overwrite files it did not create, and --from-connector " +
+        "writes no files at all — adding --gateway-wiring to give --force something to apply " +
+        "to is refused too. Drop --force.",
+    );
+  }
   // The --from-openapi group, checked ahead of each flag's own generic rule for exactly the
   // reason the --from-connector group above is: this command prints a spec to stdout and writes
   // nothing, so every flag that shapes a WRITE is dead here, and reporting "--license needs
@@ -189,6 +200,11 @@ function assertFlagCombination(opts: CliOptions): void {
       opts.license === undefined ? undefined : "--license",
       opts.dryRun ? "--dry-run" : undefined,
       opts.gatewayWiring === undefined ? undefined : "--gateway-wiring",
+      // --force and --partial are dead here for one more step than the rest: each is gated on a
+      // flag that is ITSELF refused alongside --from-openapi, so following the first line of
+      // "--force only applies to --gateway-wiring" never reaches a valid command.
+      opts.force ? "--force" : undefined,
+      opts.partial ? "--partial" : undefined,
     ].filter((f): f is string => f !== undefined);
     if (dead.length > 0) {
       throw new Error(
@@ -464,6 +480,14 @@ async function listDocumentOperations(docPath: string): Promise<void> {
     console.log(`${op.operationId.padEnd(width)}  ${op.method.padEnd(6)} ${op.path}`);
   }
   console.error(`note: read ${operations.length} operation(s) from ${source} ${docPath}`);
+  // On stderr, so stdout stays a list of --op arguments that can be copied whole. Named rather
+  // than omitted: an operation the reader can see but not offer is one the user would otherwise
+  // hunt for in their own file, having been given no reason it is absent.
+  for (const skipped of listSkippedOperations(doc)) {
+    console.error(
+      `note: skipped ${skipped.method} ${skipped.path} (${skipped.reason}) — ${skipped.detail}`,
+    );
+  }
 }
 
 export async function main(argv: readonly string[]): Promise<void> {

@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ZZ_WIDGETS_YAML } from "./support/openapi-doc.ts";
 import { tempDirs } from "./support/tmp.ts";
 
 // withTempDir already removes each directory in a finally; this is the backstop for a
@@ -439,27 +440,11 @@ describe("--from-connector", () => {
  * cannot instrument a child process, and spawning the shipped entry point is the stronger test.
  * The parse-level rules live in test/cli.test.ts; these assert what reaches stdout.
  *
- * The document is SYNTHETIC — invented here, not copied from any published API.
+ * The document is the shared synthetic one — see test/support/openapi-doc.ts, which explains why
+ * it is not hand-duplicated here.
  */
 describe("--from-openapi --list-operations", () => {
-  const DOC = [
-    "openapi: 3.0.3",
-    "info:",
-    "  title: ZZ Widgets",
-    "  version: 1.0.0",
-    "servers:",
-    "  - url: https://api.zzwidgets.test/v1",
-    "paths:",
-    "  /widgets:",
-    "    get:",
-    "      operationId: listWidgets",
-    "    post:",
-    "      operationId: createWidget",
-    "  /widgets/{widgetId}:",
-    "    get:",
-    "      operationId: getWidget",
-    "",
-  ].join("\n");
+  const DOC = ZZ_WIDGETS_YAML;
 
   function writeDoc(dir: string, text: string, name = "widgets.yaml"): string {
     const path = join(dir, name);
@@ -504,6 +489,27 @@ describe("--from-openapi --list-operations", () => {
       expect(exitCode).toBe(0);
       expect(stdout).toBe("listWidgets  GET    /widgets");
       expect(stderr).toContain("json");
+    });
+  });
+
+  // A HEAD beside three mappable operations must not take the document down with it — this
+  // command exists to pick one operation out of many. Named on stderr, so stdout stays a list of
+  // --op arguments that can be copied whole.
+  it("lists the rest and notes an operation it cannot offer, still exiting 0", () => {
+    withTempDir((dir) => {
+      const doc = writeDoc(dir, DOC.replace("    post:", "    head:"));
+      const { exitCode, stdout, stderr } = runCliBare(
+        ["--from-openapi", doc, "--list-operations"],
+        dir,
+      );
+      expect(exitCode).toBe(0);
+      expect(stdout.split("\n").map((l) => l.trim().split(/\s+/)[0])).toEqual([
+        "listWidgets",
+        "getWidget",
+      ]);
+      expect(stdout).not.toContain("head");
+      expect(stderr).toContain("skipped head /widgets");
+      expect(stderr).toContain("unsupported-method");
     });
   });
 

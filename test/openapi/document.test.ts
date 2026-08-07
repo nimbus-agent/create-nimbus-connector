@@ -1,37 +1,22 @@
 import { describe, expect, it } from "bun:test";
-import { listOperations, loadDocument, resolveRefs } from "../../src/openapi/document.ts";
+import {
+  listOperations,
+  listSkippedOperations,
+  loadDocument,
+  resolveRefs,
+} from "../../src/openapi/document.ts";
+import { ZZ_WIDGETS_YAML } from "../support/openapi-doc.ts";
 
 /**
- * A minimal SYNTHETIC document — invented here, not copied from any published API. Every field
- * is deliberate: two operations on one path (so "document order" has something to be wrong
- * about), a templated path, and a `summary` on each operation.
+ * The shared synthetic document — see `test/support/openapi-doc.ts` for what each field is for
+ * and why it lives there rather than in this file.
  *
- * The `$ref` and YAML-alias cases are NOT in this constant. They are built from it by `withRef`
- * and `withAlias` below, so each refusal differs from the passing document by exactly the
- * construct under test — which is also what makes the `not.toBe(YAML_DOC)` corruption proofs
+ * Nothing below adds a `$ref` or an alias to this constant. Each case builds its own variant with
+ * `withRef` or a local `.replace`, so every refusal differs from the passing document by exactly
+ * the construct under test — which is what makes the `not.toBe(YAML_DOC)` corruption proofs
  * meaningful.
  */
-const YAML_DOC = [
-  "openapi: 3.0.3",
-  "info:",
-  "  title: ZZ Widgets",
-  "  version: 1.0.0",
-  "servers:",
-  "  - url: https://api.zzwidgets.test/v1",
-  "paths:",
-  "  /widgets:",
-  "    get:",
-  "      operationId: listWidgets",
-  "      summary: List widgets.",
-  "    post:",
-  "      operationId: createWidget",
-  "      summary: Create a widget.",
-  "  /widgets/{widgetId}:",
-  "    get:",
-  "      operationId: getWidget",
-  "      summary: Fetch one widget.",
-  "",
-].join("\n");
+const YAML_DOC = ZZ_WIDGETS_YAML;
 
 /** The same document as JSON, written out by hand so the two are independently readable. */
 const JSON_DOC = JSON.stringify(
@@ -141,6 +126,14 @@ describe("loadDocument", () => {
 
   it("refuses a document whose root is not an object by name", () => {
     expect(() => loadDocument('"just a string"')).toThrow(/not-an-object/);
+  });
+
+  // An array means two different things by route, and the message must not describe the reader's
+  // guess instead of the input: "[1, 2]" is neither YAML nor "---"-separated, so reporting it as a
+  // multi-document stream would be a confident sentence about a file that does not exist.
+  it("refuses a JSON array as not-an-object, not as a multi-document stream", () => {
+    expect(() => loadDocument("[1, 2]")).toThrow(/not-an-object/);
+    expect(() => loadDocument("[1, 2]")).not.toThrow(/multi-document/);
   });
 
   describe("the openapi version", () => {
@@ -327,14 +320,115 @@ describe("listOperations", () => {
     expect(() => listOperations(loadDocument(numeric).doc)).toThrow(/operation-shape/);
   });
 
-  // Beyond the brief, same rule: the spec language has GET/POST/PUT/PATCH/DELETE and nothing
-  // else, so skipping `head` would drop an operation from the listing with no signal.
-  it("refuses an HTTP method the spec language cannot express by name", () => {
+  it("refuses a path item whose parameters is not an array by name", () => {
+    const bad = YAML_DOC.replace("  /widgets:", "  /widgets:\n    parameters: not-a-list");
+    expect(bad).not.toBe(YAML_DOC);
+    const { doc } = loadDocument(bad);
+    expect(() => listOperations(doc)).toThrow(/path-parameters-shape/);
+    expect(() => listOperations(doc)).toThrow(/\/widgets/);
+  });
+});
+
+/**
+ * The path item's own `parameters` — the canonical place a document declares `{widgetId}` for
+ * every operation under `/widgets/{widgetId}`.
+ *
+ * Dropping it is the expensive silent omission in this file's blast radius: the mapper would see
+ * a `{widgetId}` in the path template with nothing declaring it, and would have to either refuse
+ * a common valid document or invent a type.
+ */
+describe("listOperations > pathParameters", () => {
+  const WITH_PATH_PARAM = YAML_DOC.replace(
+    "  /widgets/{widgetId}:",
+    [
+      "  /widgets/{widgetId}:",
+      "    parameters:",
+      "      - name: widgetId",
+      "        in: path",
+      "        required: true",
+      "        schema:",
+      "          type: string",
+    ].join("\n"),
+  );
+
+  it("carries the path item's parameters through on every operation under it", () => {
+    expect(WITH_PATH_PARAM).not.toBe(YAML_DOC);
+    const ops = listOperations(loadDocument(WITH_PATH_PARAM).doc);
+    const getWidget = ops.find((o) => o.operationId === "getWidget");
+    expect(getWidget?.pathParameters).toEqual([
+      { name: "widgetId", in: "path", required: true, schema: { type: "string" } },
+    ]);
+  });
+
+  it("is empty, not undefined, for a path item declaring none", () => {
+    for (const op of listOperations(loadDocument(YAML_DOC).doc)) {
+      expect(op.pathParameters).toEqual([]);
+    }
+  });
+
+  // NOT merged into `raw`: OpenAPI's rule is that an operation-level parameter overrides a
+  // path-level one sharing its (name, in) pair, and only the parameter mapper can tell the two
+  // apart. Merging here would hand it one flat list in which an override reads as a duplicate.
+  it("does not merge them into raw, so the mapper can apply the override rule itself", () => {
+    const ops = listOperations(loadDocument(WITH_PATH_PARAM).doc);
+    const getWidget = ops.find((o) => o.operationId === "getWidget");
+    expect(getWidget?.raw).toEqual({ operationId: "getWidget", summary: "Fetch one widget." });
+  });
+});
+
+/**
+ * Reported, not refused — and that distinction is the point. Every refusal in this reader fires
+ * on a document that is broken, foreign or unreadable; these two fire on a document that is valid
+ * and otherwise entirely mappable. `--list-operations` exists to pick one operation out of many,
+ * so refusing a whole file over one HEAD sitting beside forty usable operations would defeat the
+ * command it is part of.
+ */
+describe("listSkippedOperations", () => {
+  it("is empty for a document whose every method key is expressible", () => {
+    expect(listSkippedOperations(loadDocument(YAML_DOC).doc)).toEqual([]);
+  });
+
+  it("reports an unsupported method by name and leaves the rest of the document listable", () => {
     const head = YAML_DOC.replace("    post:", "    head:");
     expect(head).not.toBe(YAML_DOC);
     const { doc } = loadDocument(head);
-    expect(() => listOperations(doc)).toThrow(/unsupported-method/);
-    expect(() => listOperations(doc)).toThrow(/head/);
+
+    expect(listSkippedOperations(doc)).toEqual([
+      {
+        reason: "unsupported-method",
+        method: "head",
+        path: "/widgets",
+        detail: expect.stringContaining("GET, POST, PUT, PATCH or DELETE"),
+      },
+    ]);
+    // The refusal-shaped failure this replaced took the other two operations down with it.
+    expect(listOperations(doc).map((o) => o.operationId)).toEqual(["listWidgets", "getWidget"]);
+  });
+
+  // The likelier hand-authored mistake, and the one that used to vanish into the same bucket as
+  // an `x-` extension: the listing just came up short, with no line saying which key was ignored.
+  it("reports a mis-cased method key and says what to write instead", () => {
+    const miscased = YAML_DOC.replace("    post:", "    POST:");
+    expect(miscased).not.toBe(YAML_DOC);
+    const { doc } = loadDocument(miscased);
+
+    const [skipped] = listSkippedOperations(doc);
+    expect(skipped?.reason).toBe("mis-cased-method");
+    expect(skipped?.method).toBe("POST");
+    expect(skipped?.path).toBe("/widgets");
+    expect(skipped?.detail).toContain('"post:"');
+    expect(listOperations(doc).map((o) => o.operationId)).toEqual(["listWidgets", "getWidget"]);
+  });
+
+  it("says nothing about path-item keys that were never operations", () => {
+    // `parameters`, `summary`, `servers` and every `x-` extension are ordinary path-item fields.
+    // Reporting them as skipped operations would bury the two reports that matter.
+    const noisy = YAML_DOC.replace(
+      "  /widgets:",
+      ["  /widgets:", "    summary: The widget collection.", "    x-internal: true"].join("\n"),
+    );
+    expect(noisy).not.toBe(YAML_DOC);
+    expect(listSkippedOperations(loadDocument(noisy).doc)).toEqual([]);
   });
 });
 
