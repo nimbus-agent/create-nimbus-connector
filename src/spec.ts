@@ -903,6 +903,45 @@ export const EnvSchema = z
     message:
       'env entry cannot declare both "default" and "required" — a defaulted value is never empty',
   })
+  /*
+   * The one entry shape with no way to emit correct code: no `auth`, no `default`, and
+   * `required` left at its schema default of `false`. `guardLines` (src/emit/server/env.ts)
+   * emits nothing for it, so the accessor returns `process.env[…]?.trim()` — `string |
+   * undefined` — out of a function `renderEnvAccessor` declares as `(): string`. It is the
+   * shape an author gets by omitting fields, and no fixture has it, so no gate saw it.
+   *
+   * REFUSED rather than emitted differently, and that is the measured choice. All six shapes
+   * that reach this branch were compiled under Nimbus's own compilerOptions, and each of the two
+   * emitter fixes closes some of them and leaves the rest:
+   *
+   *   bare                   TS2322   return type `string`, expression `string | undefined`
+   *   transform: strip…      TS18048  `zzUrl.replace(…)` on a possibly-undefined binding
+   *   transform: trim…Fn     TS2345   `trimTrailingSlash(zzUrl)`
+   *   prefix / suffix / both CLEAN, and wrong at runtime — the value lands in a template
+   *                          literal, so the accessor returns the eight characters "undefined"
+   *                          and the fetch helper requests `https://undefined/…`
+   *
+   * Widening the return type to `string | undefined` fixes only the first row: the two
+   * `transform` rows fail INSIDE the body, where the return type is not what is being checked,
+   * and it turns the three clean rows into `string | undefined` at every `${env.X}` call site,
+   * which is the same silent interpolation one level out. Coalescing the body (`?? ""`) does
+   * typecheck all six, at the price of converting three loud failures into an empty URL
+   * authority. Refusing costs no emitted byte at all — this rule touches no emitter — and it is
+   * the only option that leaves nothing behind that compiles and is wrong.
+   *
+   * An optional variable is still expressible, and the message names the two spellings: give it
+   * a `default`, which suppresses the guard and makes the binding `string`.
+   */
+  .refine((e) => e.auth !== undefined || e.default !== undefined || e.required, {
+    message:
+      'an env entry with no "auth" and no "default" must set "required": true — with no guard ' +
+      "to narrow it, its accessor returns process.env[…]?.trim() unchanged, which is " +
+      "`string | undefined`, from a function the emitter declares as `(): string`. The " +
+      "generated package then fails its own typecheck (TS2322, or TS18048/TS2345 when " +
+      '"transform" is set) — or, with "prefix"/"suffix", where the value is spliced into a ' +
+      'template literal, it typechecks and returns the text "undefined" at runtime. Set ' +
+      '"required": true, or give the variable a "default".',
+  })
   .refine((e) => e.bindings === undefined || e.bindings.length === e.vars.length, {
     message: '"bindings" must have exactly one entry per "vars" entry',
   })

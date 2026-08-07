@@ -176,8 +176,11 @@ const NOT_COLLIDABLE: Record<string, string> = {
 /** Every branch of renderEnvAccessor, by the fields that select it. */
 const SHAPES: readonly (readonly [string, Record<string, unknown>])[] = [
   ["plain, required", { vars: ["V1"], local: "acc", required: true }],
+  // The only unguarded shape there is. `{ vars, local }` with neither `required` nor `default`
+  // was the second one until EnvSchema learned to refuse it — its accessor returns
+  // `process.env[…]?.trim()` out of a `(): string`, which does not typecheck in the generated
+  // package. `emitsThrow`'s false arm is reached from here instead.
   ["plain, defaulted (no guard)", { vars: ["V1"], local: "acc", default: "d" }],
-  ["plain, neither (no guard)", { vars: ["V1"], local: "acc" }],
   [
     "plain, prefix/suffix",
     { vars: ["V1"], local: "acc", required: true, prefix: "p-", suffix: "-s" },
