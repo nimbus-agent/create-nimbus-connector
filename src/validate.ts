@@ -260,18 +260,30 @@ function checkEnvBindings(spec: ConnectorSpec): void {
 }
 
 /**
- * Four emitted names are built by wrapping `titleIdentifier(spec.title)` — `register<X>Tool`,
- * `create<X>Syncable`, `map<X>ItemToItem` and `<X>SearchMatchOptions` — so the stripped title
- * has to be usable as the middle of an identifier.
+ * Four emitted names are built from `titleIdentifier(spec.title)` — `register<X>Tool`
+ * (`registrarName`), `create<X>Syncable` and `map<X>ItemToItem` (src/emit/wiring.ts), and
+ * `<X>SearchMatchOptions` (src/emit/search-filter.ts) — and exactly ONE of them puts the stripped
+ * title at the START of an identifier. That one position is where the requirement comes from.
+ *
+ * **The reason stated here before was false for three of the four.** A digit is illegal only as an
+ * identifier's FIRST character, so `register1PasswordTool`, `create1PasswordSyncable` and
+ * `map1PasswordItemToItem` all compile — checked under `tsc --strict`, not reasoned about.
+ * `export type 1PasswordSearchMatchOptions` is the one that does not: TS2457, *Type alias name
+ * cannot be '1'*, with three parse errors around it. The empty string breaks the same position and
+ * only that one, differently — `export type SearchMatchOptions = SearchMatchOptions` is a circular
+ * alias, TS2456, while `registerTool`, `createSyncable` and `mapItemToItem` are ordinary names.
+ *
+ * The rule stays FLAT: `title` needs a leading letter whether or not the spec declares a search
+ * tool. That is the argument `RESERVED_IDENTIFIERS` above makes explicitly for itself — a value
+ * that validates or fails depending on a field elsewhere in the file is worse than a rule that is
+ * slightly wide — and it carries further here, because the alternative is a `title` that becomes
+ * invalid the moment a search tool is added to a connector that already shipped.
  *
  * Checked here rather than on `title` in the schema because the field is OPTIONAL: `parseSpec`
  * fills it from `capitalize(spec.name)`, so a schema-level refine would leave the defaulted
  * value unchecked, which is the half a user never writes and therefore never suspects.
  *
- * Stripping rescues "Google Meet" and "Google-meet". It cannot rescue a title whose first
- * character is a digit ("1Password" yields `register1PasswordTool`) or one with no alphanumeric
- * character at all (which yields the empty string, and `export type SearchMatchOptions =
- * SearchMatchOptions` — a circular alias, TS2456). No corpus connector directory name begins
+ * Stripping rescues "Google Meet" and "Google-meet". No corpus connector directory name begins
  * with a digit, so this rejects nothing `--from-connector` can produce.
  */
 function validateTitleIdentifier(spec: ConnectorSpec): void {
@@ -279,10 +291,12 @@ function validateTitleIdentifier(spec: ConnectorSpec): void {
   if (/^[A-Za-z][A-Za-z0-9]*$/.test(id)) return;
   throw new Error(
     `"title" ${JSON.stringify(spec.title)} yields ${JSON.stringify(id)} once non-alphanumeric ` +
-      "characters are stripped, which cannot be part of an emitted identifier — the generator " +
-      'builds "register<X>Tool", "create<X>Syncable", "map<X>ItemToItem" and ' +
-      '"<X>SearchMatchOptions" from it. Give "title" a value starting with a letter and ' +
-      "containing at least one letter or digit.",
+      'characters are stripped, and the generator emits "<X>SearchMatchOptions" as a type-alias ' +
+      "NAME — which puts that value at the start of an identifier, where it must begin with a " +
+      'letter and cannot be empty. The other three names built from it ("register<X>Tool", ' +
+      '"create<X>Syncable", "map<X>ItemToItem") embed it, and a leading digit is legal there; ' +
+      "the rule is applied to every spec so that adding a search tool cannot change whether " +
+      '"title" is valid. Give "title" a value starting with a letter.',
   );
 }
 

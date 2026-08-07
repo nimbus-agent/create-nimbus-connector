@@ -643,8 +643,11 @@ describe('a search tool\'s "rows"', () => {
 });
 
 /**
- * Four emitted names are built by wrapping the stripped title. Stripping rescues a two-word
- * title; it cannot rescue one that starts with a digit or has no alphanumeric character at all.
+ * Four emitted names are built by wrapping the stripped title, and ONE of them — the
+ * `export type <X>SearchMatchOptions` alias — puts it at the start of an identifier. That
+ * position is the whole reason for the rule; the other three embed it, where a leading digit is
+ * perfectly legal (compiled to confirm: `register1PasswordTool` and its two siblings are valid,
+ * `export type 1PasswordSearchMatchOptions` is TS2457).
  */
 describe("the identifier derived from title", () => {
   it("accepts a two-word title, which strips to a usable identifier", () => {
@@ -653,6 +656,18 @@ describe("the identifier derived from title", () => {
 
   it("rejects a title starting with a digit, which stripping cannot rescue", () => {
     expect(() => validateSpec(specWith({ title: "1Password" }))).toThrow(/"1Password"/);
+  });
+
+  it("names the alias position, which is the one that actually breaks", () => {
+    // The rejection is right and the reason given for it was not: the message used to say the
+    // stripped title "cannot be part of an emitted identifier", which is false for three of the
+    // four names built from it. Pinned so the true reason cannot be traded back for the tidy one.
+    expect(() => validateSpec(specWith({ title: "1Password" }))).toThrow(
+      /SearchMatchOptions[\s\S]*start of an identifier/,
+    );
+    expect(() => validateSpec(specWith({ title: "1Password" }))).toThrow(
+      /embed it, and a leading digit is legal there/,
+    );
   });
 
   it("rejects a title with no alphanumeric character, which strips to nothing", () => {
