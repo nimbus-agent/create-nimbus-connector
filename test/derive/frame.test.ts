@@ -169,6 +169,22 @@ const REFUSED_FRAMES = [
       "await mcp.connect(new SomethingElse());",
     ),
   ],
+
+  // Key SPELLING, the same class as the interior checks above and invisible in the same way:
+  // `wiring()` (src/emit/server/index.ts) writes `{ name: …, version: … }` with both keys bare,
+  // and the underlying objectProps parse resolves `{ "name": … }` to the same `key`. So the
+  // quoted form recovered the IDENTICAL connectorName and varName and re-emitted the bare form —
+  // a claimed frame whose spec provably regenerates different bytes, which neither diff:golden
+  // (it emits what it read) nor the totality rule (the statement WAS claimed) can see.
+  // `bareKeyedProps` (src/derive/read.ts) is the pin.
+  [
+    "rejects a quoted `name` key in the McpServer literal",
+    FRAME.replace('{ name: "nimbus-newrelic"', '{ "name": "nimbus-newrelic"'),
+  ],
+  [
+    "rejects a quoted `version` key in the McpServer literal",
+    FRAME.replace('version: "0.1.0" });', '"version": "0.1.0" });'),
+  ],
 ];
 
 /**

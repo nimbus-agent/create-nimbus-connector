@@ -188,6 +188,17 @@ describe("recognizeSearchFilter", () => {
     }
   });
 
+  it("rejects a quoted `tags` key in the keyed form's options object — emitSearchFilter writes it bare", () => {
+    // `emitSearchFilter` hardcodes `, { tags: true }`. The objectProps parse resolves
+    // `{ "tags": true }` to the same `key`, so the quoted spelling recovered the identical
+    // trailing `{ tags: "text" }` FieldEntry and re-emitted the bare form — different bytes, an
+    // unchanged spec, and no gate able to see it. `bareKeyedProps` (src/derive/read.ts) is the pin.
+    const corrupted = MONOREPO_SOURCE.replace("{ tags: true }", '{ "tags": true }');
+    expect(corrupted).not.toBe(MONOREPO_SOURCE);
+    const result = recognizeSearchFilter(corrupted);
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects a trailing statement the totality rule cannot account for", () => {
     const corrupted = `${MONOREPO_SOURCE}\nconst extra = 1;\n`;
     const result = recognizeSearchFilter(corrupted);

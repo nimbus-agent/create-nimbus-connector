@@ -7,6 +7,7 @@ import {
   arrayElements,
   arrayElementType,
   arrowFn,
+  bareKeyedProps,
   binary,
   blockBody,
   boolLit,
@@ -29,7 +30,6 @@ import {
   isIdent,
   isNullLiteral,
   newOf,
-  objectProps,
   returnArgument,
   stringLit,
   throwArgument,
@@ -244,7 +244,9 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
 
   let tags = false;
   if (innerArgs.length === 2) {
-    const props = objectProps(innerArgs[1]);
+    // `emitSearchFilter` hardcodes `{ tags: true }`, key bare — a quoted `"tags"` recovers the
+    // identical `tags` flag and re-emits the bare form.
+    const props = bareKeyedProps(innerArgs[1]);
     const only = props?.length === 1 ? props[0] : undefined;
     if (only === undefined || only.key !== "tags" || boolLit(only.value) !== true) {
       return undefined;

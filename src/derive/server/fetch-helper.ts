@@ -4,6 +4,7 @@ import {
   asExpression,
   assignment,
   awaited,
+  bareKeyedProps,
   binary,
   blockBody,
   callArgs,
@@ -17,6 +18,7 @@ import {
   functionName,
   functionParams,
   functionReturnType,
+  IDENTIFIER_KEY_RE,
   identName,
   identTypeAnnotation,
   ifStatement,
@@ -30,9 +32,9 @@ import {
   methodCallTo,
   objectExpressionProperties,
   objectProperty,
-  objectProps,
   optionalMemberName,
   optionalMemberObject,
+  quoteMinimalProps,
   returnArgument,
   spreadArgument,
   stringLit,
@@ -220,11 +222,17 @@ function findObjectProperty(properties: readonly AstNode[], name: string): AstNo
  * An object literal read wholesale as `inlineHeaders` — the shape `headerOption`
  * (src/emit/server/fetch-helper.ts) writes when the spec sets that field.
  *
- * Parsed via `objectProps`, so any entry it cannot resolve — a spread, a computed key, e.g.
+ * Parsed via `quoteMinimalProps`, so any entry it cannot resolve — a spread, a computed key, e.g.
  * `{ ...common, "X-Api-Key": k }` — rejects the WHOLE object rather than being skipped: unlike
  * `findObjectProperty`'s search over the outer fetch-options list, every entry here is meant to
  * become a header. An empty object is refused too, since `FetchHelperSchema` never carries an
  * empty `inlineHeaders` and the accessor form is what its absence actually looks like.
+ *
+ * The spelling pin is `quoteMinimalProps`, not `bareKeyedProps`: `headerOption` and
+ * `renderRestKitFetchHelper` (src/emit/server/fetch-helper.ts) both write a header name bare
+ * exactly when `IDENTIFIER_RE` accepts it, so `"X-Api-Key"` — newrelic's, and one of the four
+ * byte-locked fixtures' — MUST arrive quoted, while `"Accept"` quoted is a spelling neither
+ * emitter can produce. Reading `key` alone accepted both and re-emitted whichever the rule says.
  *
  * Shared by both helpers, which differ only in where the object arrives from: the read helper's
  * `headers:` option value (`inlineHeadersObject` below) and the write helper's
@@ -234,7 +242,7 @@ function findObjectProperty(properties: readonly AstNode[], name: string): AstNo
  * learned to reject.
  */
 function headerFields(node: AstNode | undefined): Record<string, string> | undefined {
-  const entries = objectProps(node);
+  const entries = quoteMinimalProps(node);
   if (entries === undefined || entries.length === 0) return undefined;
 
   const out: Record<string, string> = {};
@@ -1247,6 +1255,14 @@ function isInitHeadersSpread(node: AstNode): boolean {
  * accessor to call — so a plain string literal is the only value shape possible here, unlike
  * `headerValue` above (the hand-style helper's equivalent), which also accepts an env-accessor
  * call.
+ *
+ * The key spelling is `quoteMinimalProps`' rule (src/derive/read.ts) applied per key rather than
+ * through that wrapper, because these properties arrive already sliced out of a list whose first
+ * and last entries are the fixed `Authorization` header and the `...init?.headers` spread — a
+ * spread `objectProps` refuses outright. `renderRestKitFetchHelper` writes each extra header as
+ * `IDENTIFIER_RE.test(k) ? k : JSON.stringify(k)`, so `"X-Api-Version"` MUST arrive quoted and a
+ * quoted `"Accept"` is a spelling it cannot produce — and, since the recovered `inlineHeaders`
+ * record is identical either way, one that re-emits different bytes with no gate able to see it.
  */
 function restInlineHeaderEntries(
   properties: readonly AstNode[],
@@ -1256,9 +1272,11 @@ function restInlineHeaderEntries(
     if (isComputedProperty(property)) return undefined;
     const parts = objectProperty(property);
     if (parts === undefined) return undefined;
-    const key = identName(parts.key) ?? stringLit(parts.key);
+    const bare = identName(parts.key);
+    const key = bare ?? stringLit(parts.key);
     const value = stringLit(parts.value);
     if (key === undefined || value === undefined) return undefined;
+    if ((bare !== undefined) !== IDENTIFIER_KEY_RE.test(key)) return undefined;
     out[key] = value;
   }
   return out;
@@ -1355,9 +1373,14 @@ function isRestJsonTryCatch(node: AstNode): boolean {
   return handlerBody?.length === 1 && isJsonAssign(handlerBody[0]!, isNullLiteral);
 }
 
-/** `return { ok: res.ok, status: res.status, json, text };` — statement 6, matched exactly, in this order. */
+/**
+ * `return { ok: res.ok, status: res.status, json, text };` — statement 6, matched exactly, in this
+ * order, and with all four keys bare: `renderRestKitFetchHelper` hardcodes that line, so
+ * `{ "ok": res.ok, … }` recovers the same nothing (this function returns a boolean; the envelope
+ * carries no spec field at all) while re-emitting the bare form.
+ */
 function isRestReturnStatement(node: AstNode): boolean {
-  const props = objectProps(returnArgument(node));
+  const props = bareKeyedProps(returnArgument(node));
   if (props?.length !== 4) return false;
   const ok = props[0];
   const status = props[1];

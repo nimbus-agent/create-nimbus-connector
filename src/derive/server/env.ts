@@ -4,6 +4,7 @@ import {
   asExpression,
   assignment,
   awaited,
+  bareKeyedProps,
   binary,
   blockBody,
   callArgs,
@@ -31,11 +32,11 @@ import {
   newOf,
   numberLit,
   numericValue,
-  objectProps,
   optionalCallCallee,
   optionalMemberName,
   optionalMemberObject,
   propertySignature,
+  quoteMinimalProps,
   regExpLit,
   returnArgument,
   stringLit,
@@ -273,17 +274,15 @@ type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] }
  * is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
-  // Undisclosed-until-review widening (see task-2-report.md's fix report): `objectProps` merges
-  // an Identifier key and a same-named StringLiteral key into the one resolved name via
-  // `identName ?? stringLit`, so `{ "Authorization": …, "Accept": … }` — string-literal keys —
-  // now classifies the same as the bare `{ Authorization: …, Accept: … }` form `returnLines`
-  // actually writes. The pre-retrofit code required an Identifier specifically at both
-  // positions and would have refused the string-literal form. This is the same merge the task
-  // 2 brief explicitly sanctioned at server/index.ts's getMcpServerInfo (its Step 5, item 4);
-  // it is bounded to a byte mismatch (a claimed function whose `auth` return is a form the
-  // emitter never writes regenerates non-identical bytes, not a wrong `EnvEntry`) rather than a
-  // silent behavioural success, so it is accepted rather than special-cased back out.
-  const properties = objectProps(arg);
+  // The widening this comment used to disclose and accept is now closed. `objectProps` merges an
+  // Identifier key and a same-named StringLiteral key into one resolved name, so
+  // `{ "Authorization": …, "Accept": … }` classified the same as the bare form `returnLines`
+  // actually writes — a claimed function regenerating non-identical bytes from an identical
+  // `EnvEntry`, which no gate can see. `quoteMinimalProps` is the pin, NOT `bareKeyedProps`: the
+  // header names here are `headerNames`, a spec field, and `returnLines` quotes one exactly when
+  // `IDENTIFIER_RE` rejects it — so datadog's `"DD-API-KEY"` must arrive quoted and the trailing
+  // `Accept` must not. Both mistakes are the same wrong claim, pointed opposite ways.
+  const properties = quoteMinimalProps(arg);
   if (properties?.length !== reads.length + 1) return undefined;
 
   const last = properties.at(-1)!;
@@ -552,7 +551,9 @@ function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | und
   if (statements?.length !== 1) return undefined;
 
   const arg = returnArgument(statements[0]!);
-  const properties = objectProps(arg);
+  // Both keys hardcoded and bare — `renderSplitBearer` writes this line verbatim, so a quoted
+  // spelling recovers the identical local and re-emits the bare form.
+  const properties = bareKeyedProps(arg);
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
   if (authProp === undefined || authProp.key !== "Authorization") return undefined;
@@ -642,7 +643,9 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   if (local === undefined) return undefined;
 
   const arg = returnArgument(section.rest[0]!);
-  const properties = objectProps(arg);
+  // Both keys hardcoded and bare, as in `matchSplitBearerWrapper` — `renderBasic` writes this
+  // two-key object verbatim.
+  const properties = bareKeyedProps(arg);
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
   if (authProp === undefined || authProp.key !== "Authorization") return undefined;
@@ -795,12 +798,15 @@ function isCacheCheck(stmt: AstNode): boolean {
   return isIdent(returnArgument(s.consequent), "cachedToken");
 }
 
-/** `const body = new URLSearchParams({ grant_type: "client_credentials" });` */
+/**
+ * `const body = new URLSearchParams({ grant_type: "client_credentials" });` — the key bare, which
+ * is the only way `renderTokenFunction` writes it and which `IDENTIFIER_KEY_RE` accepts anyway.
+ */
 function isTokenBodyInit(stmt: AstNode): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "body") return false;
   const args = newOf(decl.init, "URLSearchParams", 1);
-  const props = objectProps(args?.[0]);
+  const props = bareKeyedProps(args?.[0]);
   if (props?.length !== 1) return false;
   const only = props[0]!;
   return only.key === "grant_type" && stringLit(only.value) === "client_credentials";
@@ -818,9 +824,14 @@ function bodySetValue(stmt: AstNode | undefined, key: string): AstNode | undefin
  * the `encodeBasicAuthHeader(<id>, <secret>)` Authorization entry, `false` for the two-entry
  * `"body"` form. The caller holds that against the `body.set` lines, which is the OTHER half of
  * the same if/else.
+ *
+ * The one hardcoded literal in the deriver whose fixed spelling is MIXED: `renderTokenFunction`
+ * writes `"Content-Type"` quoted and `Accept`/`Authorization` bare. `bareKeyedProps` would refuse
+ * the emitter's own output here, so the pin is `quoteMinimalProps` — which for these three fixed
+ * names dictates exactly that spelling, and still refuses a quoted `"Accept"`.
  */
 function matchTokenHeaders(node: AstNode, id: string, secret: string): boolean | undefined {
-  const props = objectProps(node);
+  const props = quoteMinimalProps(node);
   if (props === undefined || props.length < 2) return undefined;
   const contentType = props[0];
   const accept = props[1];
@@ -858,7 +869,9 @@ function matchTokenFetch(
   const tokenUrl = stringLit(args[0]);
   if (tokenUrl === undefined) return undefined;
 
-  const options = objectProps(args[1]);
+  // All three option keys hardcoded and bare in `renderTokenFunction`; `tokenUrl` is the only
+  // spec field in this statement, and it is the fetch's first ARGUMENT, not one of these keys.
+  const options = bareKeyedProps(args[1]);
   if (options?.length !== 3) return undefined;
   const [method, headers, body] = options;
   if (method === undefined || headers === undefined || body === undefined) return undefined;
@@ -1169,7 +1182,8 @@ function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
   if (statements?.length !== 1) return undefined;
   // renderClientCredentials writes no comment in the wrapper — see the section header.
   if (!commentsAre(statements[0]!, [])) return undefined;
-  const properties = objectProps(returnArgument(statements[0]!));
+  // Both keys hardcoded and bare, as in the two synchronous header objects above.
+  const properties = bareKeyedProps(returnArgument(statements[0]!));
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
   if (authProp === undefined || acceptProp === undefined) return undefined;

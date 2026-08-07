@@ -579,12 +579,9 @@ export type Prop = {
    * string (`{ "method": … }`) — the one thing `key` itself cannot say, since `objectProps`
    * resolves both spellings to the same name.
    *
-   * Handed back rather than resolved here because the right answer differs per caller, the same
-   * split `ImportName.isType` and `PropertySignature.optional` model. A fixed-key literal
-   * (`renderTool`'s `{ method, body }`, `renderRestKitTools`'s factory) is written bare and only
-   * bare, so a quoted key there is a shape the emitter cannot produce; a header object is written
-   * bare exactly when `IDENTIFIER_RE` accepts the header name (src/emit/server/env.ts's
-   * `returnLines`), so `"DD-API-KEY"` is quoted and `Accept` is not, and both are producible.
+   * Not read at a call site: the two rules an emitted literal can follow are `bareKeyedProps` and
+   * `quoteMinimalProps` below, and picking between them is the whole decision. This field is what
+   * those two are built from, kept on `Prop` so the distinction is visible where `key` is.
    *
    * Formatting settles nothing: Biome preserves a needlessly quoted key verbatim — verified
    * 2026-08-07 by running `{ "method": "DELETE" }` through `formatAll` — so the spelling reaches
@@ -666,10 +663,12 @@ export function isShorthandProperty(node: AstNode | undefined): boolean {
  * Identifier as its value, which is the shape `renderBodyExpr` emits.
  *
  * `key` deliberately merges the bare and quoted spellings, and `Prop.bareKey` carries the
- * distinction alongside it rather than a caller having to drop to `objectProperty` to recover it.
- * Reading `key` alone is correct only where BOTH spellings are producible; see `bareKey`.
+ * distinction alongside it. That merge is why this function is MODULE-PRIVATE: reading `key`
+ * without judging its spelling is never right for an emitted literal, so the two judgements are
+ * the exported entry points (`bareKeyedProps` and `quoteMinimalProps` below) and the unjudged
+ * parse is not reachable from a recognizer at all. A call site cannot forget a pin it cannot skip.
  */
-export function objectProps(node: AstNode | undefined): Prop[] | undefined {
+function objectProps(node: AstNode | undefined): Prop[] | undefined {
   if (node?.type !== "ObjectExpression") return undefined;
   const properties = childList(node, "properties");
   if (properties === undefined) return undefined;
@@ -686,6 +685,71 @@ export function objectProps(node: AstNode | undefined): Prop[] | undefined {
     out.push({ key, value, bareKey: bare !== undefined });
   }
   return out;
+}
+
+/**
+ * The emitter's own rule for whether an object key needs quoting. `IDENTIFIER_RE`
+ * (src/emit/server/env.ts), `IDENT` (src/emit/server/body.ts) and the two inline copies in
+ * src/emit/server/fetch-helper.ts are all this pattern.
+ *
+ * Copied rather than imported, and this is the deriver's SINGLE copy —
+ * `src/derive/server/body.ts`'s `fieldName` reads it from here rather than holding its own, so the
+ * two derive-side readers of the rule cannot drift apart from each other even if they drift from
+ * the emitter. Sharing one definition with the emitter would mean a deriver module importing from
+ * `src/emit/`, which this layer may not do; `src/spec.ts`, the layer both sides do share, holds
+ * the pattern only as a zod refinement over spec field NAMES, not as a spelling rule over emitted
+ * keys, so routing through it would assert a relationship that is coincidence.
+ *
+ * The asymmetry is what makes a copy tolerable, and it is `fieldName`'s own long-standing
+ * argument: this constant decides only how a key is SPELLED, and every consumer REFUSES on a
+ * mismatch rather than recovering a different field. A copy that drifts LOOSER refuses a
+ * producible module, and one that drifts TIGHTER refuses it too — a visible blocker in both
+ * directions, never a wrong claim, unlike a shared parser whose under-parsing direction is silent.
+ * Fold it back into one definition when a task may edit `src/emit/`.
+ */
+export const IDENTIFIER_KEY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * `objectProps` with the FIXED-key spelling pinned: every key must be written bare, or the whole
+ * object is refused.
+ *
+ * The reading for a literal whose keys the emitter always writes bare — either because it
+ * hardcodes them (`renderTool`'s `{ method, body }`, `wiring()`'s `{ name, version }`,
+ * `renderRestKitTools`' factory) or because the spec constrains them to valid identifiers and the
+ * emitter interpolates them unquoted (`renderZodFieldList`, over `ToolSchema.args`' key regex).
+ *
+ * A quoted spelling in that position recovers the identical fields and re-emits the bare form:
+ * different bytes with an unchanged spec, invisible to `diff:golden`, to the round trip and to the
+ * totality rule alike, because every one of them emits what it just read. Refusing it is what puts
+ * the construct in the blocker histogram instead.
+ */
+export function bareKeyedProps(node: AstNode | undefined): Prop[] | undefined {
+  const props = objectProps(node);
+  if (props === undefined) return undefined;
+  return props.every((p) => p.bareKey) ? props : undefined;
+}
+
+/**
+ * `objectProps` with the VARIABLE-key spelling pinned: each key must be quoted exactly when
+ * `IDENTIFIER_KEY_RE` rejects it, and bare exactly when it accepts it.
+ *
+ * The reading for a literal whose key NAMES come from a spec field — `returnLines`' `headerNames`
+ * and `headerOption`'s `inlineHeaders`, both of which the emitter writes as
+ * `IDENTIFIER_RE.test(name) ? name : JSON.stringify(name)`. Both spellings are producible there,
+ * so `bareKeyedProps` would refuse `"DD-API-KEY"` and `"X-Api-Key"`, headers real corpus
+ * connectors carry, while pinning nothing accepts `"Accept"`, which no emitter writes. The two
+ * mistakes are the same wrong claim pointed in opposite directions, which is why this rule is
+ * stated once here rather than per call site.
+ *
+ * It also serves a HARDCODED literal whose fixed spelling is mixed: `renderTokenFunction`'s
+ * headers object writes `"Content-Type"` quoted beside a bare `Accept` and `Authorization`, which
+ * is exactly what this rule dictates for those three names — so the mixed case needs no third
+ * variant, and `bareKeyedProps` would have refused the emitter's own output there.
+ */
+export function quoteMinimalProps(node: AstNode | undefined): Prop[] | undefined {
+  const props = objectProps(node);
+  if (props === undefined) return undefined;
+  return props.every((p) => p.bareKey === IDENTIFIER_KEY_RE.test(p.key)) ? props : undefined;
 }
 
 /** Every element of an ArrayExpression, or undefined if any element is a hole or a spread. */

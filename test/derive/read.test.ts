@@ -6,6 +6,7 @@ import {
   asExpression,
   assignment,
   awaited,
+  bareKeyedProps,
   binary,
   blockBody,
   boolLit,
@@ -44,10 +45,10 @@ import {
   numericValue,
   objectExpressionProperties,
   objectProperty,
-  objectProps,
   optionalCallCallee,
   optionalMemberName,
   optionalMemberObject,
+  quoteMinimalProps,
   regExpLit,
   returnArgument,
   spreadArgument,
@@ -188,38 +189,63 @@ describe("newOf", () => {
   });
 });
 
-describe("objectProps", () => {
+describe("bareKeyedProps / quoteMinimalProps — the two readings of an object literal", () => {
   it("reads identifier and string keys", () => {
-    const props = objectProps(initOf('({ a: 1, "b-c": 2 })'));
+    const props = quoteMinimalProps(initOf('({ a: 1, "b-c": 2 })'));
     expect(props?.map((p) => p.key)).toEqual(["a", "b-c"]);
   });
 
   it("reads a shorthand property as key and value alike", () => {
-    const props = objectProps(initOf("({ issueId })"));
+    const props = bareKeyedProps(initOf("({ issueId })"));
     expect(props?.[0]?.key).toBe("issueId");
     expect(identName(props?.[0]?.value)).toBe("issueId");
   });
 
   it("rejects a computed key — { [K]: v } has no literal name", () => {
-    expect(objectProps(initOf("({ [K]: 1 })"))).toBeUndefined();
+    expect(bareKeyedProps(initOf("({ [K]: 1 })"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("({ [K]: 1 })"))).toBeUndefined();
   });
 
   it("rejects a spread element", () => {
-    expect(objectProps(initOf("({ ...rest })"))).toBeUndefined();
+    expect(bareKeyedProps(initOf("({ ...rest })"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("({ ...rest })"))).toBeUndefined();
   });
 
-  it("reports whether each key was written bare or quoted — the distinction `key` erases", () => {
-    // `{ a: 1 }` and `{ "a": 1 }` resolve to the same `key`, and no emitter under src/emit/ writes
-    // the quoted spelling for an identifier-shaped name (src/emit/server/env.ts's `returnLines`
-    // quotes a header name exactly when `IDENTIFIER_RE` rejects it, and quotes nothing else). A
-    // recognizer that cannot tell the two apart therefore claims a module it re-emits differently.
+  it("rejects a non-ObjectExpression through both readings", () => {
+    expect(bareKeyedProps(initOf("1"))).toBeUndefined();
+    expect(quoteMinimalProps(initOf("1"))).toBeUndefined();
+  });
+
+  it("splits on the key SPELLING, which the resolved `key` erases", () => {
+    // `{ a: 1 }` and `{ "a": 1 }` resolve to the same `key`. No emitter under src/emit/ writes the
+    // quoted spelling for an identifier-shaped name (src/emit/server/env.ts's `returnLines` quotes
+    // a header name exactly when `IDENTIFIER_RE` rejects it, and quotes nothing else), so a
+    // recognizer that cannot tell the two apart claims a module it re-emits differently.
     // Formatting does not rescue that: `formatAll` leaves a needlessly quoted key quoted —
     // verified 2026-08-07 by running `{ "method": "DELETE" }` through it — so the quoted spelling
     // survives all the way to the byte comparison.
-    const props = objectProps(initOf('({ a: 1, "b": 2, "b-c": 3, d })'));
+    const source = '({ a: 1, "b": 2, "b-c": 3, d })';
+
+    // bareKeyedProps: every key bare, so both quoted spellings are out — including "b-c", which
+    // is why a fixed-key literal can never legitimately carry a name needing quotes.
+    expect(bareKeyedProps(initOf(source))).toBeUndefined();
+    expect(bareKeyedProps(initOf("({ a: 1, d })"))?.map((p) => p.key)).toEqual(["a", "d"]);
+    expect(bareKeyedProps(initOf('({ "b-c": 3 })'))).toBeUndefined();
+
+    // quoteMinimalProps: quoted iff the name cannot be bare. `"b"` is the only refusal here.
+    expect(quoteMinimalProps(initOf(source))).toBeUndefined();
+    expect(quoteMinimalProps(initOf('({ a: 1, "b-c": 3, d })'))?.map((p) => p.key)).toEqual([
+      "a",
+      "b-c",
+      "d",
+    ]);
+    expect(quoteMinimalProps(initOf('({ "b": 2 })'))).toBeUndefined();
+  });
+
+  it("carries the spelling on each Prop, which is what the two readings are built from", () => {
+    const props = quoteMinimalProps(initOf('({ a: 1, "b-c": 3, d })'));
     expect(props?.map((p) => ({ key: p.key, bareKey: p.bareKey }))).toEqual([
       { key: "a", bareKey: true },
-      { key: "b", bareKey: false },
       { key: "b-c", bareKey: false },
       { key: "d", bareKey: true },
     ]);
@@ -439,18 +465,19 @@ describe("Task 2 accessors", () => {
     expect(functionBody(only("const f = () => {};"))).toBeUndefined();
   });
 
-  it("objectExpressionProperties/objectProperty read a properties list unfiltered, unlike objectProps", () => {
+  it("objectExpressionProperties/objectProperty read a properties list unfiltered, unlike the objectProps readings", () => {
     const props = objectExpressionProperties(initOf("({ a: 1, ...rest, [k]: 2 })"));
     expect(props).toHaveLength(3);
-    // objectProps rejects the whole object over the spread and the computed key.
-    expect(objectProps(initOf("({ a: 1, ...rest, [k]: 2 })"))).toBeUndefined();
+    // The objectProps parse underneath both readings rejects the whole object over the spread
+    // and the computed key.
+    expect(bareKeyedProps(initOf("({ a: 1, ...rest, [k]: 2 })"))).toBeUndefined();
 
     const first = objectProperty(props?.[0]);
     expect(identName(first?.key)).toBe("a");
     expect(numberLit(first?.value)).toBe(1);
     // A SpreadElement has no key/value pair — objectProperty returns undefined, not a crash.
     expect(objectProperty(props?.[1])).toBeUndefined();
-    // Unlike objectProps, objectProperty does NOT reject a computed key — it hands back the
+    // Unlike that parse, objectProperty does NOT reject a computed key — it hands back the
     // key node as written, for a caller that discriminates the key node's own shape itself
     // (pairing with isComputedProperty below when the caller instead needs to know computed-ness).
     const computed = objectProperty(props?.[2]);

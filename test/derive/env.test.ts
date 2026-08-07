@@ -608,6 +608,160 @@ describe("recognizeEnv: auth: basic", () => {
   });
 });
 
+/**
+ * The datadog `auth: "headers"` shape, the one accessor in this file whose keys are a SPEC FIELD
+ * (`headerNames`) rather than constants — so it is the one where both spellings are producible and
+ * `quoteMinimalProps`, not `bareKeyedProps`, is the rule. Mirrors the "recovers auth: headers with
+ * headerNames" test above; kept as its own constant so the two spelling directions can corrupt it.
+ */
+const HEADERS_AUTH = [
+  "function headers(): Record<string, string> {",
+  '  const ak = process.env["DD_API_KEY"]?.trim();',
+  '  const app = process.env["DD_APP_KEY"]?.trim();',
+  '  if (ak === undefined || ak === "" || app === undefined || app === "") {',
+  '    throw new Error("DD_API_KEY and DD_APP_KEY must be set");',
+  "  }",
+  "  return {",
+  '    "DD-API-KEY": ak,',
+  '    "DD-APPLICATION-KEY": app,',
+  '    Accept: "application/json",',
+  "  };",
+  "}",
+].join("\n");
+
+const BEARER_AUTH = [
+  "function authHeaders(): Record<string, string> {",
+  '  const tok = process.env["GRAFANA_API_TOKEN"]?.trim();',
+  '  if (tok === undefined || tok === "") {',
+  '    throw new Error("GRAFANA_API_TOKEN is not set");',
+  "  }",
+  '  return { Authorization: `Bearer ${tok}`, Accept: "application/json" };',
+  "}",
+].join("\n");
+
+const BASIC_AUTH = [
+  "function authHeader(): Record<string, string> {",
+  '  const user = process.env["AIRFLOW_USER"]?.trim();',
+  '  if (user === undefined || user === "") {',
+  '    throw new Error("AIRFLOW_USER is not set");',
+  "  }",
+  '  const pass = process.env["AIRFLOW_PASSWORD"]?.trim();',
+  '  if (pass === undefined || pass === "") {',
+  '    throw new Error("AIRFLOW_PASSWORD is not set");',
+  "  }",
+  "  return {",
+  "    Authorization: encodeBasicAuthHeader(user, pass),",
+  '    Accept: "application/json",',
+  "  };",
+  "}",
+].join("\n");
+
+/**
+ * Every header object `src/emit/server/env.ts` writes, corrupted in its key SPELLING alone.
+ *
+ * `objectProps` resolves `{ "Accept": … }` and `{ Accept: … }` to the same `key`, so before these
+ * pins each row below recovered an `EnvEntry` identical to the pristine one and re-emitted the
+ * bare form — different bytes, an unchanged spec, invisible to `diff:golden`, to the round trip
+ * and to the totality rule alike, since each of those emits what it just read.
+ *
+ * Only the NEEDLESSLY-quoted direction is testable per key: a name `IDENTIFIER_KEY_RE` rejects
+ * cannot be written bare at all (`{ DD-API-KEY: ak }` is a syntax error), so the other direction
+ * is pinned by the positive tests below instead.
+ */
+const REFUSED_KEY_SPELLINGS: ReadonlyArray<readonly [string, string, string]> = [
+  [
+    "a quoted Authorization in a bearer accessor's return (recognizeOne's classifyAuthReturn)",
+    BEARER_AUTH,
+    BEARER_AUTH.replace("{ Authorization:", '{ "Authorization":'),
+  ],
+  [
+    "a quoted Accept in a headers accessor's return — the trailing constant, beside two header names that must STAY quoted",
+    HEADERS_AUTH,
+    HEADERS_AUTH.replace('    Accept: "application/json",', '    "Accept": "application/json",'),
+  ],
+  [
+    "a quoted Authorization in a basic accessor's return (recognizeBasicAuth)",
+    BASIC_AUTH,
+    BASIC_AUTH.replace("    Authorization: encode", '    "Authorization": encode'),
+  ],
+  [
+    "a quoted Accept in a basic accessor's return",
+    BASIC_AUTH,
+    BASIC_AUTH.replace('    Accept: "application/json",', '    "Accept": "application/json",'),
+  ],
+];
+
+describe("recognizeEnv: the key SPELLING of every emitted header object", () => {
+  for (const [reason, pristine, corrupted] of REFUSED_KEY_SPELLINGS) {
+    it(`refuses ${reason}`, () => {
+      expect(corrupted).not.toBe(pristine);
+      // The pristine form is recognized — so the row proves the SPELLING is what was refused,
+      // not that the source was malformed in some other way.
+      const before = run(pristine);
+      expect(before.entries).toHaveLength(1);
+      expect(before.unclaimed).toEqual([]);
+
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+
+  // The split-bearer wrapper needs its own two rows rather than a table entry: it is only ever
+  // offered the statement immediately after a matched reader, so the source is the PAIR, and a
+  // refused wrapper leaves the reader standing alone as a plain required entry rather than
+  // leaving nothing at all — the same fallback the "wrong callee" test above asserts.
+  for (const [reason, wrapper] of [
+    [
+      "a quoted Authorization",
+      SPLIT_BEARER_WRAPPER.replace("{ Authorization:", '{ "Authorization":'),
+    ],
+    [
+      "a quoted Accept",
+      SPLIT_BEARER_WRAPPER.replace('Accept: "application/json"', '"Accept": "application/json"'),
+    ],
+  ] as const) {
+    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitBearer writes both bare`, () => {
+      expect(wrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+      const source = [SPLIT_BEARER_READER, "", wrapper].join("\n\n");
+      const { entries, unclaimed } = run(source);
+      expect(entries).toEqual([
+        { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+      ]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+
+  it("keeps a header name the emitter MUST quote quoted — the direction a bare-key pin would break", () => {
+    // `returnLines` writes `IDENTIFIER_RE.test(header) ? header : JSON.stringify(header)`, so
+    // datadog's two header names are producible ONLY quoted. Pinning `bareKey === true` here
+    // would refuse datadog — the same wrong claim as accepting `"Accept"`, pointed the other way.
+    expect(HEADERS_AUTH).toContain('"DD-API-KEY": ak,');
+    expect(run(HEADERS_AUTH).entries[0]?.headerNames).toEqual(["DD-API-KEY", "DD-APPLICATION-KEY"]);
+  });
+
+  it("still accepts an identifier-shaped header name written BARE, which the same rule requires", () => {
+    // The mirror of the row above, and the reason the rule is `bareKey === IDENTIFIER_KEY_RE.test`
+    // rather than "quoted is always fine": a spec whose headerNames are all valid identifiers
+    // emits them bare, and that must keep deriving.
+    const source = HEADERS_AUTH.replace('"DD-API-KEY": ak,', "ddApiKey: ak,").replace(
+      '"DD-APPLICATION-KEY": app,',
+      "ddAppKey: app,",
+    );
+    expect(source).not.toBe(HEADERS_AUTH);
+    expect(run(source).entries[0]?.headerNames).toEqual(["ddApiKey", "ddAppKey"]);
+  });
+
+  it("refuses that same identifier-shaped header name written QUOTED", () => {
+    const source = HEADERS_AUTH.replace('"DD-API-KEY": ak,', '"ddApiKey": ak,').replace(
+      '"DD-APPLICATION-KEY": app,',
+      "ddAppKey: app,",
+    );
+    expect(source).not.toBe(HEADERS_AUTH);
+    expect(run(source).entries).toEqual([]);
+  });
+});
+
 describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
   const HELPER = [
     "function trimTrailingSlash(s: string): string {",
@@ -973,6 +1127,18 @@ describe("recognizeEnv: auth: client-credentials", () => {
     expect(run(source).entries).toEqual([{ ...CC_ENTRY, default: "unset" }]);
   });
 
+  it('keeps the QUOTED "Content-Type" key, the one mixed-spelling literal any emitter writes', () => {
+    // `renderTokenFunction`'s headerLines write `"Content-Type"` quoted beside a bare `Accept`
+    // and `Authorization` — the emitter's rule (quote iff the name is not a valid identifier)
+    // applied to three hardcoded names. So the pin here is `quoteMinimalProps`, and the
+    // `bareKey === true` rule that is right for every other fixed-key literal in this file would
+    // refuse the emitter's own output. This test is what fails if a later sweep "simplifies"
+    // matchTokenHeaders onto bareKeyedProps.
+    expect(CLIENT_CREDENTIALS).toContain('"Content-Type": "application/x-www-form-urlencoded"');
+    expect(CLIENT_CREDENTIALS).not.toContain("Content-Type:");
+    expect(run(CLIENT_CREDENTIALS).entries).toEqual([CC_ENTRY]);
+  });
+
   it("sorts the group by its FIRST statement's position, not the wrapper's", () => {
     // recognizeEnv re-sorts into declaration order by index, and that order is what
     // renderEnvAccessors regenerates the module's byte order from. A four-statement group keyed
@@ -1158,6 +1324,53 @@ const REFUSED_CLIENT_CREDENTIALS: [string, string][] = [
     CLIENT_CREDENTIALS.replace(
       "let tokenExpiresAt = 0;",
       "// epoch millis\nlet tokenExpiresAt = 0;",
+    ),
+  ],
+
+  // --- Key SPELLING. Every key below is one `renderTokenFunction`/`renderClientCredentials`
+  // hardcodes, so the quoted form recovers the identical fields and re-emits the bare one:
+  // different bytes, an unchanged `EnvEntry`, and no gate that can see it. The `"Content-Type"`
+  // key is deliberately absent — it is the one key here the emitter DOES quote, and the positive
+  // test above pins it staying that way.
+  [
+    "a quoted `grant_type` in the URLSearchParams literal",
+    CLIENT_CREDENTIALS.replace("{ grant_type:", '{ "grant_type":'),
+  ],
+  [
+    "a quoted `method` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace('    method: "POST",', '    "method": "POST",'),
+  ],
+  [
+    "a quoted `headers` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace("    headers: {", '    "headers": {'),
+  ],
+  [
+    "a quoted `body` in the token fetch's options object",
+    CLIENT_CREDENTIALS.replace("    body: body.toString(),", '    "body": body.toString(),'),
+  ],
+  [
+    "a quoted `Accept` inside the token fetch's headers object, beside the correctly-quoted Content-Type",
+    CLIENT_CREDENTIALS.replace(
+      '      Accept: "application/json",',
+      '      "Accept": "application/json",',
+    ),
+  ],
+  [
+    "a quoted `Authorization` inside the token fetch's headers object (the credentialsIn: basic entry)",
+    CLIENT_CREDENTIALS.replace(
+      "      Authorization: encodeBasicAuthHeader(",
+      '      "Authorization": encodeBasicAuthHeader(',
+    ),
+  ],
+  [
+    "a quoted `Authorization` in the async wrapper's returned header object",
+    CLIENT_CREDENTIALS.replace("  return { Authorization:", '  return { "Authorization":'),
+  ],
+  [
+    "a quoted `Accept` in the async wrapper's returned header object",
+    CLIENT_CREDENTIALS.replace(
+      '`, Accept: "application/json" };',
+      '`, "Accept": "application/json" };',
     ),
   ],
 ];

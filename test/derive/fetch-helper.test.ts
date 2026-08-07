@@ -471,10 +471,27 @@ const REFUSED_HELPERS = [
       "}",
     ].join("\n"),
   ],
+
+  // Key SPELLING inside the inline headers object. `headerOption` (src/emit/server/fetch-helper.ts)
+  // writes each header name as `IDENTIFIER_RE.test(k) ? k : JSON.stringify(k)`, so a quoted
+  // `"Accept"` is a spelling it cannot produce — and one whose recovered `inlineHeaders` record is
+  // IDENTICAL to the bare form's, so the derived spec re-emits different bytes while diff:golden
+  // (it emits what it read), the round trip and the totality rule all stay silent.
+  // `quoteMinimalProps` (src/derive/read.ts) is the pin; the other direction — `"X-Api-Key"`
+  // STAYING quoted — is pinned by the newrelic recognition test below, which a `bareKey === true`
+  // rule would break.
+  [
+    "rejects a needlessly quoted Accept in the inline headers object",
+    NEWRELIC.replace('Accept: "application/json"', '"Accept": "application/json"'),
+  ],
 ];
 
 describe("recognizeFetchHelper", () => {
   it("recognizes newrelic (inline headers, static base)", () => {
+    // Also the direction-B pin for the inline headers object's key spelling: `"X-Api-Key"` is a
+    // name `IDENTIFIER_RE` rejects, so `headerOption` can only write it QUOTED — a `bareKey ===
+    // true` rule would refuse one of the four byte-locked fixtures outright.
+    expect(NEWRELIC).toContain('{ "X-Api-Key": apiKey(), Accept: "application/json" }');
     const { fields, claims, statements } = run(NEWRELIC);
     expect(fields).toEqual({
       local: "nrGet",
@@ -483,6 +500,18 @@ describe("recognizeFetchHelper", () => {
       inlineHeaders: { "X-Api-Key": "${env.apiKey}", Accept: "application/json" },
     });
     expect(claims.unclaimed(statements)).toEqual([]);
+  });
+
+  it("still recognizes an identifier-shaped header name written BARE — the rule's other half", () => {
+    // The mirror of the assertion above: a spec whose inlineHeaders names are all valid
+    // identifiers emits them bare, and that must keep deriving. Together the two rule out both
+    // ways of getting `quoteMinimalProps` backwards.
+    const source = NEWRELIC.replace('"X-Api-Key": apiKey()', "xApiKey: apiKey()");
+    expect(source).not.toBe(NEWRELIC);
+    expect(run(source).fields?.inlineHeaders).toEqual({
+      xApiKey: "${env.apiKey}",
+      Accept: "application/json",
+    });
   });
 
   it("recognizes datadog (accessor headers, env base)", () => {
@@ -1437,6 +1466,31 @@ const REFUSED_REST_HELPERS = [
     "rejects a `let json` that carries an initializer — the emitter always leaves it bare",
     ZZ_FETCH.replace("let json: unknown;", "let json: unknown = null;"),
   ],
+
+  // Key SPELLING in the return envelope. All four keys are hardcoded bare by
+  // renderRestKitFetchHelper and none of them carries a spec field at all — `isRestReturnStatement`
+  // returns a boolean — so a quoted spelling recovered exactly the same nothing and re-emitted the
+  // bare form. `bareKeyedProps` (src/derive/read.ts) is the pin.
+  [
+    "rejects a quoted `ok` key in the return envelope",
+    ZZ_FETCH.replace("return { ok: res.ok,", 'return { "ok": res.ok,'),
+  ],
+  [
+    "rejects a quoted `text` key in the return envelope — the shorthand entry, which reads as bare",
+    ZZ_FETCH.replace("json, text };", 'json, "text": text };'),
+  ],
+
+  // The rest-kit helper's own inline extra headers, read by `restInlineHeaderEntries` rather than
+  // by `headerFields` (the surrounding list carries the fixed Authorization entry and the
+  // `...init?.headers` spread, which objectProps refuses). Same rule, applied per key there:
+  // renderRestKitFetchHelper writes `IDENTIFIER_RE.test(k) ? k : JSON.stringify(k)`.
+  [
+    "rejects a needlessly quoted inline extra header name",
+    ZZ_FETCH.replace(
+      "      Authorization: `Bearer ${token}`,",
+      '      Authorization: `Bearer ${token}`,\n      "xApiVersion": "2",',
+    ),
+  ],
   ["returns undefined for a module with no matching function at all", "const x = 1;"],
 ];
 
@@ -1448,6 +1502,9 @@ describe("recognizeRestFetchHelper", () => {
   });
 
   it("recognizes an inline extra header", () => {
+    // `"X-Api-Version"` is a name IDENTIFIER_RE rejects, so the emitter can only write it QUOTED
+    // — the direction-B half of `restInlineHeaderEntries`' spelling rule, whose direction-A half
+    // (a needlessly quoted `"xApiVersion"`) sits in REFUSED_REST_HELPERS above.
     const source = ZZ_FETCH.replace(
       "      Authorization: `Bearer ${token}`,",
       '      Authorization: `Bearer ${token}`,\n      "X-Api-Version": "2",',
@@ -1458,6 +1515,15 @@ describe("recognizeRestFetchHelper", () => {
       base: "https://api.zzstandalone.test",
       inlineHeaders: { "X-Api-Version": "2" },
     });
+  });
+
+  it("recognizes an identifier-shaped inline extra header written BARE", () => {
+    const source = ZZ_FETCH.replace(
+      "      Authorization: `Bearer ${token}`,",
+      '      Authorization: `Bearer ${token}`,\n      xApiVersion: "2",',
+    );
+    expect(source).not.toBe(ZZ_FETCH);
+    expect(runRest(source).fields?.inlineHeaders).toEqual({ xApiVersion: "2" });
   });
 
   // Every REFUSED_REST_HELPERS row: no fields recovered, and nothing claimed. See that table for

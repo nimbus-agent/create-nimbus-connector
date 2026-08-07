@@ -76,6 +76,23 @@ describe("recognizeArgs", () => {
   it("returns undefined for a computed modifier (z.number()[int]()) instead of establishing .int()", () => {
     expect(argsOf("z.object({ limit: z.number()[int]() })")).toBeUndefined();
   });
+
+  it("returns undefined for a QUOTED arg key, which renderZodFieldList never writes", () => {
+    // `renderZodFieldList` (src/emit/server/args.ts) interpolates `${name}:` unquoted, so
+    // `{ "q": z.string() }` is a spelling no spec can produce — and one that recovered the
+    // identical `{ q: { type: "string" } }`, re-emitting the bare form: different bytes with an
+    // unchanged spec, invisible to diff:golden, the round trip and the totality rule alike.
+    expect(argsOf('z.object({ "q": z.string() })')).toBeUndefined();
+  });
+
+  it("returns undefined for a quoted arg key that NEEDS quoting, rather than deriving an unparseable name", () => {
+    // The one place `bareKeyedProps` and `quoteMinimalProps` disagree, and the reason this call
+    // site takes the former even though its keys are variable: `ToolSchema.args`' key regex
+    // (src/spec.ts) confines an arg name to a valid identifier, so `{ "my-arg": … }` is
+    // unproducible in BOTH spellings. Under the quote-minimal rule it would be accepted here and
+    // rejected by parseSpec one tier down, with no bucket naming the construct that caused it.
+    expect(argsOf('z.object({ "my-arg": z.string() })')).toBeUndefined();
+  });
 });
 
 describe("recognizeArgs: schemaStyle", () => {

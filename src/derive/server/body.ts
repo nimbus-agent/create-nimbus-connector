@@ -1,6 +1,7 @@
 import { type PathSegment, parsePathTemplate } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import {
+  IDENTIFIER_KEY_RE,
   identName,
   isComputedProperty,
   isIdent,
@@ -34,22 +35,6 @@ import type { QueryEntry } from "./query.ts";
  * in either direction shows up as an explicit mapping where the author wrote none (or the reverse)
  * rather than as bytes that happen to match.
  */
-
-/**
- * `renderBodyExpr`'s own `IDENT`, copied rather than imported — the one duplication this module's
- * header argues against and does not close: sharing it would mean importing from
- * `src/emit/server/body.ts`, and a deriver module may not reach into the emitter. (The
- * `parsePathTemplate` import above is not that: it resolves to `src/spec.ts`, the spec language
- * both layers already depend on, which is why THAT one is shared.)
- *
- * The asymmetry is what makes the copy tolerable. This constant decides only how a
- * field name is SPELLED, and `fieldName` below rejects a quoted key this regex accepts — so a
- * copy that drifts LOOSER refuses a producible module (a visible blocker) and one that drifts
- * TIGHTER refuses it too. Neither direction can produce a wrong claim, unlike the path parser,
- * whose under-parsing direction is silent. Fold it back into one definition when a task may edit
- * `src/emit/`.
- */
-const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * What `recognizeBodyExpr` needs of a recognized tool: the fields `renderBodyExpr` itself reads.
@@ -179,8 +164,12 @@ function bodyValueArg(value: AstNode, tool: BodyTool, hoistsInScope: boolean): s
  * One body field's API name, in the two spellings `renderBodyExpr` chooses between.
  *
  * A quoted key that IS a valid identifier is refused: the emitter quotes a field name only when
- * `IDENT` rejects it, so `{ "title": … }` is a shape it cannot write, and reading it anyway would
- * derive a spec that re-emits the bare form.
+ * `IDENTIFIER_KEY_RE` rejects it, so `{ "title": … }` is a shape it cannot write, and reading it
+ * anyway would derive a spec that re-emits the bare form. That is `quoteMinimalProps`' rule
+ * (src/derive/read.ts) spelled out per key rather than folded into the parse, because `bodyPairs`
+ * reads its properties through `objectProperty` — it discriminates SHORTHAND, which `objectProps`
+ * cannot report — so the shared regex is imported and the wrapper is not. The empty-key clause is
+ * this function's own, and has no counterpart there.
  *
  * The EMPTY key is refused here rather than passed on: `ToolSchema`'s `body` is
  * `z.record(z.string().min(1), z.string().min(1))`, so `{ "": … }` produces a derived spec that
@@ -191,7 +180,7 @@ function fieldName(key: AstNode): string | undefined {
   const bare = identName(key);
   if (bare !== undefined) return bare;
   const quoted = stringLit(key);
-  if (quoted === undefined || quoted === "" || IDENT.test(quoted)) return undefined;
+  if (quoted === undefined || quoted === "" || IDENTIFIER_KEY_RE.test(quoted)) return undefined;
   return quoted;
 }
 

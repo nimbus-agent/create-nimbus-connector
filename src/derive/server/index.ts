@@ -3,6 +3,7 @@ import type { ClaimSet } from "../claims.ts";
 import {
   arrowFn,
   awaited,
+  bareKeyedProps,
   blockBody,
   callArgs,
   calleeOf,
@@ -25,7 +26,6 @@ import {
   metaPropertyNames,
   methodCallTo,
   newOf,
-  objectProps,
   stringLit,
   typeAliasName,
   typeAnnotationName,
@@ -360,13 +360,17 @@ function recognizeReadOnlyFrame(
  * produce a VariableDeclaration node too, and without it `let mcp = new McpServer(...)` passed
  * every check below and was claimed as the documented `const` frame, the same gap
  * `isRegistrarConst` closed for the registrar const (see its comment below).
+ *
+ * Both keys are read through `bareKeyedProps`: `wiring()` writes `name` and `version` as bare
+ * identifiers, so `{ "name": …, "version": … }` is a spelling no spec produces — and one that
+ * recovers the identical two fields, so nothing downstream could see it.
  */
 function getMcpServerInfo(node: AstNode): { varName: string; connectorName: string } | undefined {
   const decl = constDecl(node);
   if (decl === undefined) return undefined;
   const args = newOf(decl.init, "McpServer", 1);
   if (args === undefined) return undefined;
-  const props = objectProps(args[0]);
+  const props = bareKeyedProps(args[0]);
   if (props?.length !== 2) return undefined;
 
   const [nameProp, versionProp] = props;
