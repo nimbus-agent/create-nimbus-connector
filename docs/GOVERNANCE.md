@@ -47,9 +47,12 @@ under [Known limitations](./ROADMAP.md#known-limitations), a measured-and-reject
 under [Considered and declined](./ROADMAP.md#considered-and-declined), and a measurement that
 justifies a default goes in the README beside the field it justifies.
 
-Earlier stages produced long standalone design documents. Those have been retired into the
-pages above — reasoning that lives only in a dated document nobody opens again is reasoning
-that gets re-litigated.
+Earlier stages produced long standalone design documents. **All of them have been retired** into
+the pages above — reasoning that lives only in a dated document nobody opens again is reasoning
+that gets re-litigated. The rule that leaves is: a design document is the right artifact while a
+stage is being built and the wrong one afterwards, so the durable half moves to a page that stays
+and the document goes to git history. [docs/README.md](./README.md)'s *Where the reasoning lives*
+records where each kind of thing went.
 
 **Changes that move locked bytes** need explicit justification in the PR, plus a `diff:golden`
 run showing the four locked fixtures still at 6/6.
@@ -64,6 +67,36 @@ Every PR gets a human review. Automated review (CodeRabbit, Sonar, CodeQL) runs 
 is advisory: a finding is verified against the code before it is implemented or dismissed, and
 the reasoning is recorded in the thread. Neither a bot's approval nor its objection decides
 anything on its own.
+
+## Keeping the unattended checks running
+
+This repository is built to sit quiet for long stretches. Two of its checks are the ones that
+matter most in exactly that state, and both are the kind that stop running without turning
+anything red. **A maintainer who checks in twice a year should read this section first.**
+
+**The two scheduled workflows are auto-disabled after 60 days of repository inactivity.** That
+is a GitHub platform behaviour, not a setting in this repository, and it applies to
+`acceptance.yml`'s daily `--registry` run and `codeql.yml`'s weekly scan. Those two are
+precisely the unattended safety nets: the daily acceptance run exists because the published
+`@nimbus-dev/sdk` can change without a single commit here, and the weekly CodeQL run exists so a
+newly published query finds existing code rather than waiting for someone to touch it. The thing
+that keeps the window open today is incidental — Dependabot's weekly branch pushes count as
+activity — which means the protection lapses exactly when nothing needs updating, the case it
+was for.
+
+GitHub emails the repository admins before disabling them, so the instruction is short and it is
+the whole of the mitigation: **re-enable them, and do not read a green Actions tab as proof they
+ran.** A disabled schedule shows no failure. Check the workflow's last run date, not its last
+result. A keep-alive workflow was considered and declined — it would manufacture activity to
+defeat a mechanism whose purpose is to detect its absence, which is the same shape as a gate
+that passes while asserting nothing.
+
+**The `sonar` workflow can go red for a reason no commit fixes.** SonarCloud's quality gate
+includes `new_security_hotspots_reviewed`, which is satisfied by a human reviewing the hotspot
+in the SonarCloud UI and recording a verdict — not by changing code. A red `sonar` check is
+therefore not automatically a defect in the pull request. Read the finding first: if it is an
+unreviewed hotspot, review it there and say so in the thread, the same way any other advisory
+finding is verified before being implemented or dismissed.
 
 ## Compatibility
 

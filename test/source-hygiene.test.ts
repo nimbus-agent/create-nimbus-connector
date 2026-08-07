@@ -73,12 +73,23 @@ function rendersAsNothing(ch: string): boolean {
  * instance. `schema/` was on this list and contributing ZERO files, because `.gitignore` ignores
  * every top-level directory by a catch-all and re-admits the ones this repo owns by name — a
  * brand-new `schema/` was ignored, so `--exclude-standard` dropped it and the sweep saw none of it.
- * Every gate stayed green. Measured per path today: src 58, test 77, scripts 22, schema 1 — so
- * `src` ALONE clears the aggregate floor below, and any one of the other three could go to zero
- * without moving a single assertion. `git ls-files` exits 0 and prints nothing for a path that
- * matches nothing, so silence is the failure mode, not an error.
+ * Every gate stayed green. Measured per path on 2026-08-07 with the same `git ls-files` invocation
+ * `filesUnder` runs: src 58, test 86, scripts 28, schema 1, docs 11 — so `src` ALONE clears the
+ * aggregate floor below, and any one of the others could go to zero without moving a single
+ * assertion. `git ls-files` exits 0 and prints nothing for a path that matches nothing, so silence
+ * is the failure mode, not an error.
+ *
+ * `docs` is the fourth correction, and it is about WHERE prose is written rather than where code
+ * is. The invisible character this gate exists for is pasted, not typed, and prose is what gets
+ * pasted — but `docs/` sat outside the sweep, so a zero-width space in any published page went
+ * unseen while every `.ts` file was inspected byte by byte. `docs/SPEC.md` sharpens it: that file
+ * is GENERATED from `ConnectorSpecSchema`'s descriptions, so a stray code point in a zod
+ * `.describe()` string would be copied into a published document by a build step and land in the
+ * one directory nothing was reading. Markdown at the repo root (`README.md`, `CLAUDE.md`,
+ * `CONTRIBUTING.md`) is still unswept — every entry here is a DIRECTORY, and a `.` path would
+ * sweep `node_modules`' siblings and the whole `fixtures/` tree with it.
  */
-const SWEPT_PATHS = ["src", "test", "scripts", "schema"] as const;
+const SWEPT_PATHS = ["src", "test", "scripts", "schema", "docs"] as const;
 
 /**
  * This gate's FIFTH hole, and the first one that was in the path handling rather than the file
@@ -226,8 +237,8 @@ describe("source hygiene", () => {
   });
 
   it("sees files under EVERY path it is told to sweep, not just enough of them in total", () => {
-    // The aggregate guard above closes the instance; this closes the class. Measured per path:
-    // src 58, test 77, scripts 22, schema 1 — so `src` alone clears 50, and a directory that
+    // The aggregate guard above closes the instance; this closes the class. See SWEPT_PATHS' own
+    // docstring for the per-path counts and their date: `src` alone clears 50, so a directory that
     // contributes nothing (added to SWEPT_PATHS but swallowed by .gitignore's top-level catch-all,
     // which is exactly what happened to `schema/`) leaves every other assertion here green. `git
     // ls-files` exits 0 and prints nothing for a path it cannot match, so nothing else complains.

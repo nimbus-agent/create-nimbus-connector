@@ -1031,7 +1031,7 @@ function matchWriteHelperFunction(
   if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
 
   const name = functionName(s);
-  if (name === undefined || !name.endsWith(WRITE_SUFFIX)) return undefined;
+  if (!name?.endsWith(WRITE_SUFFIX)) return undefined;
   const local = name.slice(0, -WRITE_SUFFIX.length);
   // `FetchHelperSchema` keeps `local` non-empty, so a function named exactly "Send" is not a
   // write helper any spec produces.

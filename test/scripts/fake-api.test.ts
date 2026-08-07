@@ -45,7 +45,7 @@ describe("startApi", () => {
   });
 
   it("records the method, the path and the query string together", async () => {
-    // `?flag=false` is the entire evidence for the spec §8 decision that an unset optional
+    // `?flag=false` is the entire evidence for the documented decision that an unset optional
     // boolean reaches the URL as false. Recording `pathname` alone would silently discard it
     // and the check would compare "/items" against "/items?flag=false" forever.
     const { base, recorded } = start();

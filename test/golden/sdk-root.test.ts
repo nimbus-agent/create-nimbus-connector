@@ -72,7 +72,7 @@ describe("parseSdkArgs", () => {
     });
   });
 
-  it("accepts the --sdk-root form the design doc's pre-release gate table documents", () => {
+  it("accepts the --sdk-root form resolveSdkRoot's own failure message tells you to pass", () => {
     expect(parseSdkArgs(["--sdk-root", "/c/gitrep/nimbus-sdk"])).toEqual({
       flag: "/c/gitrep/nimbus-sdk",
       registry: false,

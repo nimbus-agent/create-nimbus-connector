@@ -129,25 +129,52 @@ function parseFlags(argv: readonly string[]): CliOptions {
     listOperations: false,
     ops: [],
   };
+  // A switch rather than the else-if chain this replaced: every arm tests the same value for
+  // equality, which is what a switch says and what a chain of `else if (a === …)` only implies.
+  // `++i` inside an arm consumes that flag's value, so the loop's own counter skips it.
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--dry-run") opts.dryRun = true;
-    else if (a === "--standalone") opts.standalone = true;
-    else if (a === "--force") opts.force = true;
-    else if (a === "--partial") opts.partial = true;
-    else if (a === "--list-operations") opts.listOperations = true;
-    else if (a === "--op") opts.ops.push(takeValue(argv, ++i, "--op"));
-    else if (a === "--spec") opts.specPath = takeValue(argv, ++i, "--spec");
-    else if (a === "--out-dir") opts.outDir = takeValue(argv, ++i, "--out-dir");
-    else if (a === "--license") opts.license = validateLicense(takeValue(argv, ++i, "--license"));
-    else if (a === "--gateway-wiring") {
-      opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
-    } else if (a === "--from-connector") {
-      opts.fromConnector = takeValue(argv, ++i, "--from-connector");
-    } else if (a === "--from-openapi") {
-      opts.fromOpenapi = takeValue(argv, ++i, "--from-openapi");
-    } else if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
-    else opts.name = a;
+    switch (a) {
+      case "--dry-run":
+        opts.dryRun = true;
+        break;
+      case "--standalone":
+        opts.standalone = true;
+        break;
+      case "--force":
+        opts.force = true;
+        break;
+      case "--partial":
+        opts.partial = true;
+        break;
+      case "--list-operations":
+        opts.listOperations = true;
+        break;
+      case "--op":
+        opts.ops.push(takeValue(argv, ++i, "--op"));
+        break;
+      case "--spec":
+        opts.specPath = takeValue(argv, ++i, "--spec");
+        break;
+      case "--out-dir":
+        opts.outDir = takeValue(argv, ++i, "--out-dir");
+        break;
+      case "--license":
+        opts.license = validateLicense(takeValue(argv, ++i, "--license"));
+        break;
+      case "--gateway-wiring":
+        opts.gatewayWiring = takeValue(argv, ++i, "--gateway-wiring");
+        break;
+      case "--from-connector":
+        opts.fromConnector = takeValue(argv, ++i, "--from-connector");
+        break;
+      case "--from-openapi":
+        opts.fromOpenapi = takeValue(argv, ++i, "--from-openapi");
+        break;
+      default:
+        if (a.startsWith("--")) throw new Error(unknownFlagMessage(a));
+        opts.name = a;
+    }
   }
   return opts;
 }
@@ -155,14 +182,32 @@ function parseFlags(argv: readonly string[]): CliOptions {
 /**
  * Every flag combination this CLI refuses, all instances of one rule: a flag that would
  * have no effect is a worse outcome silently ignored than loudly rejected.
+ *
+ * **The call order below is the contract**, and each group's own comment says why it sits where it
+ * does: the two "this command writes nothing" groups run ahead of the per-flag prerequisites,
+ * because a prerequisite's advice ("add --standalone") is actively wrong when the flag it names is
+ * itself refused by the group above. The groups were a single 200-line body until the ordering
+ * they encode was worth reading on one screen; nothing about which check runs when has changed.
  */
 function assertFlagCombination(opts: CliOptions): void {
+  assertSpecSuppliesTheName(opts);
+  assertFromConnectorGeneratesNothing(opts);
+  assertFromOpenapiGeneratesNothing(opts);
+  assertDocumentSelection(opts);
+  assertFlagPrerequisites(opts);
+  assertFromConnectorSpecSources(opts);
+}
+
+function assertSpecSuppliesTheName(opts: CliOptions): void {
   if (opts.name !== undefined && opts.specPath !== undefined) {
     throw new Error(
       "--spec supplies the connector name from the spec file; a positional name is redundant " +
         "and was probably a mistake — remove one.",
     );
   }
+}
+
+function assertFromConnectorGeneratesNothing(opts: CliOptions): void {
   // --from-connector only ever reads a directory and prints its derived spec to stdout — it
   // generates nothing and writes nothing, so every flag that shapes a WRITE is dead weight
   // rather than merely redundant. Checked as its own group, ahead of each flag's own generic
@@ -207,6 +252,9 @@ function assertFlagCombination(opts: CliOptions): void {
         "to is refused too. Drop --force.",
     );
   }
+}
+
+function assertFromOpenapiGeneratesNothing(opts: CliOptions): void {
   // The --from-openapi group, checked ahead of each flag's own generic rule for exactly the
   // reason the --from-connector group above is: this command prints a spec to stdout and writes
   // nothing, so every flag that shapes a WRITE is dead here, and reporting "--license needs
@@ -253,6 +301,9 @@ function assertFlagCombination(opts: CliOptions): void {
         "name is redundant and was probably a mistake — remove one.",
     );
   }
+}
+
+function assertDocumentSelection(opts: CliOptions): void {
   // The same trap the --force check above closes. --list-operations and --op only mean anything
   // against an OpenAPI document, so on their own they say "Add --from-openapi <doc>" — which is
   // wrong advice when a flag that REFUSES --from-openapi is already present. --spec and
@@ -263,12 +314,12 @@ function assertFlagCombination(opts: CliOptions): void {
     opts.listOperations ? "--list-operations" : undefined,
     opts.ops.length > 0 ? "--op" : undefined,
   ].filter((f): f is string => f !== undefined);
-  const suppliesASpec =
-    opts.fromConnector !== undefined
-      ? "--from-connector"
-      : opts.specPath !== undefined
-        ? "--spec"
-        : undefined;
+  // Same shape as `documentOnly` above, and in priority order: --from-connector is named first
+  // when both are present, because it is the one that wins downstream.
+  const suppliesASpec = [
+    opts.fromConnector !== undefined ? "--from-connector" : undefined,
+    opts.specPath !== undefined ? "--spec" : undefined,
+  ].find((f) => f !== undefined);
   if (documentOnly.length > 0 && opts.fromOpenapi === undefined && suppliesASpec !== undefined) {
     throw new Error(
       `${documentOnly.join(" and ")} read an OpenAPI document, and ${suppliesASpec} supplies a ` +
@@ -314,6 +365,10 @@ function assertFlagCombination(opts: CliOptions): void {
         "operationIds this document declares, then pass one or more --op <operationId>.",
     );
   }
+}
+
+/** Each flag whose effect depends on another flag being present, checked after the groups above. */
+function assertFlagPrerequisites(opts: CliOptions): void {
   // A user who believes they set a license and did not is a worse outcome than an error.
   if (opts.license !== undefined && !opts.standalone) {
     throw new Error(
@@ -344,6 +399,10 @@ function assertFlagCombination(opts: CliOptions): void {
         "--gateway-wiring.",
     );
   }
+}
+
+/** The --from-connector rules that are about where a spec comes from, rather than about writes. */
+function assertFromConnectorSpecSources(opts: CliOptions): void {
   if (opts.fromConnector !== undefined && opts.specPath !== undefined) {
     throw new Error(
       "--from-connector derives a spec from an existing connector and --spec reads one from a " +
@@ -647,6 +706,7 @@ function selectOperations(doc: OpenApiDocument, ids: readonly string[]): Selecte
     // argument would describe the arguments, when the fact to report is that this document offers
     // none. Every skipped operation is listed with its own reason — the first one's is not
     // representative when a `head:` and a mis-cased `Post:` are both present.
+    const skippedLines = skipped.map((s) => `    ${describeSkipped(s)} — ${s.detail}`);
     const refusal: Refusal =
       skipped.length === 0
         ? {
@@ -659,7 +719,7 @@ function selectOperations(doc: OpenApiDocument, ids: readonly string[]): Selecte
             kind: "no-selectable-operation",
             detail:
               "there is nothing for --op to select: every operation this document declares was " +
-              `skipped.\n${skipped.map((s) => `    ${describeSkipped(s)} — ${s.detail}`).join("\n")}`,
+              `skipped.\n${skippedLines.join("\n")}`,
           };
     return { ok: false, refusals: [refusal] };
   }
@@ -713,10 +773,8 @@ type SelectedOperations =
  * and src/openapi/spec.ts all refuse in.
  */
 function renderOpenapiRefusals(docPath: string, refusals: readonly Refusal[]): string {
-  return (
-    `cannot read ${docPath} into a spec. What stopped it:\n\n` +
-    `${refusals.map((r) => `  ${r.kind}: ${r.detail}`).join("\n\n")}\n`
-  );
+  const lines = refusals.map((r) => `  ${r.kind}: ${r.detail}`);
+  return `cannot read ${docPath} into a spec. What stopped it:\n\n${lines.join("\n\n")}\n`;
 }
 
 /**
@@ -761,6 +819,38 @@ function refuseDocument(docPath: string, refusals: readonly Refusal[]): never {
   throw new Error(`--from-openapi: ${docPath} could not be read into a spec.`);
 }
 
+/**
+ * `--from-connector <dir>`: the connector as a spec on stdout, or its blockers on stderr.
+ *
+ * Its own function for the reason `assembleDocumentSpec` and `listDocumentOperations` are: main()
+ * is the dispatch between the commands, and a command's body inside the dispatch hides which of
+ * the two it is.
+ */
+async function printDerivedSpec(dir: string, partial: boolean): Promise<void> {
+  // Lazy: a static import would pull @babel/parser into the module graph for every command,
+  // so a consumer without the optionalDependency could not even run --dry-run. Task 3's
+  // step 6 is the check that this stays true.
+  const { initParser, parserAvailable, parserUnavailableReason } = await import("./derive/ast.ts");
+  const { deriveFromDirectory, renderBlockers } = await import("./derive/from-connector.ts");
+  await initParser();
+  if (!parserAvailable())
+    throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
+
+  const result = await deriveFromDirectory(dir, { partial });
+  if (!result.ok) {
+    // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
+    // Error as one prefixed line, which would mangle a multi-line report and repeat the
+    // program name. The throw below is only how this process exits non-zero.
+    console.error(renderBlockers(dir, result.blockers));
+    throw new Error(`--from-connector: ${dir} could not be read into a spec.`);
+  }
+  console.log(JSON.stringify(result.spec, null, 2));
+  for (const note of result.notes) console.error(`note: ${note}`);
+  if (result.target === "standalone") {
+    console.error("note: read from a standalone package — generate with --standalone.");
+  }
+}
+
 export async function main(argv: readonly string[]): Promise<void> {
   if (await handleInfoFlags(argv)) return;
 
@@ -776,33 +866,15 @@ export async function main(argv: readonly string[]): Promise<void> {
   }
 
   if (opts.fromConnector !== undefined) {
-    // Lazy: a static import would pull @babel/parser into the module graph for every command,
-    // so a consumer without the optionalDependency could not even run --dry-run. Task 3's
-    // step 6 is the check that this stays true.
-    const { initParser, parserAvailable, parserUnavailableReason } = await import(
-      "./derive/ast.ts"
-    );
-    const { deriveFromDirectory, renderBlockers } = await import("./derive/from-connector.ts");
-    await initParser();
-    if (!parserAvailable())
-      throw new Error(parserUnavailableReason() ?? "the parser is unavailable.");
-
-    const result = await deriveFromDirectory(opts.fromConnector, { partial: opts.partial });
-    if (!result.ok) {
-      // Printed, not thrown. `blocked` is a RESULT — the top-level catcher formats a thrown
-      // Error as one prefixed line, which would mangle a multi-line report and repeat the
-      // program name. The throw below is only how this process exits non-zero.
-      console.error(renderBlockers(opts.fromConnector, result.blockers));
-      throw new Error(`--from-connector: ${opts.fromConnector} could not be read into a spec.`);
-    }
-    console.log(JSON.stringify(result.spec, null, 2));
-    for (const note of result.notes) console.error(`note: ${note}`);
-    if (result.target === "standalone") {
-      console.error("note: read from a standalone package — generate with --standalone.");
-    }
+    await printDerivedSpec(opts.fromConnector, opts.partial);
     return;
   }
 
+  await generatePackage(opts);
+}
+
+/** The default command: a spec (from `--spec` or the prompts) generated, previewed or written. */
+async function generatePackage(opts: CliOptions): Promise<void> {
   const spec =
     opts.specPath !== undefined ? await parseSpecFile(opts.specPath) : promptForSpec(opts.name);
 

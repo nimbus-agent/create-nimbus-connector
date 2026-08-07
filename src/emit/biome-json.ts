@@ -5,8 +5,15 @@ import type { GeneratedFile } from "../types.ts";
  * The Biome release a generated standalone package pins. Shared with
  * src/emit/package-json.ts so the emitted `$schema` URL and the emitted
  * `@biomejs/biome` devDependency range cannot drift apart.
+ *
+ * It must also equal the Biome this repository itself installs, because THAT one — the
+ * `@biomejs/wasm-nodejs` engine src/format.ts runs — produces the bytes the emitted config
+ * describes. Nothing checked that until test/emit/static.test.ts's "BIOME_VERSION matches the
+ * Biome this repo actually pins" and "matches the Biome ENGINE that produced the bytes": the
+ * two guards before them compared the emitted output against this constant, so both held for
+ * any value it took, and the constant sat a patch behind the pin unnoticed.
  */
-export const BIOME_VERSION = "2.5.6";
+export const BIOME_VERSION = "2.5.7";
 
 /**
  * Standalone target only. A monorepo-target connector inherits the workspace root's

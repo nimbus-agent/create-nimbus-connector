@@ -39,7 +39,7 @@ import { z } from "zod";
  * reject ordinary documents with "expected string, received number", which describes the
  * reader's assumption rather than the document's problem.
  */
-const versionText = () => z.union([z.string(), z.number()]).transform((v) => String(v));
+const versionText = () => z.union([z.string(), z.number()]).transform(String);
 
 /** One operation object. `operationId` is optional here so listOperations can name what lacks it. */
 export const OpenApiOperationSchema = z.looseObject({

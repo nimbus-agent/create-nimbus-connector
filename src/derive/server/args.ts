@@ -101,12 +101,10 @@ export function recognizeArgs(node: AstNode): ArgsResult | undefined {
   // spell it `z.object({})` (renderZodSchema's own empty-object special case), so it carries no
   // evidence either way and schemaStyle stays unset.
   const first = props[0];
-  const schemaStyle: "inline" | "expanded" | undefined =
-    first === undefined
-      ? undefined
-      : startLine(objectNode) === startLine(first.value)
-        ? "inline"
-        : "expanded";
+  let schemaStyle: "inline" | "expanded" | undefined;
+  if (first !== undefined) {
+    schemaStyle = startLine(objectNode) === startLine(first.value) ? "inline" : "expanded";
+  }
 
   return { args: out, ...(schemaStyle === undefined ? {} : { schemaStyle }) };
 }

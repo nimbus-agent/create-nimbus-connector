@@ -154,8 +154,8 @@ describe("style recovery", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 6b: prove the vote rule against every fixture's own emitted bytes, rather than trust the
-// paragraph in the plan. Independent of whether deriveSpec succeeds end-to-end for a fixture — a
+// Prove the vote rule against every fixture's own emitted bytes, rather than against a prose
+// statement of it. Independent of whether deriveSpec succeeds end-to-end for a fixture — a
 // fixture can declare a non-default style while its module blocks on a gap that has nothing to do
 // with style recovery, so routing through deriveSpec is not a reliable path to this evidence.
 // Scanning the emitted AST directly finds the same evidence recognizeArgs/recognizePath would

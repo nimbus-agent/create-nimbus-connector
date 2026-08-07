@@ -507,9 +507,15 @@ describe("--help", () => {
    * that do not exist, or omits ones that do, and nothing fails. parseFlags is the source of
    * truth, so the flags it compares against are extracted from the source and required to
    * appear in USAGE.
+   *
+   * The extraction reads parseFlags' `case` labels. It read `a === "--flag"` while that function
+   * was an else-if chain, and this assertion is what failed when the chain became a switch — which
+   * is the guard working: an extraction that silently matched nothing would have left `parsed`
+   * empty and passed every loop below it vacuously. The `toBeGreaterThan` is what stops that,
+   * and it is why the pattern may be re-aimed but must never be widened to "match anything".
    */
   it("documents every flag parseFlags accepts", () => {
-    const parsed = [...cliSource.matchAll(/a === "(--[a-z-]+)"/g)].map((m) => m[1]!);
+    const parsed = [...cliSource.matchAll(/^\s*case "(--[a-z-]+)":/gm)].map((m) => m[1]!);
     expect(parsed.length).toBeGreaterThan(5);
     for (const flag of parsed) {
       expect(USAGE).toContain(flag);

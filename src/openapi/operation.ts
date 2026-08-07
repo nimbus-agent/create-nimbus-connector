@@ -42,11 +42,11 @@
  *    incidental: parameters before body properties, path-item parameters before the operation's
  *    own, an override in the position it overrode, and document order within each group.
  *
- * **What this deliberately does not decide.** No `effect` — the design lists it as unfillable
- * (the corpus is emphatic that deriving HITL from the method is wrong for a third of connectors),
- * so a non-GET operation carries a note asking for it instead. No `description` when the
- * operation supplies no `summary`; Task 3 owns the `TODO:` placeholder for that, and `notes` is
- * what it folds into the description it writes.
+ * **What this deliberately does not decide.** No `effect` — an OpenAPI document carries nothing
+ * that answers it, and the corpus is emphatic that deriving HITL from the HTTP method is wrong
+ * for a third of connectors, so a non-GET operation carries a note asking for it instead.
+ * No `description` when the operation supplies no `summary`; Task 3 owns the `TODO:` placeholder
+ * for that, and `notes` is what it folds into the description it writes.
  *
  * **On `$ref` siblings.** `resolveRefs` replaces a referenced node whole, dropping any
  * `summary`/`description` sibling, and its docstring calls that acceptable *because no mapper
@@ -373,70 +373,80 @@ type MappedParameter = {
 function mapParameters(merged: readonly unknown[], c: Collected): MappedParameter[] {
   const out: MappedParameter[] = [];
   for (const raw of merged) {
-    const parsed = OpenApiParameterSchema.safeParse(raw);
-    if (!parsed.success) {
-      refuse(c, "parameter-shape", `a parameter is not a parameter object (${issuesOf(parsed)}).`);
-      continue;
-    }
-    const parameter = parsed.data;
-    const where = `parameter "${parameter.name}"`;
-
-    if (parameter.in !== "path" && parameter.in !== "query") {
-      refuse(
-        c,
-        "parameter-location",
-        `${where} is declared in: "${parameter.in}". A generated tool sends only path and query ` +
-          "parameters — the fetch helper owns every header it sends, and no tool sends cookies.",
-      );
-      continue;
-    }
-    if (parameter.schema === undefined) {
-      refuse(
-        c,
-        "parameter-shape",
-        parameter.content === undefined
-          ? `${where} declares no "schema", so its type is unknown.`
-          : `${where} is content-encoded ("content" rather than "schema"), which serialises the ` +
-              "value as a media type this generator does not build.",
-      );
-      continue;
-    }
-
-    const slug = slugifyArgName(parameter.name);
-    if (slug === undefined) {
-      refuse(
-        c,
-        "argument-name",
-        `${where} cannot become a JS identifier, which a spec argument name must be. Rename it ` +
-          "in the document, or add the argument by hand after generating.",
-      );
-      continue;
-    }
-    if (slug !== parameter.name) {
-      note(
-        c,
-        `TODO: the argument "${slug}" is the document's "${parameter.name}", renamed because a ` +
-          "spec argument name must be a valid JS identifier. The request is unchanged.",
-      );
-    }
-
-    // A path parameter is required whatever the document says: the URL cannot be built without a
-    // value, and an optional one would emit encodeURIComponent(string | undefined), which is a
-    // TS2345 in the generated package rather than a runtime surprise.
-    const required = parameter.in === "path" || parameter.required === true;
-    if (parameter.in === "path" && parameter.required !== true) {
-      note(
-        c,
-        `TODO: path parameter "${parameter.name}" is not marked required in the document; it is ` +
-          "mapped as a required argument, because the URL cannot be built without a value.",
-      );
-    }
-
-    const arg = mapScalarSchema(parameter.schema, where, required, undefined, c);
-    if (arg === undefined) continue;
-    out.push({ slug, documentName: parameter.name, location: parameter.in, arg });
+    const mapped = mapOneParameter(raw, c);
+    if (mapped !== undefined) out.push(mapped);
   }
   return out;
+}
+
+/**
+ * One merged parameter, or `undefined` once it has been refused — every `continue` the loop above
+ * used to carry, which is what put each of these guards a level deep for no reason: the decision
+ * is about ONE parameter, and collecting the results is the loop's whole remaining job.
+ */
+function mapOneParameter(raw: unknown, c: Collected): MappedParameter | undefined {
+  const parsed = OpenApiParameterSchema.safeParse(raw);
+  if (!parsed.success) {
+    refuse(c, "parameter-shape", `a parameter is not a parameter object (${issuesOf(parsed)}).`);
+    return undefined;
+  }
+  const parameter = parsed.data;
+  const where = `parameter "${parameter.name}"`;
+
+  if (parameter.in !== "path" && parameter.in !== "query") {
+    refuse(
+      c,
+      "parameter-location",
+      `${where} is declared in: "${parameter.in}". A generated tool sends only path and query ` +
+        "parameters — the fetch helper owns every header it sends, and no tool sends cookies.",
+    );
+    return undefined;
+  }
+  if (parameter.schema === undefined) {
+    refuse(
+      c,
+      "parameter-shape",
+      parameter.content === undefined
+        ? `${where} declares no "schema", so its type is unknown.`
+        : `${where} is content-encoded ("content" rather than "schema"), which serialises the ` +
+            "value as a media type this generator does not build.",
+    );
+    return undefined;
+  }
+
+  const slug = slugifyArgName(parameter.name);
+  if (slug === undefined) {
+    refuse(
+      c,
+      "argument-name",
+      `${where} cannot become a JS identifier, which a spec argument name must be. Rename it ` +
+        "in the document, or add the argument by hand after generating.",
+    );
+    return undefined;
+  }
+  if (slug !== parameter.name) {
+    note(
+      c,
+      `TODO: the argument "${slug}" is the document's "${parameter.name}", renamed because a ` +
+        "spec argument name must be a valid JS identifier. The request is unchanged.",
+    );
+  }
+
+  // A path parameter is required whatever the document says: the URL cannot be built without a
+  // value, and an optional one would emit encodeURIComponent(string | undefined), which is a
+  // TS2345 in the generated package rather than a runtime surprise.
+  const required = parameter.in === "path" || parameter.required === true;
+  if (parameter.in === "path" && parameter.required !== true) {
+    note(
+      c,
+      `TODO: path parameter "${parameter.name}" is not marked required in the document; it is ` +
+        "mapped as a required argument, because the URL cannot be built without a value.",
+    );
+  }
+
+  const arg = mapScalarSchema(parameter.schema, where, required, undefined, c);
+  if (arg === undefined) return undefined;
+  return { slug, documentName: parameter.name, location: parameter.in, arg };
 }
 
 /**

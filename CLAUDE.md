@@ -72,19 +72,30 @@ This repo's defining concern is **false greens** — checks that pass while asse
 Several exist because an earlier version of the check was vacuous. Know what each one is
 worth before quoting it as evidence.
 
-| Command | What it proves | Needs |
-| --- | --- | --- |
-| `bun test` | Unit + emitted-source typecheck | — |
-| `bunx tsc --noEmit` | This repo typechecks | — |
-| `bunx biome check src/ test/ scripts/` | This repo lints | — |
-| `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
-| `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
-| `bun run reach --baseline --nimbus-root <path>` | No connector lost a tier against `fixtures/reach-baseline.json` | Nimbus checkout |
-| `bun run acceptance <nimbus-root>` | A generated connector survives inside the monorepo | Nimbus checkout |
-| `bun run wiring:conformance --nimbus-root <path>` | The wiring skeleton still matches Nimbus's real sync interface | Nimbus checkout |
-| `bun run standalone-acceptance <sdk-root>` | A standalone package builds and serves MCP, against an **unreleased SDK branch** | SDK checkout, built |
-| `bun run standalone-acceptance --registry` | The same, against the **published** artifact | network |
-| `bun run runtime:acceptance --registry` | Generated connectors make the right HTTP requests | network |
+**`bun run preflight --nimbus-root <path>` runs the eight gates marked **P** below**, in that
+order, stopping at the first failure. Without `--nimbus-root` it reports the four that need the
+monorepo as `SKIP` **by name**, keeps them in the report, and withholds the sentence a complete
+run prints — see `scripts/_lib/preflight.ts`'s `fullyVerified`. It is the answer to "did I run
+everything", and a gate no list names is a gate that silently stops being run.
+
+| P | Command | What it proves | Needs |
+| --- | --- | --- | --- |
+| P | `bun test` | Unit + emitted-source typecheck | — |
+| P | `bun test --coverage` | `bunfig.toml`'s **per-file** floors, which a bare `bun test` never evaluates | — |
+| P | `bunx tsc --noEmit` | This repo typechecks | — |
+| P | `bunx biome check src/ test/ scripts/` | This repo lints | — |
+| P | `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
+|  | `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
+| P | `bun run reach --baseline --nimbus-root <path>` | No connector lost a tier against `fixtures/reach-baseline.json` | Nimbus checkout |
+| P | `bun run wiring:conformance --nimbus-root <path>` | The wiring skeleton still matches Nimbus's real sync interface | Nimbus checkout |
+| P | `bun run acceptance <nimbus-root>` | A generated connector survives inside the monorepo | Nimbus checkout |
+|  | `bun run standalone-acceptance <sdk-root>` | A standalone package builds and serves MCP, against an **unreleased SDK branch** | SDK checkout, built |
+|  | `bun run standalone-acceptance --registry` | The same, against the **published** artifact | network |
+|  | `bun run runtime:acceptance --registry` | Generated connectors make the right HTTP requests | network |
+
+`acceptance` runs last of the four monorepo gates on a hard constraint, not a preference: it
+generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and `reach --baseline`
+**refuses** (exit 2) against a dirty `packages/mcp-connectors`.
 
 **Traps, each of which has bitten before:**
 
@@ -95,14 +106,29 @@ worth before quoting it as evidence.
   skipped run deliberately does **not** print the sentence a fully-verified run prints.
 - **Generated `test/sandbox.test.ts` proves nothing.** It is wrapped in
   `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])`, and that variable is set nowhere in
-  Nimbus. All 79 such tests skip on every CI run. "The generated connector passes its tests"
-  is not an acceptance bar. The real bar is `tsc --noEmit` + `biome check` + a byte-diff.
-- **`diff:golden` and `wiring:conformance` cannot run in CI** — both need the AGPL monorepo.
-  They are local pre-merge gates. Do not add a CI job that skips when the root is absent; a
-  silently-skipping gate is the failure mode this repo keeps removing.
+  Nimbus, so every such test in the monorepo is collected and skipped on every CI run. (The 79
+  in `src/emit/sandbox-test.ts`'s header is a different number — the corpus connectors whose
+  copy of the file is byte-identical, 79 of 94.) In THIS repository the three copies under
+  `fixtures/snapshots/` are not collected at all; `bunfig.toml`'s `pathIgnorePatterns` keeps
+  them out, and discovered they would fail rather than skip. "The generated connector passes
+  its tests" is not an acceptance bar. The real bar is `tsc --noEmit` + `biome check` + a
+  byte-diff.
+- **Four gates can never run in CI** — `diff:golden`, `reach --baseline`, `wiring:conformance`
+  and `acceptance`, each of which needs a checkout of the AGPL monorepo. They are local
+  pre-merge gates, and `preflight` is the one command that names all four whether or not it
+  could run them. Do not add a CI job that skips when the root is absent; a silently-skipping
+  gate is the failure mode this repo keeps removing.
+- **"Runs in CI" and "is in the merge gate" are different claims**, and conflating them has
+  already put a false sentence into a source file. `ci.yml` is the merge gate and runs three
+  commands. `standalone-acceptance --registry` and `runtime:acceptance --registry` **do** run in
+  CI — in `acceptance.yml`, on a daily cron and on pull requests touching `src/`, `scripts/` or
+  `fixtures/` — but neither is a required check, deliberately, because both install from npm and
+  a registry outage must not red-X an unrelated pull request.
 - **`reach` measures the spec language's coverage of the corpus and proves nothing about any
   individual generated connector that `diff:golden` does not already prove.** It too needs the
-  AGPL monorepo and cannot run in CI.
+  AGPL monorepo and cannot run in CI. `reach --baseline` is the gate form: it fails when a
+  connector *loses* a tier. Never re-record `fixtures/reach-baseline.json` to make a regression
+  pass — the same rule `expectations.json` carries.
 - **Coverage floors are per-file, not aggregate**, and `src/cli.ts` / `src/prompts.ts` are
   excluded from the metric because they are driven through `Bun.spawnSync` on the real binary,
   which Bun cannot instrument. Do **not** "raise coverage" by adding in-process tests that
@@ -125,7 +151,9 @@ The emitter declares module-scope names in the output, so a spec may not reuse t
 parse-time error rather than a generated package that fails its own typecheck.
 
 When you add an emitter path that declares or imports a new module-scope name, add it to that
-list in the same change. Two waves have been missed already, and both were found late.
+list in the same change. Three waves have been missed already — the count
+`test/emitted-globals.test.ts`'s header records — and each was found late, which is why that
+test asks the emitters rather than enumerating the names by hand.
 
 ## Conventions
 
@@ -160,13 +188,20 @@ test/              mirrors src/, plus test/scripts/ and the repo-wide gates
 docs/              ARCHITECTURE, ROADMAP, USAGE, and the project docs
 ```
 
-**Where the reasoning lives.** Four long per-stage design documents were retired once their
-durable conclusions were folded into the docs above; git history has them. What the generator
-cannot do and why is [`docs/ROADMAP.md`](./docs/ROADMAP.md)'s *Known limitations*; proposals
-measured and rejected are its *Considered and declined*; harness behaviour is
-[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). Corpus measurements sit in the README next to
-the field they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a
-document repeating it goes stale silently.
+**Where the reasoning lives.** Every per-stage design document and implementation plan has been
+retired, `docs/superpowers/` with them, once their durable conclusions were folded into the docs
+above and into the source comments that enforce them; git history has the originals, and nothing
+tracked cites them. **Do not resurrect that directory and do not cite a document that is not on
+disk** — a citation to a file nobody can open is worse than none, because it reads as evidence.
+[`docs/README.md`](./docs/README.md)'s *Where the reasoning lives* is the map of where each kind
+of thing went. In short: what the generator cannot do and why is
+[`docs/ROADMAP.md`](./docs/ROADMAP.md)'s *Known limitations*; proposals measured and rejected are
+its *Considered and declined*; harness behaviour is
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); what a green check proves is
+[`docs/TESTING.md`](./docs/TESTING.md); the deriver's vocabulary is
+[`docs/GLOSSARY.md`](./docs/GLOSSARY.md). Corpus measurements sit in the README next to the field
+they justify. **Do not restate live numbers** — `diff:golden` is the answer, and a document
+repeating it goes stale silently.
 
 The **one** exception is *The measured ceiling* in `docs/ROADMAP.md`, which states the corpus
 regeneration counts on purpose. It earns it by carrying the date and the `packages/mcp-connectors`

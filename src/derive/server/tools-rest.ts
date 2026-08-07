@@ -254,7 +254,7 @@ function recognizeInitFn(
   if (props === undefined || (props.length !== 1 && props.length !== 2)) return undefined;
 
   const methodProp = props[0];
-  if (methodProp === undefined || methodProp.key !== "method") return undefined;
+  if (methodProp?.key !== "method") return undefined;
   const method = stringLit(methodProp.value);
   if (method === undefined || !WRITE_METHODS.has(method)) return undefined;
   const typedMethod = method as "POST" | "PUT" | "PATCH" | "DELETE";
@@ -269,7 +269,7 @@ function recognizeInitFn(
   // refused the same way, from the other side.
   if (arrow.params.length !== 1) return undefined;
   const bodyProp = props[1];
-  if (bodyProp === undefined || bodyProp.key !== "body") return undefined;
+  if (bodyProp?.key !== "body") return undefined;
 
   const body = recognizeBodyExpr(
     bodyProp.value,

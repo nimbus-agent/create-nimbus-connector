@@ -305,7 +305,7 @@ describe("deriveSpec round-trips this repository's own output", () => {
     expect(listed.filter((n) => !names.includes(n))).toEqual([]);
     // In EXACTLY one: a fixture in two lists would satisfy both checks above while making one of
     // them vacuous.
-    expect(listed.length).toBe(new Set(listed).size);
+    expect(listed).toHaveLength(new Set(listed).size);
   });
 
   for (const name of ROUND_TRIP) {

@@ -144,7 +144,10 @@ export async function deriveFromDirectory(
  * recognizer to write next.
  */
 export function renderBlockers(dir: string, blockers: readonly Blocker[]): string {
-  const lines = blockers.map((b) => `  ${b.kind}${b.line > 0 ? `  (line ${b.line})` : ""}`);
+  const lines = blockers.map((b) => {
+    const where = b.line > 0 ? `  (line ${b.line})` : "";
+    return `  ${b.kind}${where}`;
+  });
   return (
     `cannot read ${dir} into a spec. What stopped it:\n\n` +
     `${lines.join("\n")}\n\n` +

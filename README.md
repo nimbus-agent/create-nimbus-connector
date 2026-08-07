@@ -4,9 +4,9 @@ A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connect
 
 Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary.
 
-This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus a seventh, `src/search-filter.ts`, when the spec declares a search tool — run through the same Biome formatter the real connectors are formatted with.
+This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus `src/search-filter.ts` when the spec declares a search tool, and a `biome.json` when the target is `--standalone` — run through the same Biome formatter the real connectors are formatted with.
 
-The bar it is held to is **byte reproduction**: generate from a spec describing an existing connector, and diff the output against the real directory. `newrelic`, `datadog`, `grafana` and `sentry` come out byte-identical.
+The bar it is held to is **byte reproduction**: generate from a spec describing an existing connector, and diff the output against the real directory. `newrelic`, `datadog`, `grafana` and `sentry` come out byte-identical. How far that reaches across the rest of the corpus, and what stops it, is [*The measured ceiling*](./docs/ROADMAP.md#the-measured-ceiling) — the one place the regeneration counts are written down, carrying the date and the `packages/mcp-connectors` tree they were measured against.
 
 ```bash
 bunx create-nimbus-connector acme --standalone
@@ -14,11 +14,12 @@ bunx create-nimbus-connector acme --standalone
 
 ## Documentation
 
-**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. This README is the *reference*: what the spec language can express, and the rules that reject a spec.
+**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. **Looking up a field? [`docs/SPEC.md`](./docs/SPEC.md)** is the complete field reference: every field `ConnectorSpecSchema` accepts, with its type, its default and the constraints on it, generated from that schema so it cannot drift from it. This README is the *prose* reference — how the fields work together, and the rules that reject a spec, which are the part no field-by-field table can carry.
 
 | | |
 | --- | --- |
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
+| [SPEC.md](./docs/SPEC.md) | Every spec field, generated from the schema |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
 | [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |
@@ -32,14 +33,14 @@ Stuck on how to express a service as a spec, or wondering whether a change would
 
 The org ships two, and they do different jobs:
 
-- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package byte-identical to the 94 hand-written Nimbus connectors. Reach for it when you are wrapping a REST API and want output that matches the corpus exactly.
-- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`, which performs the contract-version handshake before serving MCP. Reach for it when you want a blank project to write by hand, or when you need Python.
+- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package in the shape the hand-written Nimbus connectors share, formatted by the same Biome. Reach for it when you are wrapping a REST API and want output that matches the corpus. Byte-identity is the bar it is held to, not a blanket guarantee across the corpus — [*The measured ceiling*](./docs/ROADMAP.md#the-measured-ceiling) is how much of it regenerates today, and why.
+- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project that performs the SDK's contract-version handshake on stdio before serving MCP through the same `McpServer` and `StdioServerTransport` this generator emits. Reach for it when you want a blank project to write by hand, or when you need Python.
 
-[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool and the three capabilities that must land first.
+The intent is to converge these into one tool. [CONSOLIDATION.md](./docs/CONSOLIDATION.md) is what has to be true first — four preconditions, only one of which is a checkbox on this side — and because each of them describes another repository's state, each carries the commit and the date it was checked against.
 
 ## The two targets
 
-**Standalone** connectors are self-contained — installable and runnable anywhere, with no Nimbus checkout. `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, and the package gains `dev` and `build` scripts. This is what a third-party connector wants.
+**Standalone** connectors are self-contained — installable and runnable anywhere, with no Nimbus checkout. `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, and the package gains `dev` and `build` scripts. It also carries its own `biome.json`, which the monorepo target does not emit — a connector inside the checkout inherits the workspace root's, so emitting one there would be dead weight and would break the six-file byte-diff. This is what a third-party connector wants.
 
 ```bash
 bunx create-nimbus-connector acme --standalone
@@ -61,7 +62,7 @@ A tool that can't be expressed under that constraint sets `"impl": "stub"` and g
 
 **Fields the emitters cannot render are a hard validation error, never an automatic downgrade.** A spec that would silently generate something other than what it describes is rejected instead. `hitl` on a tool is the one field rejected outright; declare write-intent through `effect`.
 
-**Spec surface is a cost, and it is deliberately controlled.** Byte-exactness pushes some purely cosmetic choices into the spec — real connectors hoist defaulted args to hand-picked short names (`const lim = p.limit ?? 10`, `const q = p.query ?? ""`), and there is no derivable rule for that. So `local` and `bindings` are permitted everywhere as optional strings with sensible defaults. Beyond those, a new field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff instead. A generator whose input is harder to write than its output is a failed generator.
+**Spec surface is a cost, and it is deliberately controlled.** Byte-exactness pushes some purely cosmetic choices into the spec — real connectors hoist defaulted args to hand-picked short names (`const lim = p.limit ?? 10`, `const q = p.query ?? ""`), and there is no derivable rule for that. So the spec carries `local` — on an argument, on an env entry and on `fetchHelper` — and `bindings`, on an env entry. Three things about them the phrase "optional strings" would get wrong. They are **validated JS identifiers** (`identifierField` in `src/spec.ts`), checked against `RESERVED_IDENTIFIERS`, not free strings. `bindings` is an **array**, with exactly one entry per `vars` entry. And they are optional only where the emitter can work the name out on its own: an argument's `local` defaults to the argument's own key and `bindings` to the camelCase of each var, while an env entry's `local` and `fetchHelper.local` are **required**, because each names a function the emitter must declare and nothing else in the spec implies it. Beyond those, a new field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff instead. A generator whose input is harder to write than its output is a failed generator.
 
 ### Conditional query parameters: `query`
 
@@ -157,7 +158,8 @@ all — the hoist resolves it to a concrete value before the query line ever run
 
 - **`method`** (`"GET" | "POST" | "PUT" | "PATCH" | "DELETE"`, default `"GET"`) is the HTTP verb, nothing more.
 - **`effect`** (`"read" | "write" | "delete"`, default `"read"`) is the author's declaration of intent, and drives the manifest's `hitlRequired` array (the deduplicated set of non-`read` effects, emitted in the corpus's fixed capability order — `write` before `delete`, the order used by all 23 Nimbus manifests declaring both and by none in reverse). It is deliberately **not** derived from `method` — in the Nimbus corpus a POST is not necessarily a write: `dagster` POSTs GraphQL *queries* and `ramp` POSTs to *exchange an OAuth token*. A REST GET may not carry a write or delete effect (a hard validation error); a write or delete effect may pair with any non-GET method, including `DELETE` with `effect: "write"` — deleting a webhook subscription is not destructive to user data, and `effect` is the author's judgement rather than something read off the verb.
-- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg *not* referenced in the tool's path** — `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`, and a `DELETE` whose only arg appears in the path sends no body (and no `Content-Type` header) at all. An explicit `body` mapping overrides the default entirely.
+- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg the URL does not already carry** — that is, every arg not referenced in the tool's `path` *and* not named by a `query` entry, since either one puts the value on the wire already and mirroring it into the body would send it twice. `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`; a `DELETE` whose only arg is its path id, or is its one `query` entry, sends no body at all. An explicit `body` mapping overrides the default entirely, and is respected verbatim even where it names a path or `query` arg — doing that is a deliberate author choice, so neither exclusion applies to it.
+- **A request with no body still carries `Content-Type: application/json`.** The hand-rolled write helper (`renderWriteHelper` in `src/emit/server/fetch-helper.ts`, emitted as `<fetchHelper.local>Send`) sets that header on every call, and omits only the `body` itself — so the bodyless `DELETE` above is sent with the header and nothing to describe. rest-kit writes do not go through that helper at all: the registrar callback emits only `{ method }` or `{ method, body }`, and the rest-kit fetch helper sets `Authorization` plus the spec's `inlineHeaders` and no `Content-Type`.
 - **`impl: "get"` is a deprecated alias for `"rest"`**, so specs written before `method` existed still parse; it is normalised at parse time.
 
 **An unset optional boolean renders `false` in the URL but is omitted from a JSON body.** This looks like an inconsistency and is deliberate, so it is pinned by tests rather than left to be "fixed" later. It is reachable only when a spec gives an explicit `body` mapping re-including an arg the path already references. A query string carries text and the corpus decided what that text is — `newrelic` emits `p.only_open === true ? "true" : "false"`, and changing it drops a byte-exact fixture. A JSON body carries types, and every API distinguishes a `false` the caller asserted from a key the caller never sent; emitting `false` for an unset optional would fabricate an assertion the author never made, and would be wrong exactly where the server's own default is `true`.
@@ -234,7 +236,7 @@ This exchanges the two `vars` (client id, then secret) for a bearer token by POS
 
 There is **no refresh-token flow and no authorization-code flow** — no connector in the corpus has either, so adding them would be speculative.
 
-`credentialsIn` controls how the id and secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` does); `"body"` puts `client_id`/`client_secret` in the form body (as `looker`, `powerbi`, `teams` and `wiz` do). `scope` is optional. The two `vars` and `style: "hand-rolled"` are required — **`client-credentials` is hand-rolled only**, because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
+`credentialsIn` controls how the id and secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` does); `"body"` puts `client_id`/`client_secret` in the form body (as `looker`, `powerbi`, `teams` and `wiz` do). `scope` is optional; exactly two `vars`, `tokenUrl` and `credentialsIn` are required. The one style it cannot pair with is **`rest-kit`**, because that registrar resolves a single bearer credential itself and has no seam for a token exchange; `hand-rolled` and `read-only-kit` both accept it, and the latter emits the same module-scope exchange above a `runReadOnlyMcpConnector` call. A connector may declare **at most one** `client-credentials` entry — the exchange declares `token` and `cachedToken` at module scope, so a second would redeclare both.
 
 ### Reserved identifiers
 
@@ -274,7 +276,7 @@ bunx create-nimbus-connector <name>   # the published CLI, no checkout needed
 bun src/cli.ts <name>                 # from a checkout of this repo
 ```
 
-With a positional name it runs an interactive prompt session (name, display name, service label, description, base API URL, auth type, credential env var, tools) and writes to `packages/mcp-connectors/<name>/` relative to the current directory, or to `<name>/` when `--standalone` is passed.
+With a positional name it runs an interactive prompt session — display name, service label, description, base API URL, auth type, credential env var, then tool names. The connector name is *not* asked for: it is the positional argument. Run with neither a name nor `--spec` and the session opens by asking for it. One question is conditional: answering `token` or `basic` to the auth question adds a header-name prompt, which `bearer` skips. Generated output goes to `packages/mcp-connectors/<name>/` relative to the current directory, or to `<name>/` when `--standalone` is passed.
 
 ### Flags
 

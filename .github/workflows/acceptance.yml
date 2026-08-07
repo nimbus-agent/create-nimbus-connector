@@ -10,8 +10,8 @@ name: acceptance
 # and leaves the merge gate honest. That is also why neither is listed as a required check.
 #
 # `diff:golden` and `wiring:conformance` still cannot run here: both need a checkout of the
-# Nimbus monorepo, a separate AGPL-3.0-only repository that this runner does not have and
-# that decision D4 declined to vendor. They remain local pre-merge gates — see ci.yml.
+# Nimbus monorepo, a separate AGPL-3.0-only repository that this MIT repository refused to
+# vendor and that this runner does not have. They remain local pre-merge gates — see ci.yml.
 
 on:
   pull_request:

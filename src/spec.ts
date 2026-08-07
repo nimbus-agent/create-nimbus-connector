@@ -6,9 +6,10 @@ import { z } from "zod";
  *
  * The message used to read "is not supported in Stage A (… a later Stage C task)". Stage C
  * happened, and it did not add `hitl` — the manifest's `hitlRequired` array is computed from
- * each tool's `effect` instead, deliberately (see the Stage C design doc §1.1: `hitlRequired`
- * is a manifest-level capability array in all 94 corpus connectors, never per-tool). The
- * message now says what is true and what to write instead, and does not promise a stage.
+ * each tool's `effect` instead, deliberately: `hitlRequired` is a manifest-level capability
+ * array in all 94 corpus connectors, never per-tool, so a per-tool key would have no shape to
+ * emit into. The message now says what is true and what to write instead, and does not
+ * promise a stage.
  */
 const OUT_OF_SCOPE_TOOL_KEYS: Record<string, string> = {
   hitl: 'HITL is not declared per tool; use "effect": "write" | "delete", which is what the manifest\'s hitlRequired array is computed from',
@@ -1237,8 +1238,11 @@ export const FetchHelperSchema = z
 
 /**
  * The two styles that emit their own fetch helper and env accessors. `read-only-kit`
- * differs from `hand-rolled` only in the server file's prologue and epilogue (Stage D
- * design §1.2), so every schema rule keyed to "hand-rolled" applies to it unchanged.
+ * differs from `hand-rolled` only in the server file's prologue and epilogue — its import
+ * group, and the `runReadOnlyMcpConnector` wrapper the registrations sit inside instead of
+ * the McpServer/StdioServerTransport wiring. Neither touches how arguments, env, headers or
+ * the fetch helper are declared, so every schema rule keyed to "hand-rolled" applies to it
+ * unchanged.
  */
 function isHandStyle(style: string): boolean {
   return style === "hand-rolled" || style === "read-only-kit";
@@ -1466,8 +1470,11 @@ function formatIssuePath(path: readonly PropertyKey[]): string {
   if (path.length === 0) return "(root)";
   let out = "";
   for (const seg of path) {
-    out +=
-      typeof seg === "number" ? `[${seg}]` : out.length === 0 ? String(seg) : `.${String(seg)}`;
+    if (typeof seg === "number") {
+      out += `[${seg}]`;
+    } else {
+      out += out.length === 0 ? String(seg) : `.${String(seg)}`;
+    }
   }
   return out;
 }

@@ -438,7 +438,9 @@ function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
  * calls. Corpus measurement: the only corpus connector with two extractors in one file is
  * readwise (`fieldsOf` and `bookFieldsOf`) — its field lists are otherwise expressible, so
  * this rule alone is what keeps it unreachable. Rejected rather than adding a spec field to
- * name the extractor or auto-suffixing it, per the Stage E design's declined-options list.
+ * name the extractor or auto-suffixing it: one corpus connector does not justify spec surface,
+ * and an auto-suffix would invent a name no corpus file contains — so the second extractor
+ * could never byte-match anyway, which is the whole point of the field.
  */
 function validateSingleExtractor(spec: ConnectorSpec): void {
   const extractorTools = spec.tools.filter(

@@ -63,8 +63,31 @@ bun run diff:golden --nimbus-root C:/gitrep/Nimbus
   gap is on screen on every run, and add it to
   [`docs/ROADMAP.md`](../../docs/ROADMAP.md)'s **Known limitations** section with the reason.
 
-**6. Confirm nothing else moved.** `newrelic`, `datadog`, `grafana` and `sentry` must still
-report `6/6`.
+**6. Register the fixture with the round-trip test.** `test/derive/round-trip.test.ts` asserts
+that **every** fixture in `fixtures/` appears in exactly one of `ROUND_TRIP`,
+`PARTIAL_ROUND_TRIP` or `BLOCKED` — an unlisted fixture is a gap nobody can see, so its
+"accounts for every fixture in fixtures/" test fails until you add yours. Put it in `ROUND_TRIP`
+if `emit → derive → re-emit` reproduces every file, in `PARTIAL_ROUND_TRIP` with the file and the
+unrecovered field if one file differs, and in `BLOCKED` with the construct that stops it
+otherwise. `BLOCKED` is empty today; adding to it is a real result, not a workaround.
+
+**7. If the fixture declares a write tool, add its snapshot.** `listWriteFixtures`
+(`src/golden/snapshots.ts`) selects every fixture with a non-`read`-effect tool, and
+`test/golden/snapshots.test.ts` then requires a checked-in standalone package under
+`fixtures/snapshots/<name>/`. `loadSnapshot` refuses an absent or empty directory rather than
+comparing against nothing, so the suite goes red the moment the spec lands:
+
+```bash
+bun run snapshot:update
+```
+
+**Read the tree it writes before committing it.** This is the one expected value in the repo that
+a command rewrites, which is the same shape `fixtures/expectations.json` warns about — a snapshot
+regenerated to absorb an unintended emitter change is a byte gate turned into decoration.
+
+**8. Confirm nothing else moved.** `newrelic`, `datadog`, `grafana` and `sentry` must still
+report `6/6`, and `bun test` must be green — steps 6 and 7 are the two that most often leave it
+red after an otherwise-correct fixture.
 
 ## The line you do not cross
 
