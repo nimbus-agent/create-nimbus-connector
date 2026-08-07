@@ -13,6 +13,13 @@ left here read as unreleased long after they shipped, which is exactly what happ
 
 *Nothing pending.*
 
+## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)
+
+
+### Features
+
+* **openapi:** author a spec from an OpenAPI document, and close Stage F ([#68](https://github.com/nimbus-agent/create-nimbus-connector/issues/68)) ([da03f46](https://github.com/nimbus-agent/create-nimbus-connector/commit/da03f469f0c7088032ef9539f0107c0a532ff8a8))
+
 ## [0.10.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.9.0...create-nimbus-connector-v0.10.0) (2026-08-07)
 
 
