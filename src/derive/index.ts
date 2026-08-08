@@ -581,17 +581,20 @@ function crossCheckRecognizers(facts: {
   readonly tools: readonly (ToolFields | SearchToolFields)[];
 }): Derivation | undefined {
   const { env, fetchHelper, readHelper, writeHelper, tokenServiceLabels, tools } = facts;
-  // Both helpers, in the order their blockers name them — the shape three of the four checks below
-  // iterate. Built once rather than three times.
-  const helpers = [
-    {
-      role: "read",
-      helper: readHelper as RecognizedFetchHelper | RecognizedWriteHelper | undefined,
-    },
-    {
-      role: "write",
-      helper: writeHelper as RecognizedFetchHelper | RecognizedWriteHelper | undefined,
-    },
+  // Both helpers, in the order their blockers name them — the shape the AWAIT and PASSTHROUGH
+  // checks iterate, two of the four below. The presence check builds its own rows, carrying
+  // `wanted` and `called` instead, because it asks about the tools rather than about a flag the
+  // helper carries.
+  //
+  // Annotated rather than asserted per element: both recognized types are already assignable to
+  // the union, so the `as` this replaces bought nothing — and would have gone on silently
+  // succeeding if the two ever diverged, which is the one moment the compiler should speak up.
+  const helpers: readonly {
+    readonly role: string;
+    readonly helper: RecognizedFetchHelper | RecognizedWriteHelper | undefined;
+  }[] = [
+    { role: "read", helper: readHelper },
+    { role: "write", helper: writeHelper },
   ];
 
   // Which HELPERS the emitter writes is decided entirely by the tools, so each one's presence is
