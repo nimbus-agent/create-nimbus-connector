@@ -805,6 +805,22 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   root-array pluck, the array-first prelude and the keyed-first root fallback, `figma` writes a
   loop flattener returning `Array<{ id; name }>` rather than `unknown[]`, so it keeps a
   `function:<name>From` blocker under any correct guard.
+- **An index cursor instead of `shift()` in `collectSections`** (`scripts/_lib/build-spec-doc.ts`).
+  The performance claim is correct: `Array.prototype.shift` moves every remaining entry, so the
+  breadth-first walk is O(N²) in element moves. The quantity is what decides it, and it is smaller
+  than the bound suggests. `docs/SPEC.md` has **eight** section tables; instrumenting the real
+  `pending.shift()` counts **nine** element moves for the whole traversal, against the 28 that
+  N(N−1)/2 would give, because the tree is shallow and wide — the queue drains almost as fast as it
+  fills, so it never holds enough to move. That is the run cost of `bun run spec:doc`, once, by
+  hand.
+
+  It is declined because the queue is not there for speed. It replaced an index cursor, to fix
+  Sonar `S4138` without relying on the property that makes `for-of` work here — an Array iterator
+  re-reads `length` on every step, so `for (const s of sections) { … sections.push(child) }` is
+  correct and reads as a bug. Naming the queue is what states that the walked array grows while it
+  is walked. Reverting to a cursor buys back a linear traversal by buying back the shape the change
+  removed. Recorded rather than applied, and worth revisiting only if a measurement ever puts N
+  somewhere this arithmetic stops being irrelevant.
 - **A validation warning on a large `maxLimit`.** It measures the wrong quantity. `maxLimit`
   caps how many matches are *returned*, not how many rows are *fetched* — the connector has
   already awaited the full response. A connector with `maxLimit: 50` against an endpoint
