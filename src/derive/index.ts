@@ -112,6 +112,23 @@ export function attributeEffects(
 }
 
 /**
+ * `{ <key>: <value> }` when the value is set, and nothing at all when it is not.
+ *
+ * The derived spec OMITS every field sitting at its schema default, so a connector whose author
+ * never set one stays byte-comparable with the hand-written fixtures — writing the default back
+ * explicitly would re-emit a spec that regenerates different bytes. That rule was spelled
+ * `...(x === undefined ? {} : { x })` thirteen times in this file; naming it says what the spread
+ * is FOR, which the punctuation never did.
+ *
+ * `undefined` is the only omission signal, so a field whose default is a VALUE rather than absence
+ * — `argsSchemaStyle`'s `"inline"`, `staticPathStyle`'s `"quoted"` — is reduced to `undefined` by
+ * `finalizeTools` before it gets here, in one place rather than at each call site.
+ */
+function optional<T>(key: string, value: T | undefined): Record<string, T> {
+  return value === undefined ? {} : { [key]: value };
+}
+
+/**
  * `registrarName`'s sanitizing formula (src/spec.ts), mirrored rather than called: that function
  * takes a full `ConnectorSpec`, and constructing one here for a single-field read would need a
  * cast this module's accessors are built specifically to avoid (see read.ts's own header).
@@ -395,17 +412,17 @@ function deriveRestKitSpec(
     ok: true,
     spec: {
       name: frame.name,
-      ...(titleRecovery.title === undefined ? {} : { title: titleRecovery.title }),
+      ...optional("title", titleRecovery.title),
       displayName: manifest.displayName,
       description: manifest.description,
       serviceLabel: registrar.serviceLabel,
       style: frame.style,
       // Emitted only when it differs from ConnectorSpecSchema's "inline" default, so a
       // connector using the default stays byte-comparable with the hand-written fixtures.
-      ...(argsSchemaStyle === undefined || argsSchemaStyle === "inline" ? {} : { argsSchemaStyle }),
+      ...optional("argsSchemaStyle", argsSchemaStyle),
       network: manifest.network,
-      ...(manifest.id === undefined ? {} : { id: manifest.id }),
-      ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
+      ...optional("id", manifest.id),
+      ...optional("filesystem", manifest.filesystem),
       syncInterval: manifest.syncInterval,
       minNimbusVersion: manifest.minNimbusVersion,
       // The single entry ConnectorSpecSchema's rest-kit refine requires: one var, auth
@@ -417,15 +434,11 @@ function deriveRestKitSpec(
       fetchHelper: {
         local: restFetchHelper.local,
         base: restFetchHelper.base,
-        ...(restFetchHelper.baseConst === undefined
-          ? {}
-          : { baseConst: restFetchHelper.baseConst }),
-        ...(restFetchHelper.inlineHeaders === undefined
-          ? {}
-          : { inlineHeaders: restFetchHelper.inlineHeaders }),
+        ...optional("baseConst", restFetchHelper.baseConst),
+        ...optional("inlineHeaders", restFetchHelper.inlineHeaders),
         // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
         // reasoning as argsSchemaStyle above.
-        ...(staticPathStyle === undefined ? {} : { staticPathStyle }),
+        ...optional("staticPathStyle", staticPathStyle),
       },
       tools: attribution.tools,
     },
@@ -528,6 +541,7 @@ function finalizeTools(
     );
   }
 
+  const argsStyle = voteArgsSchemaStyle(shapes.schemaShapes);
   const attribution = attributeEffects(tools, hitlRequired);
   if (attribution === undefined) {
     return blocked(
@@ -539,7 +553,10 @@ function finalizeTools(
 
   return {
     staticPathStyle: staticVote.value === "quoted" ? undefined : staticVote.value,
-    argsSchemaStyle: voteArgsSchemaStyle(shapes.schemaShapes),
+    // Reduced here for the same reason and in the same place as `staticPathStyle` above: both
+    // callers spread it through `optional`, which omits on `undefined` alone, so the "is this the
+    // schema default" question is answered once instead of at each of the two call sites.
+    argsSchemaStyle: argsStyle === "inline" ? undefined : argsStyle,
     attribution,
   };
 }
@@ -757,7 +774,7 @@ function resolveSearchFilter(
       ...t,
       filter: {
         export: t.filter.export,
-        ...(recovered?.fields === undefined ? {} : { fields: recovered.fields }),
+        ...optional("fields", recovered?.fields),
       },
     };
   });
@@ -872,7 +889,7 @@ function deriveSharedStyleSpec(
     ok: true,
     spec: {
       name: frame.name,
-      ...(title === undefined ? {} : { title }),
+      ...optional("title", title),
       displayName: manifest.displayName,
       description: manifest.description,
       serviceLabel,
@@ -880,13 +897,13 @@ function deriveSharedStyleSpec(
       // handlerStyle is top-level (ConnectorSpecSchema), not per-tool — recognizeTools
       // recovers it from the SET of recognized tools; see its docstring for the rule.
       // Omitted lets the schema's `.default("concise")` apply.
-      ...(toolsResult.handlerStyle === undefined ? {} : { handlerStyle: toolsResult.handlerStyle }),
+      ...optional("handlerStyle", toolsResult.handlerStyle),
       // Emitted only when it differs from ConnectorSpecSchema's "inline" default, so a
       // connector using the default stays byte-comparable with the hand-written fixtures.
-      ...(argsSchemaStyle === undefined || argsSchemaStyle === "inline" ? {} : { argsSchemaStyle }),
+      ...optional("argsSchemaStyle", argsSchemaStyle),
       network: manifest.network,
-      ...(manifest.id === undefined ? {} : { id: manifest.id }),
-      ...(manifest.filesystem === undefined ? {} : { filesystem: manifest.filesystem }),
+      ...optional("id", manifest.id),
+      ...optional("filesystem", manifest.filesystem),
       syncInterval: manifest.syncInterval,
       minNimbusVersion: manifest.minNimbusVersion,
       env,
@@ -894,7 +911,7 @@ function deriveSharedStyleSpec(
         ...helper,
         // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
         // reasoning as argsSchemaStyle above.
-        ...(staticPathStyle === undefined ? {} : { staticPathStyle }),
+        ...optional("staticPathStyle", staticPathStyle),
       },
       tools: attribution.tools,
     },
