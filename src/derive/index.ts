@@ -544,6 +544,18 @@ function finalizeTools(
   };
 }
 
+/** The `*-helper-mismatch` message. A function only so its two ternaries read at the top level rather than nested inside the guard that raises them. */
+function helperMismatchDetail(h: {
+  readonly role: string;
+  readonly wanted: string;
+  readonly present: boolean;
+  readonly called: boolean;
+}): string {
+  const declares = h.present ? "a" : "no";
+  const calls = h.called ? "a tool is" : "no tool is";
+  return `this module declares ${declares} ${h.role} helper, but ${calls} ${h.wanted}`;
+}
+
 /**
  * The four cross-recognizer agreement checks, in the order they were written, returning the first
  * blocker or `undefined` when every pair agrees.
@@ -617,9 +629,7 @@ function crossCheckRecognizers(facts: {
   if (helperMismatch !== undefined) {
     return blocked(
       `fetch-helper:${helperMismatch.role}-helper-mismatch`,
-      `this module declares ${helperMismatch.present ? "a" : "no"} ${helperMismatch.role} ` +
-        `helper, but ${helperMismatch.called ? "a tool is" : "no tool is"} ` +
-        `${helperMismatch.wanted}`,
+      helperMismatchDetail(helperMismatch),
     );
   }
 
@@ -651,14 +661,18 @@ function crossCheckRecognizers(facts: {
   const awaitsHeaders = env.some(
     (e) => e.local === fetchHelper.headers && e.auth === "client-credentials",
   );
+  // Both words picked before the guard rather than inside its message, so the two ternaries read
+  // at the top level. They depend only on `awaitsHeaders`, which is already known here.
+  const awaitVerb = awaitsHeaders ? "does not await" : "awaits";
+  const awaitArticle = awaitsHeaders ? "the" : "no";
   const awaitMismatch = helpers.find(
     (h) => h.helper !== undefined && h.helper.awaitedHeaders !== awaitsHeaders,
   );
   if (awaitMismatch !== undefined) {
     return blocked(
       "fetch-helper:headers-await-mismatch",
-      `the ${awaitMismatch.role} helper ${awaitsHeaders ? "does not await" : "awaits"} its ` +
-        `headers accessor, but ${awaitsHeaders ? "the" : "no"} env entry named ` +
+      `the ${awaitMismatch.role} helper ${awaitVerb} its ` +
+        `headers accessor, but ${awaitArticle} env entry named ` +
         `"${String(fetchHelper.headers)}" declares auth: "client-credentials"`,
     );
   }
@@ -673,14 +687,17 @@ function crossCheckRecognizers(facts: {
   // both, and a search tool never carries one anyway (ToolSchema rejects `impl: "search"` beside
   // `query`). Guarding it would state the opposite.
   const anyQuery = tools.some((t) => t.query !== undefined);
+  // Same reason as the pair above.
+  const queryVerb = anyQuery ? "lacks" : "carries";
+  const queryClause = anyQuery ? "a tool declares" : "no tool declares";
   const passthroughMismatch = helpers.find(
     (h) => h.helper !== undefined && h.helper.passthrough !== anyQuery,
   );
   if (passthroughMismatch !== undefined) {
     return blocked(
       "fetch-helper:query-passthrough-mismatch",
-      `the ${passthroughMismatch.role} helper ${anyQuery ? "lacks" : "carries"} the absolute-URL ` +
-        `passthrough line, but ${anyQuery ? "a tool declares" : "no tool declares"} a query array`,
+      `the ${passthroughMismatch.role} helper ${queryVerb} the absolute-URL ` +
+        `passthrough line, but ${queryClause} a query array`,
     );
   }
 
