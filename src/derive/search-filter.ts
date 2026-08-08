@@ -111,10 +111,11 @@ function stringArrayElements(node: AstNode | undefined): string[] | undefined {
 }
 
 /**
- * The `nestedString(row, [...])` arm of `matchEntryCall`, split out because it is the only one of
- * the four whose ARGUMENT has to be validated rather than merely read — the other three accept the
- * call the moment their first argument is `row`. Inline, its three guards were the whole reason
- * that table of four forms did not read as a table.
+ * The `nestedString(row, [...])` arm of `matchEntryCall`, split out because its second argument is
+ * a COMPOSITE: every element has to be a string literal, and then the array as a whole has to be
+ * long enough. `stringField` also validates its second argument, but against one predicate that
+ * fits beside the `row` check; the two tag forms take only `row`. Three guards in sequence were
+ * the whole reason that table of four forms did not read as a table.
  */
 function matchNestedStringEntry(args: readonly AstNode[]): FieldEntry | undefined {
   if (!isIdent(args[0], "row")) return undefined;
@@ -131,9 +132,10 @@ function matchNestedStringEntry(args: readonly AstNode[]): FieldEntry | undefine
  * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
  * `renderEntry`.
  *
- * Four forms, one line each, in `renderEntry`'s own order. The arms are mutually exclusive by
- * callee name, so the sequence is a table rather than a chain of decisions — reaching the end
- * means the call is none of the four, which is the `undefined` a caller reads as "not an entry".
+ * Four forms in `renderEntry`'s own order, one return expression each. The arms are mutually
+ * exclusive by callee name, so the sequence is a table rather than a chain of decisions — reaching
+ * the end means the call is none of the four, which is the `undefined` a caller reads as "not an
+ * entry".
  */
 function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const stringArgs = callTo(node, "stringField", 2);

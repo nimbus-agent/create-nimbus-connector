@@ -71,13 +71,17 @@ const IS_A_NOTE = /^(###|[*-][ \t])/;
  * holds. The gate's grading is faithful to the awk it replaces: spaces and tabs, nothing more.
  *
  * Scanned from both ends rather than written as `.replace(/[ \t]+$/, "")`, which backtracks
- * quadratically on a long run of whitespace not at the end of the line — measured on Bun, 1.1 ms
- * at 2,000 characters and 65.6 ms at 16,000, a clean 4x per doubling. The leading half was already
- * linear (`/^[ \t]+/` is anchored); only the trailing one had to try every start position. As with
- * `slugifyConnectorName` in src/openapi/spec.ts, the point is not that a 16,000-character run of
- * tabs is expected in a CHANGELOG — it is that this function is the last thing standing between a
- * malformed file and `npm publish`, which cannot be undone after 72 hours, so its cost stops
- * depending on the shape of its input.
+ * quadratically on a long run of whitespace not at the end of the line — measured, 4x per doubling
+ * of the run, the same shape and the same wording as `slugifyConnectorName` in
+ * src/openapi/spec.ts. The leading half was already linear (`/^[ \t]+/` is anchored); only the
+ * trailing one had to try every start position, so only it changed shape.
+ *
+ * The point is not that a pathological run of tabs is expected in a CHANGELOG. It is that this
+ * function is the last thing standing between a malformed file and `npm publish`, which cannot be
+ * undone after 72 hours, so its cost stops depending on the shape of its input. The scaling factor
+ * is recorded and the absolute timings are not: 4x per doubling is a property of the expression
+ * and stays true wherever it runs, where a millisecond count is a property of one machine on one
+ * day and goes stale without saying so.
  */
 function trimSpacesAndTabs(raw: string): string {
   let start = 0;
