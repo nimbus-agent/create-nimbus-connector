@@ -62,6 +62,13 @@ reached npm readers as fact and are corrected here rather than only in the repos
 
 *Nothing pending.*
 
+## [0.11.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.0...create-nimbus-connector-v0.11.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* correct seven shipped README claims, two quadratic regexes, and the Sonar backlog ([#71](https://github.com/nimbus-agent/create-nimbus-connector/issues/71)) ([d9bfe82](https://github.com/nimbus-agent/create-nimbus-connector/commit/d9bfe82e35d4299d45454f2924ac1dfcc073244b))
+
 ## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)
 
 
