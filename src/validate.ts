@@ -456,6 +456,10 @@ function validateSingleExtractor(spec: ConnectorSpec): void {
         "fields (the fieldsFromKeys branch), or split it into its own connector.",
     );
   }
+  // Fetch-helper references are spec-level placeholders rather than tool-path segments, so
+  // validate them after the tool and extractor checks. This preserves the existing
+  // identifier-collision and extractor errors when a spec has more than one invalid field.
+  validateFetchHelperEnvRefs(spec);
 }
 
 /** A `${arg.X}` reference must name an arg the tool declares, with a mode that fits its type. */
@@ -507,5 +511,42 @@ function validateToolPath(spec: ConnectorSpec, t: ToolLike, path: string): void 
   for (const seg of parsePathTemplate(path)) {
     if (seg.kind === "arg") validateArgSegment(t, seg);
     if (seg.kind === "env") validateEnvSegment(spec, t, seg);
+  }
+}
+
+/**
+ * A hand-rolled fetch helper may reference declared env accessors in its base and inline header
+ * values. Inline header values are rendered either as literals or as one whole-value accessor
+ * call, so an env reference embedded in a larger value would be emitted literally and must be
+ * rejected instead of silently changing the request.
+ */
+function validateFetchHelperEnvRefs(spec: ConnectorSpec): void {
+  if (spec.style === "rest-kit") return;
+
+  const envLocals = new Set(spec.env.map((e) => e.local));
+  const references = /\$\{env\.(\w+)\}/g;
+
+  const validateValue = (field: string, value: string, wholeReferenceOnly: boolean): void => {
+    for (const match of value.matchAll(references)) {
+      const name = match[1];
+      if (name === undefined) continue;
+      if (!envLocals.has(name)) {
+        throw new Error(
+          `fetchHelper.${field} references "\${env.${name}}", but no env entry has ` +
+            `local "${name}".`,
+        );
+      }
+      if (wholeReferenceOnly && value !== match[0]) {
+        throw new Error(
+          `fetchHelper.${field} references "\${env.${name}}" inside a larger value; ` +
+            "inlineHeaders values must be exactly one env reference or a literal.",
+        );
+      }
+    }
+  };
+
+  validateValue("base", spec.fetchHelper.base, false);
+  for (const [name, value] of Object.entries(spec.fetchHelper.inlineHeaders ?? {})) {
+    validateValue(`inlineHeaders["${name}"]`, value, true);
   }
 }

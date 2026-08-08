@@ -98,6 +98,7 @@ describe("validateSpec", () => {
       title: "Foo",
       style: "hand-rolled",
       env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], required: true }],
+      fetchHelper: { local: "sentryGet", base: "https://example.test", headers: "headers" },
     });
     expect(() => validateSpec(s)).not.toThrow();
   });
@@ -152,6 +153,46 @@ describe("validateSpec", () => {
           path: "/projects/${env.org}/${arg.projectSlug}/issues/",
         },
       ],
+    });
+    expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  it("rejects a fetchHelper.base referencing an env local the spec never declares", () => {
+    const s = specWith({
+      fetchHelper: { local: "sentryGet", base: "https://${env.nosuch}", headers: "headers" },
+    });
+    expect(() => validateSpec(s)).toThrow(/fetchHelper\.base.*nosuch/s);
+  });
+
+  it("rejects an inline header referencing an env local the spec never declares", () => {
+    const s = specWith({
+      fetchHelper: {
+        local: "sentryGet",
+        base: "https://example.test",
+        inlineHeaders: { "X-Api-Key": "${env.nosuch}" },
+      },
+    });
+    expect(() => validateSpec(s)).toThrow(/inlineHeaders.*nosuch/s);
+  });
+
+  it("rejects an inline header with an embedded env reference", () => {
+    const s = specWith({
+      fetchHelper: {
+        local: "sentryGet",
+        base: "https://example.test",
+        inlineHeaders: { Authorization: "Token ${env.org}" },
+      },
+    });
+    expect(() => validateSpec(s)).toThrow(/inlineHeaders.*larger value/s);
+  });
+
+  it("accepts declared env references in fetchHelper.base and whole-value inline headers", () => {
+    const s = specWith({
+      fetchHelper: {
+        local: "sentryGet",
+        base: "https://${env.org}",
+        inlineHeaders: { "X-Org": "${env.org}", Accept: "application/json" },
+      },
     });
     expect(() => validateSpec(s)).not.toThrow();
   });
