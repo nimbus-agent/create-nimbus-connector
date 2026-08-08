@@ -179,17 +179,51 @@ function matchFieldsOfReturnType(node: AstNode | undefined): boolean {
  * `asRecord`), the declaration is always a named `function` (never an arrow with a type
  * annotation), the function is always named exactly `fieldsOf`, and it carries no doc comment.
  */
-function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
-  if (stmt.type !== "FunctionDeclaration" || isAsyncFunction(stmt)) return undefined;
-  if (functionName(stmt) !== "fieldsOf" || hasLeadingComment(stmt)) return undefined;
+/**
+ * `function fieldsOf(item: unknown): readonly string[] | null` — the declaration HEAD, every part of
+ * it pinned, and nothing about the body.
+ *
+ * Each clause is one of the gaps docs/ROADMAP.md's "Known limitations" records as the reason almost
+ * none of the 26 expressible corpus files byte-match: the declaration is always a named `function`
+ * (never an arrow with a type annotation), never `async`, always named exactly `fieldsOf`, and
+ * carries no doc comment. Split from the body match below because these read only the node's
+ * header — widening any of them is a decision about which declarations to accept, taken here, and
+ * it should not be interleaved with the question of what the body says.
+ */
+function matchesFieldsOfSignature(stmt: AstNode): boolean {
+  if (stmt.type !== "FunctionDeclaration" || isAsyncFunction(stmt)) return false;
+  if (functionName(stmt) !== "fieldsOf" || hasLeadingComment(stmt)) return false;
 
   const params = functionParams(stmt);
-  if (params?.length !== 1) return undefined;
+  if (params?.length !== 1) return false;
   const param = params[0];
   if (identName(param) !== "item" || identTypeAnnotation(param)?.type !== "TSUnknownKeyword") {
-    return undefined;
+    return false;
   }
-  if (!matchFieldsOfReturnType(functionReturnType(stmt))) return undefined;
+  return matchFieldsOfReturnType(functionReturnType(stmt));
+}
+
+/**
+ * `if (row === undefined) { return null; }` — the extractor's middle statement, matched exactly:
+ * no `else`, no other operator, no second statement in the block.
+ *
+ * `asRecord` is deliberately NOT accepted here or in the declaration above; `emitSearchFilter`
+ * writes `asObjectish`, and accepting the sibling guard would claim a file this generator
+ * re-emits differently.
+ */
+function matchesRowUndefinedGuard(stmt: AstNode): boolean {
+  const guard = ifStatement(stmt);
+  if (guard === undefined || guard.alternate !== undefined) return false;
+  const test = binary(guard.test);
+  if (test?.operator !== "===" || !isIdent(test.left, "row") || !isIdent(test.right, "undefined")) {
+    return false;
+  }
+  const guardBody = blockBody(guard.consequent);
+  return guardBody?.length === 1 && isNullLiteral(returnArgument(guardBody[0]));
+}
+
+function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
+  if (!matchesFieldsOfSignature(stmt)) return undefined;
 
   const body = functionBody(stmt);
   if (body?.length !== 3) return undefined;
@@ -199,16 +233,7 @@ function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
   if (rowDecl?.name !== "row") return undefined;
   const guardArgs = callTo(rowDecl.init, "asObjectish", 1);
   if (guardArgs === undefined || !isIdent(guardArgs[0], "item")) return undefined;
-
-  // `if (row === undefined) { return null; }` — matched exactly, no `else`.
-  const guard = ifStatement(guardStmt);
-  if (guard === undefined || guard.alternate !== undefined) return undefined;
-  const test = binary(guard.test);
-  if (test?.operator !== "===" || !isIdent(test.left, "row") || !isIdent(test.right, "undefined")) {
-    return undefined;
-  }
-  const guardBody = blockBody(guard.consequent);
-  if (guardBody?.length !== 1 || !isNullLiteral(returnArgument(guardBody[0]))) return undefined;
+  if (!matchesRowUndefinedGuard(guardStmt)) return undefined;
 
   // `return [ <entries> ];`
   const elements = arrayElements(returnArgument(returnStmt));

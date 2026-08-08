@@ -170,7 +170,7 @@ function isBindingCompare(node: AstNode, binding: string, rhs: "undefined" | "")
  * Anything else — a different message, a reordered condition, extra statements in the block —
  * is not this shape and must not be treated as though it were.
  */
-function verifyGuard(ifStmt: AstNode, reads: readonly ReadLine[]): boolean {
+function verifyGuard(ifStmt: AstNode | undefined, reads: readonly ReadLine[]): boolean {
   const s = ifStatement(ifStmt);
   if (s === undefined) return false;
   const leaves = flattenOr(s.test);
@@ -623,6 +623,40 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * `collectReadLines` requires ALL reads before the first guard, which `renderBasic`'s interleaved
  * read/guard/read/guard never satisfies — so the two never compete for the same statement.
  */
+/**
+ * `renderBasic`'s returned header object — `{ Authorization: encodeBasicAuthHeader(<user>, <pass>),
+ * Accept: "application/json" }` — recovering only what varies: the username's prefix/suffix.
+ *
+ * Split from `recognizeBasicAuth` because the two ask different questions of different nodes. That
+ * function asks whether the FUNCTION has renderBasic's shape (not async, `Record<string, string>`,
+ * two reads, a trailing return); this asks whether the RETURNED VALUE has it. Every guard here
+ * reads the return argument and the two binding names, and nothing else — no statement list, no
+ * claim, no function node — which is what makes the seam a seam rather than a cut.
+ *
+ * Both keys hardcoded and bare, as in `matchSplitBearerWrapper`: `renderBasic` writes this two-key
+ * object verbatim, so a module writing the same two headers in the other order, or quoting a key,
+ * is refused rather than normalized.
+ */
+function matchBasicHeaderObject(
+  returnStatement: AstNode,
+  userBinding: string,
+  passBinding: string,
+): BasicUser | undefined {
+  const properties = bareKeyedProps(returnArgument(returnStatement));
+  if (properties?.length !== 2) return undefined;
+  const [authProp, acceptProp] = properties;
+  if (authProp?.key !== "Authorization") return undefined;
+  if (acceptProp?.key !== "Accept") return undefined;
+  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+
+  const callArguments = callArgs(authProp.value);
+  if (callArguments?.length !== 2) return undefined;
+  if (!isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader")) return undefined;
+  if (!isIdent(callArguments[1], passBinding)) return undefined;
+
+  return matchBasicUserExpr(callArguments[0]!, userBinding);
+}
+
 function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   // renderBasic is never async and always returns `Record<string, string>` — both type arguments
   // pinned, not just the head name; see `isStringRecord`.
@@ -642,23 +676,12 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   const local = functionName(fn);
   if (local === undefined) return undefined;
 
-  const arg = returnArgument(section.rest[0]!);
-  // Both keys hardcoded and bare, as in `matchSplitBearerWrapper` — `renderBasic` writes this
-  // two-key object verbatim.
-  const properties = bareKeyedProps(arg);
-  if (properties?.length !== 2) return undefined;
-  const [authProp, acceptProp] = properties;
-  if (authProp?.key !== "Authorization") return undefined;
-  if (acceptProp?.key !== "Accept") return undefined;
-  if (stringLit(acceptProp.value) !== "application/json") return undefined;
-
-  const callArguments = callArgs(authProp.value);
-  if (callArguments?.length !== 2) return undefined;
-  if (!isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader")) return undefined;
-
-  const user = matchBasicUserExpr(callArguments[0]!, section.reads[0]!.binding);
+  const user = matchBasicHeaderObject(
+    section.rest[0]!,
+    section.reads[0]!.binding,
+    section.reads[1]!.binding,
+  );
   if (user === undefined) return undefined;
-  if (!isIdent(callArguments[1], section.reads[1]!.binding)) return undefined;
 
   return {
     vars: section.reads.map((r) => r.var),
@@ -779,7 +802,7 @@ function isTokenExpiresAtBinding(stmt: AstNode): boolean {
  * The consequent is a bare `return`, not a block: the emitter writes the statement on one line
  * and Biome preserves that.
  */
-function isCacheCheck(stmt: AstNode): boolean {
+function isCacheCheck(stmt: AstNode | undefined): boolean {
   const s = ifStatement(stmt);
   if (s === undefined || s.alternate !== undefined) return false;
 
@@ -802,7 +825,7 @@ function isCacheCheck(stmt: AstNode): boolean {
  * `const body = new URLSearchParams({ grant_type: "client_credentials" });` — the key bare, which
  * is the only way `renderTokenFunction` writes it and which `IDENTIFIER_KEY_RE` accepts anyway.
  */
-function isTokenBodyInit(stmt: AstNode): boolean {
+function isTokenBodyInit(stmt: AstNode | undefined): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "body") return false;
   const args = newOf(decl.init, "URLSearchParams", 1);
@@ -858,7 +881,7 @@ function matchTokenHeaders(node: AstNode, id: string, secret: string): boolean |
  * built at runtime is one no `tokenUrl` value can regenerate.
  */
 function matchTokenFetch(
-  stmt: AstNode,
+  stmt: AstNode | undefined,
   id: string,
   secret: string,
 ): { readonly tokenUrl: string; readonly basicHeader: boolean } | undefined {
@@ -891,7 +914,7 @@ function matchTokenFetch(
  * (see its own docstring); everything inside the template is pinned here, including the 400-
  * character slice, which carries no spec field.
  */
-function tokenExchangeLabel(stmt: AstNode): string | undefined {
+function tokenExchangeLabel(stmt: AstNode | undefined): string | undefined {
   if (!isThrowGuard(stmt)) return undefined;
   const thrown = blockBody(ifStatement(stmt)?.consequent)?.[0];
   const args = newOf(throwArgument(thrown), "Error", 1);
@@ -921,7 +944,7 @@ function isParsedField(node: AstNode | undefined, field: string): boolean {
  * `const parsed = JSON.parse(text) as { access_token?: unknown; expires_in?: unknown };` — the
  * cast's two optional members pinned by name and order, because the statements below read both.
  */
-function isParsedDecl(stmt: AstNode): boolean {
+function isParsedDecl(stmt: AstNode | undefined): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "parsed") return false;
   const cast = asExpression(decl.init);
@@ -945,7 +968,7 @@ function isParsedDecl(stmt: AstNode): boolean {
  * function's two throws, whose message must name the SAME service as the first. One
  * `spec.serviceLabel` writes both, so a module where they disagree is one no spec regenerates.
  */
-function isMissingTokenGuard(stmt: AstNode, serviceLabel: string): boolean {
+function isMissingTokenGuard(stmt: AstNode | undefined, serviceLabel: string): boolean {
   const s = ifStatement(stmt);
   if (s === undefined || s.alternate !== undefined) return false;
 
@@ -974,7 +997,7 @@ function isMissingTokenGuard(stmt: AstNode, serviceLabel: string): boolean {
  * constant of this emitter with no spec field behind it, so each is pinned. This is the statement
  * the section header names: a module differing here re-emits with 60 and 2 restored.
  */
-function isTtlDecl(stmt: AstNode): boolean {
+function isTtlDecl(stmt: AstNode | undefined): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "ttl") return false;
   const c = conditional(decl.init);
@@ -1006,7 +1029,7 @@ function isTtlDecl(stmt: AstNode): boolean {
  * `tokenExpiresAt = ttl === undefined ? Number.POSITIVE_INFINITY : Date.now() + ttl * 1000;` —
  * the seconds-to-milliseconds factor and the unbounded-TTL sentinel are constants too.
  */
-function isExpiryAssignment(stmt: AstNode): boolean {
+function isExpiryAssignment(stmt: AstNode | undefined): boolean {
   const a = assignment(expressionOf(stmt));
   if (a?.operator !== "=" || !isIdent(a.left, "tokenExpiresAt")) return false;
   const c = conditional(a.right);
@@ -1026,7 +1049,7 @@ function isExpiryAssignment(stmt: AstNode): boolean {
 }
 
 /** `cachedToken = parsed.access_token;` */
-function isCacheAssignment(stmt: AstNode): boolean {
+function isCacheAssignment(stmt: AstNode | undefined): boolean {
   const a = assignment(expressionOf(stmt));
   if (a?.operator !== "=" || !isIdent(a.left, "cachedToken")) return false;
   return isParsedField(a.right, "access_token");
@@ -1053,16 +1076,145 @@ type TokenExchange = {
  * hard-codes it (which is why `token`, `cachedToken` and `tokenExpiresAt` are all in
  * `RESERVED_IDENTIFIERS`), so no spec field can vary it.
  */
-function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
-  if (functionName(fn) !== "token" || !isAsyncFunction(fn)) return undefined;
-  if (functionParams(fn)?.length !== 0) return undefined;
+/**
+ * `async function token(): Promise<string>` — the declaration HEAD only, every part pinned.
+ *
+ * The name is pinned to `token` rather than recovered: `renderTokenFunction` hard-codes it (which
+ * is why `token`, `cachedToken` and `tokenExpiresAt` are all in `RESERVED_IDENTIFIERS`), so no spec
+ * field can vary it. Split from the body walk below because it reads the function NODE and never a
+ * statement — it holds no cursor and cannot affect one.
+ */
+function matchesTokenSignature(fn: AstNode): boolean {
+  if (functionName(fn) !== "token" || !isAsyncFunction(fn)) return false;
+  if (functionParams(fn)?.length !== 0) return false;
   const returnType = functionReturnType(fn);
-  if (typeAnnotationName(returnType) !== "Promise") return undefined;
+  if (typeAnnotationName(returnType) !== "Promise") return false;
   const resolved = typeArguments(returnType);
-  if (resolved?.length !== 1 || typeAnnotationName(resolved[0]) !== "string") return undefined;
+  return resolved?.length === 1 && typeAnnotationName(resolved[0]) === "string";
+}
+
+/** What `collectBodyLines` recovered, and — the part the caller needs to keep walking — how many statements it accounted for. */
+type TokenBodyLines = {
+  readonly scope: string | undefined;
+  readonly credentialsInBody: boolean;
+  readonly consumed: number;
+};
+
+/**
+ * `bodyLines`' run: the `scope` line, then the two credential lines, in that order. All three are
+ * optional and their ABSENCE is the fact — `scope` is omitted when the spec sets none, the
+ * credential lines when `credentialsIn` is `"basic"`.
+ *
+ * Takes a SLICE and reports how many statements of it it accounted for, which is the same contract
+ * `collectReadLines` already has in this file and the reason this split does not weaken the walk:
+ * the cursor stays in `matchTokenFunction`, this function never sees it, and `consumed` can only be
+ * raised by a line that positively matched. Under-reporting cannot smuggle a statement past the
+ * walk either — the caller's next guard would meet a `body.set(...)` line where it requires the
+ * fetch, and refuse.
+ */
+function collectBodyLines(
+  rest: readonly AstNode[],
+  id: string,
+  secret: string,
+): TokenBodyLines | undefined {
+  let consumed = 0;
+  let scope: string | undefined;
+  const scopeValue = bodySetValue(rest[consumed], "scope");
+  if (scopeValue !== undefined) {
+    // `scope` reaches the emitted line through JSON.stringify, so a non-literal here is a shape
+    // no spec value produces.
+    scope = stringLit(scopeValue);
+    if (scope === undefined) return undefined;
+    consumed++;
+  }
+
+  const idValue = bodySetValue(rest[consumed], "client_id");
+  if (idValue === undefined) return { scope, credentialsInBody: false, consumed };
+  if (!isIdent(idValue, id)) return undefined;
+  const secretValue = bodySetValue(rest[consumed + 1], "client_secret");
+  if (secretValue === undefined || !isIdent(secretValue, secret)) return undefined;
+  return { scope, credentialsInBody: true, consumed: consumed + 2 };
+}
+
+/** The HTTP exchange's three statements, plus the `serviceLabel` only its error line carries. */
+type TokenResponse = {
+  readonly tokenUrl: string;
+  readonly serviceLabel: string;
+  readonly consumed: number;
+};
+
+/**
+ * `const res = await fetch(...)`, the `text` read, and the non-2xx throw whose message names the
+ * service — the exchange itself, three statements with no optionality.
+ *
+ * `credentialsInBody` comes in as a FACT rather than being re-derived, because the check it feeds
+ * cannot be made from these statements alone: the credential lines and the `Authorization` header
+ * are the two arms of ONE if/else on `credentialsIn` in `renderTokenFunction`, so exactly one must
+ * be present. Both, or neither, is a shape the emitter cannot write, and reading either arm alone
+ * would let the other contradict it silently.
+ */
+function matchTokenResponse(
+  rest: readonly AstNode[],
+  id: string,
+  secret: string,
+  credentialsInBody: boolean,
+): TokenResponse | undefined {
+  const fetched = matchTokenFetch(rest[0], id, secret);
+  if (fetched === undefined) return undefined;
+  if (credentialsInBody === fetched.basicHeader) return undefined;
+  if (!isTextStatement(rest[1])) return undefined;
+  const serviceLabel = tokenExchangeLabel(rest[2]);
+  if (serviceLabel === undefined) return undefined;
+  return { tokenUrl: fetched.tokenUrl, serviceLabel, consumed: 3 };
+}
+
+/**
+ * The cache-write tail: `parsed`, the missing-token guard, the two cache assignments either side of
+ * the `ttl` const, and `return cachedToken;`.
+ *
+ * Takes the slice that must be ALL that is left and requires exactly six statements — which is
+ * where "every statement is accounted for" is enforced for the back half of the walk. Six exactly:
+ * not five (a body cannot end before the return) and not seven (an extra statement here is exactly
+ * the class of mutation this walk exists to catch). Reports where the `ttl` const sits, because
+ * that is the one statement allowed to carry a comment and the caller checks that over the whole
+ * body, not over this slice.
+ */
+function matchCacheEpilogue(
+  rest: readonly AstNode[],
+  serviceLabel: string,
+): { readonly ttlOffset: number } | undefined {
+  if (rest.length !== 6) return undefined;
+  if (!isParsedDecl(rest[0])) return undefined;
+  if (!isMissingTokenGuard(rest[1], serviceLabel)) return undefined;
+  if (!isCacheAssignment(rest[2])) return undefined;
+  if (!isTtlDecl(rest[3])) return undefined;
+  if (!isExpiryAssignment(rest[4])) return undefined;
+  if (!isIdent(returnArgument(rest[5]), "cachedToken")) return undefined;
+  return { ttlOffset: 3 };
+}
+
+/**
+ * The comment sweep — see this section's header. Checked over the WHOLE body rather than at the
+ * `ttl` statement alone: the claim covers this function's entire byte range, so a comment above ANY
+ * of these statements is claimed with it and vanishes on re-emission just the same.
+ *
+ * `ttlIndex` is the one position `renderTokenFunction` writes a comment at. It is a position in the
+ * body, not a walk cursor — this function never advances it and never reads a statement relative to
+ * it.
+ */
+function commentsClearExcept(body: readonly AstNode[], ttlIndex: number): boolean {
+  return body.every((stmt, i) => commentsAre(stmt, i === ttlIndex ? TTL_COMMENT : []));
+}
+
+function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
+  if (!matchesTokenSignature(fn)) return undefined;
 
   const body = functionBody(fn);
-  if (body === undefined || body.length === 0 || !isCacheCheck(body[0]!)) return undefined;
+  // Past the end `body[idx]` is `undefined`, and every matcher this walk calls already refuses
+  // that — so the bound is enforced once, by the type, instead of nine times by hand. The walk
+  // itself is untouched: `idx` still advances one statement at a time and still never leaves this
+  // function, which is the property `claims.claim` covering the whole byte range depends on.
+  if (body === undefined || !isCacheCheck(body[0])) return undefined;
   let idx = 1;
 
   const section = collectReadLines(body.slice(idx));
@@ -1074,86 +1226,35 @@ function matchTokenFunction(fn: AstNode): TokenExchange | undefined {
   // guardLines writes nothing once a `default` is present, whatever `required`/`auth` say; with
   // no default, `auth` alone forces the combined multi-var guard.
   if (defaultValue === undefined) {
-    if (idx >= body.length || !verifyGuard(body[idx]!, section.reads)) return undefined;
+    if (!verifyGuard(body[idx], section.reads)) return undefined;
     idx++;
   }
 
-  if (idx >= body.length || !isTokenBodyInit(body[idx]!)) return undefined;
+  if (!isTokenBodyInit(body[idx])) return undefined;
   idx++;
-
-  // bodyLines' order: the `scope` line, then the two credential lines. Both optional, and their
-  // ABSENCE is the fact — `scope` is omitted when the spec sets none, the credential lines when
-  // `credentialsIn` is "basic".
-  let scope: string | undefined;
-  const scopeValue = bodySetValue(body[idx], "scope");
-  if (scopeValue !== undefined) {
-    scope = stringLit(scopeValue);
-    // `scope` reaches the emitted line through JSON.stringify, so a non-literal here is a shape
-    // no spec value produces.
-    if (scope === undefined) return undefined;
-    idx++;
-  }
 
   const id = section.reads[0]!.binding;
   const secret = section.reads[1]!.binding;
-  let credentialsInBody = false;
-  const idValue = bodySetValue(body[idx], "client_id");
-  if (idValue !== undefined) {
-    if (!isIdent(idValue, id)) return undefined;
-    const secretValue = bodySetValue(body[idx + 1], "client_secret");
-    if (secretValue === undefined || !isIdent(secretValue, secret)) return undefined;
-    credentialsInBody = true;
-    idx += 2;
-  }
+  const bodyLines = collectBodyLines(body.slice(idx), id, secret);
+  if (bodyLines === undefined) return undefined;
+  const { scope, credentialsInBody } = bodyLines;
+  idx += bodyLines.consumed;
 
-  if (idx >= body.length) return undefined;
-  const fetched = matchTokenFetch(body[idx]!, id, secret);
-  if (fetched === undefined) return undefined;
-  idx++;
+  const response = matchTokenResponse(body.slice(idx), id, secret, credentialsInBody);
+  if (response === undefined) return undefined;
+  idx += response.consumed;
 
-  // The credential lines and the Authorization header are the two arms of ONE if/else on
-  // `credentialsIn`, so exactly one of them must be present. Both (or neither) is a shape
-  // renderTokenFunction cannot write, and reading either one alone would let the other contradict
-  // it silently.
-  if (credentialsInBody === fetched.basicHeader) return undefined;
-
-  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
-  idx++;
-
-  const serviceLabel = idx < body.length ? tokenExchangeLabel(body[idx]!) : undefined;
-  if (serviceLabel === undefined) return undefined;
-  idx++;
-
-  if (idx >= body.length || !isParsedDecl(body[idx]!)) return undefined;
-  idx++;
-  if (idx >= body.length || !isMissingTokenGuard(body[idx]!, serviceLabel)) return undefined;
-  idx++;
-  if (idx >= body.length || !isCacheAssignment(body[idx]!)) return undefined;
-  idx++;
-  if (idx >= body.length || !isTtlDecl(body[idx]!)) return undefined;
-  const ttlIndex = idx;
-  idx++;
-  if (idx >= body.length || !isExpiryAssignment(body[idx]!)) return undefined;
-  idx++;
-
-  // Exactly one statement left: `return cachedToken;`.
-  if (body.length - idx !== 1) return undefined;
-  if (!isIdent(returnArgument(body[idx]!), "cachedToken")) return undefined;
-
-  // The comment sweep — see this section's header. Checked over the WHOLE body rather than at the
-  // `ttl` statement alone: the claim covers this function's entire byte range, so a comment above
-  // ANY of these statements is claimed with it and vanishes on re-emission just the same.
-  if (!body.every((stmt, i) => commentsAre(stmt, i === ttlIndex ? TTL_COMMENT : []))) {
-    return undefined;
-  }
+  const epilogue = matchCacheEpilogue(body.slice(idx), response.serviceLabel);
+  if (epilogue === undefined) return undefined;
+  if (!commentsClearExcept(body, idx + epilogue.ttlOffset)) return undefined;
 
   return {
     reads: section.reads,
-    tokenUrl: fetched.tokenUrl,
+    tokenUrl: response.tokenUrl,
     credentialsIn: credentialsInBody ? "body" : "basic",
     scope,
     defaultValue,
-    serviceLabel,
+    serviceLabel: response.serviceLabel,
   };
 }
 

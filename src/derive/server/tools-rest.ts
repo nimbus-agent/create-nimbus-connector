@@ -15,7 +15,7 @@ import {
 } from "../read.ts";
 import { recognizeArgs, type SchemaShape } from "./args.ts";
 import { recognizeBodyExpr } from "./body.ts";
-import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
+import { type HoistedBlock, mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
 import { type BasePrefix, recognizeQueryBlock } from "./query.ts";
 import { recognizeStubHandler, type ToolFields } from "./tools-hand.ts";
@@ -333,6 +333,39 @@ function withInitFn(
  * "pathFn" position is the identical throw-block tools-hand.ts's own `reg()` stub writes, just
  * never `async` (`recognizeStubHandler`'s `requireAsync: false` is what tells the two apart).
  */
+/**
+ * Form 3 — `(parsed) => { <hoists>; return <pathExpr>; }` — once `recognizeHoistedBlock` has
+ * already established that the arrow's body IS that shape. Reaching here and returning `undefined`
+ * means "this form, malformed", which `recognizeOneCall` turns into a refusal; see the comment at
+ * its call site for why that distinction cannot move into this function.
+ *
+ * Unlike tools-hand.ts, what the block returns IS the path expression — there is no
+ * `jsonResult(await ...)` wrapper to unwrap first.
+ */
+function hoistedBlockTool(
+  block: HoistedBlock,
+  base: { readonly name: string; readonly description: string; readonly args: ToolFields["args"] },
+  schemaShape: SchemaShape,
+  initFnNode: AstNode | undefined,
+): ToolShape | undefined {
+  const recognized =
+    block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
+  if (recognized === undefined) return undefined;
+
+  // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
+  // the schema text itself, so both are only visible at the hoist statement.
+  const mergedArgs = mergeHoistedArgs(base.args, block.hoistMeta);
+  if (mergedArgs === undefined) return undefined;
+
+  return withInitFn(
+    { name: base.name, description: base.description, args: mergedArgs, path: recognized.path },
+    recognized.staticStyle,
+    schemaShape,
+    undefined,
+    initFnNode,
+  );
+}
+
 function recognizeOneCall(call: AstNode): ToolShape | undefined {
   const parts = registrarCallParts(call);
   if (parts === undefined) return undefined;
@@ -383,23 +416,16 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
   if (arrow.params.length !== 1) return undefined;
 
   const block = recognizeHoistedBlock(arrow.body);
+  // The test stays HERE rather than inside `hoistedBlockTool`, and that is the whole contract of
+  // the split: once the body IS a hoists-then-return block, a failure below is TERMINAL — the call
+  // is refused, never retried as the query form. Folding this test into the helper would make its
+  // `undefined` mean both "not this form" and "this form, malformed", and the query branch would
+  // start claiming blocks it must not.
   if (block !== undefined) {
-    // Unlike tools-hand.ts, what the block returns IS the path expression — there is no
-    // `jsonResult(await ...)` wrapper to unwrap first.
-    const recognized =
-      block.returned === undefined ? undefined : recognizePath(block.returned, block.locals);
-    if (recognized === undefined) return undefined;
-
-    // Gap A / Gap B, same as tools-hand.ts: renderZodSchema never encodes `local` or `default` in
-    // the schema text itself, so both are only visible at the hoist statement.
-    const mergedArgs = mergeHoistedArgs(argsResult.args, block.hoistMeta);
-    if (mergedArgs === undefined) return undefined;
-
-    return withInitFn(
-      { name, description, args: mergedArgs, path: recognized.path },
-      recognized.staticStyle,
+    return hoistedBlockTool(
+      block,
+      { name, description, args: argsResult.args },
       schemaShape,
-      undefined,
       initFnNode,
     );
   }
