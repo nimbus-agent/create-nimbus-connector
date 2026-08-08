@@ -6,8 +6,11 @@ import { deriveManifest, type ManifestFields, MissingManifestKey } from "./manif
 import { calleeOf, expressionOf, identName, importNames, importSource, startLine } from "./read.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
-import { recognizeEnv } from "./server/env.ts";
+import { type EnvEntry, recognizeEnv } from "./server/env.ts";
 import {
+  type FetchHelperFields,
+  type RecognizedFetchHelper,
+  type RecognizedWriteHelper,
   recognizeFetchHelper,
   recognizeRestFetchHelper,
   recognizeWriteHelper,
@@ -384,29 +387,9 @@ function deriveRestKitSpec(
     );
   }
 
-  // Tools disagreeing on a connector-wide convention their own emitter can only have written
-  // one value for — see voteStaticPathStyle's own docstring for why this is a refusal rather
-  // than a pick.
-  const staticVote = voteStaticPathStyle(tools.staticPathStyles);
-  if (!staticVote.ok) {
-    return blocked(
-      "style:mixed-static-path",
-      "tools disagree on whether a fully static path renders quoted or as a template literal",
-    );
-  }
-  const argsSchemaStyle = voteArgsSchemaStyle(tools.schemaShapes);
-
-  // Last, because it is a different kind of refusal from everything above — every earlier
-  // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
-  // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(rebasedTools, manifest.hitlRequired);
-  if (attribution === undefined) {
-    return blocked(
-      "manifest:unattributable-hitl",
-      `hitlRequired ${JSON.stringify(manifest.hitlRequired)} is not reproduced by any ` +
-        "attribution of this connector's tool methods",
-    );
-  }
+  const finalized = finalizeTools(tools, rebasedTools, manifest.hitlRequired);
+  if ("ok" in finalized) return finalized;
+  const { staticPathStyle, argsSchemaStyle, attribution } = finalized;
 
   return {
     ok: true,
@@ -442,9 +425,7 @@ function deriveRestKitSpec(
           : { inlineHeaders: restFetchHelper.inlineHeaders }),
         // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
         // reasoning as argsSchemaStyle above.
-        ...(staticVote.value === undefined || staticVote.value === "quoted"
-          ? {}
-          : { staticPathStyle: staticVote.value }),
+        ...(staticPathStyle === undefined ? {} : { staticPathStyle }),
       },
       tools: attribution.tools,
     },
@@ -505,6 +486,288 @@ function collapseSecondFileBlockers(
     ];
   }
   return ordinary;
+}
+
+/**
+ * The three steps both assemblies end with, and the two refusals they can raise — the connector-wide
+ * style votes, then the effect attribution.
+ *
+ * `deriveRestKitSpec` and `deriveSharedStyleSpec` carried a byte-identical copy of this, comments
+ * included, which is the reason it is one function rather than a shape repeated twice. It runs last
+ * in both for the reason the attribution comment gives: every earlier check says "this shape was
+ * not recognized", and this one says "the shape WAS recognized, but no attribution of it reproduces
+ * what the manifest declares".
+ *
+ * `staticPathStyle` comes back already reduced to what the spec should carry — `undefined` when the
+ * vote was undecided OR landed on `FetchHelperSchema`'s own `"quoted"` default, so a connector
+ * using the default stays byte-comparable with the hand-written fixtures. Both callers spread the
+ * result rather than re-deciding it, which is what stops the two from drifting on the default.
+ */
+function finalizeTools(
+  shapes: {
+    readonly staticPathStyles: readonly (StaticPathStyle | undefined)[];
+    readonly schemaShapes: readonly SchemaShape[];
+  },
+  tools: readonly Record<string, unknown>[],
+  hitlRequired: readonly string[],
+):
+  | Derivation
+  | {
+      readonly staticPathStyle: StaticPathStyle | undefined;
+      readonly argsSchemaStyle: "inline" | "expanded" | undefined;
+      readonly attribution: EffectAttribution;
+    } {
+  // Tools disagreeing on a connector-wide convention their own emitter can only have written
+  // one value for — see voteStaticPathStyle's own docstring for why this is a refusal rather
+  // than a pick.
+  const staticVote = voteStaticPathStyle(shapes.staticPathStyles);
+  if (!staticVote.ok) {
+    return blocked(
+      "style:mixed-static-path",
+      "tools disagree on whether a fully static path renders quoted or as a template literal",
+    );
+  }
+
+  const attribution = attributeEffects(tools, hitlRequired);
+  if (attribution === undefined) {
+    return blocked(
+      "manifest:unattributable-hitl",
+      `hitlRequired ${JSON.stringify(hitlRequired)} is not reproduced by any ` +
+        "attribution of this connector's tool methods",
+    );
+  }
+
+  return {
+    staticPathStyle: staticVote.value === "quoted" ? undefined : staticVote.value,
+    argsSchemaStyle: voteArgsSchemaStyle(shapes.schemaShapes),
+    attribution,
+  };
+}
+
+/** The `*-helper-mismatch` message. A function only so its two ternaries read at the top level rather than nested inside the guard that raises them. */
+function helperMismatchDetail(h: {
+  readonly role: string;
+  readonly wanted: string;
+  readonly present: boolean;
+  readonly called: boolean;
+}): string {
+  const declares = h.present ? "a" : "no";
+  const calls = h.called ? "a tool is" : "no tool is";
+  return `this module declares ${declares} ${h.role} helper, but ${calls} ${h.wanted}`;
+}
+
+/**
+ * The four cross-recognizer agreement checks, in the order they were written, returning the first
+ * blocker or `undefined` when every pair agrees.
+ *
+ * They are one thing, not four: each holds a fact recovered by one recognizer against a fact
+ * recovered by another that could not see it, and each exists because the disagreement is the
+ * WRONG-CLAIM class — a statement claimed as understood whose derived spec regenerates something
+ * else. The totality rule cannot catch that, because the statement *was* claimed. The per-check
+ * comments below say which two recognizers are being held against each other and why neither can
+ * do it alone; that reasoning is unchanged and stays with each check.
+ *
+ * Split out of `deriveSharedStyleSpec` because it reads none of that function's other state — no
+ * frame, no claims, no manifest, no filter source — and returns a blocker or nothing. **Their
+ * relative order is preserved exactly**, because it decides which blocker a module tripping more
+ * than one of them reports, and the fixtures pin those strings.
+ */
+function crossCheckRecognizers(facts: {
+  readonly env: readonly EnvEntry[];
+  readonly fetchHelper: FetchHelperFields;
+  readonly readHelper: RecognizedFetchHelper | undefined;
+  readonly writeHelper: RecognizedWriteHelper | undefined;
+  readonly tokenServiceLabels: readonly string[];
+  readonly tools: readonly (ToolFields | SearchToolFields)[];
+}): Derivation | undefined {
+  const { env, fetchHelper, readHelper, writeHelper, tokenServiceLabels, tools } = facts;
+  // Both helpers, in the order their blockers name them — the shape the AWAIT and PASSTHROUGH
+  // checks iterate, two of the four below. The presence check builds its own rows, carrying
+  // `wanted` and `called` instead, because it asks about the tools rather than about a flag the
+  // helper carries.
+  //
+  // Annotated rather than asserted per element: both recognized types are already assignable to
+  // the union, so the `as` this replaces bought nothing — and would have gone on silently
+  // succeeding if the two ever diverged, which is the one moment the compiler should speak up.
+  const helpers: readonly {
+    readonly role: string;
+    readonly helper: RecognizedFetchHelper | RecognizedWriteHelper | undefined;
+  }[] = [
+    { role: "read", helper: readHelper },
+    { role: "write", helper: writeHelper },
+  ];
+
+  // Which HELPERS the emitter writes is decided entirely by the tools, so each one's presence is
+  // evidence to be cross-checked rather than a fact to be recorded — the same class of guard as
+  // the passthrough below, one recognizer earlier. `renderReadHelper` emits the read helper iff
+  // some tool is a non-stub GET; `renderWriteHelper` emits the write helper iff some tool is
+  // non-GET (src/emit/server/fetch-helper.ts). A module carrying a helper no tool would call
+  // re-emits without it, and one missing a helper its tools DO call re-emits with it — neither
+  // reproduces, and neither recognizer can see the other's evidence on its own. `method` is
+  // omitted from `ToolFields` for GET, so its presence is the non-GET test.
+  //
+  // A stub calls NEITHER helper — it never issues a request at all — so it must not count as
+  // "read called" evidence even though its own `method` is also undefined (ToolSchema pins one
+  // to GET, but `renderTool`'s stub branch returns before ever reaching the read helper). Without
+  // this exclusion a connector whose every non-stub, non-search tool is a WRITE, plus a stub,
+  // would derive `read called: true` from the stub alone while `recognizedHelper` is correctly
+  // undefined (no tool actually calls it) — a false `fetch-helper:read-helper-mismatch` block on
+  // a connector this generator can regenerate. `bitrise`'s own read helper is called by its
+  // SEARCH tool, not either stub, so this exclusion does not change what bitrise derives to.
+  const nonStubTools = tools.filter((t) => t.impl !== "stub");
+  const helperMismatch = [
+    {
+      role: "read",
+      wanted: "GET",
+      present: readHelper !== undefined,
+      called: nonStubTools.some((t) => t.method === undefined),
+    },
+    {
+      role: "write",
+      wanted: "non-GET",
+      present: writeHelper !== undefined,
+      called: nonStubTools.some((t) => t.method !== undefined),
+    },
+  ].find((h) => h.present !== h.called);
+  if (helperMismatch !== undefined) {
+    return blocked(
+      `fetch-helper:${helperMismatch.role}-helper-mismatch`,
+      helperMismatchDetail(helperMismatch),
+    );
+  }
+
+  // One `spec.serviceLabel` writes BOTH the fetch helper's `${res.status}` error and the
+  // client-credentials token function's two — `renderEnvAccessors` passes it through to
+  // `renderTokenFunction` — and the two recognizers recover it independently, which is how they
+  // drift. Same class of guard as `rest-fetch-helper-name-mismatch`, and the same reason it lives
+  // outside `recognizeEnv`: that recognizer never sees the fetch helper.
+  const wrongLabel = tokenServiceLabels.find((label) => label !== fetchHelper.serviceLabel);
+  if (wrongLabel !== undefined) {
+    return blocked(
+      "env:token-service-label-mismatch",
+      `the client-credentials token exchange names service "${wrongLabel}", but this module's ` +
+        `fetch helper names "${fetchHelper.serviceLabel}"`,
+    );
+  }
+
+  // `headerOption` (src/emit/server/fetch-helper.ts) writes `await <accessor>()` exactly when the
+  // env entry that accessor names carries `auth: "client-credentials"` — the one accessor
+  // `renderEnvAccessor` emits `async` — and a bare `<accessor>()` for every other mode. So which
+  // form a helper carries is evidence about the ENV, recovered by a recognizer that cannot see
+  // the env, and held against it here. Without this, an awaited call to a synchronous accessor
+  // (or an un-awaited call to the async one) derives a spec that regenerates the OTHER form: a
+  // claimed statement the module does not reproduce, which the totality rule cannot see.
+  //
+  // This also covers the two helpers disagreeing with each other, which is why
+  // `agreesWithReadHelper` does not compare the flag: each is checked against the env separately,
+  // so a disagreement means at least one of them fails here.
+  const awaitsHeaders = env.some(
+    (e) => e.local === fetchHelper.headers && e.auth === "client-credentials",
+  );
+  // Both words picked before the guard rather than inside its message, so the two ternaries read
+  // at the top level. They depend only on `awaitsHeaders`, which is already known here.
+  const awaitVerb = awaitsHeaders ? "does not await" : "awaits";
+  const awaitArticle = awaitsHeaders ? "the" : "no";
+  const awaitMismatch = helpers.find(
+    (h) => h.helper !== undefined && h.helper.awaitedHeaders !== awaitsHeaders,
+  );
+  if (awaitMismatch !== undefined) {
+    return blocked(
+      "fetch-helper:headers-await-mismatch",
+      `the ${awaitMismatch.role} helper ${awaitVerb} its ` +
+        `headers accessor, but ${awaitArticle} env entry named ` +
+        `"${String(fetchHelper.headers)}" declares auth: "client-credentials"`,
+    );
+  }
+
+  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides BOTH helpers' passthrough line
+  // from the SET of tools, so each recognized helper must agree with it in both directions. A
+  // helper with the line and no query tool regenerates a helper without it; a query tool with no
+  // line regenerates one with it. Either way the derived spec would not reproduce this module —
+  // the wrong-claim class, caught here because neither recognizer can see the tools' evidence.
+  // `query` is read off the union without narrowing on purpose: `SearchToolFields` is built
+  // from `ToolFields` (`Omit<ToolFields, "impl" | "path"> & {...}`), so the field is there for
+  // both, and a search tool never carries one anyway (ToolSchema rejects `impl: "search"` beside
+  // `query`). Guarding it would state the opposite.
+  const anyQuery = tools.some((t) => t.query !== undefined);
+  // Same reason as the pair above.
+  const queryVerb = anyQuery ? "lacks" : "carries";
+  const queryClause = anyQuery ? "a tool declares" : "no tool declares";
+  const passthroughMismatch = helpers.find(
+    (h) => h.helper !== undefined && h.helper.passthrough !== anyQuery,
+  );
+  if (passthroughMismatch !== undefined) {
+    return blocked(
+      "fetch-helper:query-passthrough-mismatch",
+      `the ${passthroughMismatch.role} helper ${queryVerb} the absolute-URL ` +
+        `passthrough line, but ${queryClause} a query array`,
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * The search half of the shared-style assembly: the filter file resolved against the search tools
+ * that were recognized, folded back into the tool list, plus `spec.title`.
+ *
+ * Returns a `Derivation` when it refuses — the caller returns it unchanged — and `{ tools, title }`
+ * otherwise. Split out because it is the one part of `deriveSharedStyleSpec` that reads a SECOND
+ * FILE: `filterSource` reaches nothing else in that function, and none of the env, helper or claim
+ * state reaches this. A connector with no search tool never enters it.
+ *
+ * A search tool whose filter file cannot be read must not derive a spec that regenerates a
+ * connector with a different filter — an absent file alongside a recognized search tool is a
+ * blocker, not a silent omission. `title` is folded in here too: the type alias
+ * (`export type <Title>SearchMatchOptions = SearchMatchOptions;`) is the only place this style's
+ * `spec.title` is recoverable at all (rest-kit recovers it from the registrar name instead, in
+ * `deriveRestKitSpec` below) — so it stays unset for every connector with no search tool.
+ */
+function resolveSearchFilter(
+  searchTools: readonly SearchToolFields[],
+  rebasedTools: (ToolFields | SearchToolFields)[],
+  filterSource: string | undefined,
+  connectorName: string,
+): Derivation | { readonly tools: (ToolFields | SearchToolFields)[]; readonly title?: string } {
+  if (filterSource === undefined) {
+    return blocked(
+      "missing-file:src/search-filter.ts",
+      "a search tool was recognized but no filter file was supplied",
+    );
+  }
+  const filterDerivation = recognizeSearchFilter(filterSource);
+  if (!filterDerivation.ok) return { ok: false, blockers: filterDerivation.blockers };
+
+  const wanted = new Set(searchTools.map((t) => t.filter.export));
+  const available = new Set(filterDerivation.result.filters.map((f) => f.export));
+  const sameSet = wanted.size === available.size && [...wanted].every((e) => available.has(e));
+  if (!sameSet) {
+    return blocked(
+      "search-filter:mismatch",
+      `search tools declare filter exports ${JSON.stringify([...wanted])}, but ` +
+        `src/search-filter.ts declares ${JSON.stringify([...available])}`,
+    );
+  }
+
+  const filterByExport = new Map(filterDerivation.result.filters.map((f) => [f.export, f]));
+  const tools = rebasedTools.map((t) => {
+    if (!isSearchTool(t)) return t;
+    const recovered = filterByExport.get(t.filter.export);
+    return {
+      ...t,
+      filter: {
+        export: t.filter.export,
+        ...(recovered?.fields === undefined ? {} : { fields: recovered.fields }),
+      },
+    };
+  });
+
+  // Omitted when it reproduces ConnectorSpecSchema's own default (`capitalize(name)`), so a
+  // connector whose author never set a custom `title` stays byte-comparable with the
+  // hand-written fixtures — same reasoning as recognizeRestTitle's Step 1 below.
+  const defaultTitle = capitalize(connectorName);
+  const fragment = filterDerivation.result.titleFragment;
+  return { tools, ...(fragment === defaultTitle ? {} : { title: fragment }) };
 }
 
 /**
@@ -569,109 +832,15 @@ function deriveSharedStyleSpec(
     return blocked("unrecognized-handler", "a reg() handler was not understood");
   }
 
-  // Which HELPERS the emitter writes is decided entirely by the tools, so each one's presence is
-  // evidence to be cross-checked rather than a fact to be recorded — the same class of guard as
-  // the passthrough below, one recognizer earlier. `renderReadHelper` emits the read helper iff
-  // some tool is a non-stub GET; `renderWriteHelper` emits the write helper iff some tool is
-  // non-GET (src/emit/server/fetch-helper.ts). A module carrying a helper no tool would call
-  // re-emits without it, and one missing a helper its tools DO call re-emits with it — neither
-  // reproduces, and neither recognizer can see the other's evidence on its own. `method` is
-  // omitted from `ToolFields` for GET, so its presence is the non-GET test.
-  //
-  // A stub calls NEITHER helper — it never issues a request at all — so it must not count as
-  // "read called" evidence even though its own `method` is also undefined (ToolSchema pins one
-  // to GET, but `renderTool`'s stub branch returns before ever reaching the read helper). Without
-  // this exclusion a connector whose every non-stub, non-search tool is a WRITE, plus a stub,
-  // would derive `read called: true` from the stub alone while `recognizedHelper` is correctly
-  // undefined (no tool actually calls it) — a false `fetch-helper:read-helper-mismatch` block on
-  // a connector this generator can regenerate. `bitrise`'s own read helper is called by its
-  // SEARCH tool, not either stub, so this exclusion does not change what bitrise derives to.
-  const nonStubTools = toolsResult.tools.filter((t) => t.impl !== "stub");
-  const helperMismatch = [
-    {
-      role: "read",
-      wanted: "GET",
-      present: recognizedHelper !== undefined,
-      called: nonStubTools.some((t) => t.method === undefined),
-    },
-    {
-      role: "write",
-      wanted: "non-GET",
-      present: writeHelper !== undefined,
-      called: nonStubTools.some((t) => t.method !== undefined),
-    },
-  ].find((h) => h.present !== h.called);
-  if (helperMismatch !== undefined) {
-    return blocked(
-      `fetch-helper:${helperMismatch.role}-helper-mismatch`,
-      `this module declares ${helperMismatch.present ? "a" : "no"} ${helperMismatch.role} ` +
-        `helper, but ${helperMismatch.called ? "a tool is" : "no tool is"} ` +
-        `${helperMismatch.wanted}`,
-    );
-  }
-
-  // One `spec.serviceLabel` writes BOTH the fetch helper's `${res.status}` error and the
-  // client-credentials token function's two — `renderEnvAccessors` passes it through to
-  // `renderTokenFunction` — and the two recognizers recover it independently, which is how they
-  // drift. Same class of guard as `rest-fetch-helper-name-mismatch` above, and the same reason it
-  // lives in the caller: `recognizeEnv` never sees the fetch helper.
-  const wrongLabel = tokenServiceLabels.find((label) => label !== fetchHelper.serviceLabel);
-  if (wrongLabel !== undefined) {
-    return blocked(
-      "env:token-service-label-mismatch",
-      `the client-credentials token exchange names service "${wrongLabel}", but this module's ` +
-        `fetch helper names "${fetchHelper.serviceLabel}"`,
-    );
-  }
-
-  // `headerOption` (src/emit/server/fetch-helper.ts) writes `await <accessor>()` exactly when the
-  // env entry that accessor names carries `auth: "client-credentials"` — the one accessor
-  // `renderEnvAccessor` emits `async` — and a bare `<accessor>()` for every other mode. So which
-  // form a helper carries is evidence about the ENV, recovered by a recognizer that cannot see
-  // the env, and held against it here. Without this, an awaited call to a synchronous accessor
-  // (or an un-awaited call to the async one) derives a spec that regenerates the OTHER form: a
-  // claimed statement the module does not reproduce, which the totality rule cannot see.
-  //
-  // This also covers the two helpers disagreeing with each other, which is why
-  // `agreesWithReadHelper` does not compare the flag: each is checked against the env separately,
-  // so a disagreement means at least one of them fails here.
-  const awaitsHeaders = env.some(
-    (e) => e.local === fetchHelper.headers && e.auth === "client-credentials",
-  );
-  const awaitMismatch = [
-    { role: "read", helper: recognizedHelper },
-    { role: "write", helper: writeHelper },
-  ].find((h) => h.helper !== undefined && h.helper.awaitedHeaders !== awaitsHeaders);
-  if (awaitMismatch !== undefined) {
-    return blocked(
-      "fetch-helper:headers-await-mismatch",
-      `the ${awaitMismatch.role} helper ${awaitsHeaders ? "does not await" : "awaits"} its ` +
-        `headers accessor, but ${awaitsHeaders ? "the" : "no"} env entry named ` +
-        `"${String(fetchHelper.headers)}" declares auth: "client-credentials"`,
-    );
-  }
-
-  // `hasQueryTool` (src/emit/server/fetch-helper.ts) decides BOTH helpers' passthrough line
-  // from the SET of tools, so each recognized helper must agree with it in both directions. A
-  // helper with the line and no query tool regenerates a helper without it; a query tool with no
-  // line regenerates one with it. Either way the derived spec would not reproduce this module —
-  // the wrong-claim class, caught here because neither recognizer can see the tools' evidence.
-  // `query` is read off the union without narrowing on purpose: `SearchToolFields` is built
-  // from `ToolFields` (`Omit<ToolFields, "impl" | "path"> & {...}`), so the field is there for
-  // both, and a search tool never carries one anyway (ToolSchema rejects `impl: "search"` beside
-  // `query`). Guarding it would state the opposite.
-  const anyQuery = toolsResult.tools.some((t) => t.query !== undefined);
-  const passthroughMismatch = [
-    { role: "read", helper: recognizedHelper },
-    { role: "write", helper: writeHelper },
-  ].find((h) => h.helper !== undefined && h.helper.passthrough !== anyQuery);
-  if (passthroughMismatch !== undefined) {
-    return blocked(
-      "fetch-helper:query-passthrough-mismatch",
-      `the ${passthroughMismatch.role} helper ${anyQuery ? "lacks" : "carries"} the absolute-URL ` +
-        `passthrough line, but ${anyQuery ? "a tool declares" : "no tool declares"} a query array`,
-    );
-  }
+  const disagreement = crossCheckRecognizers({
+    env,
+    fetchHelper,
+    readHelper: recognizedHelper,
+    writeHelper,
+    tokenServiceLabels,
+    tools: toolsResult.tools,
+  });
+  if (disagreement !== undefined) return disagreement;
 
   // The same class of guard, one recognizer further along: the query tools' base prefixes and the
   // fetch helper's own base are recovered independently and have to agree. See `rebaseQueryTools`,
@@ -685,82 +854,18 @@ function deriveSharedStyleSpec(
     );
   }
 
-  // A search tool whose filter file cannot be read must not derive a spec that regenerates a
-  // connector with a different filter — an absent file alongside a recognized search tool is a
-  // blocker, not a silent omission. `title` is folded in here too: the type alias
-  // (`export type <Title>SearchMatchOptions = SearchMatchOptions;`) is the only place this
-  // style's `spec.title` is recoverable at all (rest-kit recovers it from the registrar name
-  // instead, in deriveRestKitSpec below) — so it stays unset for every connector with no search
-  // tool, unchanged from before this task.
   let tools: (ToolFields | SearchToolFields)[] = rebasedTools;
   let title: string | undefined;
   if (searchTools.length > 0) {
-    if (filterSource === undefined) {
-      return blocked(
-        "missing-file:src/search-filter.ts",
-        "a search tool was recognized but no filter file was supplied",
-      );
-    }
-    const filterDerivation = recognizeSearchFilter(filterSource);
-    if (!filterDerivation.ok) return { ok: false, blockers: filterDerivation.blockers };
-
-    const wanted = new Set(searchTools.map((t) => t.filter.export));
-    const available = new Set(filterDerivation.result.filters.map((f) => f.export));
-    const sameSet = wanted.size === available.size && [...wanted].every((e) => available.has(e));
-    if (!sameSet) {
-      return blocked(
-        "search-filter:mismatch",
-        `search tools declare filter exports ${JSON.stringify([...wanted])}, but ` +
-          `src/search-filter.ts declares ${JSON.stringify([...available])}`,
-      );
-    }
-
-    const filterByExport = new Map(filterDerivation.result.filters.map((f) => [f.export, f]));
-    tools = rebasedTools.map((t) => {
-      if (!isSearchTool(t)) return t;
-      const recovered = filterByExport.get(t.filter.export);
-      return {
-        ...t,
-        filter: {
-          export: t.filter.export,
-          ...(recovered?.fields === undefined ? {} : { fields: recovered.fields }),
-        },
-      };
-    });
-
-    // Omitted when it reproduces ConnectorSpecSchema's own default (`capitalize(name)`), so a
-    // connector whose author never set a custom `title` stays byte-comparable with the
-    // hand-written fixtures — same reasoning as recognizeRestTitle's Step 1 below.
-    const defaultTitle = capitalize(frame.name);
-    title =
-      filterDerivation.result.titleFragment === defaultTitle
-        ? undefined
-        : filterDerivation.result.titleFragment;
+    const resolved = resolveSearchFilter(searchTools, rebasedTools, filterSource, frame.name);
+    if ("ok" in resolved) return resolved;
+    tools = resolved.tools;
+    title = resolved.title;
   }
 
-  // Tools disagreeing on a connector-wide convention their own emitter can only have written
-  // one value for — see voteStaticPathStyle's own docstring for why this is a refusal rather
-  // than a pick.
-  const staticVote = voteStaticPathStyle(toolsResult.staticPathStyles);
-  if (!staticVote.ok) {
-    return blocked(
-      "style:mixed-static-path",
-      "tools disagree on whether a fully static path renders quoted or as a template literal",
-    );
-  }
-  const argsSchemaStyle = voteArgsSchemaStyle(toolsResult.schemaShapes);
-
-  // Last, because it is a different kind of refusal from everything above — every earlier
-  // check is "this shape was not recognized"; this one is "the shape WAS recognized, but no
-  // attribution of it reproduces what the manifest declares".
-  const attribution = attributeEffects(tools, manifest.hitlRequired);
-  if (attribution === undefined) {
-    return blocked(
-      "manifest:unattributable-hitl",
-      `hitlRequired ${JSON.stringify(manifest.hitlRequired)} is not reproduced by any ` +
-        "attribution of this connector's tool methods",
-    );
-  }
+  const finalized = finalizeTools(toolsResult, tools, manifest.hitlRequired);
+  if ("ok" in finalized) return finalized;
+  const { staticPathStyle, argsSchemaStyle, attribution } = finalized;
 
   const { serviceLabel, ...helper } = fetchHelper;
   return {
@@ -789,9 +894,7 @@ function deriveSharedStyleSpec(
         ...helper,
         // Emitted only when it differs from FetchHelperSchema's "quoted" default — same
         // reasoning as argsSchemaStyle above.
-        ...(staticVote.value === undefined || staticVote.value === "quoted"
-          ? {}
-          : { staticPathStyle: staticVote.value }),
+        ...(staticPathStyle === undefined ? {} : { staticPathStyle }),
       },
       tools: attribution.tools,
     },
