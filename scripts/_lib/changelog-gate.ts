@@ -50,9 +50,8 @@
  */
 export const UNRELEASED_PLACEHOLDER = "*Nothing pending.*";
 
-/** The heading that opens the section, and the one shape that closes it. */
+/** The heading that opens the section. Any other `## ` heading closes it — see `startsWith` below. */
 const OPENS_SECTION = /^## Unreleased[ \t]*$/;
-const OPENS_ANY_SECTION = /^## /;
 
 /**
  * A line that is a release NOTE rather than the convention prose around it: a sub-heading, or a
@@ -63,6 +62,34 @@ const OPENS_ANY_SECTION = /^## /;
  * would fail every correct changelog.
  */
 const IS_A_NOTE = /^(###|[*-][ \t])/;
+
+/**
+ * A line with its leading and trailing spaces and tabs removed — and nothing else removed, which
+ * is why this is not `String.prototype.trim`. `trim` also strips `\r`, the Unicode spaces and the
+ * vertical whitespace, so a line holding only a stray lone `\r` — an old-Mac ending the `\r?\n`
+ * split below does not touch — would stop counting as content and quietly change what `last`
+ * holds. The gate's grading is faithful to the awk it replaces: spaces and tabs, nothing more.
+ *
+ * Scanned from both ends rather than written as `.replace(/[ \t]+$/, "")`, which backtracks
+ * quadratically on a long run of whitespace not at the end of the line — measured, 4x per doubling
+ * of the run, the same shape and the same wording as `slugifyConnectorName` in
+ * src/openapi/spec.ts. The leading half was already linear (`/^[ \t]+/` is anchored); only the
+ * trailing one had to try every start position, so only it changed shape.
+ *
+ * The point is not that a pathological run of tabs is expected in a CHANGELOG. It is that this
+ * function is the last thing standing between a malformed file and `npm publish`, which cannot be
+ * undone after 72 hours, so its cost stops depending on the shape of its input. The scaling factor
+ * is recorded and the absolute timings are not: 4x per doubling is a property of the expression
+ * and stays true wherever it runs, where a millisecond count is a property of one machine on one
+ * day and goes stale without saying so.
+ */
+function trimSpacesAndTabs(raw: string): string {
+  let start = 0;
+  let end = raw.length;
+  while (start < end && (raw[start] === " " || raw[start] === "\t")) start++;
+  while (end > start && (raw[end - 1] === " " || raw[end - 1] === "\t")) end--;
+  return raw.slice(start, end);
+}
 
 /**
  * Every problem the Unreleased section has, as the GitHub `::error` annotations the workflow
@@ -91,10 +118,10 @@ export function unreleasedProblems(markdown: string): string[] {
       inside = true;
       continue;
     }
-    if (OPENS_ANY_SECTION.test(raw)) inside = false;
+    if (raw.startsWith("## ")) inside = false;
     if (!inside) continue;
 
-    const line = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    const line = trimSpacesAndTabs(raw);
     if (line === "") continue;
     if (IS_A_NOTE.test(line)) {
       problems.push(

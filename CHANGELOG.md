@@ -17,6 +17,49 @@ section carries no `###` sub-heading and no bulleted entry. The gate runs before
 `npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
 is written next to the step.
 
+### Output changes
+
+* **A generated standalone package now pins Biome 2.5.7, where it pinned 2.5.6.** Both the
+  emitted `biome.json`'s `$schema` URL and the emitted `@biomejs/biome` devDependency range
+  move. Nothing about an already-generated package changes until it is regenerated, and the
+  monorepo target is untouched — it emits no `biome.json` at all, inheriting the workspace
+  root's.
+
+  The constant had drifted a patch behind the Biome this repository itself installs, which is
+  the engine `src/format.ts` runs to produce the bytes that config describes. The two guards
+  that existed compared the emitted output against the constant, so they held for any value it
+  took; `test/emit/static.test.ts` now compares it against the pin and against the engine.
+
+### Documentation shipped in the package
+
+`README.md` is one of the three paths `package.json`'s `files` array publishes, so these
+reached npm readers as fact and are corrected here rather than only in the repository:
+
+* **The default request body excluded only path arguments.** It excludes `query` entries too —
+  either one already puts the value on the wire, and mirroring it into the body would send it
+  twice. An explicit `body` mapping still overrides both exclusions verbatim.
+* **A request with no body was described as sending no `Content-Type`.** The hand-rolled write
+  helper sets that header on every call and omits only the body itself, so a bodyless `DELETE`
+  is sent with the header and nothing to describe. rest-kit writes do not go through that
+  helper and genuinely set no `Content-Type` — the two paths differ, and the README claimed the
+  rest-kit behaviour for both.
+* **Byte reproduction was stated as a property of the corpus** ("a package byte-identical to
+  the 94 hand-written Nimbus connectors"). It is the bar four fixtures are held to, not a
+  blanket guarantee; the README now points at *The measured ceiling*, which carries the date
+  and the tree it was measured against.
+* Four smaller corrections in the same pass: the emitted file list omitted `biome.json`,
+  `local`/`bindings` were described as "optional strings" when they are validated identifiers
+  with per-field requiredness, `client-credentials` was said to require `hand-rolled` when
+  `read-only-kit` accepts it too, and the interactive session was described as asking for the
+  connector name it in fact takes from the positional argument.
+
+### Fixed
+
+* Two regexes that backtracked quadratically on their input have been replaced with linear
+  constructions: `src/openapi/spec.ts`'s connector-name slug trim, and the trailing-whitespace
+  trim in the changelog gate that runs before `npm publish`. Neither had a reachable trigger,
+  and neither now depends on one — measured at 4x per doubling of the run before the change.
+
 *Nothing pending.*
 
 ## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)

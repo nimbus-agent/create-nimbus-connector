@@ -1299,6 +1299,48 @@ export type RecognizedEnv = {
 };
 
 /**
+ * Group A at `statements[i]`: the split bearer reader and the wrapper that names it, as one entry.
+ *
+ * Shaped to match `matchClientCredentials`, which the next loop in `recognizeEnv` already calls the
+ * same way — the two loops were asymmetric only because this one built its entry inline, which is
+ * also what put every guard in it a level deep. Claiming stays with the caller, as it does there.
+ */
+function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEntry | undefined {
+  const reader = matchSplitBearerReader(statements[i]!);
+  if (reader === undefined) return undefined;
+  const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
+  if (wrapperLocal === undefined) return undefined;
+
+  return {
+    vars: [reader.var],
+    local: wrapperLocal,
+    tokenLocal: reader.local,
+    bindings: [reader.binding],
+    required: false,
+    auth: "bearer",
+  };
+}
+
+/**
+ * The shared `trimTrailingSlash` helper, claimed only once an entry actually carries the transform
+ * that calls it — gated on that, not on the function's name alone, so a same-named helper doing
+ * something else is left unclaimed rather than silently absorbed.
+ *
+ * Not one of `recognizeEnv`'s three passes and not ordered against them: it reads the entries they
+ * produced, never a statement they might still claim, and it is the only part of that function that
+ * does not touch `consumed`, `indexed` or `tokenServiceLabels`. Split out for exactly that reason.
+ */
+function claimTrimTrailingSlashHelper(
+  statements: readonly AstNode[],
+  entries: readonly EnvEntry[],
+  claims: ClaimSet,
+): void {
+  if (!entries.some((entry) => entry.transform === "trimTrailingSlashFn")) return;
+  const helperIndex = statements.findIndex((s) => matchTrimTrailingSlashFn(s));
+  if (helperIndex !== -1) claims.claim(statements[helperIndex]!, "env");
+}
+
+/**
  * Every env accessor in `statements`, in DECLARATION order — not "every group, then every plain
  * entry", which would scramble the array position `renderEnvAccessors` depends on to regenerate
  * byte-identical output (it emits `spec.env` in array order, unconditionally). A multi-statement
@@ -1328,30 +1370,14 @@ export type RecognizedEnv = {
  * A and A′ cannot compete for a statement: A's two halves are non-async `(): string` /
  * `(): Record<string, string>` functions, A′'s are two `let`s and two `async` functions. Nothing
  * satisfies both, so A′ needs no `consumed` check of its own.
- */
-/**
- * Group A at `statements[i]`: the split bearer reader and the wrapper that names it, as one entry.
  *
- * Shaped to match `matchClientCredentials`, which the next loop in `recognizeEnv` already calls the
- * same way — the two loops were asymmetric only because this one built its entry inline, which is
- * also what put every guard in it a level deep. Claiming stays with the caller, as it does there.
+ * The three passes stay INLINE, and that is a decision rather than an omission. They share four
+ * accumulators — `consumed`, `indexed`, `tokenServiceLabels` and `claims` — and the order in which
+ * they write to them is the correctness property the paragraphs above spend their length on;
+ * lifting a pass out would hand three mutable accumulators across a function boundary and put the
+ * ordering contract on the caller, which is the coupling `matchFetchHelperBody` was rewritten to
+ * remove. This is one decision expressed at length, so it is written at length.
  */
-function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEntry | undefined {
-  const reader = matchSplitBearerReader(statements[i]!);
-  if (reader === undefined) return undefined;
-  const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
-  if (wrapperLocal === undefined) return undefined;
-
-  return {
-    vars: [reader.var],
-    local: wrapperLocal,
-    tokenLocal: reader.local,
-    bindings: [reader.binding],
-    required: false,
-    auth: "bearer",
-  };
-}
-
 export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): RecognizedEnv {
   const consumed = new Set<number>();
   const indexed: { readonly index: number; readonly entry: EnvEntry }[] = [];
@@ -1386,16 +1412,7 @@ export function recognizeEnv(statements: readonly AstNode[], claims: ClaimSet): 
     indexed.push({ index: i, entry });
   }
 
-  // The shared trimTrailingSlash helper is claimed only once an entry actually carries the
-  // transform that calls it — gated on that, not on the function's name alone, so a same-named
-  // helper doing something else is left unclaimed rather than silently absorbed.
-  if (indexed.some(({ entry }) => entry.transform === "trimTrailingSlashFn")) {
-    const helperIndex = statements.findIndex((s) => matchTrimTrailingSlashFn(s));
-    if (helperIndex !== -1) claims.claim(statements[helperIndex]!, "env");
-  }
-
-  return {
-    entries: indexed.toSorted((a, b) => a.index - b.index).map(({ entry }) => entry),
-    tokenServiceLabels,
-  };
+  const entries = indexed.toSorted((a, b) => a.index - b.index).map(({ entry }) => entry);
+  claimTrimTrailingSlashHelper(statements, entries, claims);
+  return { entries, tokenServiceLabels };
 }

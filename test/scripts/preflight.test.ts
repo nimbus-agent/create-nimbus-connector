@@ -140,7 +140,7 @@ describe("preflight", () => {
 
   it("tells a skipping run how to un-skip it, by naming --nimbus-root", () => {
     const skipped = runPreflight({ run: ok }).results.filter((r) => r.status === "skip");
-    expect(skipped.length).toBe(4);
+    expect(skipped).toHaveLength(4);
     for (const r of skipped) expect(r.reason).toContain("--nimbus-root");
   });
 
@@ -251,7 +251,7 @@ describe("the per-gate report", () => {
     // The other direction, and not decoration: `skipped: true` for everything would satisfy the
     // assertion above while reporting a fully verified run as eight skips.
     const lines = linesFor({ nimbusRoot: "/x", run: ok });
-    expect(lines.filter((l) => l.startsWith("PASS  ")).length).toBe(8);
+    expect(lines.filter((l) => l.startsWith("PASS  "))).toHaveLength(8);
     expect(lines.some((l) => l.startsWith("SKIP"))).toBe(false);
   });
 
@@ -268,7 +268,7 @@ describe("the per-gate report", () => {
     // `formatCheckLines` prints the output line only when there is one, so a `toCheck` that
     // dropped `reason` would print four unexplained SKIPs and fail nothing else here.
     const lines = linesFor({ run: ok });
-    expect(lines.filter((l) => l.includes("--nimbus-root")).length).toBe(4);
+    expect(lines.filter((l) => l.includes("--nimbus-root"))).toHaveLength(4);
   });
 });
 

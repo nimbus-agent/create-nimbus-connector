@@ -45,6 +45,17 @@ const CASES: readonly Case[] = [
     clean: true,
   },
   {
+    name: "a placeholder carrying trailing spaces and tabs",
+    // The other half of the trim, and it was uncovered until this case: with the TRAILING half
+    // deleted, every test in this file and in test/release-workflow-guard.test.ts still passed,
+    // while `last` held "*Nothing pending.*  \t" and the gate refused a changelog with nothing
+    // wrong with it — a red release, not a false green, but silent either way. Trailing
+    // whitespace is what an editor that does not strip it leaves behind, so this is the ordinary
+    // case, not the exotic one.
+    markdown: `${HEAD}*Nothing pending.*  \t\n${TAIL}`,
+    clean: true,
+  },
+  {
     name: "convention prose above the placeholder",
     // NOT a hole, and the reason the rule is shaped the way it is: CHANGELOG.md's own Unreleased
     // section holds four paragraphs explaining what the section is for, permanently. A gate that
@@ -133,12 +144,62 @@ describe("the changelog gate", () => {
     expect(unreleasedProblems(markdown)[0]).toStartWith("::error file=CHANGELOG.md,line=5::");
   });
 
-  it("passes the repository's real CHANGELOG.md", () => {
-    // The case no synthetic table can stand in for. A rule that is right about every fixture and
-    // wrong about the actual file would red every release — and the actual file is the one shape
-    // nobody would think to write down, four paragraphs of convention prose above a placeholder.
+  it("trims the reported line, so trailing whitespace never reaches the annotation", () => {
+    // `toContain` cannot pin this — "…note" is a substring of "…note \t" too — so the assertion
+    // has to be on the END of the message. The trailing half of the trim is the half that was
+    // written as `/[ \t]+$/` and backtracked quadratically; nothing exercised it until this test
+    // and the placeholder case above, which is why the rewrite came with both.
+    const markdown = `${HEAD}- an unreleased note \t\n\n*Nothing pending.*\n${TAIL}`;
+    expect(unreleasedProblems(markdown)[0]).toEndWith("unreleased: - an unreleased note");
+  });
+
+  it("does not read the repository's real convention prose as pending work", () => {
+    // The case no synthetic table can stand in for: the actual file is the one shape nobody would
+    // think to write down, four paragraphs of convention prose above a placeholder. A rule right
+    // about every fixture and wrong about that prose would red every release.
+    //
+    // This asserts the prose, NOT that the section is empty right now. `unreleasedProblems(real)`
+    // was the whole file, which passed only while nothing was filed — and filing a note there is
+    // what the section EXISTS for, so the first correct use of it would have failed this test and
+    // the fix would have looked like weakening the gate. "Is it clean right now" is a question
+    // about release readiness, and .github/workflows/release.yml already asks it, at the moment it
+    // means something. This asks whether the rule is right.
+    //
+    // The note lines are dropped by a rule transcribed INDEPENDENTLY of `IS_A_NOTE`, the way the
+    // table above transcribes the rest — asking the gate which lines to hide from the gate would
+    // pass for any rule at all. `*Nothing pending.*` survives it: the marker needs the space after
+    // it that a bullet has and the placeholder does not.
     const real = readFileSync(join(import.meta.dir, "..", "..", "CHANGELOG.md"), "utf8");
-    expect(unreleasedProblems(real)).toEqual([]);
+    const section = real.slice(real.indexOf("\n## Unreleased\n"));
+    const prose = section
+      .split("\n")
+      .filter((l) => !/^[ \t]*(###|[*-][ \t])/.test(l))
+      .join("\n");
+    expect(unreleasedProblems(prose)).toEqual([]);
+    // …and the prose is the bulk of it, so a `section` that failed to find the heading and left
+    // `prose` empty or near-empty cannot pass the assertion above by having nothing in it.
+    expect(prose.split("\n").length).toBeGreaterThan(10);
+  });
+
+  it("reports the real CHANGELOG.md's Unreleased notes, one per note and no others", () => {
+    // Not a pass/fail on release readiness — see above — but the rule still has to be RIGHT about
+    // the real file, and while notes are filed that is observable in a way an empty section cannot
+    // show. Counted rather than looped over, because a loop over the problems asserts NOTHING in
+    // the state this file spends most of its life in: clean, zero problems, body never entered.
+    // The count is decidable either way, and `0 === 0` still catches a rule that invents one.
+    const real = readFileSync(join(import.meta.dir, "..", "..", "CHANGELOG.md"), "utf8");
+    const afterHeading = real.slice(real.indexOf("\n## Unreleased\n") + 1);
+    const section = afterHeading.slice(0, afterHeading.indexOf("\n## ", 1));
+    const noteLines = section.split("\n").filter((l) => /^[ \t]*(###|[*-][ \t])/.test(l));
+
+    // One problem per note line — and no "must end with its placeholder" problem on top, which is
+    // the assertion that the notes sit ABOVE the placeholder where the convention puts them.
+    expect(unreleasedProblems(real)).toHaveLength(noteLines.length);
+    for (const problem of unreleasedProblems(real)) {
+      const quoted = problem.slice(problem.indexOf("::", 2) + 2).replace(/^[^:]*: /, "");
+      expect(quoted).not.toBe("");
+      expect(noteLines.map((l) => l.trim())).toContain(quoted);
+    }
   });
 
   it("grades against the literal CHANGELOG.md actually documents", () => {

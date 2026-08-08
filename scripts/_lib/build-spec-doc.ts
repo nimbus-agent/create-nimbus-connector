@@ -298,7 +298,7 @@ export function anchor(headingText: string): string {
 
 /** `|` ends a cell, so a value carrying one has to be escaped before it lands in a table. */
 function cell(text: string): string {
-  return text.replaceAll("|", "\\|");
+  return text.replaceAll("|", String.raw`\|`);
 }
 
 /**
@@ -306,14 +306,22 @@ function cell(text: string): string {
  * breadth-first, so a field's table follows the table that names the field.
  */
 function collectSections(root: Section): Section[] {
-  const sections: Section[] = [root];
-  for (let i = 0; i < sections.length; i++) {
-    const section = sections[i]!;
+  // A queue read from the head and appended to at the tail, kept separate from the result it
+  // fills. The array being walked GROWS while it is walked — visiting a section discovers the
+  // sections under it, and those have to be visited too — which is the whole reason this was a
+  // cursor loop rather than a `for-of`. Naming the queue says that outright, where
+  // `for (const s of sections) { … sections.push(child) }` relies on the reader knowing an Array
+  // iterator re-reads `length` on every step: true, and it reads like a bug.
+  const sections: Section[] = [];
+  const pending: Section[] = [root];
+  while (pending.length > 0) {
+    const section = pending.shift()!;
+    sections.push(section);
     const properties = section.schema["properties"];
     if (!isSchemaObject(properties)) continue;
     for (const [key, sub] of Object.entries(properties)) {
       const child = childSection(fieldPath(section, key), sub as JsonSchema);
-      if (child !== undefined) sections.push(child);
+      if (child !== undefined) pending.push(child);
     }
   }
   return sections;

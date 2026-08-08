@@ -215,27 +215,28 @@ function assertFromConnectorGeneratesNothing(opts: CliOptions): void {
   // --from-connector --standalone --license MIT — where BOTH flags are dead — reports the
   // reason specific to --from-connector rather than "add --standalone", which would be actively
   // wrong advice here since --standalone itself is refused two checks below.
-  if (opts.fromConnector !== undefined && opts.outDir !== undefined) {
+  if (opts.fromConnector === undefined) return;
+  if (opts.outDir !== undefined) {
     throw new Error(
       "--from-connector always prints its derived spec to stdout; --out-dir names a directory " +
         "to WRITE a package into, and this command writes no package. Drop --out-dir.",
     );
   }
-  if (opts.fromConnector !== undefined && opts.standalone) {
+  if (opts.standalone) {
     throw new Error(
       "--from-connector reads its target (monorepo or standalone) FROM the connector directory " +
         "and prints it as a stderr note — it does not generate a package for --standalone to " +
         "shape. Drop --standalone.",
     );
   }
-  if (opts.fromConnector !== undefined && opts.license !== undefined) {
+  if (opts.license !== undefined) {
     throw new Error(
       "--license sets the SPDX field of a package this command would generate, and " +
         "--from-connector generates no package — it only reads one and prints its spec. Drop " +
         "--license.",
     );
   }
-  if (opts.fromConnector !== undefined && opts.dryRun) {
+  if (opts.dryRun) {
     throw new Error(
       "--from-connector never writes files, with or without --dry-run — the two flags claim " +
         "the same thing twice. Drop --dry-run.",
@@ -245,7 +246,7 @@ function assertFromConnectorGeneratesNothing(opts: CliOptions): void {
   // reports "only applies to --gateway-wiring. Add it, or drop --force." — and adding
   // --gateway-wiring is refused four checks below, so following the first half of that advice
   // never reaches a valid command. Wrong advice is worse than none.
-  if (opts.fromConnector !== undefined && opts.force) {
+  if (opts.force) {
     throw new Error(
       "--force lets --gateway-wiring overwrite files it did not create, and --from-connector " +
         "writes no files at all — adding --gateway-wiring to give --force something to apply " +
@@ -261,41 +262,41 @@ function assertFromOpenapiGeneratesNothing(opts: CliOptions): void {
   // --standalone" would send the user to a flag that is equally dead. Grouped into one message
   // rather than five checks because they all fail for one reason, and naming every dead flag at
   // once beats three successive runs each rejecting the next one.
-  if (opts.fromOpenapi !== undefined) {
-    const dead = [
-      opts.outDir === undefined ? undefined : "--out-dir",
-      opts.standalone ? "--standalone" : undefined,
-      opts.license === undefined ? undefined : "--license",
-      opts.dryRun ? "--dry-run" : undefined,
-      opts.gatewayWiring === undefined ? undefined : "--gateway-wiring",
-      // --force and --partial are dead here for one more step than the rest: each is gated on a
-      // flag that is ITSELF refused alongside --from-openapi, so following the first line of
-      // "--force only applies to --gateway-wiring" never reaches a valid command.
-      opts.force ? "--force" : undefined,
-      opts.partial ? "--partial" : undefined,
-    ].filter((f): f is string => f !== undefined);
-    if (dead.length > 0) {
-      throw new Error(
-        `--from-openapi reads a document and prints a spec to stdout — it generates no package, ` +
-          `so ${dead.join(", ")} would be silently ignored. Drop ${dead.length === 1 ? "it" : "them"}, ` +
-          `then generate from the printed spec with --spec.`,
-      );
-    }
+  if (opts.fromOpenapi === undefined) return;
+
+  const dead = [
+    opts.outDir === undefined ? undefined : "--out-dir",
+    opts.standalone ? "--standalone" : undefined,
+    opts.license === undefined ? undefined : "--license",
+    opts.dryRun ? "--dry-run" : undefined,
+    opts.gatewayWiring === undefined ? undefined : "--gateway-wiring",
+    // --force and --partial are dead here for one more step than the rest: each is gated on a
+    // flag that is ITSELF refused alongside --from-openapi, so following the first line of
+    // "--force only applies to --gateway-wiring" never reaches a valid command.
+    opts.force ? "--force" : undefined,
+    opts.partial ? "--partial" : undefined,
+  ].filter((f): f is string => f !== undefined);
+  if (dead.length > 0) {
+    throw new Error(
+      `--from-openapi reads a document and prints a spec to stdout — it generates no package, ` +
+        `so ${dead.join(", ")} would be silently ignored. Drop ${dead.length === 1 ? "it" : "them"}, ` +
+        `then generate from the printed spec with --spec.`,
+    );
   }
-  if (opts.fromOpenapi !== undefined && opts.fromConnector !== undefined) {
+  if (opts.fromConnector !== undefined) {
     throw new Error(
       "--from-openapi reads an OpenAPI document and --from-connector reads a connector " +
         "directory; both print a spec, so passing them together means one would be discarded. " +
         "Keep one.",
     );
   }
-  if (opts.fromOpenapi !== undefined && opts.specPath !== undefined) {
+  if (opts.specPath !== undefined) {
     throw new Error(
       "--from-openapi derives a spec from a document and --spec reads one from a file; passing " +
         "both means one would be discarded. Keep one.",
     );
   }
-  if (opts.fromOpenapi !== undefined && opts.name !== undefined) {
+  if (opts.name !== undefined) {
     throw new Error(
       "--from-openapi takes the connector name from the document's info.title; a positional " +
         "name is redundant and was probably a mistake — remove one.",
