@@ -17,6 +17,27 @@ section carries no `###` sub-heading and no bulleted entry. The gate runs before
 `npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
 is written next to the step.
 
+*Nothing pending.*
+
+## [0.11.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.0...create-nimbus-connector-v0.11.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* correct seven shipped README claims, two quadratic regexes, and the Sonar backlog ([#71](https://github.com/nimbus-agent/create-nimbus-connector/issues/71)) ([d9bfe82](https://github.com/nimbus-agent/create-nimbus-connector/commit/d9bfe82e35d4299d45454f2924ac1dfcc073244b))
+
+### Not on npm
+
+**0.11.1 was tagged and GitHub-released, and never published.** The Unreleased-section gate
+refused it: the notes below this paragraph were still filed as unreleased when the release
+workflow ran, which is that gate doing its job on the first release that gave it anything to
+catch. `npm publish` cannot be
+undone after 72 hours, so the recovery path is forward-only and written into
+`.github/workflows/release.yml`: re-running the job checks out the same commit and a fresh run
+sees `release_created=false`, so the notes move under their version and release-please cuts the
+next patch. **Everything described below therefore reaches npm as 0.11.2**, and the registry
+skips from 0.11.0 to it. Publishing 0.11.1 by hand would have lost the provenance attestation.
+
 ### Output changes
 
 * **A generated standalone package now pins Biome 2.5.7, where it pinned 2.5.6.** Both the
@@ -59,15 +80,6 @@ reached npm readers as fact and are corrected here rather than only in the repos
   constructions: `src/openapi/spec.ts`'s connector-name slug trim, and the trailing-whitespace
   trim in the changelog gate that runs before `npm publish`. Neither had a reachable trigger,
   and neither now depends on one — measured at 4x per doubling of the run before the change.
-
-*Nothing pending.*
-
-## [0.11.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.0...create-nimbus-connector-v0.11.1) (2026-08-08)
-
-
-### Bug Fixes
-
-* correct seven shipped README claims, two quadratic regexes, and the Sonar backlog ([#71](https://github.com/nimbus-agent/create-nimbus-connector/issues/71)) ([d9bfe82](https://github.com/nimbus-agent/create-nimbus-connector/commit/d9bfe82e35d4299d45454f2924ac1dfcc073244b))
 
 ## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)
 
