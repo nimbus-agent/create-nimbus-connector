@@ -105,6 +105,77 @@ all — the hoist resolves it to a concrete value before the query line ever run
   a compile error for a `string` arg, or a literal `"?name=undefined"` sent on the wire for a
   wrapped one, since `String(undefined) === "undefined"`.
 
+## Conditional endpoints: `pathWhen`
+
+`path` renders one fixed template per tool, so it cannot express a tool that calls a *different
+endpoint* depending on whether an optional argument was supplied — as opposed to `query`, above,
+which only ever adds or omits a parameter on the same URL. A tool that needs that adds a
+`pathWhen` array alongside `path`:
+
+```jsonc
+{
+  "name": "zzcond_get",
+  "description": "Fetch a build, or the app when no build is named.",
+  "impl": "rest",
+  "path": "/builds/${arg.buildId|enc}",
+  "pathWhen": [{ "absent": "buildId", "path": "/apps/${arg.appId|enc}" }],
+  "args": {
+    "appId": { "type": "string", "min": 1 },
+    "buildId": { "type": "string", "min": 1, "optional": true }
+  }
+}
+```
+
+**`path` is the fallthrough.** Each `pathWhen` entry is a *guard*: `absent` names an argument,
+and when that argument is `undefined` the tool returns the request built from that entry's own
+`path` instead of the tool's `path`. Guards are tried **in the order they are written**, each one
+an `if (p.<absent> === undefined) { return …; }` ahead of the tool's own `return`, so the first
+guard whose argument is absent wins — `path` itself is reached only once every guard's argument
+turned out to be present. A spec with no `pathWhen` is unchanged in meaning and in emitted bytes.
+
+**Guard order matters for a second reason: it decides which arguments a guard may reference.**
+A guard's own path may interpolate any of the tool's arguments *except the one it tests* — reaching
+guard *N* already proves every earlier guard's argument is non-`undefined`, so guard *N* may
+safely reference any of THEM, even though they are themselves optional. This is what lets a
+two-guard ladder read:
+
+```jsonc
+"pathWhen": [
+  { "absent": "catalog", "path": "/catalogs" },
+  { "absent": "database", "path": "/c/${arg.catalog|enc}/databases" }
+]
+```
+
+the shape `athena_list` uses in the real corpus: the second guard interpolates `catalog`, which
+is optional and untested by that guard, but by the time that guard runs the first guard has
+already proven `catalog` present. **The rule is positional, not global** — it is evaluated guard
+by guard against what is provably true at that point in the ladder, not against the set of every
+argument any guard in the tool happens to test.
+
+**Rejected at parse time:**
+
+- `pathWhen` on a `"stub"` tool — a stub issues no request to select a path for.
+- `pathWhen` on a `"search"` tool — its path is the endpoint its rows come from.
+- `pathWhen` together with `query` — refused **in full**, not only for a guarded entry that also
+  has a `query` array: both decide the request line, no corpus connector needs both, and a rule
+  can be loosened later but never tightened.
+- `pathWhen` on a `"rest-kit"` connector — `makeRestToolRegistrar` takes one path expression per
+  tool and has no seam for a guard ladder (zero of the twelve corpus connectors that branch on an
+  optional argument use it). Use `"read-only-kit"` or `"hand-rolled"`.
+- a guard whose `absent` names an argument the tool does not declare.
+- a guard whose `absent` argument can never be `undefined` at the point the guard would read it
+  — the same predicate `query`'s `omitWhen` rule uses: not declared `"optional": true`, or
+  declaring a `"default"`, or type `"boolean"`. The guard would be dead code.
+- two guards naming the same `absent` argument — the second is unreachable, since the first
+  already returns whenever that argument is absent.
+- a guard whose own `path` interpolates the argument it tests (`{ "absent": "buildId", "path":
+  "/builds/${arg.buildId|enc}" }`) — it would render `"undefined"` into the URL. This check is
+  **positional, not global**: it rejects only a guard referencing *its own* tested argument, and
+  a *later* guard referencing an *earlier* guard's argument is explicitly allowed (see above) —
+  the naive global version of this rule rejects `athena_list`, the shape this feature exists to
+  reach.
+- an empty `pathWhen` array — omit the field entirely instead.
+
 ## Writes: `method`, `effect` and `body`
 
 ```jsonc

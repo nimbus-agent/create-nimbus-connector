@@ -62,8 +62,8 @@ const BIOME_BIN = join(
  *     `style: "hand-rolled"`, but `emitWiring` does not read `spec.style`; no `server.ts` is
  *     compiled by that case.
  *   - read-only-kit x monorepo `src/server.ts` (+ `src/search-filter.ts` where emitted) —
- *     `tsc --noEmit`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor,
- *     conditional query parameter.
+ *     `tsc --noEmit`, five cases: search-only, stub filter, bespoke `fieldsOf` extractor,
+ *     conditional query parameter, conditional-endpoint (`pathWhen`) guard ladder.
  *   - read-only-kit x standalone, whole package — a real `biome check src/` under the emitted
  *     biome.json. That is a LINT, not a typecheck: no `tsc` runs against a standalone
  *     `server.ts` anywhere in `bun test`.
@@ -265,18 +265,21 @@ export async function runReadOnlyMcpConnector(
 `;
 
 /**
- * A second, generically-typed stand-in for `shared/mcp-tool-kit.ts`, used ONLY by the
- * conditional-query-parameter compile below — NOT a replacement for MCP_TOOL_KIT_STANDIN
- * above, which every other describe block in this file keeps using unchanged.
+ * A second, generically-typed stand-in for `shared/mcp-tool-kit.ts`, used by the
+ * conditional-query-parameter compile below and the pathWhen guard-ladder compile that
+ * follows it — NOT a replacement for MCP_TOOL_KIT_STANDIN above, which every other describe
+ * block in this file keeps using unchanged.
  *
  * MCP_TOOL_KIT_STANDIN's `ZodToolRegistrar` deliberately types its handler's argument as
  * `never` ("loosely typed on purpose... not to reproduce every real overload" — see that
  * const's own comment) because no test that uses it ever reads a field off the handler
- * argument. This test is the first one that does: `p.limit`, `p.channelId`, `p.after`. A
- * `never`-typed `p` would fail every one of those with `TS2339`, which is not the defect
- * this test exists to catch — it exists to catch a wrong query/URL shape, not the stand-in's
- * own looseness. `T` is inferred from the emitted `z.object({...})` schema argument, exactly
- * as the real generated call site expects.
+ * argument. The query test below was the first one that does: `p.limit`, `p.channelId`,
+ * `p.after`. A `never`-typed `p` would fail every one of those with `TS2339` — confirmed by
+ * hand, since `never` absorbs everything else TypeScript permits *except* a property read
+ * (`p.foo` on a `never`-typed `p` is `TS2339`, unlike `p` typed `unknown`) — which is not the
+ * defect either test exists to catch; both exist to catch a wrong emitted shape, not the
+ * stand-in's own looseness. `T` is inferred from the emitted `z.object({...})` schema
+ * argument, exactly as the real generated call site expects.
  */
 const QUERY_TOOL_KIT_STANDIN = `import type { ZodObject, ZodRawShape, z } from "zod";
 export type ZodToolRegistrar = <T extends ZodRawShape>(
@@ -812,6 +815,111 @@ describe("a generated package with a conditional query parameter typechecks", ()
     expect(output).not.toContain("TS6133"); // declared but never read (unused import/local)
     expect(output).not.toContain("TS2304"); // cannot find name (the base const gate)
     expect(output).not.toContain("TS2345"); // argument not assignable
+    expect(output).toBe("");
+    expect(ok).toBe(true);
+  }, 120_000);
+});
+
+describe("a generated package with a pathWhen guard ladder typechecks", () => {
+  /**
+   * Closes the gap `docs/ROADMAP.md`'s *Known limitations* names under "An unguarded optional
+   * argument interpolated into a path emits a package that does not typecheck": that bullet's
+   * own text says "No gate in the merge gate catches it" and names this exact fix — "a
+   * read-only-kit x monorepo case in emitted-typecheck.test.ts — that path IS compiled". Before
+   * this test, `pathWhen`'s emitted `if` ladder (`tools-hand.ts`'s `renderTool`) was verified
+   * only by `diff:golden`'s byte comparison against real connectors, none of which use it yet,
+   * and by the fixture round trip, which cannot run until the deriver reads a ladder (Task 6).
+   * Neither proves the emitted TypeScript actually compiles.
+   *
+   * `fetchHelper.local` is called through a plain accessor path (`isHandStyle` routes
+   * `pathWhen` through `renderHandRolledTools` for BOTH `hand-rolled` and `read-only-kit`, per
+   * that function's own header), so `read-only-kit` is the style that lets this compile against
+   * local stand-ins the same way the query test above does — no `McpServer`/`StdioServerTransport`
+   * import to fake.
+   *
+   * The spec mirrors `fixtures/zzcond.spec.json`'s shape (one guard, `buildId` absent selects
+   * `/apps/${arg.appId|enc}`, the fallthrough `path` reads `buildId` itself) but declares
+   * `style: "read-only-kit"` where the fixture is `"hand-rolled"`, since only the former is
+   * compiled in this file.
+   */
+  const spec = parseSpec({
+    name: "zzcond",
+    displayName: "ZZ Conditional",
+    description: "Synthetic fixture exercising pathWhen.",
+    serviceLabel: "ZZCond",
+    style: "read-only-kit",
+    fetchHelper: {
+      local: "zzcondGet",
+      base: "https://api.zzcond.test",
+      inlineHeaders: { Accept: "application/json" },
+    },
+    tools: [
+      {
+        name: "zzcond_get",
+        description: "Fetch a build, or the app when no build is named.",
+        path: "/builds/${arg.buildId|enc}",
+        pathWhen: [{ absent: "buildId", path: "/apps/${arg.appId|enc}" }],
+        args: {
+          appId: { type: "string", min: 1 },
+          buildId: { type: "string", min: 1, optional: true },
+        },
+      },
+    ],
+  });
+
+  it("emits the guard's if statement ahead of the fallthrough return", () => {
+    const out = emitServer(spec, "monorepo").content;
+    expect(out).toContain("if (p.buildId === undefined) {");
+    expect(out).toContain("encodeURIComponent(p.appId)");
+    expect(out).toContain("encodeURIComponent(p.buildId)");
+  });
+
+  it("compiles clean under Nimbus's own compilerOptions", async () => {
+    const dir = tmp.make("cnc-pathwhen-tc-");
+    mkdirSync(join(dir, "shared"), { recursive: true });
+    mkdirSync(join(dir, "zzcond", "src"), { recursive: true });
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    writeFileSync(join(dir, "shared", "mcp-tool-kit.ts"), QUERY_TOOL_KIT_STANDIN, "utf8");
+    writeFileSync(
+      join(dir, "shared", "run-read-only-mcp-connector.ts"),
+      RUN_READ_ONLY_STANDIN,
+      "utf8",
+    );
+    // Same junction as the query compile above, and for the same reason: this spec's tool
+    // declares args, so its schema needs the real `zod` package to resolve.
+    symlinkSync(
+      join(REPO_ROOT, "node_modules", "zod"),
+      join(dir, "node_modules", "zod"),
+      "junction",
+    );
+
+    await initFormatter();
+    const srcFiles = generate(spec, { target: "monorepo" }).filter((f) => f.path[0] === "src");
+    expect(srcFiles.map((f) => f.path.join("/")).sort()).toEqual(["src/server.ts"]);
+    for (const f of formatAll(srcFiles)) {
+      writeFileSync(join(dir, "zzcond", ...f.path), f.content, "utf8");
+    }
+    const tsconfigPath = join(dir, "zzcond", "tsconfig.json");
+    // Same DOM-lib substitution as the other monorepo compiles above, and for the same
+    // reason: this tsconfig lives in a throwaway temp dir with no node_modules/@types/bun to
+    // resolve `types: ["bun"]` against.
+    writeFileSync(
+      tsconfigPath,
+      `${JSON.stringify(
+        {
+          compilerOptions: { ...NIMBUS_COMPILER_OPTIONS, types: [], lib: ["ESNext", "DOM"] },
+          include: ["src/**/*.ts"],
+        },
+        undefined,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const { ok, output } = run(["bunx", "tsc", "--noEmit", "-p", tsconfigPath], dir);
+    expect(output).not.toContain("TS6133"); // declared but never read (unused import/local)
+    expect(output).not.toContain("TS2345"); // argument not assignable (encodeURIComponent vs string | undefined)
+    expect(output).not.toContain("TS2339"); // property does not exist (a `never`-typed handler arg)
     expect(output).toBe("");
     expect(ok).toBe(true);
   }, 120_000);

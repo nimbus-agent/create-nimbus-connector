@@ -1,22 +1,23 @@
 {
   "name": "zzcond",
-  "title": "Zzcond",
-  "displayName": "ZZ Cond",
-  "description": "Throwaway fixture proving the pathWhen conditional-endpoint guard end to end.",
-  "serviceLabel": "ZZ Cond",
+  "displayName": "ZZ Conditional",
+  "description": "Synthetic fixture exercising pathWhen. Matches no real connector.",
+  "serviceLabel": "ZZCond",
   "style": "hand-rolled",
-  "network": ["api.zzcond.test"],
-  "syncInterval": 300,
-  "minNimbusVersion": "0.2.0",
-  "env": [{ "vars": ["ZZCOND_TOKEN"], "local": "headers", "bindings": ["t"], "auth": "bearer" }],
-  "fetchHelper": { "local": "zzGet", "base": "https://api.zzcond.test", "headers": "headers" },
+  "syncInterval": 3600,
+  "env": [{ "vars": ["ZZCOND_TOKEN"], "local": "authHeaders", "bindings": ["token"], "auth": "bearer" }],
+  "fetchHelper": { "local": "zzcondGet", "base": "https://api.zzcond.test", "headers": "authHeaders" },
   "tools": [
     {
-      "name": "zzcond_item_get",
-      "description": "Get one item, or the default item when no id is given.",
-      "args": { "itemId": { "type": "string", "min": 1, "optional": true } },
-      "path": "/v1/items/${arg.itemId|enc}",
-      "pathWhen": [{ "absent": "itemId", "path": "/v1/items/default" }]
+      "name": "zzcond_get",
+      "description": "Fetch a build, or the app when no build is named.",
+      "impl": "rest",
+      "path": "/builds/${arg.buildId|enc}",
+      "pathWhen": [{ "absent": "buildId", "path": "/apps/${arg.appId|enc}" }],
+      "args": {
+        "appId": { "type": "string", "min": 1 },
+        "buildId": { "type": "string", "min": 1, "optional": true }
+      }
     }
   ]
 }
