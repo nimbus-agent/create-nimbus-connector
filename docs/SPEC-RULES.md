@@ -152,6 +152,11 @@ already proven `catalog` present. **The rule is positional, not global** — it 
 by guard against what is provably true at that point in the ladder, not against the set of every
 argument any guard in the tool happens to test.
 
+**A guard narrows only the argument it names.** Any *other* optional argument interpolated into
+any path in the tool — the fallthrough `path`, or another guard's own path — must itself be
+guarded, or the generated package will not compile; see [ROADMAP.md's Known
+limitations](./ROADMAP.md#known-limitations) for the uncaught defect this leaves when it isn't.
+
 **Rejected at parse time:**
 
 - `pathWhen` on a `"stub"` tool — a stub issues no request to select a path for.
@@ -169,7 +174,7 @@ argument any guard in the tool happens to test.
 - two guards naming the same `absent` argument — the second is unreachable, since the first
   already returns whenever that argument is absent.
 - a guard whose own `path` interpolates the argument it tests (`{ "absent": "buildId", "path":
-  "/builds/${arg.buildId|enc}" }`) — it would render `"undefined"` into the URL. This check is
+  "/builds/${arg.buildId}" }`) — it would render `"undefined"` into the URL. This check is
   **positional, not global**: it rejects only a guard referencing *its own* tested argument, and
   a *later* guard referencing an *earlier* guard's argument is explicitly allowed (see above) —
   the naive global version of this rule rejects `athena_list`, the shape this feature exists to
