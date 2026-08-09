@@ -1,5 +1,11 @@
 import type { ConnectorSpec, EnvSpec, PathSegment } from "./spec.ts";
-import { needsExtractor, parsePathTemplate, registrarName, titleIdentifier } from "./spec.ts";
+import {
+  envRefNames,
+  needsExtractor,
+  parsePathTemplate,
+  registrarName,
+  titleIdentifier,
+} from "./spec.ts";
 
 /** Identifiers the emitter itself introduces. A spec may never reuse one. */
 export const RESERVED_IDENTIFIERS: readonly string[] = [
@@ -358,6 +364,54 @@ export function validateSpec(spec: ConnectorSpec): void {
 
   validateTools(seen, spec);
   validateSingleExtractor(spec);
+  validateFetchHelperEnvRefs(spec);
+}
+
+/**
+ * A `${env.X}` in the fetch helper must name an env accessor the spec declares.
+ *
+ * The gap this closes: `resolveEnvRefs` (src/emit/server/fetch-helper.ts) rewrites `${env.X}` to
+ * `${X()}` unconditionally — it resolves the SHAPE and never asks whether the name exists. A base
+ * of `https://${env.nosuch}` therefore emits a call to an undeclared function, so the generated
+ * package fails its own `tsc` with TS2304 and the spec author learns about it from a compiler
+ * error in emitted code rather than from the validator. `validateEnvSegment` has asked exactly
+ * this question of tool *paths* since Stage A; the fetch helper was simply never asked.
+ *
+ * **Here rather than in `FetchHelperSchema`, because the question spans two fields.** A zod
+ * refinement on `fetchHelper` cannot see `spec.env`, which is why this is the validator's job and
+ * not the schema's — the same division `validateEnvSegment` and the identifier-collision rules
+ * already sit on.
+ *
+ * **Only the reference's TARGET is checked here.** Whether a value may mix text with a reference
+ * at all is `FetchHelperSchema`'s `superRefine` (see `isEnvRefHeaderValue`), which rejects
+ * `"Token ${env.org}"` at parse time — earlier than this, with a better message, and using the
+ * emitter's own predicate. Restating that check here would produce two rejections for one mistake
+ * and put a third copy of the pattern in the tree; `envRefNames` is imported for the same reason.
+ *
+ * rest-kit is exempt because it cannot reach here with a reference at all: `ConnectorSpecSchema`
+ * already refuses `${env.` anywhere in a rest-kit `fetchHelper`, the registrar resolving the
+ * single credential itself. The guard is a cheap statement of that, not a second rule.
+ */
+function validateFetchHelperEnvRefs(spec: ConnectorSpec): void {
+  if (spec.style === "rest-kit") return;
+
+  const declared = new Set(spec.env.map((e) => e.local));
+  const check = (where: string, template: string): void => {
+    for (const name of envRefNames(template)) {
+      if (declared.has(name)) continue;
+      const known = spec.env.map((e) => `"${e.local}"`).join(", ");
+      throw new Error(
+        `${where} references "\${env.${name}}", but no env entry declares local "${name}"` +
+          `${known === "" ? " (the spec declares no env entries)" : ` — declared: ${known}`}. ` +
+          "The emitter rewrites it to a call, so the generated connector would not compile.",
+      );
+    }
+  };
+
+  check("The fetch helper's base", spec.fetchHelper.base);
+  for (const [header, value] of Object.entries(spec.fetchHelper.inlineHeaders ?? {})) {
+    check(`Inline header ${JSON.stringify(header)}`, value);
+  }
 }
 
 type ToolLike = ConnectorSpec["tools"][number];
@@ -456,10 +510,6 @@ function validateSingleExtractor(spec: ConnectorSpec): void {
         "fields (the fieldsFromKeys branch), or split it into its own connector.",
     );
   }
-  // Fetch-helper references are spec-level placeholders rather than tool-path segments, so
-  // validate them after the tool and extractor checks. This preserves the existing
-  // identifier-collision and extractor errors when a spec has more than one invalid field.
-  validateFetchHelperEnvRefs(spec);
 }
 
 /** A `${arg.X}` reference must name an arg the tool declares, with a mode that fits its type. */
@@ -511,42 +561,5 @@ function validateToolPath(spec: ConnectorSpec, t: ToolLike, path: string): void 
   for (const seg of parsePathTemplate(path)) {
     if (seg.kind === "arg") validateArgSegment(t, seg);
     if (seg.kind === "env") validateEnvSegment(spec, t, seg);
-  }
-}
-
-/**
- * A hand-rolled fetch helper may reference declared env accessors in its base and inline header
- * values. Inline header values are rendered either as literals or as one whole-value accessor
- * call, so an env reference embedded in a larger value would be emitted literally and must be
- * rejected instead of silently changing the request.
- */
-function validateFetchHelperEnvRefs(spec: ConnectorSpec): void {
-  if (spec.style === "rest-kit") return;
-
-  const envLocals = new Set(spec.env.map((e) => e.local));
-  const references = /\$\{env\.(\w+)\}/g;
-
-  const validateValue = (field: string, value: string, wholeReferenceOnly: boolean): void => {
-    for (const match of value.matchAll(references)) {
-      const name = match[1];
-      if (name === undefined) continue;
-      if (!envLocals.has(name)) {
-        throw new Error(
-          `fetchHelper.${field} references "\${env.${name}}", but no env entry has ` +
-            `local "${name}".`,
-        );
-      }
-      if (wholeReferenceOnly && value !== match[0]) {
-        throw new Error(
-          `fetchHelper.${field} references "\${env.${name}}" inside a larger value; ` +
-            "inlineHeaders values must be exactly one env reference or a literal.",
-        );
-      }
-    }
-  };
-
-  validateValue("base", spec.fetchHelper.base, false);
-  for (const [name, value] of Object.entries(spec.fetchHelper.inlineHeaders ?? {})) {
-    validateValue(`inlineHeaders["${name}"]`, value, true);
   }
 }

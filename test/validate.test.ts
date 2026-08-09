@@ -98,6 +98,11 @@ describe("validateSpec", () => {
       title: "Foo",
       style: "hand-rolled",
       env: [{ vars: ["A"], local: "registerFooTool", bindings: ["a"], required: true }],
+      // A base of its own, because this case renames the ONLY env local away from `org` and
+      // `specWith`'s default base is "${env.org}". Before the fetch-helper reference check
+      // existed, that mismatch was accepted and this spec quietly described a connector whose
+      // generated source called an undeclared `org()`. The subject here is the registrar-name
+      // collision, so the base is made irrelevant to it rather than the new rule loosened.
       fetchHelper: { local: "sentryGet", base: "https://example.test", headers: "headers" },
     });
     expect(() => validateSpec(s)).not.toThrow();
@@ -157,11 +162,14 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).not.toThrow();
   });
 
+  // Issue #39: validateEnvSegment has asked this of tool paths since Stage A, and the fetch
+  // helper was never asked. `resolveEnvRefs` rewrites `${env.X}` to `${X()}` without checking
+  // that X exists, so an unresolved reference reached the generated package and failed its `tsc`.
   it("rejects a fetchHelper.base referencing an env local the spec never declares", () => {
     const s = specWith({
       fetchHelper: { local: "sentryGet", base: "https://${env.nosuch}", headers: "headers" },
     });
-    expect(() => validateSpec(s)).toThrow(/fetchHelper\.base.*nosuch/s);
+    expect(() => validateSpec(s)).toThrow(/base references "\$\{env\.nosuch\}"/);
   });
 
   it("rejects an inline header referencing an env local the spec never declares", () => {
@@ -172,29 +180,44 @@ describe("validateSpec", () => {
         inlineHeaders: { "X-Api-Key": "${env.nosuch}" },
       },
     });
-    expect(() => validateSpec(s)).toThrow(/inlineHeaders.*nosuch/s);
+    expect(() => validateSpec(s)).toThrow(/Inline header "X-Api-Key" references/);
   });
 
-  it("rejects an inline header with an embedded env reference", () => {
+  it("names the declared locals, so the message says what could have been meant", () => {
+    // The failure mode this guards is a typo, where the fix is almost always one of the names
+    // already in the spec. A message that only repeats the bad name makes the author go looking.
     const s = specWith({
-      fetchHelper: {
-        local: "sentryGet",
-        base: "https://example.test",
-        inlineHeaders: { Authorization: "Token ${env.org}" },
-      },
+      fetchHelper: { local: "sentryGet", base: "https://${env.ogr}", headers: "headers" },
     });
-    expect(() => validateSpec(s)).toThrow(/inlineHeaders.*larger value/s);
+    expect(() => validateSpec(s)).toThrow(/declared: "org"/);
   });
 
-  it("accepts declared env references in fetchHelper.base and whole-value inline headers", () => {
+  it("accepts declared env references in the base and in a whole-value inline header", () => {
     const s = specWith({
       fetchHelper: {
         local: "sentryGet",
-        base: "https://${env.org}",
+        base: "https://${env.org}/api",
         inlineHeaders: { "X-Org": "${env.org}", Accept: "application/json" },
       },
     });
     expect(() => validateSpec(s)).not.toThrow();
+  });
+
+  it("leaves the mixed-value rule to parseSpec rather than restating it", () => {
+    // The layering, pinned: a value that mixes text with a reference is refused by
+    // FetchHelperSchema's superRefine (via isEnvRefHeaderValue, the emitter's own predicate),
+    // one layer BEFORE validateSpec runs. This test exists so that a future reader who adds a
+    // second check here sees it already has an owner — and so that removing the schema rule
+    // fails a test that names it, rather than silently moving the rejection.
+    expect(() =>
+      specWith({
+        fetchHelper: {
+          local: "sentryGet",
+          base: "https://example.test",
+          inlineHeaders: { Authorization: "Token ${env.org}" },
+        },
+      }),
+    ).toThrow(/mixes text with an interpolation/);
   });
 
   it("accepts a rest-kit tool path whose arg references resolve and has no env reference", () => {

@@ -333,6 +333,27 @@ const RAW_SPLICE_TERMINATORS = [
 const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
 
 /**
+ * The env-accessor names a base or inline-header template references, in occurrence order.
+ *
+ * Exported so `validateSpec` can ask *which* accessors a template names without restating the
+ * pattern — the capturing twin of `RESOLVED_ENV_REF` above, built from the same source so the
+ * two cannot disagree about what counts as a reference. `isEnvRefHeaderValue`'s docstring gives
+ * the reason at length: a second copy of this pattern is how the mixed-header bug stayed open,
+ * and there are already two copies in the tree (here and `resolveEnvRefs`, pinned against each
+ * other by "accepts %j exactly when the emitter resolves every interpolation in it" in
+ * test/spec.test.ts). A third, in the validator, would be the same mistake a layer down.
+ *
+ * `RESOLVED_ENV_REF` decides whether a `${` is a live reference; this decides what it points at.
+ * Nothing here judges whether the name resolves — `validateSpec` owns that, because it is the
+ * only layer that can see `spec.env` and the fetch helper at once.
+ */
+export function envRefNames(tpl: string): string[] {
+  return [...tpl.matchAll(new RegExp(RESOLVED_ENV_REF.source.replace("\\w+", "(\\w+)"), "g"))].map(
+    ([, name]) => name!,
+  );
+}
+
+/**
  * Whether an inline header VALUE is the one shape `headerOption` (src/emit/server/fetch-helper.ts)
  * resolves: a reference and nothing else.
  *
