@@ -108,6 +108,41 @@ describe("applySecondFile", () => {
     });
   });
 
+  it("refuses an async function declaration under the right name", () => {
+    // `exportsName`'s OTHER arm — `functionName`, not `constDecl` — and the only two tests that
+    // reached it before both took it false, so the arm was asserted by its docstring and by
+    // nothing else. (Line coverage cannot see this: the `||` is one line.) `namedRegistrarBody`
+    // rejects this on `isAsyncFunction`, so the declaration exists and the SIGNATURE is what
+    // failed — which is `registrar-not-a-declaration`, not `no-matching-export`. Getting that
+    // backwards would send a reader hunting for an export that is on line 2.
+    const asyncDecl = [
+      'import type { ZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+      "export async function registerAcmeTools(reg: ZodToolRegistrar) {}",
+      "",
+    ].join("\n");
+    const { frame, claims } = frameOf(SHIM);
+    expect(applySecondFile(frame, claims, asyncDecl)).toEqual({
+      refused: "registrar-not-a-declaration",
+    });
+  });
+
+  it("refuses a function declaration whose registrar parameter is typed something else", () => {
+    // The second way to reach the same arm, and the one a real connector is likelier to write:
+    // the declaration is right, the name is right, and `namedRegistrarBody` refuses only because
+    // the parameter is not typed `ZodToolRegistrar`. Same label, different signature fault —
+    // asserted separately so a matcher that started accepting arbitrary parameter types would
+    // fail here rather than quietly widening what the deriver claims.
+    const wrongParam = [
+      "type Registrar = (name: string) => void;",
+      "export function registerAcmeTools(reg: Registrar) {}",
+      "",
+    ].join("\n");
+    const { frame, claims } = frameOf(SHIM);
+    expect(applySecondFile(frame, claims, wrongParam)).toEqual({
+      refused: "registrar-not-a-declaration",
+    });
+  });
+
   it("refuses when tools.ts exports no declaration under the imported name", () => {
     const other = "export function registerSomethingElseTools(reg: ZodToolRegistrar) {}\n";
     const { frame, claims } = frameOf(SHIM);
