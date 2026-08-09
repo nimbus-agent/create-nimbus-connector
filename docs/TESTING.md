@@ -326,7 +326,7 @@ and `standalone-acceptance` / `runtime:acceptance`. All real, none ground truth.
 
 ### `read-only-kit` + `client-credentials` has no fixture
 
-The [README](../README.md)'s *OAuth: `client-credentials`* section documents that
+[SPEC-RULES § OAuth](./SPEC-RULES.md#oauth-client-credentials) documents that
 `read-only-kit` accepts a `client-credentials` env entry, emitting the module-scope token
 exchange above the `runReadOnlyMcpConnector` call. No fixture declares that pair —
 `zzwrite` is `hand-rolled` + `client-credentials`, and every `read-only-kit` fixture uses

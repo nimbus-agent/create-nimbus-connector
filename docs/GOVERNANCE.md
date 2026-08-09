@@ -45,7 +45,7 @@ State in the PR what you counted and how, what you decided, and what you decided
 Then put the durable half where it will still be read: a gap the generator cannot close goes
 under [Known limitations](./ROADMAP.md#known-limitations), a measured-and-rejected proposal
 under [Considered and declined](./ROADMAP.md#considered-and-declined), and a measurement that
-justifies a default goes in the README beside the field it justifies.
+justifies a default goes in [SPEC-RULES.md](./SPEC-RULES.md) beside the field it justifies.
 
 Earlier stages produced long standalone design documents. **All of them have been retired** into
 the pages above — reasoning that lives only in a dated document nobody opens again is reasoning

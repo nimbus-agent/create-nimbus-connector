@@ -44,6 +44,11 @@ function linkTargets(markdown: string, file: string): string[] {
     .map(([, , fragment]) => fragment!);
 }
 
+/** Every `](target)` a markdown source links to, with any `#fragment` stripped. */
+function linkHrefs(markdown: string): string[] {
+  return [...markdown.matchAll(/]\(([^)\s]+)\)/g)].map(([, href]) => href!.split("#")[0]!);
+}
+
 function headingAnchors(markdown: string): Set<string> {
   return new Set(
     [...markdown.matchAll(/^#{1,6} (.+)$/gm)].map(([, heading]) => anchor(heading!.trim())),
@@ -65,14 +70,15 @@ describe("the checked-in spec reference", () => {
   });
 
   it("documents the fields the prose reference does not name", () => {
-    // The gap this page exists to close: README called itself *the* reference while these seven
-    // fields — each one with emitted behaviour of its own — were named in no prose document in
-    // this repository at all. Measured with grep over README.md and every page under docs/ at the
-    // commit this landed on; they are still absent from README, which now points here instead.
+    // The gap this page exists to close: the prose reference called itself *the* reference while
+    // these seven fields — each one with emitted behaviour of its own — were named in no prose
+    // document in this repository at all. Measured with grep over README.md and every page under
+    // docs/ at the commit this landed on; re-measured when the prose moved to SPEC-RULES.md, where
+    // all seven are still absent, and both pages point here instead.
     //
     // Checked as a table ROW, not as a mention, since a mention is exactly what they had nowhere.
-    // Deliberately NOT asserted absent from README: prose about one of them there would be an
-    // improvement, and a test that failed on it would be pinning the gap rather than the fix.
+    // Deliberately NOT asserted absent from the prose pages: prose about one of them there would
+    // be an improvement, and a test that failed on it would be pinning the gap rather than the fix.
     for (const field of [
       "handlerStyle",
       "baseConst",
@@ -109,20 +115,34 @@ describe("the checked-in spec reference", () => {
     expect(missing).toEqual([]);
   });
 
-  it("links into README.md by headings README.md still has", () => {
-    // The failure this catches is a renamed README heading, which nothing else in the suite sees.
-    const anchors = headingAnchors(read("README.md"));
-    const missing = linkTargets(page, "../README.md").filter((a) => !anchors.has(a));
-    expect(missing).toEqual([]);
+  it("links into SPEC-RULES.md by headings SPEC-RULES.md still has", () => {
+    // The failure this catches is a renamed prose heading, which nothing else in the suite sees.
+    // The targets moved out of README.md when the prose reference became a page of its own, and
+    // the check had to move with them: left pointing at README.md it would have gone on passing
+    // against an empty link set forever, which is the vacuous-gate shape this repo keeps removing.
+    const targets = linkTargets(page, "./SPEC-RULES.md");
+    expect(targets.length).toBeGreaterThan(0);
+
+    const anchors = headingAnchors(read("docs/SPEC-RULES.md"));
+    expect(targets.filter((a) => !anchors.has(a))).toEqual([]);
   });
 
   it("is regenerable by a named script, and indexed where a reader would look", () => {
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     expect(pkg.scripts["build:spec-doc"]).toBe("bun scripts/build-spec-doc.ts");
-    expect(read("docs/README.md")).toContain("SPEC.md");
-    // README's "the reference" sentence is what this page exists to make true, so it has to point
-    // here. Asserted as the link, since a mention that does not resolve is what a reader follows.
-    expect(read("README.md")).toContain("docs/SPEC.md");
+    // Both halves of the reference have to be indexed, not just this one. The prose half is a
+    // separate page now, and a split whose second half nothing links to is a page nobody finds.
+    //
+    // Asserted as a resolved markdown link TARGET, not as a substring of the file: prose naming
+    // `docs/SPEC-RULES.md` in a sentence satisfies a `toContain` while linking nowhere, and a
+    // reader follows links rather than mentions. `linkHrefs` drops any `#fragment`, so a deep link
+    // into a section still counts as indexing the page.
+    const rootLinks = linkHrefs(read("README.md"));
+    const docsLinks = linkHrefs(read("docs/README.md"));
+    for (const doc of ["SPEC.md", "SPEC-RULES.md"]) {
+      expect(docsLinks).toContain(`./${doc}`);
+      expect(rootLinks).toContain(`./docs/${doc}`);
+    }
   });
 
   it("has a row per field and nothing left blank", () => {

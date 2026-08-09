@@ -132,6 +132,23 @@ has a named cause. The *raising* half is not: three bullets below are still `[ ]
 headline count did not move. See [The measured ceiling](#the-measured-ceiling) for the number,
 its denominator and which of those causes are permanent.
 
+**An open bullet here is also a limitation today, and appears under
+[Known limitations](#known-limitations) as one.** That pairing is deliberate, not a duplicate: the
+two sections answer different questions — *what is planned* and *what an author will hit this
+afternoon* — and deleting either entry leaves a reader who checked the wrong section with the wrong
+answer. What is forbidden is **describing the construct twice**, because two descriptions drift and
+the shorter one is trusted without being checked. So each construct is described in one place and
+linked from the other: this stage owns the three still-open constructs and `query`'s closed
+history, while *Known limitations* owns what `query` still does not reach, and the `[x]` bullet
+points there rather than restating it. Which section owns a given construct is settled by where the
+measurement lives, not by which is more prominent.
+
+**A limitation with no bullet here is one no bullet would help** — a deliberate divergence, a rule
+chosen over a spec field, or a gap this repository cannot close alone. That is a statement about
+the individual entry and not about its category: `frame:tools-in-second-file` has a bullet below
+and `frame:no-registrar` does not, though both are frame gaps and *The measured ceiling* groups
+them on one row.
+
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
       of always emitting a throwing stub. Measured against the checkout at `f4e9d93d`, of the
@@ -178,9 +195,10 @@ its denominator and which of those causes are permanent.
       `frame:` prefix names the ceiling, not the stage that detected it.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
-      sent only when an optional argument is present or non-empty. See the README for the
-      field and its rejections, and [Known limitations](#known-limitations) for what it still
-      doesn't reach.
+      sent only when an optional argument is present or non-empty. See
+      [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query)
+      for the field and its rejections, and [Known limitations](#known-limitations) for what it
+      still doesn't reach.
 - [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
@@ -473,6 +491,14 @@ cost of closing each is named; none is proposed.**
 
 **Constructs outside the spec language.**
 
+Every entry here says what the generator cannot express **today**, which is not the same as
+saying it never will. Three of them are also open [Stage E](#stage-e--the-corpus-tail-) tasks, and
+those three link to the bullet that carries the measurement rather than restating a shorter version
+of it — a construct described in two places drifts, and the shorter description is the one a reader
+trusts. The rest carry their reason in place, because for those the reason *is* the whole entry:
+a deliberate divergence, a rule chosen over a spec field, or a gap this repository cannot close
+alone.
+
 - **Conditional query parameters, the remaining gaps.** The construct itself — `query` plus
   `omitWhen` — now exists; the gaps are narrower now. An **inlined default**: real connectors
   write `p.pageSize ?? 50` at the call site, but a `default`-bearing arg is always hoisted to a
@@ -516,10 +542,18 @@ cost of closing each is named; none is proposed.**
   "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
   and not fixed here.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
-  optional arg is present, or mapping a `z.enum` through a lookup table.
-- **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
-  source file.
-- **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+  optional arg is present, or mapping a `z.enum` through a lookup table. **Open Stage E work**,
+  not a permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector
+  that needs it.
+- **Multi-file connectors.** The generator emits one source file; some connectors split their
+  tools into `src/tools.ts`. **Open Stage E work**, and the largest of the three: the
+  [Stage E bullet](#stage-e--the-corpus-tail-) carries the count, why `bun run reach` labels these
+  `frame:tools-in-second-file` rather than as import blockers, and which stage of the deriver
+  applies the label. Closing it is a spec-language gap *and* an emitter change, since the emitter
+  cannot today write the file a recognizer would be reading.
+- **CLI-backed connectors.** A handful shell out rather than calling `fetch`. **Open Stage E
+  work**; the [Stage E bullet](#stage-e--the-corpus-tail-) names them, and the two different shapes
+  they split into, only one of which surfaces as a bucket of its own.
 - **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
   `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
   Reported as `frame:no-registrar`.
@@ -656,7 +690,7 @@ this side.
   why: no corpus connector declares `<local>Send` at all, so there is nothing to transcribe a
   fixture from.
 - **`read-only-kit` + `client-credentials` is documented and has no fixture.** The
-  [README](../README.md)'s *OAuth: `client-credentials`* section documents the pairing; every
+  [SPEC-RULES § OAuth](./SPEC-RULES.md#oauth-client-credentials) section documents the pairing; every
   `read-only-kit` fixture uses `bearer`, `basic` or plain headers, and the one fixture declaring
   `client-credentials` is `hand-rolled`. The single check on the combination is the standalone
   KIT-import ordering case in `test/emit/emitted-typecheck.test.ts`, and that case is a
@@ -752,8 +786,9 @@ human edits**, and the `TODO:` markers are how it says so.
   direction this repository normally removes, kept because the alternative is not publishing a
   schema at all. It is a property of the format rather than unfinished work: completion and
   structural checking are what it buys, and `bun src/cli.ts --spec <path> --dry-run` is what says a
-  spec is actually accepted. The README states the same limit beside the editor setup, where
-  somebody wiring it up will meet it.
+  spec is actually accepted.
+  [SPEC-RULES § Editor support](./SPEC-RULES.md#editor-support-the-published-json-schema-and-what-it-cannot-check)
+  states the same limit beside the editor setup, where somebody wiring it up will meet it.
 
 ## Considered and declined
 
@@ -812,7 +847,8 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   legitimate 2000 would. Warning on response size would be defensible; warning on `maxLimit`
   would train authors to lower a number that is not the problem.
 - **Making the URL/body treatment of an unset optional boolean consistent.** Both halves are
-  right for their medium and one is byte-locked by the corpus. See the README.
+  right for their medium and one is byte-locked by the corpus. See
+  [SPEC-RULES § Writes](./SPEC-RULES.md#writes-method-effect-and-body).
 - **Generating a working Gateway `sync()`.** The shape it would assume fits 6 of the 98 real
   `*-sync.ts` files, and producing it would mean reproducing AGPL source nearly verbatim in an
   MIT repo. (The 6 is a re-measurement: this said 2, which was the two files the shape was

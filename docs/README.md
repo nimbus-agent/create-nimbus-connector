@@ -9,7 +9,7 @@ package byte-identical to a hand-written one.
 | --- | --- |
 | Generate a connector | [USAGE.md](./USAGE.md) |
 | Look up a spec field | [SPEC.md](./SPEC.md) — every field, generated from the schema |
-| Understand how the fields work together | the [README](../README.md) — the rules that reject a spec |
+| Understand how the fields work together | [SPEC-RULES.md](./SPEC-RULES.md) — the same language in prose, and the rules that reject a spec |
 | Understand how it is built | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Know what a green check actually proves | [TESTING.md](./TESTING.md) |
 | Know where it is going | [ROADMAP.md](./ROADMAP.md) |
@@ -53,7 +53,7 @@ disagree, the code is authoritative.
   nothing** → [TESTING.md](./TESTING.md)
 - **The deriver's vocabulary — tiers, blockers, the totality rule, case 1 vs case 2**
   → [GLOSSARY.md § Reach and derivation](./GLOSSARY.md#reach-and-derivation)
-- **Corpus measurements behind a default** → the [README](../README.md), next to the field they justify
+- **Corpus measurements behind a default** → [SPEC-RULES.md](./SPEC-RULES.md), next to the field they justify
 - **The traps that bite an agent working here** → [CLAUDE.md](../CLAUDE.md)
 
 Three arguments were folded into **source comments** rather than a page, because each is a rule

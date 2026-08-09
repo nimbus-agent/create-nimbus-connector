@@ -355,7 +355,7 @@ const GLOSSES: Readonly<Record<string, string>> = {
   serviceLabel:
     "The service's name as two emitted positions read it: the error message for a non-2xx response, ``throw new Error(`<serviceLabel> ${status}: …`)``, and a block comment in the Gateway wiring.",
   style:
-    "How the connector registers its tools, and the field with the widest blast radius in the language. [README § Styles](../README.md#styles-rest-kit-hand-rolled-read-only-kit).",
+    "How the connector registers its tools, and the field with the widest blast radius in the language. [SPEC-RULES § Styles](./SPEC-RULES.md#styles-rest-kit-hand-rolled-read-only-kit).",
   handlerStyle:
     "How a REST tool's handler is written: `concise` is an expression-bodied arrow, `block` a statement body with an explicit `return`. A stub or search handler always has a block body.",
   argsSchemaStyle:
@@ -424,7 +424,7 @@ const GLOSSES: Readonly<Record<string, string>> = {
   "tools[].path":
     "The request path, a template over `${env.X}` and `${arg.X}` with an optional `|raw`, `|enc`, `|num` or `|bool` mode.",
   "tools[].query":
-    "Query-string parameters built beside `path`, each emitted as a `searchParams.set` call — the only way to express a parameter that is sent conditionally. [README § Conditional query parameters](../README.md#conditional-query-parameters-query).",
+    "Query-string parameters built beside `path`, each emitted as a `searchParams.set` call — the only way to express a parameter that is sent conditionally. [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query).",
   "tools[].impl":
     'What the tool does: a REST request, a handler that throws `"<tool> not implemented"`, or a substring search over one endpoint\'s rows. `get` is the Stage A spelling of `rest`, normalised at parse time.',
   "tools[].method": "The HTTP verb, and nothing more.",
@@ -436,7 +436,7 @@ const GLOSSES: Readonly<Record<string, string>> = {
     "The property a search tool plucks from the response envelope. Omitted means the response is itself the array.",
   "tools[].maxLimit": "A search tool's per-connector result cap.",
   "tools[].filter":
-    "The search filter emitted into `src/search-filter.ts`. [README § Search tools](../README.md#search-tools-impl-search-rows-maxlimit-and-filter).",
+    "The search filter emitted into `src/search-filter.ts`. [SPEC-RULES § Search tools](./SPEC-RULES.md#search-tools-impl-search-rows-maxlimit-and-filter).",
 
   // tools[].args.<name>
   "tools[].args.<name>.type": "The argument's type.",
@@ -531,7 +531,8 @@ const DOC_LIMITATION = [
   "  rules, which are a second pass, after `parseSpec` has returned.",
   "- [`test/schema.test.ts`](../test/schema.test.ts) — concrete specs that validate against the",
   "  schema and are then refused by the generator, pinning the gap rather than describing it.",
-  "- The [README](../README.md) — the same rules in prose, grouped by the feature they belong to.",
+  "- [`docs/SPEC-RULES.md`](./SPEC-RULES.md) — the same rules in prose, grouped by the feature they",
+  "  belong to.",
   "",
   "`bun src/cli.ts --spec <path> --dry-run` is what tells you a spec is actually accepted.",
 ].join("\n");
@@ -550,7 +551,7 @@ const INTRO = [
   "`scripts/_lib/build-spec-doc.ts`, not this file.",
   "",
   "This is the index of what exists. How the fields work together — writes, search tools, the three",
-  "styles, the OAuth exchange, the reserved identifiers — is the [README](../README.md), and",
+  "styles, the OAuth exchange, the reserved identifiers — is [SPEC-RULES.md](./SPEC-RULES.md), and",
   "[USAGE.md](./USAGE.md) walks through writing a spec from scratch.",
   "",
   "## How to read a table",

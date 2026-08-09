@@ -23,12 +23,20 @@
  * test/coverage-gate.test.ts gets by reading the workflow *directory* rather than naming `ci.yml`.
  * Here it comes from `presentsAGateList`: a document that names every gate in either half of
  * `GATES` is a gate list, whoever wrote it and whenever it arrived, and the enumeration sweeps
- * every tracked Markdown file and every tracked YAML comment block in the repository. Measured on
- * 2026-08-07 over the 38 such files `trackedProseFiles` returns (24 Markdown, 14 YAML), exactly
- * the eight in `CANONICAL` qualify and the next closest miss is `docs/ROADMAP.md`, which names
- * five gates scattered across 892 lines and no complete half. What this does **not** catch is a
- * new document listing a partial set — five of eight, say — which is a real residual hole and the
- * reason the halves are the threshold rather than a count.
+ * every tracked Markdown file and every tracked YAML comment block in the repository. Re-measured
+ * 2026-08-09: exactly the eight in `CANONICAL` qualify, and the next closest miss is
+ * `docs/ROADMAP.md`, which names five gates and no complete half. What this does **not** catch is
+ * a new document listing a partial set — five of eight, say — which is a real residual hole and
+ * the reason the halves are the threshold rather than a count.
+ *
+ * Both halves of that measurement are re-derived on every run rather than trusted from here: the
+ * `CANONICAL` half is asserted by *every document presenting a gate list is declared* below, so it
+ * cannot drift silently. **The counts of how many files were swept are deliberately not written
+ * down** — an earlier revision of this comment recorded "38 such files (24 Markdown, 14 YAML)" and
+ * "892 lines", and both were wrong one pull request later, because adding any Markdown file to the
+ * repository moves them. Neither number carried the argument; the qualifying set and the closest
+ * miss's gate count are the argument. A number that rots on an unrelated change is the defect this
+ * file exists to catch, one level up.
  *
  * **A subset is expressed, not accommodated.** Two of the eight legitimately describe only the
  * gates that need the monorepo: `docs/RELEASING.md`'s *Before you merge a release PR*, and
