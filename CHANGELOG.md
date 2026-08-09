@@ -26,6 +26,31 @@ is written next to the step.
 
 * **validate:** reject a fetch-helper env ref that names no declared local ([#78](https://github.com/nimbus-agent/create-nimbus-connector/issues/78)) ([310701b](https://github.com/nimbus-agent/create-nimbus-connector/commit/310701b9eb760e6c418a3a4e90a21da04e4e71c8))
 
+### A spec that parsed on 0.11.2 can be refused on 0.11.3
+
+Hand-written, and filed after the fact — the note should have been on the release PR and was
+not. Recorded here rather than dropped, because the subject line above says what was fixed and
+not that the fix **narrows what the CLI accepts**, which is the half an existing user needs.
+
+`validateSpec` now rejects a `${env.X}` in `fetchHelper.base` or in `fetchHelper.inlineHeaders`
+when `X` names no `env[].local` the spec declares:
+
+```
+create-nimbus-connector: The fetch helper's base references "${env.acmeHost}", but no env entry
+declares local "acmeHost" — declared: "authHeaders". The emitter rewrites it to a call, so the
+generated connector would not compile.
+```
+
+**Nothing that worked stops working.** `resolveEnvRefs` rewrites `${env.X}` to `${X()}` without
+checking that `X` exists, so such a spec always emitted a call to an undeclared function and the
+generated package always failed its own `tsc` with TS2304. The change moves that failure from
+the generated code to the spec, where it can be read. If a spec of yours starts being refused,
+it was already producing a connector that could not compile — the fix is to correct the name or
+declare the env entry, not to pin to 0.11.2.
+
+Scope: `hand-rolled` and `read-only-kit` only. `rest-kit` cannot reach the rule, because
+`ConnectorSpecSchema` already refuses `${env.` anywhere in a rest-kit `fetchHelper`.
+
 ## [0.11.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.1...create-nimbus-connector-v0.11.2) (2026-08-08)
 
 
