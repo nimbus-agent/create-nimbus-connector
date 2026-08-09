@@ -1043,6 +1043,10 @@ export const ToolSchema = z
             `"pathWhen" tests arg ${JSON.stringify(g.absent)} more than once — the second guard ` +
             "is unreachable, since the first returns whenever it is absent",
         });
+        // One mistake, one issue — mirrors the two checks above, which also return after
+        // adding. Without this, a guard that is both a duplicate and self-referencing (below)
+        // would report twice for a single bad guard.
+        return;
       }
       guarded.add(g.absent);
 

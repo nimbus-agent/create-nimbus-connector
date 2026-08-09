@@ -1757,6 +1757,28 @@ describe("ToolSchema pathWhen guards", () => {
     });
     expect(s.tools[0]!.pathWhen).toHaveLength(2);
   });
+
+  it("reports exactly one issue for a guard that is both a duplicate and self-referencing", () => {
+    // The duplicate check and the self-reference check both inspect guard 1 here. The duplicate
+    // check must `return` — like the two checks above it — or this one bad guard reports twice.
+    let message = "";
+    try {
+      condSpec({
+        pathWhen: [
+          { absent: "buildId", path: "/apps" },
+          { absent: "buildId", path: "/builds/${arg.buildId|enc}" },
+        ],
+      });
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    // Anchored per the convention above: counts lines that name guard 1, not substring hits.
+    const guard1Issues = message.match(/^ {2}tools\[0\]\.pathWhen\[1\]/gm) ?? [];
+    expect(guard1Issues).toHaveLength(1);
+    expect(message).toMatch(/more than once/);
+    expect(message).not.toMatch(/interpolates/);
+  });
 });
 
 describe("strings the emitter splices raw into generated source", () => {
