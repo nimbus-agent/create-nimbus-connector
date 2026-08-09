@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.12.0...create-nimbus-connector-v0.13.0) (2026-08-09)
+
+
+### Features
+
+* **spec,emit:** pathWhen — conditional endpoint selection (PR 1 of 2) ([#91](https://github.com/nimbus-agent/create-nimbus-connector/issues/91)) ([e616c73](https://github.com/nimbus-agent/create-nimbus-connector/commit/e616c733216cc1c75f072797944cd565f65e8f5d))
+
 ## [0.12.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.3...create-nimbus-connector-v0.12.0) (2026-08-09)
 
 
