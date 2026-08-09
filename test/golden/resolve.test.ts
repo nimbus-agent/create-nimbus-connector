@@ -81,7 +81,7 @@ describe("resolveNimbusRoot", () => {
     const message = (thrown as Error).message;
     expect(message).toContain(sibling);
     expect(message).toMatch(/tried/i);
-    const siblingAttempt = message.split("\n").find(line => line.includes(sibling));
+    const siblingAttempt = message.split("\n").find((line) => line.includes(sibling));
     expect(siblingAttempt).toBeDefined();
     expect(siblingAttempt).not.toMatch(/does not exist/);
     expect(siblingAttempt).toMatch(/marker file missing/);
