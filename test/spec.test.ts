@@ -1808,6 +1808,50 @@ describe("ToolSchema pathWhen guards", () => {
     ).toThrow(/"search"/);
   });
 
+  /**
+   * The one refusal with no emitter behind it, and therefore the one nothing else would catch.
+   * `renderTool` (src/emit/server/tools-hand.ts) emits the guard ladder; `tools-rest.ts` has no
+   * ladder at all, because `makeRestToolRegistrar` takes ONE path expression per tool. Delete or
+   * invert this refine and a rest-kit `pathWhen` tool parses, emits a single unguarded path, and
+   * describes a request the generated package never makes — accepted then discarded, silently.
+   * Measured 2026-08-09 against tree 67c7390a: zero of the twelve conditional-endpoint corpus
+   * connectors use the registrar, which is why the answer is a refusal and not an emitter path.
+   */
+  it('rejects pathWhen on a "rest-kit" connector, which has no seam for a ladder', () => {
+    const restKit = (tool: Record<string, unknown>) => () =>
+      parseSpec({
+        name: "acme",
+        displayName: "Acme",
+        description: "d.",
+        serviceLabel: "Acme",
+        style: "rest-kit",
+        env: [{ vars: ["ACME_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" }],
+        fetchHelper: { local: "acmeFetch", base: "https://api.acme.test" },
+        tools: [
+          {
+            name: "acme_get",
+            description: "Get.",
+            path: "/builds/${arg.buildId|enc}",
+            args: { buildId: { type: "string", min: 1, optional: true } },
+            ...tool,
+          },
+        ],
+      });
+
+    // The paired control: the SAME spec without pathWhen parses. Without it, a rest-kit spec that
+    // became invalid for some unrelated reason would keep this test green while proving nothing.
+    expect(restKit({})).not.toThrow();
+
+    expect(restKit({ pathWhen: [{ absent: "buildId", path: "/builds" }] })).toThrow(
+      /"rest-kit" cannot declare "pathWhen"/,
+    );
+    // The message must also say what to do instead — a refusal that names no alternative sends
+    // the author to the source to find out whether the shape is unsupported or merely unspelled.
+    expect(restKit({ pathWhen: [{ absent: "buildId", path: "/builds" }] })).toThrow(
+      /"read-only-kit" or "hand-rolled"/,
+    );
+  });
+
   it("rejects pathWhen together with query, including a single static parameter", () => {
     // Blanket, not "only conditional entries". They could compose in principle; no corpus
     // connector needs it, and loosening a rule later is safe while tightening one is not.
