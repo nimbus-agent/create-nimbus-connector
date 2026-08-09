@@ -174,6 +174,11 @@ function namedReadOnlyStarter(
 }
 
 /**
+ * Exported for `second-file.ts`, which asks the identical question of a declaration in
+ * `src/tools.ts`. A second copy of this matcher is the shape `isEnvRefHeaderValue`'s docstring
+ * warns about: two predicates that agree today and drift tomorrow, where the drift is a
+ * recognizer recovering a shape the emitter cannot re-emit.
+ *
  * `export function <name>(reg: ZodToolRegistrar): void { ... }` -> its BODY statements.
  *
  * `name` comes from what `namedReadOnlyStarter` observed being PASSED, never from a naming
@@ -187,7 +192,7 @@ function namedReadOnlyStarter(
  * over-claim — it is pinned because a body whose registrar is bound under a different name is a
  * body whose registrations the tool recognizers would silently fail to find.
  */
-function namedRegistrarBody(node: AstNode, name: string): AstNode[] | undefined {
+export function namedRegistrarBody(node: AstNode, name: string): AstNode[] | undefined {
   const decl = exportedDeclaration(node);
   if (functionName(decl) !== name || isAsyncFunction(decl)) return undefined;
   const params = functionParams(decl);

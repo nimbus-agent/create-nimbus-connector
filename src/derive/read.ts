@@ -1134,6 +1134,25 @@ export type ImportName = {
   readonly isType: boolean;
 };
 
+/**
+ * `import type { X } from "…"` — the CLAUSE-level type modifier, which is a different field from
+ * `ImportName.isType` and not derivable from it.
+ *
+ * Babel puts `importKind` on both the declaration and each specifier, and sets exactly one of them:
+ * `import type { X }` marks the DECLARATION and leaves every specifier's `importKind` null, while
+ * `import { type X }` marks the specifier and leaves the declaration `"value"`. So `importNames`,
+ * which reads the specifier, reports `isType: false` for the clause-level spelling — correct for
+ * its own callers (src/emit/server/index.ts writes the inline `type ` prefix, and search.ts and
+ * search-filter.ts check exactly that) and wrong for anyone asking "is this import type-only".
+ *
+ * A separate accessor rather than folding it into `importNames`: those three call sites compare
+ * against emitted spellings, and widening `isType` under them would change what they claim.
+ */
+export function isTypeOnlyImport(node: AstNode | undefined): boolean {
+  if (node?.type !== "ImportDeclaration") return false;
+  return raw(node)["importKind"] === "type";
+}
+
 /** Every named specifier, or undefined if the clause has a default or namespace specifier. */
 export function importNames(node: AstNode | undefined): ImportName[] | undefined {
   if (node?.type !== "ImportDeclaration") return undefined;

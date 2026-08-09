@@ -188,7 +188,7 @@ them on one row.
 
       See [Known limitations](#known-limitations) for the separate question of byte-matching,
       which only `dependencytrack` currently achieves.
-- [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
+- [~] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file. Carrying the file and being *blocked by* it are different questions, and the answer
       is now the sharper of the two: the ones that are pure shims report as
@@ -203,6 +203,26 @@ them on one row.
       `src/server.ts` is nothing but the frame plus those two statements — so the unclaimed set
       is exactly the pair, and the label collapses it into the one thing the pair shares. The
       `frame:` prefix names the ceiling, not the stage that detected it.
+
+      **The measurement half is now built.** `src/derive/server/second-file.ts` splices the
+      registrar body out of `src/tools.ts` and the totality rule walks that file's remaining
+      module-scope statements, so these connectors report what is actually behind the frame
+      rather than the frame. What that is has not been measured yet — run
+      `bun run reach --verbose --nimbus-root <path>` and record it in
+      [The measured ceiling](#the-measured-ceiling) with its date and corpus tree. **Expect the
+      headline `server-identical` count not to move**: the emitter still writes one file, so the
+      best any of these can reach is `emits`. Whether the emitter split is worth building is the
+      decision that histogram exists to inform.
+
+      **A real shim can still block, just under a different bucket.** `recognizeEnv`,
+      `recognizeFetchHelper` and `claimSearchImports` all read `frame.verifyStatements`, which is
+      `src/server.ts`'s alone — `applySecondFile` hands `src/tools.ts`'s own statements back
+      separately, as `ForeignStatements`, walked against their own claim set. A shim whose fetch
+      helper or env accessor is written in `tools.ts` rather than `server.ts` is therefore not
+      unblocked by this change: its blocker moves from the collapsed `frame:tools-in-second-file`
+      label to whatever `blockerFor` says about that statement in `tools.ts`'s own coordinates.
+      Whether the corpus's sixteen behave that way, or turn out to be pure shims after all, is
+      part of the same unmeasured number above.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
       sent only when an optional argument is present or non-empty. See

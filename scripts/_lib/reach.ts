@@ -95,7 +95,12 @@ export function measure(name: string, files: ReadonlyMap<string, string>): Conne
     };
   }
 
-  const derivation = deriveSpec({ server, manifest, filter: files.get("src/search-filter.ts") });
+  const derivation = deriveSpec({
+    server,
+    manifest,
+    filter: files.get("src/search-filter.ts"),
+    tools: files.get("src/tools.ts"),
+  });
   if (!derivation.ok) return { name, tier: "blocked", blockers: derivation.blockers };
 
   // parseSpec and validateSpec ARE the `emits` tier boundary: a derived spec that trips

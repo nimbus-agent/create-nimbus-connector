@@ -53,4 +53,23 @@ describe("blockerFor", () => {
     expect(b.detail.endsWith("…")).toBe(true);
     expect(b.detail).toHaveLength(101);
   });
+
+  it("attributes a blocker to the file whose source it was built from", () => {
+    // The bug this pins: blockerFor slices `source` by the node's byte offsets, so a node parsed
+    // from one file and priced against another's text produces a detail that is real-looking and
+    // wrong. Asserted on the detail's CONTENT, because a mispaired blocker still has a non-empty
+    // detail — which is exactly what lets that bug survive a weaker test.
+    const source = "import fs from 'node:fs';\n";
+    const [statement] = parseModule(source);
+    const blocker = blockerFor(statement!, source, "src/tools.ts");
+
+    expect(blocker.file).toBe("src/tools.ts");
+    expect(blocker.detail).toBe("import fs from 'node:fs';");
+  });
+
+  it("leaves file undefined when none is given, so existing blockers are unchanged", () => {
+    const source = "const x = 1;\n";
+    const [statement] = parseModule(source);
+    expect(blockerFor(statement!, source).file).toBeUndefined();
+  });
 });
