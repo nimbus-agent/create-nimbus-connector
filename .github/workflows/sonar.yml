@@ -93,17 +93,27 @@ jobs:
           # step when the gate does not pass, which is the difference between a report and a
           # gate.
           #
-          # Turning it on with 58 code smells already open is safe, and that is measured
-          # rather than assumed. api/qualitygates/project_status names every condition the
-          # bound gate ("Sonar way") evaluates, and all six are `new_*` metrics:
+          # Turning it on with an open backlog is safe, and that is measured rather than
+          # assumed. api/qualitygates/project_status names every condition the bound gate
+          # ("Sonar way") evaluates, and all six are `new_*` metrics:
           # new_reliability_rating, new_security_rating and new_maintainability_rating must
           # each be A, new_coverage >= 80%, new_duplicated_lines_density <= 3%, and
           # new_security_hotspots_reviewed = 100%. Not one grades overall code, so the
-          # backlog cannot fail this. Stronger still: all 58 findings are already INSIDE the
-          # new-code period (inNewCodePeriod=true returns the same 58), the gate evaluates
-          # them today, and it reports OK — because a maintainability rating is a technical-
-          # debt ratio, not an issue count. On a pull request "new code" narrows further, to
-          # that pull request's own diff.
+          # backlog cannot fail this however large it grows. Stronger still: the findings are
+          # INSIDE the new-code period, so the gate evaluates them today and still reports OK
+          # — because a maintainability rating is a technical-debt ratio, not an issue count.
+          # On a pull request "new code" narrows further, to that pull request's own diff.
+          #
+          # **The size of that backlog is deliberately not written here.** This paragraph used
+          # to say "58 code smells", three times; the real figure is now 3, and nothing in the
+          # repository checks the sentence, so it rotted silently — the same defect
+          # test/gate-lists.test.ts's header carries a note about. The argument does not
+          # depend on the number and never did: a ratio is not a count, at 3 or at 500.
+          # Re-measure whenever you actually want the figure, with the token this workflow
+          # already needs:
+          #
+          #   curl -s -H "Authorization: Bearer $SONAR_TOKEN" \
+          #     "https://sonarcloud.io/api/issues/search?componentKeys=nimbus-agent_create-nimbus-connector&issueStatuses=OPEN,CONFIRMED"
           #
           # The one condition that can red a run without anything in this repository being
           # wrong is new_security_hotspots_reviewed: a hotspot is cleared by a human marking

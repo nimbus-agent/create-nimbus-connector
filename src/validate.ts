@@ -396,13 +396,20 @@ function validateFetchHelperEnvRefs(spec: ConnectorSpec): void {
   if (spec.style === "rest-kit") return;
 
   const declared = new Set(spec.env.map((e) => e.local));
+  // The tail that names what the author could have meant, since the fix is almost always one of
+  // the locals already in the spec. Built once, outside the loop and outside the message, rather
+  // than as a conditional nested inside the template — the two spellings read the same and only
+  // one of them survives being edited.
+  const known = spec.env.map((e) => `"${e.local}"`).join(", ");
+  const declaredNote =
+    known === "" ? " (the spec declares no env entries)" : ` — declared: ${known}`;
+
   const check = (where: string, template: string): void => {
     for (const name of envRefNames(template)) {
       if (declared.has(name)) continue;
-      const known = spec.env.map((e) => `"${e.local}"`).join(", ");
       throw new Error(
         `${where} references "\${env.${name}}", but no env entry declares local "${name}"` +
-          `${known === "" ? " (the spec declares no env entries)" : ` — declared: ${known}`}. ` +
+          `${declaredNote}. ` +
           "The emitter rewrites it to a call, so the generated connector would not compile.",
       );
     }
