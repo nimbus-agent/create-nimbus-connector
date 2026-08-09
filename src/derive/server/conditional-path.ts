@@ -21,9 +21,9 @@ import { binary, blockBody, ifStatement, isIdent, memberOn, returnArgument } fro
  *     means ONE path when ALL of them are absent, where a ladder means a different path PER
  *     argument. Reading it as a ladder would change behaviour, which is why `binary` is the
  *     reader and a LogicalExpression falls out on its own;
- *   - all twelve corpus connectors that branch on an optional argument test `=== undefined` and
- *     nothing else, so any other test is a hand-written shape this generator was never asked to
- *     produce.
+ *   - measured 2026-08-09 against `packages/mcp-connectors` tree `67c7390a`, all twelve corpus
+ *     connectors that branch on an optional argument test `=== undefined` and nothing else, so
+ *     any other test is a hand-written shape this generator was never asked to produce.
  */
 
 /**

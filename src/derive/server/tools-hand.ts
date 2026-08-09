@@ -100,19 +100,25 @@ export type ToolFields = {
  * both are `ConnectorSpecSchema`/`FetchHelperSchema` fields, and `ToolSchema` is a
  * `strictObject` that would reject them.
  *
- * `votesHandlerStyle` is false for the three shapes whose handler form the emitter FORCES,
+ * `votesHandlerStyle` is false for the four shapes whose handler form the emitter FORCES,
  * independently of `spec.handlerStyle`, and which therefore carry no evidence for the vote below
  * — counting any of them would force `handlerStyle: "block"` on connectors that never declared
- * it, regardless of what their OTHER tools show:
+ * it, regardless of what their OTHER tools show. This list is the authority the individual
+ * recognizers cite, so a new forced-block shape belongs here in the same change that adds it:
  *
  *   - a search tool: `renderSearchTool` always writes a hoist-free block;
  *   - a query tool: `renderTool`'s `if (query !== undefined)` branch returns its block form
- *     BEFORE the `used.size === 0 && spec.handlerStyle === "concise"` test is ever reached
- *     (src/emit/server/tools-hand.ts), so a query tool with no hoists is a block a "concise"
- *     connector emits too;
+ *     BEFORE the `used.size === 0 && guards.length === 0 && spec.handlerStyle === "concise"` test
+ *     is ever reached (src/emit/server/tools-hand.ts), so a query tool with no hoists is a block a
+ *     "concise" connector emits too;
  *   - a stub tool: `renderTool`'s `if (tool.impl === "stub")` branch returns its block form even
  *     earlier still — before the schema-and-path machinery both the query branch and the plain
- *     form share is ever reached — so a stub is a block every connector emits, "concise" or not.
+ *     form share is ever reached — so a stub is a block every connector emits, "concise" or not;
+ *   - a `pathWhen` tool: the `guards.length === 0` conjunct in that same test fails, so a guard
+ *     ladder is a block whatever the connector declared — a ladder is statements and cannot be
+ *     written as an expression body at all. `recognizeConditionalTool`'s own docstring carries the
+ *     rest of the reasoning, including what counting it would do to a connector that pairs one
+ *     concise tool with one guarded one.
  *
  * `basePrefix` is set only for a query tool, whose `new URL(...)` was rendered with the fetch
  * helper's base spliced in ahead of the path. It is not a spec field — it is a fact about this
@@ -391,10 +397,10 @@ function recognizeQueryTool(
  * the block form for a guarded tool regardless of `spec.handlerStyle` — the concise form is gated
  * on `used.size === 0 && guards.length === 0 && spec.handlerStyle === "concise"` — so a guarded
  * tool with no hoists is a block a "concise" connector emits too, exactly like the query, stub and
- * search shapes `ToolShape`'s own docstring lists. Counting it would force `handlerStyle: "block"`
- * onto a connector that never declared it, and, worse, a connector pairing one concise tool with
- * one guarded tool would be refused outright by `recognizeTools`' mixed-shape rule — a refusal of
- * this emitter's own output.
+ * search shapes `ToolShape`'s own docstring lists this one beside. Counting it would force
+ * `handlerStyle: "block"` onto a connector that never declared it, and, worse, a connector
+ * pairing one concise tool with one guarded tool would be refused outright by `recognizeTools`'
+ * mixed-shape rule — a refusal of this emitter's own output.
  */
 function recognizeConditionalTool(
   arrow: Arrow,
@@ -680,10 +686,10 @@ export function recognizeTools(
     shapes.push(shape);
   }
 
-  // Search, query and stub shapes carry no handlerStyle evidence either way — see ToolShape's
-  // own docstring — so the vote runs over the subset that does. A connector whose every tool is
-  // one of those three correctly abstains entirely (both booleans false), leaving handlerStyle
-  // unset.
+  // Search, query, stub and `pathWhen`-ladder shapes carry no handlerStyle evidence either way —
+  // ToolShape's own docstring is the list, and it is the one place to extend — so the vote runs
+  // over the subset that does. A connector whose every tool is one of those four correctly
+  // abstains entirely (both booleans false), leaving handlerStyle unset.
   const votingShapes = shapes.filter((s) => s.votesHandlerStyle);
   const hasBlockWithoutHoists = votingShapes.some((s) => s.isBlock && !s.hasHoists);
   const hasConcise = votingShapes.some((s) => !s.isBlock);

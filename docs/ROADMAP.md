@@ -253,12 +253,18 @@ them on one row.
       before the ladder, and `splitHoists` (`src/derive/server/hoists.ts`) takes a hoist run only
       off the *front* of a handler block — so the emitted bytes differ by those two lines, and the
       deriver refuses the rung run outright rather than reading a shorter ladder. Nothing else
-      about the connector is unreached: `bun run diff:golden` reports `codemagic`'s
-      `src/server.ts` identical apart from those two lines, both ladders, the search tool, the
-      `x-auth-token` accessor and the `CODEMAGIC_API` fetch helper included. The isolation is
-      exact rather than inferred — moving that one statement in a *generated* (MIT) `codemagic`
-      reproduces the real connector's blocker report label-for-label and line-for-line
+      about the connector's `src/server.ts` is unreached, and that file alone decides the tier:
+      `bun run diff:golden` reports it identical apart from those two lines, both ladders, the
+      search tool, the `x-auth-token` accessor and the `CODEMAGIC_API` fetch helper included. The
+      isolation is exact rather than inferred — moving that one statement in a *generated* (MIT)
+      `codemagic` reproduces the real connector's blocker report label-for-label and line-for-line
       (`call:reg` at lines 27, 45, 60, plus the two downstream search imports).
+
+      **The byte diff is a wider claim than the tier, and the two must not be conflated.**
+      `codemagic` reports **5/7**, not 6/7, because `README.md` is hand-written prose as well —
+      the [*Hand-authored READMEs*](#known-limitations) gap `mercury`, `zendesk` and `bitrise`
+      carry too, independent of this one and untouched by closing it. Closing the placement rule
+      is worth `codemagic` 5/7 → **6/7** and one tier; it is not worth 7/7.
 
       **Closing it is a placement rule in both halves, and it is worth one connector.** The
       emitter would have to write a hoist after the ladder when no guard's path reads it, and
@@ -474,6 +480,13 @@ ones. Every row above rose for the same reason — the constructs were always th
 deriver could not see them. **A row growing here is the histogram getting more honest, not the
 corpus getting worse**, which is exactly why a number in this table is worth nothing without the
 tree stamp above it.
+
+**The headline 6 has survived a written prediction that it would be 7.** The conditional-endpoint
+work (`pathWhen`) was designed on the stated expectation that `codemagic` would go `blocked` →
+`server-identical` and take this figure 6/94 → 7/94; it shipped, both halves work, and the figure
+did not move. The [Stage E bullet](#stage-e--the-corpus-tail-) records the prediction, what
+actually happened and the one-statement cause, rather than deleting the prediction — read it
+before treating any *predicted* increment to this number as banked.
 
 Four groups are worth naming precisely, because each is a *different* kind of gap:
 
@@ -709,10 +722,13 @@ alone.
   `renderTool` emits every hoisted-argument const above the guard ladder, and `splitHoists` reads
   a hoist run only off the front of a handler block. A connector that writes the hoist *below* its
   guards — because the guarded branch has no use for it — therefore differs by two lines and is
-  refused by the deriver. This is the sole reason `fixtures/codemagic.spec.json` reports 5/7 and
-  the sole reason `codemagic` did not move a tier; the [Stage E
+  refused by the deriver. This is **one of the two** reasons `fixtures/codemagic.spec.json` reports
+  5/7 — it accounts for `src/server.ts`, and `README.md` is the other, the *Hand-authored READMEs*
+  gap above that `mercury`, `zendesk` and `bitrise` carry too and that closing this rule would not
+  touch. It **is** the sole reason `codemagic` did not move a tier, which is a claim about reach and
+  not about the byte diff: a tier is decided by `src/server.ts` alone. The [Stage E
   bullet](#stage-e--the-corpus-tail-) carries the isolation, the corpus count and what closing it
-  would cost. **Open Stage E work**, not a permanent ceiling.
+  would cost. **Open Stage E work**, not a permanent ceiling — but it is worth 6/7, not 7/7.
 - **A `pathWhen` ladder over the write helper is emitted but never read back.** `pathWhen` is
   legal on a non-GET tool, and `renderTool` writes the ladder correctly — every rung repeats
   `renderBodyExpr`'s output around its own path. `recognizeConditionalPath` refuses that shape

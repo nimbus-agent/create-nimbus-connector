@@ -426,7 +426,7 @@ const GLOSSES: Readonly<Record<string, string>> = {
   "tools[].query":
     "Query-string parameters built beside `path`, each emitted as a `searchParams.set` call — the only way to express a parameter that is sent conditionally. [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query).",
   "tools[].pathWhen":
-    "Guards evaluated in order before `path`, each selecting a different endpoint when its named argument is absent. `path` is the final unguarded return.",
+    "Guards evaluated in order before `path`, each selecting a different endpoint when its named argument is absent. `path` is the final unguarded return. [SPEC-RULES § Conditional endpoints](./SPEC-RULES.md#conditional-endpoints-pathwhen).",
   "tools[].impl":
     'What the tool does: a REST request, a handler that throws `"<tool> not implemented"`, or a substring search over one endpoint\'s rows. `get` is the Stage A spelling of `rest`, normalised at parse time.',
   "tools[].method": "The HTTP verb, and nothing more.",

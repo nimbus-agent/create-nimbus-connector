@@ -267,7 +267,7 @@ that changed nothing related. It is also path-filtered to `src/`, `scripts/`, `f
 | `diff:golden` | Do the emitted bytes match a real hand-written connector? |
 | `reach --baseline` | Has any connector in the corpus lost a tier? |
 | `wiring:conformance` | Does the emitted Gateway skeleton still match Nimbus's real `Syncable`? |
-| `acceptance` | Does a generated connector survive the monorepo's own `tsc`, `biome` and README audit? |
+| `acceptance` | Does a generated package survive the monorepo's `tsc`, `biome` and README audit? |
 
 This is not fixable, and it is not a backlog item. This repository is MIT and the monorepo is
 AGPL-3.0-only; the golden harness reads the monorepo **at runtime** from a path passed on the
