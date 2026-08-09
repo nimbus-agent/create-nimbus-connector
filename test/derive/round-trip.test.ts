@@ -203,7 +203,9 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  *
  * The rule for any future entry is unchanged, and it is the reason this docstring is a rule
  * rather than a narrative: **the reason must be measured by actually running `deriveSpec` against
- * that fixture's emitted output**, never inferred from the spec or the emitter. Three successive
+ * that fixture's emitted output**, never inferred from the spec or the emitter. The measurement
+ * goes in the entry's own `blocker` field, which the test below asserts against
+ * `derivation.blockers` — so an entry cannot go on describing a blocker that has moved. Three successive
  * versions of this comment described gaps that had already closed — a claim that rest-kit's frame
  * never matched, which stopped being true when src/derive/server/index.ts grew its rest-kit
  * branch; a claim that the factory const stayed unclaimed, which stopped being true when
@@ -214,8 +216,11 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * Which recognizer unblocked which fixture is recorded where it can go stale visibly instead —
  * beside the fixture, in ROUND_TRIP's and PARTIAL_ROUND_TRIP's own docstrings above.
  */
-const BLOCKED: Record<string, string> = {
-  zzcond: "a pathWhen guard ladder, which src/derive/ cannot read until Task 6",
+const BLOCKED: Record<string, { reason: string; blocker: string }> = {
+  zzcond: {
+    reason: "a pathWhen guard ladder, which src/derive/ cannot read until Task 6",
+    blocker: "call:reg",
+  },
 };
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
@@ -335,10 +340,17 @@ describe("deriveSpec round-trips this repository's own output", () => {
     });
   }
 
-  for (const [name, reason] of Object.entries(BLOCKED)) {
+  for (const [name, { reason, blocker }] of Object.entries(BLOCKED)) {
     it(`blocks ${name} (${reason}) rather than deriving something wrong`, () => {
       const derivation = deriveSpec(emitted(name));
       expect(derivation.ok).toBe(false);
+      // The KIND, not merely the failure. `ok: false` alone passes for any regression that stops
+      // the derivation for an unrelated reason — a broken frame recognizer, a parse error — and
+      // this loop generated zero tests until zzcond joined the list, so nothing has ever held it
+      // to the blocker its entry names. Pinning it is what makes `blocker` the measurement the
+      // docstring above insists every entry must be, rather than an unchecked claim.
+      const kinds = derivation.ok ? [] : derivation.blockers.map((b) => b.kind);
+      expect(kinds).toContain(blocker);
     });
   }
 });

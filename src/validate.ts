@@ -487,6 +487,15 @@ function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);
     }
+    // A guard path is the same DSL in a second position and src/emit/server/tools-hand.ts
+    // renders it through the same code, so it must face the same checks. Unchecked, an
+    // undeclared ${arg.X}/${env.X} reaches the author as TS2339/TS2304 against generated
+    // source; worse, a |bool on a non-boolean arg falls back to a raw reference, which
+    // compiles — the wrong URL is requested and nothing reports it. That silent case is the
+    // whole reason validateArgSegment exists.
+    for (const g of t.pathWhen ?? []) {
+      validateToolPath(spec, t, g.path);
+    }
   }
 }
 
