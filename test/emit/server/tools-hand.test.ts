@@ -504,6 +504,133 @@ describe("hand-rolled write support", () => {
   });
 });
 
+describe("hand-rolled pathWhen guards", () => {
+  const spec = (tools: unknown[]) =>
+    parseSpec({
+      name: "acme",
+      title: "Acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", inlineHeaders: {} },
+      tools,
+    });
+
+  it("emits one guard per pathWhen entry, in order, before the fallthrough return", () => {
+    const src = renderHandRolledTools(
+      spec([
+        {
+          name: "acme_build_get",
+          description: "Get a build.",
+          args: {
+            buildId: { type: "string", min: 1, optional: true },
+            catalog: { type: "string", min: 1, optional: true },
+            database: { type: "string", min: 1, optional: true },
+          },
+          path: "/builds/${arg.buildId|enc}",
+          pathWhen: [
+            { absent: "catalog", path: "/catalogs" },
+            { absent: "database", path: "/databases" },
+            { absent: "buildId", path: "/builds" },
+          ],
+        },
+      ]),
+    );
+    expect(src).toContain("if (p.buildId === undefined) {");
+    expect(src).toContain('return jsonResult(await acmeGet("/builds"));');
+    // The fallthrough is the ordinary return, unchanged.
+    expect(src).toContain(
+      "return jsonResult(await acmeGet(`/builds/${encodeURIComponent(p.buildId)}`));",
+    );
+    // Order is the spec's, not sorted.
+    expect(src.indexOf("p.catalog === undefined")).toBeLessThan(
+      src.indexOf("p.database === undefined"),
+    );
+    // …and every guard precedes the fallthrough, which is what makes it a fallthrough.
+    expect(src.indexOf("p.buildId === undefined")).toBeLessThan(src.indexOf("encodeURIComponent"));
+  });
+
+  it("takes the block form even when the tool has no hoisted arg", () => {
+    // The trap: the concise/block decision keys on `used.size`, i.e. HOISTS. A pathWhen tool
+    // with no default-bearing arg would otherwise take the concise form and emit none of the
+    // ladder — silently, visible only in a byte-diff.
+    const src = renderHandRolledTools(
+      spec([
+        {
+          name: "acme_item_get",
+          description: "Get one item.",
+          args: { itemId: { type: "string", min: 1, optional: true } },
+          path: "/v1/items/${arg.itemId|enc}",
+          pathWhen: [{ absent: "itemId", path: "/v1/items/default" }],
+        },
+      ]),
+    );
+    expect(src).toContain("async (p) => {");
+    expect(src).not.toMatch(/async \(p\) =>\s*jsonResult/);
+    expect(src).toContain('return jsonResult(await acmeGet("/v1/items/default"));');
+  });
+
+  it("takes the parameter for a guard even when the fallthrough path names no arg", () => {
+    // Nothing but the guard's own test reads `p` here, so without pathWhen in `needsParam` this
+    // emits `async () => {` around a body referencing `p` — a generated package that does not
+    // compile.
+    const src = renderHandRolledTools(
+      spec([
+        {
+          name: "acme_list",
+          description: "List items.",
+          args: { scope: { type: "string", min: 1, optional: true } },
+          path: "/v1/items",
+          pathWhen: [{ absent: "scope", path: "/v1/items/all" }],
+        },
+      ]),
+    );
+    expect(src).toContain("async (p) => {");
+    expect(src).not.toContain("async () =>");
+  });
+
+  it("emits the hoist a guard's own path reads, which the fallthrough never names", () => {
+    const src = renderHandRolledTools(
+      spec([
+        {
+          name: "acme_build_get",
+          description: "Get a build.",
+          args: {
+            buildId: { type: "string", min: 1, optional: true },
+            region: { type: "string", optional: true, default: "us", local: "reg_" },
+          },
+          path: "/builds/${arg.buildId|enc}",
+          pathWhen: [{ absent: "buildId", path: "/regions/${arg.region}/builds" }],
+        },
+      ]),
+    );
+    expect(src).toContain('const reg_ = p.region ?? "us";');
+    expect(src).toContain("return jsonResult(await acmeGet(`/regions/${reg_}/builds`));");
+  });
+
+  it("builds a guard's call through the write helper on a non-GET tool", () => {
+    // callFor, not a hand-copied ternary: a guard that rebuilt the call would keep routing
+    // through the READ helper here, and both forms compile.
+    const src = renderHandRolledTools(
+      spec([
+        {
+          name: "acme_item_delete",
+          description: "Delete an item.",
+          method: "DELETE",
+          effect: "delete",
+          args: { itemId: { type: "string", min: 1, optional: true } },
+          path: "/v1/items/${arg.itemId|enc}",
+          pathWhen: [{ absent: "itemId", path: "/v1/items/all" }],
+        },
+      ]),
+    );
+    expect(src).toContain(
+      'return jsonResult(await acmeGetSend("/v1/items/all", "DELETE", undefined));',
+    );
+  });
+});
+
 describe('renderHandRolledTools, handlerStyle "block"', () => {
   function blockSpec(tools: unknown[]) {
     return parseSpec({

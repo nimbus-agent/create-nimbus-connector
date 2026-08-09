@@ -1655,6 +1655,215 @@ describe("ToolSchema query parameters", () => {
   });
 });
 
+describe("ToolSchema pathWhen guards", () => {
+  const condSpec = (over: Record<string, unknown>) =>
+    parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "authHeaders", bindings: ["token"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "authHeaders" },
+      tools: [
+        {
+          name: "acme_get",
+          description: "Get.",
+          impl: "rest",
+          path: "/builds/${arg.buildId|enc}",
+          args: {
+            appId: { type: "string", min: 1 },
+            buildId: { type: "string", min: 1, optional: true },
+          },
+          ...over,
+        },
+      ],
+    });
+
+  it("accepts a guard naming an optional arg with no default", () => {
+    expect(() => condSpec({ pathWhen: [{ absent: "buildId", path: "/apps" }] })).not.toThrow();
+  });
+
+  it("rejects a guard naming an arg the tool does not declare", () => {
+    expect(() => condSpec({ pathWhen: [{ absent: "nosuch", path: "/apps" }] })).toThrow(/nosuch/);
+  });
+
+  it("rejects a guard named after an inherited Object property with the undeclared-arg message", () => {
+    // t.args[g.absent] would find Object.prototype's own toString instead of nothing, and
+    // report the wrong reason (not "optional") for an arg the tool never declared.
+    expect(() => condSpec({ pathWhen: [{ absent: "toString", path: "/apps" }] })).toThrow(
+      /declares no such arg/,
+    );
+  });
+
+  it("rejects a guard on a required arg, whose value can never be undefined", () => {
+    // Reuses canOmitQueryValue, so this message names the same clause query's does.
+    expect(() => condSpec({ pathWhen: [{ absent: "appId", path: "/apps" }] })).toThrow(
+      /can never be undefined/,
+    );
+  });
+
+  it("rejects two guards naming the same arg", () => {
+    expect(() =>
+      condSpec({
+        pathWhen: [
+          { absent: "buildId", path: "/apps" },
+          { absent: "buildId", path: "/other" },
+        ],
+      }),
+    ).toThrow(/more than once/);
+  });
+
+  it("rejects an empty pathWhen array", () => {
+    expect(() => condSpec({ pathWhen: [] })).toThrow(/at least one/);
+  });
+
+  it("rejects a guard whose own path interpolates the arg it tests", () => {
+    // Compiles in the generated package (string | undefined is legal in a template literal), so
+    // the connector would send "/builds/undefined" and nothing would report it.
+    expect(() =>
+      condSpec({ pathWhen: [{ absent: "buildId", path: "/builds/${arg.buildId|enc}" }] }),
+    ).toThrow(/interpolates .*buildId.* it tests/);
+  });
+
+  it("ALLOWS a later guard to reference an earlier guard's arg", () => {
+    // The rule is positional, not global. athena_list does exactly this: reaching guard 2 means
+    // guard 1's test was false, so that arg is non-undefined there. A global "no guarded arg may
+    // be referenced" rule would wrongly reject the real corpus connector this feature targets.
+    const s = parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "authHeaders", bindings: ["token"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "authHeaders" },
+      tools: [
+        {
+          name: "acme_list",
+          description: "List.",
+          impl: "rest",
+          path: "/c/${arg.catalog|enc}/d/${arg.database|enc}",
+          args: {
+            catalog: { type: "string", min: 1, optional: true },
+            database: { type: "string", min: 1, optional: true },
+          },
+          pathWhen: [
+            { absent: "catalog", path: "/catalogs" },
+            { absent: "database", path: "/c/${arg.catalog|enc}/databases" },
+          ],
+        },
+      ],
+    });
+    expect(s.tools[0]!.pathWhen).toHaveLength(2);
+  });
+
+  it("reports exactly one issue for a guard that is both a duplicate and self-referencing", () => {
+    // The duplicate check and the self-reference check both inspect guard 1 here. The duplicate
+    // check must `return` — like the two checks above it — or this one bad guard reports twice.
+    let message = "";
+    try {
+      condSpec({
+        pathWhen: [
+          { absent: "buildId", path: "/apps" },
+          { absent: "buildId", path: "/builds/${arg.buildId|enc}" },
+        ],
+      });
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    // Anchored per the convention above: counts lines that name guard 1, not substring hits.
+    const guard1Issues = message.match(/^ {2}tools\[0\]\.pathWhen\[1\]/gm) ?? [];
+    expect(guard1Issues).toHaveLength(1);
+    expect(message).toMatch(/more than once/);
+    expect(message).not.toMatch(/interpolates/);
+  });
+
+  it("rejects pathWhen on a stub tool, which issues no request", () => {
+    expect(() =>
+      condSpec({ impl: "stub", pathWhen: [{ absent: "buildId", path: "/apps" }] }),
+    ).toThrow(/"stub"/);
+  });
+
+  it("reports exactly one issue for a stub tool whose guard is also malformed", () => {
+    // The per-guard loop must not run once the structural rejection has fired — a tool that
+    // may not carry pathWhen at all should not also be told its guards are wrong.
+    let message = "";
+    try {
+      condSpec({ impl: "stub", pathWhen: [{ absent: "missingArg", path: "/apps" }] });
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    const issues = message.match(/^ {2}tools\[0\]\.pathWhen/gm) ?? [];
+    expect(issues).toHaveLength(1);
+    expect(message).toMatch(/"stub"/);
+    expect(message).not.toMatch(/declares no such arg/);
+  });
+
+  it("rejects pathWhen on a search tool", () => {
+    expect(() =>
+      condSpec({ impl: "search", pathWhen: [{ absent: "buildId", path: "/apps" }] }),
+    ).toThrow(/"search"/);
+  });
+
+  /**
+   * The one refusal with no emitter behind it, and therefore the one nothing else would catch.
+   * `renderTool` (src/emit/server/tools-hand.ts) emits the guard ladder; `tools-rest.ts` has no
+   * ladder at all, because `makeRestToolRegistrar` takes ONE path expression per tool. Delete or
+   * invert this refine and a rest-kit `pathWhen` tool parses, emits a single unguarded path, and
+   * describes a request the generated package never makes — accepted then discarded, silently.
+   * Measured 2026-08-09 against tree 67c7390a: zero of the twelve conditional-endpoint corpus
+   * connectors use the registrar, which is why the answer is a refusal and not an emitter path.
+   */
+  it('rejects pathWhen on a "rest-kit" connector, which has no seam for a ladder', () => {
+    const restKit = (tool: Record<string, unknown>) => () =>
+      parseSpec({
+        name: "acme",
+        displayName: "Acme",
+        description: "d.",
+        serviceLabel: "Acme",
+        style: "rest-kit",
+        env: [{ vars: ["ACME_TOKEN"], local: "tokenHeaders", bindings: ["t"], auth: "bearer" }],
+        fetchHelper: { local: "acmeFetch", base: "https://api.acme.test" },
+        tools: [
+          {
+            name: "acme_get",
+            description: "Get.",
+            path: "/builds/${arg.buildId|enc}",
+            args: { buildId: { type: "string", min: 1, optional: true } },
+            ...tool,
+          },
+        ],
+      });
+
+    // The paired control: the SAME spec without pathWhen parses. Without it, a rest-kit spec that
+    // became invalid for some unrelated reason would keep this test green while proving nothing.
+    expect(restKit({})).not.toThrow();
+
+    expect(restKit({ pathWhen: [{ absent: "buildId", path: "/builds" }] })).toThrow(
+      /"rest-kit" cannot declare "pathWhen"/,
+    );
+    // The message must also say what to do instead — a refusal that names no alternative sends
+    // the author to the source to find out whether the shape is unsupported or merely unspelled.
+    expect(restKit({ pathWhen: [{ absent: "buildId", path: "/builds" }] })).toThrow(
+      /"read-only-kit" or "hand-rolled"/,
+    );
+  });
+
+  it("rejects pathWhen together with query, including a single static parameter", () => {
+    // Blanket, not "only conditional entries". They could compose in principle; no corpus
+    // connector needs it, and loosening a rule later is safe while tightening one is not.
+    expect(() =>
+      condSpec({
+        pathWhen: [{ absent: "buildId", path: "/apps" }],
+        query: [{ name: "limit", arg: "appId" }],
+      }),
+    ).toThrow(/cannot be combined/);
+  });
+});
+
 describe("strings the emitter splices raw into generated source", () => {
   // The payload that reproduced the hole: it closes renderFetchHelper's URL template literal,
   // runs a call, and reopens the literal so `${path}` still lands inside one. The emitted file
@@ -1747,7 +1956,7 @@ describe("strings the emitter splices raw into generated source", () => {
     );
   });
 
-  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 22
+  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 23
   // fixtures use it, three of them byte-locked — so the refinement above has to admit exactly
   // that shape and refuse the rest. A tightening that folded it into the rejection would break
   // the feature; it fails here, in milliseconds, instead of in diff:golden.

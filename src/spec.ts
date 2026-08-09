@@ -432,14 +432,14 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  *     all of them are refused. `serviceLabel`, `tools[].name`, `env[].prefix`, `env[].suffix`.
  *   - a `RegExp` — the shape an emitter resolves, stripped before the residue is scanned, so
  *     every OTHER `${` is refused. `fetchHelper.base` and `RESOLVED_ENV_REF`, because `${env.X}`
- *     there is a documented feature: it is what 7 of the 22 fixtures write, three of them the
+ *     there is a documented feature: it is what 7 of the 23 fixtures write, three of them the
  *     byte-locked datadog, grafana and sentry, so banning `${` outright would fail diff:golden on
  *     the first run, and `bun run reach --baseline` says the same of the specs the deriver
  *     reconstructs from the corpus. The residue left once the resolved shape is removed is
  *     exactly what survives into the emitted template literal.
  *   - `"path-template"` — the field is the path DSL and `parsePathTemplate` owns the question.
- *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 19 of the
- *     22 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-07 over `fixtures/*.spec.json`).
+ *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 20 of the
+ *     23 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-09 over `fixtures/*.spec.json`).
  *     Every one of those is a placeholder the DSL consumes, and `assertNoUnparsedPlaceholders`
  *     already refuses every spelling it did not — which is why a second rule here would produce
  *     two rejections for one mistake.
@@ -452,7 +452,7 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
  * to draw the rule on, because it is a property of one payload rather than of the field.
  *
- * Measured across the 22 fixtures: no guarded field carries a backtick, a block-comment
+ * Measured across the 23 fixtures: no guarded field carries a backtick, a block-comment
  * terminator or a backslash — which this docstring cannot spell out literally, the hazard in
  * miniature.
  *
@@ -716,6 +716,35 @@ export const QueryParamSchema = z.strictObject({
 export type QueryParam = z.infer<typeof QueryParamSchema>;
 
 /**
+ * One rung of a conditional-endpoint ladder: the path to use when `absent` names an argument
+ * that is `undefined`.
+ *
+ * `absent` reuses the word `QueryParamSchema.omitWhen` already uses for the identical test. A
+ * second spelling for "this argument was not supplied" is the drift this repo removes.
+ *
+ * Deliberately NOT a general condition object. Every one of the twelve corpus connectors that
+ * branches on an optional argument tests `=== undefined` and nothing else, and the single
+ * compound guard (`semgrep`) means something a ladder cannot say — see docs/ROADMAP.md.
+ */
+export const PathWhenSchema = z.strictObject({
+  absent: z.string().min(1),
+  /**
+   * Note the missing fourth argument, and that it is deliberate. `tools[].path` passes
+   * `emptyIsMeaningful = true` because an empty `path` is already rejected by the checks that
+   * read it, so adding a `.min(1)` there would move where an existing rejection comes from. No
+   * such downstream check exists for a guard's path: `{ "absent": "x", "path": "" }` would emit a
+   * guard returning the base URL alone. Defaulting to `false` gives it the `.min(1)`.
+   */
+  path: rawSplicedString(
+    "tools[].pathWhen[].path",
+    "the fetch helper's path argument template literal",
+    "path-template",
+  ),
+});
+
+export type PathWhen = z.infer<typeof PathWhenSchema>;
+
+/**
  * A `"custom"` issue as the query checks below raise it: where it points, and what it says.
  * Those checks are module-level functions rather than blocks inside the superRefine, so they
  * take a sink instead of zod's refinement context — the `code: "custom"` is supplied by the
@@ -877,6 +906,15 @@ export const ToolSchema = z
       .array(QueryParamSchema)
       .min(1, "a query must declare at least one parameter")
       .optional(),
+    /**
+     * Guards evaluated in order before `path`, each selecting a different endpoint when its
+     * named argument is absent. `path` remains the final unguarded return, so a spec without
+     * `pathWhen` is unchanged in meaning and in emitted bytes.
+     */
+    pathWhen: z
+      .array(PathWhenSchema)
+      .min(1, "a pathWhen must declare at least one guard")
+      .optional(),
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
@@ -968,9 +1006,98 @@ export const ToolSchema = z
       'needs "query" moves its whole query string there.',
   })
   .superRefine((t, ctx) => {
-    if (t.query === undefined) return;
     const add: AddQueryIssue = ({ path, message }) =>
       ctx.addIssue({ code: "custom", path, message });
+
+    // Structural rejections, ahead of the per-guard loop below: a tool that may not carry
+    // pathWhen at all should not also be told its individual guards are malformed — the guards
+    // are meaningless in a shape that cannot have them, so the loop is skipped entirely once one
+    // of these fires. Same one-mistake-one-rejection convention the duplicate/self-reference
+    // checks in the loop below follow.
+    let pathWhenInvalid = false;
+    if (t.pathWhen !== undefined) {
+      if (t.impl === "stub" || t.impl === "search") {
+        pathWhenInvalid = true;
+        add({
+          path: ["pathWhen"],
+          message:
+            t.impl === "stub"
+              ? '"pathWhen" is not valid on a "stub" tool — a stub issues no request to select a path for'
+              : '"pathWhen" is not valid on a "search" tool — its path is the endpoint its rows come from',
+        });
+      }
+      if (t.query !== undefined) {
+        pathWhenInvalid = true;
+        add({
+          path: ["pathWhen"],
+          message:
+            '"pathWhen" and "query" cannot be combined: both decide the request line, and no ' +
+            "corpus connector needs both. Refused in full rather than only for guarded query " +
+            "entries, because a rule can be loosened later and cannot be tightened.",
+        });
+      }
+    }
+
+    const guarded = new Set<string>();
+    (pathWhenInvalid ? [] : (t.pathWhen ?? [])).forEach((g, i) => {
+      // `t.args[g.absent]` reaches inherited properties (`"toString"` would find
+      // Object.prototype's method rather than nothing), the same hazard the query loop below
+      // guards with the same fix — Object.hasOwn checks only t.args's own keys.
+      const arg = Object.hasOwn(t.args, g.absent) ? t.args[g.absent] : undefined;
+      if (arg === undefined) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" guard ${String(i)} names arg ${JSON.stringify(g.absent)}, but the tool ` +
+            "declares no such arg",
+        });
+        return;
+      }
+      // The same predicate query's omitWhen uses, called rather than restated: a guard on a value
+      // that can never be undefined is dead code, and the two rules must not drift apart.
+      if (!canOmitQueryValue(arg)) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" guard ${String(i)} tests arg ${JSON.stringify(g.absent)}, but that arg ` +
+            `${omitWhenViolations(arg).join(" and ")} — its value can never be undefined, so the ` +
+            "guard can never select its path",
+        });
+        return;
+      }
+      if (guarded.has(g.absent)) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" tests arg ${JSON.stringify(g.absent)} more than once — the second guard ` +
+            "is unreachable, since the first returns whenever it is absent",
+        });
+        // One mistake, one issue — mirrors the two checks above, which also return after
+        // adding. Without this, a guard that is both a duplicate and self-referencing (below)
+        // would report twice for a single bad guard.
+        return;
+      }
+      guarded.add(g.absent);
+
+      // POSITIONAL, not global. Guard i may reference any arg EXCEPT the one it tests: reaching
+      // guard i means every earlier guard's test was false, so those args are non-undefined here.
+      // The naive version — collect every guarded arg and reject any reference to any of them —
+      // rejects athena_list, the shape this feature exists to reach.
+      for (const seg of parsePathTemplate(g.path)) {
+        if (seg.kind === "arg" && seg.name === g.absent) {
+          add({
+            path: ["pathWhen", i, "path"],
+            message:
+              `"pathWhen" guard ${String(i)}'s path interpolates ${JSON.stringify(g.absent)}, ` +
+              'the arg it tests for absence — it would render "undefined" into the URL. A ' +
+              "template literal accepts `string | undefined`, so the generated package compiles " +
+              "and the wrong request is sent silently.",
+          });
+        }
+      }
+    });
+
+    if (t.query === undefined) return;
 
     checkQueryPathPrefix(t.name, t.path, add);
 
@@ -1385,6 +1512,17 @@ export const ConnectorSpecSchema = z
       'style "rest-kit" cannot declare an "impl": "search" tool: makeRestToolRegistrar ' +
       "performs the request and wraps the result itself, so it has no seam for the filter. " +
       'Use style "read-only-kit" or "hand-rolled".',
+  })
+  // Measured 2026-08-09 against packages/mcp-connectors tree 67c7390a: zero of the twelve
+  // conditional-endpoint corpus connectors use makeRestToolRegistrar. Without this, a rest-kit
+  // tool with pathWhen would silently emit a single path expression — tools-rest.ts has no
+  // ladder callback, only the one-hoist-or-none shape the registrar's path argument accepts —
+  // so the spec would describe a request the emitted package does not make.
+  .refine((s) => s.style !== "rest-kit" || !s.tools.some((t) => t.pathWhen !== undefined), {
+    message:
+      'style "rest-kit" cannot declare "pathWhen": makeRestToolRegistrar takes one path ' +
+      'expression per tool and has no seam for a guard ladder. Use style "read-only-kit" or ' +
+      '"hand-rolled".',
   })
   // One emitted `export const` per filter, all in one src/search-filter.ts. Two tools
   // naming the same export would emit a duplicate declaration. No corpus connector reuses

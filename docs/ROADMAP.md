@@ -636,6 +636,27 @@ alone.
   spec is rejected anyway. `fixtures/google-meet.spec.json` carries `"local":
   "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
   and not fixed here.
+- **An unguarded optional argument interpolated into a path emits a package that does not
+  typecheck.** An arg with `"optional": true` and no `"default"` is `string | undefined` in the
+  emitted `z.object`, and `renderPath`'s `|enc` mode wraps it in `encodeURIComponent`, which
+  accepts `string | number | boolean`. So `"path": "/x/${arg.a|enc}"` with
+  `"a": { "type": "string", "optional": true }` emits
+  `encodeURIComponent(p.a)` and the generated package fails `tsc` under its own strict
+  `tsconfig.json`. Nothing rejects the spec — the arg IS used, so the unreferenced-arg checks
+  pass, and hoisting does not apply because there is no default to hoist. **A `pathWhen` guard
+  narrows only the arg it names**, so this survives the guard ladder: a tool whose fallthrough
+  path interpolates a *second*, unguarded optional arg takes the block form and still emits the
+  uncompilable call. `fixtures/zzcond.spec.json` compiles only because its one guard happens to
+  cover its one path argument; the emitter does not guarantee that pairing.
+
+  **No gate in the merge gate catches it.** `test/emit/emitted-typecheck.test.ts`'s own header
+  (`:71`) records that hand-rolled and rest-kit `src/server.ts` are compiled nowhere in
+  `bun test` at either target; the read-only-kit × monorepo cases that *are* compiled there do
+  not include this shape. `diff:golden` is a byte comparison against real connectors, and no
+  real connector writes it. Pre-existing and unrelated to the conditional-endpoint work, which
+  neither introduced nor closed it. The cheap close is a read-only-kit × monorepo case in
+  `emitted-typecheck.test.ts` — that path IS compiled — which would turn this from an
+  uncaught defect into a failing test naming the arg.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
   optional arg is present, or mapping a `z.enum` through a lookup table. **Open Stage E work**,
   not a permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector

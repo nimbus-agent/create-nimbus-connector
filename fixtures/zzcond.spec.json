@@ -1,0 +1,23 @@
+{
+  "name": "zzcond",
+  "displayName": "ZZ Conditional",
+  "description": "Synthetic fixture exercising pathWhen. Matches no real connector.",
+  "serviceLabel": "ZZCond",
+  "style": "hand-rolled",
+  "syncInterval": 3600,
+  "env": [{ "vars": ["ZZCOND_TOKEN"], "local": "authHeaders", "bindings": ["token"], "auth": "bearer" }],
+  "fetchHelper": { "local": "zzcondGet", "base": "https://api.zzcond.test", "headers": "authHeaders" },
+  "tools": [
+    {
+      "name": "zzcond_get",
+      "description": "Fetch a build, or the app when no build is named.",
+      "impl": "rest",
+      "path": "/builds/${arg.buildId|enc}",
+      "pathWhen": [{ "absent": "buildId", "path": "/apps/${arg.appId|enc}" }],
+      "args": {
+        "appId": { "type": "string", "min": 1 },
+        "buildId": { "type": "string", "min": 1, "optional": true }
+      }
+    }
+  ]
+}

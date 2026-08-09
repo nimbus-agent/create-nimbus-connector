@@ -425,6 +425,8 @@ const GLOSSES: Readonly<Record<string, string>> = {
     "The request path, a template over `${env.X}` and `${arg.X}` with an optional `|raw`, `|enc`, `|num` or `|bool` mode.",
   "tools[].query":
     "Query-string parameters built beside `path`, each emitted as a `searchParams.set` call — the only way to express a parameter that is sent conditionally. [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query).",
+  "tools[].pathWhen":
+    "Guards evaluated in order before `path`, each selecting a different endpoint when its named argument is absent. `path` is the final unguarded return.",
   "tools[].impl":
     'What the tool does: a REST request, a handler that throws `"<tool> not implemented"`, or a substring search over one endpoint\'s rows. `get` is the Stage A spelling of `rest`, normalised at parse time.',
   "tools[].method": "The HTTP verb, and nothing more.",
@@ -454,6 +456,11 @@ const GLOSSES: Readonly<Record<string, string>> = {
   "tools[].query[].arg": "The tool's argument supplying the value.",
   "tools[].query[].omitWhen":
     'Guards the emitted `searchParams.set`: `absent` tests `!== undefined`, `empty` adds `&& !== ""`. Omitted sends the parameter unconditionally.',
+
+  // tools[].pathWhen[]
+  "tools[].pathWhen[].absent": "The argument tested; this rung wins when it is `undefined`.",
+  "tools[].pathWhen[].path":
+    "The path to use when `absent` is undefined, in the same template DSL as `tools[].path`.",
 
   // tools[].filter
   "tools[].filter.export":

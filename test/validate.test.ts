@@ -263,6 +263,60 @@ describe("validateSpec", () => {
     expect(() => validateSpec(s)).not.toThrow();
   });
 
+  /**
+   * A `pathWhen` guard's `path` is the same path DSL in a second position, and
+   * src/emit/server/tools-hand.ts renders it the same way — so every check `tools[].path` gets
+   * must reach it too. These live here, not in test/spec.test.ts, because the placeholder rules
+   * are `validateSpec`'s (they need the tool's args and the spec's env locals, which a zod
+   * refinement on one guard cannot see); a test calling only `parseSpec` passes either way.
+   *
+   * Every guard below is otherwise legal — same tool, same args, only the guard path varies —
+   * so the rejection asserted is the one named. In particular no guard interpolates the arg it
+   * tests: that shape is already refused by ConnectorSpecSchema, which would make these pass
+   * while proving nothing about the placeholder checks.
+   */
+  describe("a pathWhen guard's path is checked like any other tool path", () => {
+    const withGuardPath = (guardPath: string, args: Record<string, unknown>) =>
+      specWith({
+        tools: [
+          {
+            name: "sentry_issue_list",
+            description: "d.",
+            args: { projectSlug: { type: "string", optional: true }, ...args },
+            path: "/projects/${env.org}/${arg.projectSlug|enc}/issues/",
+            pathWhen: [{ absent: "projectSlug", path: guardPath }],
+          },
+        ],
+      });
+
+    it("accepts a guard path whose placeholders all resolve", () => {
+      expect(() =>
+        validateSpec(withGuardPath("/organizations/${env.org}/issues/", {})),
+      ).not.toThrow();
+    });
+
+    // Emitted as `encodeURIComponent(p.nosuch)` — TS2339 in the generated package.
+    it("rejects a guard path referencing an undeclared arg", () => {
+      const s = withGuardPath("/organizations/${env.org}/${arg.nosuch|enc}", {});
+      expect(() => validateSpec(s)).toThrow(/declares no arg named "nosuch"/);
+    });
+
+    // Emitted as a call to an accessor no env entry declares — TS2304.
+    it("rejects a guard path referencing an undeclared env local", () => {
+      const s = withGuardPath("/organizations/${env.nosuch}/issues/", {});
+      expect(() => validateSpec(s)).toThrow(/no env entry has local "nosuch"/);
+    });
+
+    // The silent one: |bool on a non-boolean arg falls back to a raw reference, so the package
+    // compiles and requests the wrong URL. Nothing downstream reports it.
+    it("rejects a |bool guard placeholder applied to a non-boolean arg", () => {
+      const s = withGuardPath("/organizations/${env.org}/issues/${arg.flag|bool}", {
+        flag: { type: "string" },
+      });
+      expect(() => validateSpec(s)).toThrow(/"flag".*boolean/s);
+    });
+  });
+
   it("rejects an env local colliding with the reserved global `fetch` (F6)", () => {
     const s = specWith({ env: [{ vars: ["A"], local: "fetch", bindings: ["a"], required: true }] });
     expect(() => validateSpec(s)).toThrow(/fetch/);
