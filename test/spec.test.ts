@@ -1655,6 +1655,62 @@ describe("ToolSchema query parameters", () => {
   });
 });
 
+describe("ToolSchema pathWhen guards", () => {
+  const condSpec = (over: Record<string, unknown>) =>
+    parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "authHeaders", bindings: ["token"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "authHeaders" },
+      tools: [
+        {
+          name: "acme_get",
+          description: "Get.",
+          impl: "rest",
+          path: "/builds/${arg.buildId|enc}",
+          args: {
+            appId: { type: "string", min: 1 },
+            buildId: { type: "string", min: 1, optional: true },
+          },
+          ...over,
+        },
+      ],
+    });
+
+  it("accepts a guard naming an optional arg with no default", () => {
+    expect(() => condSpec({ pathWhen: [{ absent: "buildId", path: "/apps" }] })).not.toThrow();
+  });
+
+  it("rejects a guard naming an arg the tool does not declare", () => {
+    expect(() => condSpec({ pathWhen: [{ absent: "nosuch", path: "/apps" }] })).toThrow(/nosuch/);
+  });
+
+  it("rejects a guard on a required arg, whose value can never be undefined", () => {
+    // Reuses canOmitQueryValue, so this message names the same clause query's does.
+    expect(() => condSpec({ pathWhen: [{ absent: "appId", path: "/apps" }] })).toThrow(
+      /can never be undefined/,
+    );
+  });
+
+  it("rejects two guards naming the same arg", () => {
+    expect(() =>
+      condSpec({
+        pathWhen: [
+          { absent: "buildId", path: "/apps" },
+          { absent: "buildId", path: "/other" },
+        ],
+      }),
+    ).toThrow(/more than once/);
+  });
+
+  it("rejects an empty pathWhen array", () => {
+    expect(() => condSpec({ pathWhen: [] })).toThrow(/at least one/);
+  });
+});
+
 describe("strings the emitter splices raw into generated source", () => {
   // The payload that reproduced the hole: it closes renderFetchHelper's URL template literal,
   // runs a call, and reopens the literal so `${path}` still lands inside one. The emitted file

@@ -716,6 +716,35 @@ export const QueryParamSchema = z.strictObject({
 export type QueryParam = z.infer<typeof QueryParamSchema>;
 
 /**
+ * One rung of a conditional-endpoint ladder: the path to use when `absent` names an argument
+ * that is `undefined`.
+ *
+ * `absent` reuses the word `QueryParamSchema.omitWhen` already uses for the identical test. A
+ * second spelling for "this argument was not supplied" is the drift this repo removes.
+ *
+ * Deliberately NOT a general condition object. Every one of the twelve corpus connectors that
+ * branches on an optional argument tests `=== undefined` and nothing else, and the single
+ * compound guard (`semgrep`) means something a ladder cannot say — see docs/ROADMAP.md.
+ */
+export const PathWhenSchema = z.strictObject({
+  absent: z.string().min(1),
+  /**
+   * Note the missing fourth argument, and that it is deliberate. `tools[].path` passes
+   * `emptyIsMeaningful = true` because an empty `path` is already rejected by the checks that
+   * read it, so adding a `.min(1)` there would move where an existing rejection comes from. No
+   * such downstream check exists for a guard's path: `{ "absent": "x", "path": "" }` would emit a
+   * guard returning the base URL alone. Defaulting to `false` gives it the `.min(1)`.
+   */
+  path: rawSplicedString(
+    "tools[].pathWhen[].path",
+    "the fetch helper's path argument template literal",
+    "path-template",
+  ),
+});
+
+export type PathWhen = z.infer<typeof PathWhenSchema>;
+
+/**
  * A `"custom"` issue as the query checks below raise it: where it points, and what it says.
  * Those checks are module-level functions rather than blocks inside the superRefine, so they
  * take a sink instead of zod's refinement context — the `code: "custom"` is supplied by the
@@ -877,6 +906,15 @@ export const ToolSchema = z
       .array(QueryParamSchema)
       .min(1, "a query must declare at least one parameter")
       .optional(),
+    /**
+     * Guards evaluated in order before `path`, each selecting a different endpoint when its
+     * named argument is absent. `path` remains the final unguarded return, so a spec without
+     * `pathWhen` is unchanged in meaning and in emitted bytes.
+     */
+    pathWhen: z
+      .array(PathWhenSchema)
+      .min(1, "a pathWhen must declare at least one guard")
+      .optional(),
     // "get" is the Stage A spelling. It became wrong the moment `method` existed, but
     // 0.2.2 is published, so it is normalised rather than rejected.
     impl: z
@@ -968,9 +1006,45 @@ export const ToolSchema = z
       'needs "query" moves its whole query string there.',
   })
   .superRefine((t, ctx) => {
-    if (t.query === undefined) return;
     const add: AddQueryIssue = ({ path, message }) =>
       ctx.addIssue({ code: "custom", path, message });
+
+    const guarded = new Set<string>();
+    (t.pathWhen ?? []).forEach((g, i) => {
+      const arg = t.args?.[g.absent];
+      if (arg === undefined) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" guard ${String(i)} names arg ${JSON.stringify(g.absent)}, but the tool ` +
+            "declares no such arg",
+        });
+        return;
+      }
+      // The same predicate query's omitWhen uses, called rather than restated: a guard on a value
+      // that can never be undefined is dead code, and the two rules must not drift apart.
+      if (!canOmitQueryValue(arg)) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" guard ${String(i)} tests arg ${JSON.stringify(g.absent)}, but that arg ` +
+            `${omitWhenViolations(arg).join(" and ")} — its value can never be undefined, so the ` +
+            "guard can never select its path",
+        });
+        return;
+      }
+      if (guarded.has(g.absent)) {
+        add({
+          path: ["pathWhen", i, "absent"],
+          message:
+            `"pathWhen" tests arg ${JSON.stringify(g.absent)} more than once — the second guard ` +
+            "is unreachable, since the first returns whenever it is absent",
+        });
+      }
+      guarded.add(g.absent);
+    });
+
+    if (t.query === undefined) return;
 
     checkQueryPathPrefix(t.name, t.path, add);
 
