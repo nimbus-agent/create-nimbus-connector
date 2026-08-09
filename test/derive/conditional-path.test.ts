@@ -80,6 +80,25 @@ describe("recognizeConditionalPath", () => {
     expect(got).toBeUndefined();
   });
 
+  it("refuses an if/else that IS followed by a fallthrough, dropping no branch", () => {
+    // The case above is vacuous with respect to the `alternate` guard, and the difference matters.
+    // An if/else with nothing after it has no unguarded return, so the fallthrough-count check
+    // refuses it for an unrelated reason and `parts.alternate !== undefined` can be deleted with
+    // every other test in this file still green — verified by mutation, 2026-08-09.
+    //
+    // Give the if/else a trailing return and the guard becomes the ONLY thing standing between
+    // this module and a wrong claim: without it the reader recovers
+    // `{ pathWhen: [{ absent: "buildId", path: "/apps" }], path: "/other" }` and the `else`
+    // branch — a whole endpoint — simply vanishes from the derived spec. That is not a refusal
+    // that costs a tier; it is a connector that re-emits doing something it does not do.
+    const got = recognize("p", [
+      "if (p.buildId === undefined) { return jsonResult(await acmeGet(`/apps`)); }",
+      "else { return jsonResult(await acmeGet(`/builds`)); }",
+      "return jsonResult(await acmeGet(`/other`));",
+    ]);
+    expect(got).toBeUndefined();
+  });
+
   it("refuses a compound guard, which means something a ladder cannot say", () => {
     // semgrep's shape: one path when ALL are absent, not three paths. Reading it as a ladder
     // would change behaviour.
