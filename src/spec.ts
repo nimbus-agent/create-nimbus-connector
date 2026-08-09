@@ -1010,17 +1010,24 @@ export const ToolSchema = z
       ctx.addIssue({ code: "custom", path, message });
 
     // Structural rejections, ahead of the per-guard loop below: a tool that may not carry
-    // pathWhen at all should not also be told its guards are wrong.
+    // pathWhen at all should not also be told its individual guards are malformed — the guards
+    // are meaningless in a shape that cannot have them, so the loop is skipped entirely once one
+    // of these fires. Same one-mistake-one-rejection convention the duplicate/self-reference
+    // checks in the loop below follow.
+    let pathWhenInvalid = false;
     if (t.pathWhen !== undefined) {
       if (t.impl === "stub" || t.impl === "search") {
+        pathWhenInvalid = true;
         add({
           path: ["pathWhen"],
           message:
-            `"pathWhen" is not valid on an ${JSON.stringify(t.impl)} tool — a stub issues no ` +
-            "request, and a search tool's path is the endpoint its rows come from",
+            t.impl === "stub"
+              ? '"pathWhen" is not valid on a "stub" tool — a stub issues no request to select a path for'
+              : '"pathWhen" is not valid on a "search" tool — its path is the endpoint its rows come from',
         });
       }
       if (t.query !== undefined) {
+        pathWhenInvalid = true;
         add({
           path: ["pathWhen"],
           message:
@@ -1032,7 +1039,7 @@ export const ToolSchema = z
     }
 
     const guarded = new Set<string>();
-    (t.pathWhen ?? []).forEach((g, i) => {
+    (pathWhenInvalid ? [] : (t.pathWhen ?? [])).forEach((g, i) => {
       // `t.args[g.absent]` reaches inherited properties (`"toString"` would find
       // Object.prototype's method rather than nothing), the same hazard the query loop below
       // guards with the same fix — Object.hasOwn checks only t.args's own keys.

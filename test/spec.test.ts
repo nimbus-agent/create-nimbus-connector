@@ -1786,6 +1786,22 @@ describe("ToolSchema pathWhen guards", () => {
     ).toThrow(/"stub"/);
   });
 
+  it("reports exactly one issue for a stub tool whose guard is also malformed", () => {
+    // The per-guard loop must not run once the structural rejection has fired — a tool that
+    // may not carry pathWhen at all should not also be told its guards are wrong.
+    let message = "";
+    try {
+      condSpec({ impl: "stub", pathWhen: [{ absent: "missingArg", path: "/apps" }] });
+      expect(true).toBe(false); // Should not reach here
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    const issues = message.match(/^ {2}tools\[0\]\.pathWhen/gm) ?? [];
+    expect(issues).toHaveLength(1);
+    expect(message).toMatch(/"stub"/);
+    expect(message).not.toMatch(/declares no such arg/);
+  });
+
   it("rejects pathWhen on a search tool", () => {
     expect(() =>
       condSpec({ impl: "search", pathWhen: [{ absent: "buildId", path: "/apps" }] }),
