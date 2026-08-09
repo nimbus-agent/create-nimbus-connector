@@ -7,7 +7,7 @@ import {
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
-import { renderPath } from "./path-template.ts";
+import { type RenderContext, renderPath } from "./path-template.ts";
 import { queryArgsUsed, renderQueryLines } from "./query.ts";
 import { renderSearchTool } from "./search.ts";
 
@@ -76,12 +76,20 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const hoisted = hoistedLocals(tool.args);
   const query = tool.query;
   const segments = parsePathTemplate(path);
-  const pathExpr = renderPath(segments, {
+  const pathCtx: RenderContext = {
     param: PARAM,
     hoisted,
     staticStyle: spec.fetchHelper.staticPathStyle,
     ...(query === undefined ? {} : { prefix: baseExpr(spec) }),
-  });
+  };
+  const pathExpr = renderPath(segments, pathCtx);
+
+  // A guard's path is parsed once and read twice — by usedHoists below and by the ladder at the
+  // end — so the two can never disagree about which args a guard names.
+  const guards = (tool.pathWhen ?? []).map((g) => ({
+    absent: g.absent,
+    segments: parsePathTemplate(g.path),
+  }));
 
   // A non-GET tool routes through the write helper (`${local}Send`) with its method and
   // JSON body; renderBodyExpr returns undefined for a tool that sends no body (e.g. a
@@ -99,14 +107,25 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   // the path rather than duplicating the ternary is what keeps a non-GET query tool from
   // silently routing through the read helper.
   const callPath = query === undefined ? pathExpr : "path";
-  const call =
+  // Named rather than inlined because a pathWhen guard builds the same call around a different
+  // path: two hand-written copies of this ternary would compile even after they diverged, so the
+  // moment the write path changes only one of them would follow.
+  const callFor = (pathArg: string): string =>
     tool.method === "GET"
-      ? `jsonResult(await ${spec.fetchHelper.local}(${callPath}))`
-      : `jsonResult(await ${spec.fetchHelper.local}Send(${callPath}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+      ? `jsonResult(await ${spec.fetchHelper.local}(${pathArg}))`
+      : `jsonResult(await ${spec.fetchHelper.local}Send(${pathArg}, ${JSON.stringify(tool.method)}, ${bodyExpr ?? "undefined"}))`;
+  const call = callFor(callPath);
 
   // Only hoists something actually reads are emitted — see renderHoists, and usedHoists for
-  // which of the body, the path and the query contributes what.
-  const used = usedHoists(segments, hoisted, query, body?.hoistsUsed ?? []);
+  // which of the body, the path and the query contributes what. A guard's path is a path like
+  // any other: a hoisted arg it names is read at runtime, so it joins the set or the guard
+  // references a const the handler never declares.
+  const used = usedHoists(
+    [...segments, ...guards.flatMap((g) => g.segments)],
+    hoisted,
+    query,
+    body?.hoistsUsed ?? [],
+  );
 
   // The body only ever references PARAM through renderBodyExpr's own param.field
   // expressions, so a defined bodyExpr always needs the parameter — even when the path
@@ -114,8 +133,12 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   // POST to a fixed collection endpoint) would emit an unused `p`, which the generated
   // package's own noUnusedParameters tsconfig setting rejects. A query entry naming an
   // unhoisted arg needs the same thing, for the same reason — it reads `p.<arg>` directly.
+  // Every guard reads `p.<absent>` in its own test, so one guard is enough to need the
+  // parameter even when nothing else in the tool does — a fully static fallthrough path with
+  // one guard would otherwise emit `async () =>` around a body referencing `p`.
   const needsParam =
     used.size > 0 ||
+    guards.length > 0 ||
     segments.some((s) => s.kind === "arg" && !hoisted.has(s.name)) ||
     bodyExpr !== undefined ||
     (query ?? []).some((q) => !hoisted.has(q.arg));
@@ -151,13 +174,26 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     ].join("\n");
   }
 
-  // A hoist has nowhere to live in an expression body, so a tool that needs one takes the
-  // block form regardless of the connector's declared style.
-  if (used.size === 0 && spec.handlerStyle === "concise") {
+  // A hoist has nowhere to live in an expression body, so a tool that needs one takes the block
+  // form regardless of the connector's declared style. A pathWhen ladder is statements for the
+  // same reason — and it has to be named here explicitly, because `used` counts HOISTS and a
+  // guarded tool need not have any. Without this a guarded tool with no defaulted arg takes the
+  // expression form and emits none of its guards: it compiles, it lints, and only a byte-diff
+  // would ever see it.
+  if (used.size === 0 && guards.length === 0 && spec.handlerStyle === "concise") {
     return renderConciseTool(head, param, call, needsParam);
   }
 
   const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
+  // One statement per guard, in spec order — the ladder is the author's, not sorted. Each
+  // guard's path goes through the same renderPath and the same callFor the fallthrough uses,
+  // so a guard cannot render differently from an ordinary path. Line breaks are the emitter's,
+  // indentation is Biome's (see CLAUDE.md).
+  const guardLines = guards.flatMap((g) => [
+    `    if (${PARAM}.${g.absent} === undefined) {`,
+    `      return ${callFor(renderPath(g.segments, pathCtx))};`,
+    "    }",
+  ]);
   return [
     "reg(",
     `  ${JSON.stringify(tool.name)},`,
@@ -165,6 +201,7 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     `  ${schema},`,
     `  async ${param} => {`,
     ...hoists,
+    ...guardLines,
     `    return ${call};`,
     "  },",
     ");",

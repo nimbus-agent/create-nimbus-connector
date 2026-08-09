@@ -133,6 +133,7 @@ describe("the checked-in fixtures/expectations.json", () => {
       "newrelic",
       "sentry",
       "zendesk",
+      "zzcond",
       "zzextract",
       "zzquery",
       "zzreadonly",

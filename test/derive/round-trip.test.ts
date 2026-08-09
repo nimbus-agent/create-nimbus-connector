@@ -122,13 +122,7 @@ import { displayPath } from "../../src/types.ts";
  * observable in a single byte this connector emits, so their absence from the derived spec is
  * the correct minimal spec, not a recovery this deriver failed at.
  *
- * zzcond is the pathWhen fixture (conditional-endpoint plan, Task 1): one hand-rolled tool, one
- * optional no-default arg, one guard. Deliberately minimal and deliberately without `query` —
- * Task 3 refuses `pathWhen` alongside `query` in full, so a fixture pairing the two would stop
- * parsing the moment that refine lands. It round-trips trivially today because `pathWhen` has no
- * emitter yet: nothing about it reaches `src/server.ts`, so deriving from that file and re-
- * emitting can neither recover it nor need to. Task 5 grows this fixture once there is something
- * to prove.
+ * zzcond is the pathWhen fixture, and it moved OUT of this list in Task 4 — see BLOCKED.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -152,7 +146,6 @@ const ROUND_TRIP = [
   "zzwriterest",
   "bitrise",
   "zzwrite",
-  "zzcond",
 ];
 
 /**
@@ -194,16 +187,19 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it.
  *
- * **This list is empty**, and the invariant it now records is: every fixture in `fixtures/`
- * derives, and every one of them re-emits byte-identically except `google-meet`, whose single
- * moving file PARTIAL_ROUND_TRIP names and re-checks in both directions. No count appears here
- * deliberately — the "accounts for every fixture" test does that arithmetic on every run, which is
- * this file's own top docstring's rule and CLAUDE.md's ("do not restate live numbers"): a number
- * written down here goes stale silently the next time a fixture is added.
+ * `zzcond` is the pathWhen fixture (conditional-endpoint plan, Task 1): one hand-rolled tool, one
+ * optional no-default arg, one guard. Deliberately minimal and deliberately without `query` —
+ * Task 3 refuses `pathWhen` alongside `query` in full, so a fixture pairing the two would stop
+ * parsing. It sat in ROUND_TRIP while `pathWhen` had no emitter and nothing about it reached
+ * `src/server.ts`; Task 4 emits the guard ladder, and `src/derive/` cannot read one until Task 6,
+ * which restores this entry to ROUND_TRIP. The blocker is `call:reg` — measured by running
+ * `deriveSpec` against this fixture's own emitted output, per the rule below, not inferred:
+ * `recognizeHandTools` reads a handler whose body is hoists plus one `return`, and the `if`
+ * statements the ladder adds are not that shape, so the whole `reg(...)` call goes unclaimed.
  *
- * The list is kept rather than deleted because that same test spans all three: a fixture added
- * later that does NOT derive belongs here, on screen, rather than being quietly absent — the same
- * reason fixtures/expectations.json omits a file instead of hiding it.
+ * No count appears here deliberately — the "accounts for every fixture" test does that arithmetic
+ * on every run, which is this file's own top docstring's rule and CLAUDE.md's ("do not restate
+ * live numbers"): a number written down here goes stale silently the next time a fixture is added.
  *
  * The rule for any future entry is unchanged, and it is the reason this docstring is a rule
  * rather than a narrative: **the reason must be measured by actually running `deriveSpec` against
@@ -218,7 +214,9 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * Which recognizer unblocked which fixture is recorded where it can go stale visibly instead —
  * beside the fixture, in ROUND_TRIP's and PARTIAL_ROUND_TRIP's own docstrings above.
  */
-const BLOCKED: Record<string, string> = {};
+const BLOCKED: Record<string, string> = {
+  zzcond: "a pathWhen guard ladder, which src/derive/ cannot read until Task 6",
+};
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
