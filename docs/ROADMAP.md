@@ -237,13 +237,24 @@ them on one row.
 - [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
-- [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
-      than `fetch`: `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai`. All five
-      write that CLI logic in `src/tools.ts`, so `bun run reach` reports them as
-      `frame:tools-in-second-file`, not under a CLI-shaped bucket of their own — the construct
-      itself is never reached. A separate set (`aws`, `azure`, `gcp`, `kubernetes`) shells out
-      via `shared/run-cli-json` directly from `server.ts`, without `safe-cli-arg`, and *does*
-      surface as its own bucket, `import-from:../../shared/run-cli-json.ts`.
+- [ ] **CLI-backed connectors, and both sets now surface.** Nine connectors shell out instead of
+      calling `fetch`, in two shapes that used to report very differently:
+
+      | Shape | Bucket | Connectors |
+      | --- | --- | --- |
+      | `shared/safe-cli-arg`, from `src/tools.ts` | `import-from:../../shared/safe-cli-arg.ts` | `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai` |
+      | `shared/run-cli-json`, from `src/server.ts` | `import-from:../../shared/run-cli-json.ts` | `aws`, `azure`, `gcp`, `kubernetes` |
+
+      **This bullet used to say the first construct "is never reached"** — true when the deriver
+      stopped at `frame:tools-in-second-file` and never opened the second file, and false as of
+      the 2026-08-09 measurement, which is what reading `src/tools.ts` changed. The five are now
+      reported under the same kind of bucket as the four, so the construct can be counted rather
+      than inferred. Recorded rather than quietly corrected, because the claim was invalidated by
+      this repository's own change and the next reader deserves to know a sentence here moved.
+
+      Nothing about the *gap* changed: shelling out is unexpressible in the spec language either
+      way, and closing it means a spec construct for a subprocess call plus an emitter path for
+      it — not a recognizer.
 - [~] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
       number with its method. **The publishing half is closed; the raising half is not, and
       this bullet stays `[~]` for that reason rather than being marked done.** The method is no
@@ -402,19 +413,27 @@ achievable.
 | --- | --- | --- |
 | **Frame** — `frame:no-registrar` (4) | 4 | **spec-language** |
 | **Manifest** — `manifest:missing-syncInterval` (`iac`) | 1 | **spec-language** |
-| **Tool registration** — `call:reg`, eleven single-connector `call:register<X>Tool` buckets, `const-call:makeRestToolRegistrar` | 68 | mostly **spec-language**; see below |
-| **Hoisted helper functions** — 173 distinct `function:<name>` buckets | 67 | **spec-language** |
-| **Hoisted consts and schemas** — `statement:VariableDeclaration`, `method-call:.object`, `.extend` | 42 | **spec-language**, plus one downstream case |
+| **Tool registration** — `call:reg`, the single-connector `call:register<X>Tool` buckets, `const-call:makeRestToolRegistrar` | 79 | mostly **spec-language**; see below |
+| **Hoisted helper functions** — 196 distinct `function:<name>` buckets | 78 | **spec-language** |
+| **Hoisted consts and schemas** — `statement:VariableDeclaration`, `method-call:.object`, `.extend` | 47 | **spec-language**, plus one downstream case |
 | **Local type declarations** — `TSTypeAliasDeclaration`, `TSInterfaceDeclaration` | 9 | **spec-language** |
-| **Imports** — 23 buckets: shared primitives, node builtins, per-connector modules | 61 | mixed, and mostly downstream |
+| **Imports** — 30 buckets: shared primitives, node builtins, per-connector modules | 72 | mixed, and mostly downstream |
 
 **Those columns do not add to 88, and that is the most important thing to know about them.** A
 connector is blocked by *every* statement nothing claimed, so one refusal upstream produces
 several buckets downstream: a connector whose fetch helper is refused also reports its hoisted
 base-URL const, its imports and its registrations as unclaimed, none of which is an independent
-cause. **19 connectors carry exactly one bucket**, and only for those is the bucket the whole
-story: the 15 frame-only ones, `iac`, and `intercom`/`lever`/`readwise` on `function:authHeader`.
+cause. **8 connectors carry exactly one bucket**, and only for those is the bucket the whole
+story: `apple`/`fastmail`/`imap`/`protonmail` on `frame:no-registrar`, `iac` on its manifest, and
+`intercom`/`lever`/`readwise` on `function:authHeader`.
 Read the histogram as a map of constructs, not as a ranking of causes.
+
+That figure was **19** on the previous tree, and the eleven that left it are the shims: reading
+`src/tools.ts` replaced each one's single `frame:tools-in-second-file` bucket with several real
+ones. Every row above rose for the same reason — the constructs were always there, and the
+deriver could not see them. **A row growing here is the histogram getting more honest, not the
+corpus getting worse**, which is exactly why a number in this table is worth nothing without the
+tree stamp above it.
 
 Four groups are worth naming precisely, because each is a *different* kind of gap:
 
@@ -445,8 +464,23 @@ Four groups are worth naming precisely, because each is a *different* kind of ga
   constraint** — see [Considered and declined](#considered-and-declined) for why the split is not
   being built.
 - **The named argument-schema const is the largest single closable-looking shape, and it is
-  not one recognizer.** Twenty connectors hoist `const <name>Schema = z.object({ … })` to module
-  scope — 109 such declarations — and pass it to `reg` by name. **Five** connectors compose with
+  not one recognizer.** **13** connectors hoist `const <name>Schema = z.object({ … })` — **66**
+  such declarations — and pass it to `reg` by name. Re-measured 2026-08-09 against tree
+  `67c7390a` with
+
+  ```bash
+  grep -rE '^const [A-Za-z_$][A-Za-z0-9_$]*Schema\s*=\s*z\.object\(' */src/*.ts
+  ```
+
+  run from `packages/mcp-connectors`, and scoped to `src/*.ts` rather than `src/server.ts`
+  because the deriver now reads both files.
+
+  This paragraph previously said **20** connectors and **109** declarations, taken on tree
+  `94fd3623`. Those figures do not reproduce here under any pattern tried, including a
+  deliberately loose one counting every `const …Schema` however initialised (14 / 92). The
+  earlier method was not written down, so whether the corpus changed or the count was wider than
+  its own description cannot be settled — which is the argument for the command above being
+  printed beside the number rather than the number standing alone. **Five** connectors compose with
   `.extend` (`bitbucket`, `circleci`, `github`, `github-actions`, `gitlab`), and only four of them
   produce a bucket for it: the other four hoist the composed schema into a module-scope const,
   while `circleci` writes `.extend` only inside its registrar call's arguments, where it is part
