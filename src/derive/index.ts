@@ -3,7 +3,7 @@ import { type AstNode, parseModule } from "./ast.ts";
 import { type Blocker, blockerFor } from "./blockers.ts";
 import { type ClaimSet, createClaimSet } from "./claims.ts";
 import { deriveManifest, type ManifestFields, MissingManifestKey } from "./manifest.ts";
-import { calleeOf, expressionOf, identName, importNames, importSource, startLine } from "./read.ts";
+import { calleeOf, expressionOf, identName, startLine } from "./read.ts";
 import { recognizeSearchFilter } from "./search-filter.ts";
 import type { SchemaShape } from "./server/args.ts";
 import { type EnvEntry, recognizeEnv } from "./server/env.ts";
@@ -19,6 +19,12 @@ import type { Frame } from "./server/frame.ts";
 import { frameFailureKind, recognizeFrame } from "./server/index.ts";
 import type { BasePrefix } from "./server/query.ts";
 import { claimSearchImports, type SearchToolFields } from "./server/search.ts";
+import {
+  applySecondFile,
+  type ForeignStatements,
+  relativeImportBindingSource,
+  type SecondFileRefusal,
+} from "./server/second-file.ts";
 import { recognizeTools, type ToolFields } from "./server/tools-hand.ts";
 import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.ts";
 
@@ -482,11 +488,18 @@ function deriveRestKitSpec(
  * reach this function at all. And the call's own callee must be a name that import's specifiers
  * actually bind (`importNames`'s `local`), not merely "some call happened to be the other
  * statement" — a connector importing one name and calling a different one falls through to the
- * ordinary blockers instead of a label that asserts a relationship that is not there.
+ * ordinary blockers instead of a label that asserts a relationship that is not there. That pair of
+ * conditions is `relativeImportBindingSource` (server/second-file.ts), the ONE definition
+ * `applySecondFile` also matches the shim on: this function and that one disagreeing about what a
+ * shim is would mean reporting one shape and splicing another.
+ *
+ * `refusal` is what the second file's own reader had to say, and it is present only when a tools
+ * source WAS supplied and could not be used — see the label it produces below.
  */
 function collapseSecondFileBlockers(
   unclaimed: readonly AstNode[],
   serverSource: string,
+  refusal?: SecondFileRefusal,
 ): Blocker[] {
   const ordinary = unclaimed.map((n) => blockerFor(n, serverSource));
   if (unclaimed.length !== 2) return ordinary;
@@ -496,16 +509,24 @@ function collapseSecondFileBlockers(
     [first, second],
     [second, first],
   ] as const) {
-    const source = importSource(imp);
-    if (!source?.startsWith("./")) continue;
-    const names = importNames(imp);
     const calleeName = identName(calleeOf(expressionOf(call)));
-    if (names === undefined || calleeName === undefined) continue;
-    if (!names.some((n) => n.local === calleeName)) continue;
+    if (calleeName === undefined) continue;
+    const source = relativeImportBindingSource(imp, calleeName);
+    if (source === undefined) continue;
     return [
       {
-        kind: "frame:tools-in-second-file",
-        detail: `every tool is registered from "${source}", a second file this generator does not read`,
+        // Once a tools source was supplied, "does not read" is a claim about the past that is no
+        // longer true — we read it and refused, and WHY is the measurement. Suffixing the kind
+        // keeps the frame: prefix (so the ceiling grouping still holds) while giving reach a
+        // distinct bucket per refusal.
+        kind:
+          refusal === undefined
+            ? "frame:tools-in-second-file"
+            : `frame:tools-in-second-file:${refusal}`,
+        detail:
+          refusal === undefined
+            ? `every tool is registered from "${source}", a second file this generator does not read`
+            : `every tool is registered from "${source}", which was read and refused: ${refusal}`,
         line: startLine(imp) ?? 0,
       },
     ];
@@ -803,14 +824,42 @@ function resolveSearchFilter(
  * The hand-rolled and read-only-kit assembly — one path, because the two styles differ only in
  * the frame that got them here (see `Frame`'s two statement lists), not in the env accessors,
  * fetch helper or `reg()` handlers those recognizers then read.
+ *
+ * The second file is spliced HERE rather than in `deriveSpec`, next to `recognizeFrame`, for one
+ * structural reason: the splice and the walk of what it hands back have to live in the same
+ * function. Splicing before the dispatch would let the rest-kit assembly — which has no foreign
+ * walk — silently drop `tools.ts`'s statements, which is the false `emits` the totality rule
+ * exists to prevent. A rest-kit frame cannot be a shim anyway (its `toolStatements` is the whole
+ * module, never the single call `applySecondFile` requires), so nothing is lost by scoping it.
  */
 function deriveSharedStyleSpec(
-  frame: Frame,
+  inputFrame: Frame,
   claims: ClaimSet,
   manifest: ManifestFields,
   serverSource: string,
   filterSource: string | undefined,
+  toolsSource: string | undefined,
 ): Derivation {
+  // A shim connector's tools live in src/tools.ts. Splicing before the recognizers run is the
+  // whole point: afterwards they would have already found nothing, which is how these connectors
+  // came to report frame:tools-in-second-file at the totality rule instead.
+  let frame = inputFrame;
+  let foreign: ForeignStatements | undefined;
+  let foreignClaims: ClaimSet | undefined;
+  let secondFileRefusal: SecondFileRefusal | undefined;
+  if (toolsSource !== undefined) {
+    const spliced = applySecondFile(frame, claims, toolsSource);
+    if ("refused" in spliced) {
+      // "not-a-shim" stays undefined: the connector is not a shim, so nothing about it changed and
+      // its ordinary blockers are already the right report.
+      if (spliced.refused !== "not-a-shim") secondFileRefusal = spliced.refused;
+    } else {
+      frame = spliced.frame;
+      foreign = spliced.foreign;
+      foreignClaims = spliced.foreignClaims;
+    }
+  }
+
   const { entries: env, tokenServiceLabels } = recognizeEnv(frame.verifyStatements, claims);
   const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);
   // The write helper, held against the read helper when there is one — see `agreesWithReadHelper`
@@ -832,7 +881,15 @@ function deriveSharedStyleSpec(
   // totality rule — see this function's own comment on that ordering — rather than
   // short-circuited here, so an unrecognized fetch helper still surfaces as a named,
   // per-statement blocker instead of the coarse "no-fetch-helper" case.
-  const toolsResult = recognizeTools(frame.toolStatements, claims, fetchHelper?.local);
+  // Registrations spliced in from the second file are claimed in the SECOND FILE's claim set. The
+  // server's would take tools.ts byte ranges, and `covers` is containment over two files that both
+  // start at offset 0 — a registration spanning bytes 150..900 of tools.ts would report a
+  // src/server.ts statement at 200..260 as claimed. That is the same hazard the two claim sets
+  // exist to keep apart, pointing the other way: not a foreign statement wrongly claimed, but a
+  // SERVER statement wrongly claimed by a foreign range. With no splice the two are the same set,
+  // so nothing about an ordinary connector changes.
+  const toolClaims = foreignClaims ?? claims;
+  const toolsResult = recognizeTools(frame.toolStatements, toolClaims, fetchHelper?.local);
 
   // Claim the two search-specific imports only once a search tool is positively recognized —
   // the same scoping recognizeReadOnlyFrame uses for its own frame imports (server/index.ts).
@@ -851,8 +908,30 @@ function deriveSharedStyleSpec(
   // `namedRegistrarBody`). Either way the container is spliced out rather than claimed, which is
   // what stops the registrations inside it from inheriting coverage from a claim on it.
   const unclaimed = claims.unclaimed(frame.verifyStatements);
-  if (unclaimed.length > 0) {
-    return { ok: false, blockers: collapseSecondFileBlockers(unclaimed, serverSource) };
+  // tools.ts's statements are walked with the same RULE but against their own claim set and their
+  // own source. Both are the same hazard twice: claims are byte ranges and blocker details are
+  // byte slices, so a foreign node priced against server.ts's coordinates gets a confident wrong
+  // answer rather than an error.
+  //
+  // The registrar's OWN body statements are walked alongside tools.ts's module-scope ones. For the
+  // read-only wrapper that is unnecessary — `recognizeReadOnlyFrame` splices the body INTO
+  // verifyStatements, so this rule already sees it — but `applySecondFile` cannot do that, because
+  // those statements must be read in tools.ts's coordinates. `recognizeTools` silently skips a
+  // statement that is not a reg() call, so without this a hoisted const between two registrations
+  // would be verified by nothing at all: exactly the false `emits` this rule exists to prevent.
+  const unclaimedForeign =
+    foreign === undefined || foreignClaims === undefined
+      ? []
+      : foreignClaims.unclaimed([...foreign.statements, ...frame.toolStatements]);
+
+  if (unclaimed.length > 0 || unclaimedForeign.length > 0) {
+    return {
+      ok: false,
+      blockers: [
+        ...collapseSecondFileBlockers(unclaimed, serverSource, secondFileRefusal),
+        ...unclaimedForeign.map((n) => blockerFor(n, foreign!.source, foreign!.file)),
+      ],
+    };
   }
   if (fetchHelper === undefined) {
     return blocked("no-fetch-helper", "neither a read nor a write helper was recognized");
@@ -974,5 +1053,5 @@ export function deriveSpec(files: SourceFiles): Derivation {
 
   return frame.style === "rest-kit"
     ? deriveRestKitSpec(frame, claims, manifest, files.server)
-    : deriveSharedStyleSpec(frame, claims, manifest, files.server, files.filter);
+    : deriveSharedStyleSpec(frame, claims, manifest, files.server, files.filter, files.tools);
 }

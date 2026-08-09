@@ -72,16 +72,35 @@ function loneCallName(statements: readonly AstNode[]): { node: AstNode; name: st
   return name === undefined ? undefined : { node, name };
 }
 
+/**
+ * The module specifier of `node`, when `node` is a `./…`-relative import whose own specifiers bind
+ * `name` — otherwise undefined.
+ *
+ * Exported because `collapseSecondFileBlockers` (src/derive/index.ts) asks the identical question
+ * of the shim's two unclaimed statements, and the two copies of it agreed only by coincidence: the
+ * same drift shape the `namedRegistrarBody` export was made to avoid, one file over. What the two
+ * call sites legitimately differ in is how they LOCATE the candidate — a two-element unclaimed
+ * array there, `frame.verifyStatements` here — so only this predicate is shared, not the search.
+ *
+ * The source is returned rather than a boolean because the blocker's detail quotes it, and a caller
+ * that had to re-read it would be re-asserting half the predicate to get it.
+ *
+ * importNames returns undefined for a default or namespace clause, so `import tools from` and
+ * `import * as tools from` fall through here rather than needing a rule of their own. The match is
+ * on `local`, the binding the call site actually uses, so a renamed import works.
+ */
+export function relativeImportBindingSource(
+  node: AstNode | undefined,
+  name: string,
+): string | undefined {
+  const source = importSource(node);
+  if (source?.startsWith("./") !== true) return undefined;
+  return importNames(node)?.some((n) => n.local === name) === true ? source : undefined;
+}
+
 /** The `./…`-relative import whose specifiers bind `name`. */
 function relativeImportBinding(statements: readonly AstNode[], name: string): AstNode | undefined {
-  return statements.find((s) => {
-    const source = importSource(s);
-    if (source?.startsWith("./") !== true) return false;
-    // importNames returns undefined for a default or namespace clause, so `import tools from` and
-    // `import * as tools from` fall through here rather than needing a rule of their own. The
-    // match is on `local`, the binding the call site actually uses, so a renamed import works.
-    return importNames(s)?.some((n) => n.local === name) === true;
-  });
+  return statements.find((s) => relativeImportBindingSource(s, name) !== undefined);
 }
 
 /**

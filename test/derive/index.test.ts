@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser } from "../../src/derive/ast.ts";
+import type { Blocker } from "../../src/derive/blockers.ts";
 import { deriveSpec } from "../../src/derive/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
@@ -615,6 +616,56 @@ describe("deriveSpec", () => {
       "});",
     ].join("\n");
 
+    /**
+     * The same shim shape, but with the env accessor and the fetch helper left in `src/server.ts`
+     * — this repo's own emitter output for a one-tool read-only-kit connector, with the `reg(...)`
+     * call lifted out into `./tools.ts`.
+     *
+     * The eleven real shims put the helper in `tools.ts` too, and this deriver never scans the
+     * second file for one (see the `no-fetch-helper` test below, which pins that). So this is the
+     * only arrangement in which a shim can derive at all, and it is the one that proves the splice
+     * feeds the tool recognizers rather than merely silencing a blocker.
+     */
+    const SHIM_SERVER_WITH_HELPER = [
+      'import { z } from "zod";',
+      'import { mcpJsonResult as jsonResult } from "../../shared/mcp-tool-kit.ts";',
+      'import { runReadOnlyMcpConnector } from "../../shared/run-read-only-mcp-connector.ts";',
+      'import { registerZzshimTools } from "./tools.ts";',
+      "",
+      "function headers(): Record<string, string> {",
+      '  const zzshimToken = process.env["ZZSHIM_TOKEN"]?.trim();',
+      '  if (zzshimToken === undefined || zzshimToken === "") {',
+      '    throw new Error("ZZSHIM_TOKEN is not set");',
+      "  }",
+      '  return { Authorization: `Bearer ${zzshimToken}`, Accept: "application/json" };',
+      "}",
+      "",
+      "async function zzGet(path: string): Promise<unknown> {",
+      "  const res = await fetch(`https://api.zzshim.test${path}`, { headers: headers() });",
+      "  const text = await res.text();",
+      "  if (!res.ok) {",
+      "    throw new Error(`ZZ Shim ${String(res.status)}: ${text.slice(0, 400)}`);",
+      "  }",
+      "  return JSON.parse(text) as unknown;",
+      "}",
+      "",
+      'await runReadOnlyMcpConnector("nimbus-zzshim", (reg) => {',
+      "  registerZzshimTools(reg);",
+      "});",
+    ].join("\n");
+
+    /** `src/tools.ts` for the connector above: the type-only import and the registrar, nothing else. */
+    const SHIM_TOOLS = [
+      'import type { ZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+      "",
+      "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+      '  reg("zzshim_list", "List things.", z.object({}), async () =>',
+      '    jsonResult(await zzGet("/v1/things")),',
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
     it("collapses the import and the call into one frame:tools-in-second-file blocker", () => {
       const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
       expect(result.ok).toBe(false);
@@ -659,17 +710,121 @@ describe("deriveSpec", () => {
       ]);
     });
 
-    it("accepts a tools source without yet changing what it derives", () => {
-      // Task 2 lands the contract only. Supplying `tools` must be inert until Task 4 reads it, so
-      // this pins the boundary between the two changes rather than the eventual behaviour.
-      const withTools = deriveSpec({
-        server: SHIM_SERVER,
+    it("derives a shim connector when its tools.ts is supplied", () => {
+      const result = deriveSpec({
+        server: SHIM_SERVER_WITH_HELPER,
         manifest: MANIFEST,
-        tools: "export function registerZzshimTools(reg: ZodToolRegistrar) {}\n",
+        tools: SHIM_TOOLS,
       });
-      const without = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // The tool itself, not merely `ok` — the registration this recovered lives in the OTHER file,
+      // so its presence is the whole claim being made.
+      expect((result.spec["tools"] as { name: string }[]).map((t) => t.name)).toEqual([
+        "zzshim_list",
+      ]);
+    });
 
-      expect(withTools).toEqual(without);
+    it("still blocks when the fetch helper lives in tools.ts, rather than deriving without one", () => {
+      // The likeliest real-corpus arrangement, and the honest limit of this task: the splice feeds
+      // the TOOL recognizers, not the env/fetch-helper ones, which still only read src/server.ts.
+      // The blocker moving off frame:tools-in-second-file is itself the evidence the tools WERE
+      // found — a bare SHIM_SERVER with no tools source reports that bucket instead.
+      const tools = [
+        'import type { ZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
+        "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+        '  reg("zzshim_list", "List things.", {}, async () => ({ ok: true }));',
+        "}",
+        "",
+      ].join("\n");
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST, tools });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      // Per-statement, and in the second file: with no helper recognized `recognizeTools` refuses
+      // before claiming anything, so the registration reaches the totality rule as its own blocker
+      // rather than the coarse no-fetch-helper bucket further down.
+      expect(result.blockers.map((b) => b.kind)).toEqual(["call:reg"]);
+      expect(result.blockers[0]?.file).toBe("src/tools.ts");
+    });
+
+    it("blocks on a statement inside the registrar body that is not a registration", () => {
+      // recognizeTools SKIPS a statement that is not a reg() call. For the read-only wrapper that
+      // is harmless — the body is spliced into verifyStatements, so the totality rule sees it — but
+      // a shim's body statements are in the other file's coordinates and reach that rule only
+      // through the foreign walk. Without them there, this hoisted const is verified by nothing.
+      const tools = SHIM_TOOLS.replace(
+        "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+        [
+          "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+          '  const prefix = "/v1";',
+        ].join("\n"),
+      );
+      const result = deriveSpec({
+        server: SHIM_SERVER_WITH_HELPER,
+        manifest: MANIFEST,
+        tools,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const [blocker] = result.blockers;
+      expect(blocker?.file).toBe("src/tools.ts");
+      expect(blocker?.detail).toContain('const prefix = "/v1"');
+    });
+
+    it("blocks on a helper tools.ts hoists, and says which file it is in", () => {
+      // Claiming is NOT transitive: a helper called from a claimed registration is still unclaimed.
+      // This is the likeliest real-corpus outcome, so it is pinned rather than assumed.
+      const tools = [
+        "function shorten(s: string) { return s.slice(0, 5); }",
+        "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+        '  reg("zzshim_list", "List things.", {}, async () => ({ ok: shorten("xyz") }));',
+        "}",
+        "",
+      ].join("\n");
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST, tools });
+
+      expect(result.ok).toBe(false);
+      const blocker = (result as { blockers: Blocker[] }).blockers.find((b) =>
+        b.kind.startsWith("function:"),
+      );
+      expect(blocker).toBeDefined();
+      expect(blocker!.file).toBe("src/tools.ts");
+      // Content, not merely presence: a blocker built against the WRONG source still has a
+      // non-empty detail, which is what would let the byte-offset bug survive this test.
+      expect(blocker!.detail).toContain("function shorten");
+    });
+
+    it("blocks on an import tools.ts makes, rather than treating an external one as free", () => {
+      const tools = [
+        'import { readFileSync } from "node:fs";',
+        "export function registerZzshimTools(reg: ZodToolRegistrar) {",
+        '  reg("zzshim_list", "List things.", {}, async () => ({ ok: readFileSync !== undefined }));',
+        "}",
+        "",
+      ].join("\n");
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST, tools });
+      expect(result.ok).toBe(false);
+      expect(
+        (result as { blockers: Blocker[] }).blockers.some((b) => b.file === "src/tools.ts"),
+      ).toBe(true);
+    });
+
+    it("says the second file was read and refused, rather than that it was never read", () => {
+      const arrow = "export const registerZzshimTools = (reg: ZodToolRegistrar) => {};\n";
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST, tools: arrow });
+      const [blocker] = (result as { blockers: Blocker[] }).blockers;
+
+      expect(blocker!.kind).toBe("frame:tools-in-second-file:registrar-not-a-declaration");
+      expect(blocker!.detail).toContain("read and refused");
+      // The old label asserted something that is false once a tools source was supplied.
+      expect(blocker!.detail).not.toContain("does not read");
+    });
+
+    it("keeps the original label when no tools source was supplied", () => {
+      const result = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
+      const [blocker] = (result as { blockers: Blocker[] }).blockers;
+      expect(blocker!.kind).toBe("frame:tools-in-second-file");
+      expect(blocker!.detail).toContain("does not read");
     });
   });
 
