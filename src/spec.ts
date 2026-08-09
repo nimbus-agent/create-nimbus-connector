@@ -1009,6 +1009,28 @@ export const ToolSchema = z
     const add: AddQueryIssue = ({ path, message }) =>
       ctx.addIssue({ code: "custom", path, message });
 
+    // Structural rejections, ahead of the per-guard loop below: a tool that may not carry
+    // pathWhen at all should not also be told its guards are wrong.
+    if (t.pathWhen !== undefined) {
+      if (t.impl === "stub" || t.impl === "search") {
+        add({
+          path: ["pathWhen"],
+          message:
+            `"pathWhen" is not valid on an ${JSON.stringify(t.impl)} tool — a stub issues no ` +
+            "request, and a search tool's path is the endpoint its rows come from",
+        });
+      }
+      if (t.query !== undefined) {
+        add({
+          path: ["pathWhen"],
+          message:
+            '"pathWhen" and "query" cannot be combined: both decide the request line, and no ' +
+            "corpus connector needs both. Refused in full rather than only for guarded query " +
+            "entries, because a rule can be loosened later and cannot be tightened.",
+        });
+      }
+    }
+
     const guarded = new Set<string>();
     (t.pathWhen ?? []).forEach((g, i) => {
       // `t.args[g.absent]` reaches inherited properties (`"toString"` would find
@@ -1483,6 +1505,17 @@ export const ConnectorSpecSchema = z
       'style "rest-kit" cannot declare an "impl": "search" tool: makeRestToolRegistrar ' +
       "performs the request and wraps the result itself, so it has no seam for the filter. " +
       'Use style "read-only-kit" or "hand-rolled".',
+  })
+  // Measured 2026-08-09 against packages/mcp-connectors tree 67c7390a: zero of the twelve
+  // conditional-endpoint corpus connectors use makeRestToolRegistrar. Without this, a rest-kit
+  // tool with pathWhen would silently emit a single path expression — tools-rest.ts has no
+  // ladder callback, only the one-hoist-or-none shape the registrar's path argument accepts —
+  // so the spec would describe a request the emitted package does not make.
+  .refine((s) => s.style !== "rest-kit" || !s.tools.some((t) => t.pathWhen !== undefined), {
+    message:
+      'style "rest-kit" cannot declare "pathWhen": makeRestToolRegistrar takes one path ' +
+      'expression per tool and has no seam for a guard ladder. Use style "read-only-kit" or ' +
+      '"hand-rolled".',
   })
   // One emitted `export const` per filter, all in one src/search-filter.ts. Two tools
   // naming the same export would emit a duplicate declaration. No corpus connector reuses

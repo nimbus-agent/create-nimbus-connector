@@ -1779,6 +1779,29 @@ describe("ToolSchema pathWhen guards", () => {
     expect(message).toMatch(/more than once/);
     expect(message).not.toMatch(/interpolates/);
   });
+
+  it("rejects pathWhen on a stub tool, which issues no request", () => {
+    expect(() =>
+      condSpec({ impl: "stub", pathWhen: [{ absent: "buildId", path: "/apps" }] }),
+    ).toThrow(/"stub"/);
+  });
+
+  it("rejects pathWhen on a search tool", () => {
+    expect(() =>
+      condSpec({ impl: "search", pathWhen: [{ absent: "buildId", path: "/apps" }] }),
+    ).toThrow(/"search"/);
+  });
+
+  it("rejects pathWhen together with query, including a single static parameter", () => {
+    // Blanket, not "only conditional entries". They could compose in principle; no corpus
+    // connector needs it, and loosening a rule later is safe while tightening one is not.
+    expect(() =>
+      condSpec({
+        pathWhen: [{ absent: "buildId", path: "/apps" }],
+        query: [{ name: "limit", arg: "appId" }],
+      }),
+    ).toThrow(/cannot be combined/);
+  });
 });
 
 describe("strings the emitter splices raw into generated source", () => {
