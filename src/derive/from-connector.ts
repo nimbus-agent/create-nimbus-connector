@@ -145,7 +145,15 @@ export async function deriveFromDirectory(
  */
 export function renderBlockers(dir: string, blockers: readonly Blocker[]): string {
   const lines = blockers.map((b) => {
-    const where = b.line > 0 ? `  (line ${b.line})` : "";
+    // `file` is omitted for src/server.ts, which is where every blocker came from until the
+    // deriver learned to read a second file — so the un-prefixed form stays byte-identical and
+    // only a foreign blocker gains a qualifier.
+    const where =
+      b.line > 0
+        ? b.file === undefined
+          ? `  (line ${b.line})`
+          : `  (${b.file} line ${b.line})`
+        : "";
     return `  ${b.kind}${where}`;
   });
   return (

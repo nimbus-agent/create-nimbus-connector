@@ -8,7 +8,14 @@ import {
   labelName,
 } from "./read.ts";
 
-export type Blocker = { kind: string; detail: string; line: number };
+/**
+ * A statement nothing claimed, as a histogram bucket.
+ *
+ * `file` is optional and omitted for `src/server.ts`, which is where every blocker came from
+ * until the deriver learned to read a second file. Omitting rather than defaulting keeps every
+ * existing blocker byte-identical in the reports that print them.
+ */
+export type Blocker = { kind: string; detail: string; line: number; file?: string };
 
 const MAX_DETAIL = 100;
 
@@ -43,13 +50,18 @@ function kindOf(node: AstNode): string {
  * counted and compared across connectors, while the detail is what makes a near-miss
  * actionable — an inlined `?? 50` reads as its own line rather than disappearing into a pile
  * labelled "unknown".
+ *
+ * `source` MUST be the text `node` was parsed from. The detail is a slice by the node's own byte
+ * offsets, so a node priced against another file's text yields a plausible-looking wrong answer
+ * rather than an error — which is why `file` travels with it.
  */
-export function blockerFor(node: AstNode, source: string): Blocker {
+export function blockerFor(node: AstNode, source: string, file?: string): Blocker {
   const text = node.start === null || node.end === null ? "" : source.slice(node.start, node.end);
   const collapsed = text.replaceAll(/\s+/g, " ").trim();
   return {
     kind: kindOf(node),
     detail: collapsed.length > MAX_DETAIL ? `${collapsed.slice(0, MAX_DETAIL)}…` : collapsed,
     line: node.loc?.start.line ?? 0,
+    ...(file === undefined ? {} : { file }),
   };
 }
