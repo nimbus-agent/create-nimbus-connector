@@ -330,27 +330,30 @@ const RAW_SPLICE_TERMINATORS = [
  * uses one actually writes — so the question here is per-occurrence, "is every `${` in this
  * string one of these", not "is this string one of these".
  */
-const RESOLVED_ENV_REF = /\$\{env\.\w+\}/g;
+const RESOLVED_ENV_REF = /\$\{env\.(\w+)\}/g;
 
 /**
  * The env-accessor names a base or inline-header template references, in occurrence order.
  *
  * Exported so `validateSpec` can ask *which* accessors a template names without restating the
- * pattern — the capturing twin of `RESOLVED_ENV_REF` above, built from the same source so the
- * two cannot disagree about what counts as a reference. `isEnvRefHeaderValue`'s docstring gives
- * the reason at length: a second copy of this pattern is how the mixed-header bug stayed open,
- * and there are already two copies in the tree (here and `resolveEnvRefs`, pinned against each
- * other by "accepts %j exactly when the emitter resolves every interpolation in it" in
- * test/spec.test.ts). A third, in the validator, would be the same mistake a layer down.
+ * pattern. `isEnvRefHeaderValue`'s docstring gives the reason at length: a second copy of this
+ * pattern is how the mixed-header bug stayed open, and there are already two copies in the tree
+ * (here and `resolveEnvRefs`, pinned against each other by "accepts %j exactly when the emitter
+ * resolves every interpolation in it" in test/spec.test.ts). A third, in the validator, would be
+ * the same mistake a layer down.
  *
- * `RESOLVED_ENV_REF` decides whether a `${` is a live reference; this decides what it points at.
+ * **The group is why `RESOLVED_ENV_REF` captures at all**, and it costs its own consumer nothing:
+ * the only other use is `v.replaceAll(RESOLVED_ENV_REF, "")` in `rawSplicedString`, where a string
+ * replacement ignores captures. Reading the name out of the shared pattern rather than rebuilding
+ * a capturing copy of it keeps this to one regex — an earlier revision derived the capturing form
+ * with `.source.replace("\\w+", "(\\w+)")`, which was two patterns wearing a trench coat and put
+ * the shape in a string literal where no regex-aware tool could see it.
+ *
  * Nothing here judges whether the name resolves — `validateSpec` owns that, because it is the
  * only layer that can see `spec.env` and the fetch helper at once.
  */
 export function envRefNames(tpl: string): string[] {
-  return [...tpl.matchAll(new RegExp(RESOLVED_ENV_REF.source.replace("\\w+", "(\\w+)"), "g"))].map(
-    ([, name]) => name!,
-  );
+  return [...tpl.matchAll(RESOLVED_ENV_REF)].map(([, name]) => name!);
 }
 
 /**
