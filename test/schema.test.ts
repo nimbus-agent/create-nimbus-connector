@@ -374,13 +374,15 @@ describe("the checked-in schema document", () => {
     );
   });
 
-  it("is documented in README.md in the same words, alongside the URL it is served from", () => {
+  it("is documented in the prose reference in the same words, alongside the URL it is served from", () => {
     // Not a style rule. A reader who learns the schema exists and not that it is incomplete has
     // been handed the false green; the two facts have to travel together, so they are asserted
-    // together.
-    const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
-    expect(readme).toContain(SCHEMA_LIMITATION);
-    expect(readme).toContain(SCHEMA_ID);
+    // together. Read from docs/SPEC-RULES.md, which is where the editor-setup section lives — it
+    // was README.md until the prose reference became a page of its own, and the assertion followed
+    // the section rather than staying on the file, since it is the section that has to carry both.
+    const prose = readFileSync(join(repoRoot, "docs", "SPEC-RULES.md"), "utf8");
+    expect(prose).toContain(SCHEMA_LIMITATION);
+    expect(prose).toContain(SCHEMA_ID);
   });
 });
 

@@ -102,7 +102,8 @@ Then grow it. The pieces you are most likely to reach for next:
 | OAuth | an env entry with `"auth": "client-credentials"`, `tokenUrl`, `credentialsIn` |
 | A tool you cannot express | `"impl": "stub"` — a typed handler that throws, never a silent guess |
 
-The README documents each of these in full, with the corpus measurements behind the defaults.
+[SPEC-RULES.md](./SPEC-RULES.md) documents each of these in full, with the corpus measurements
+behind the defaults.
 `fixtures/*.spec.json` are working examples — `fixtures/sentry.spec.json` for a plain read
 connector, `fixtures/mercury.spec.json` for search, `fixtures/zzwrite.spec.json` for writes.
 
