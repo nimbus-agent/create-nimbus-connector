@@ -1,7 +1,8 @@
-import type { StaticPathStyle } from "../../spec.ts";
+import type { PathWhen, StaticPathStyle } from "../../spec.ts";
 import type { AstNode } from "../ast.ts";
 import type { ClaimSet } from "../claims.ts";
 import {
+  type Arrow,
   arrowFn,
   awaited,
   blockBody,
@@ -9,6 +10,7 @@ import {
   calleeOf,
   callTo,
   expressionOf,
+  identName,
   isIdent,
   newOf,
   stringLit,
@@ -16,7 +18,8 @@ import {
 } from "../read.ts";
 import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
 import { type BodyTool, recognizeBodyExpr } from "./body.ts";
-import { mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
+import { recognizeConditionalPath } from "./conditional-path.ts";
+import { mergeHoistedArgs, recognizeHoistedBlock, splitHoists } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
 import { type BasePrefix, PATH_LOCAL, type QueryEntry, recognizeQueryBlock } from "./query.ts";
 import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
@@ -65,6 +68,16 @@ export type ToolFields = {
    * styles, parameterised only by the handler's parameter name.
    */
   query?: QueryEntry[];
+  /**
+   * The guard ladder recovered from a conditional-endpoint handler (see
+   * server/conditional-path.ts). Omitted for every other handler shape, so a tool with no ladder
+   * is byte-unchanged by this field's existence — the same reason `method` is omitted for GET.
+   *
+   * Never set beside `query`: ToolSchema refuses that pairing outright (src/spec.ts), and the two
+   * recognizers are disjoint by construction anyway — a ladder's tail is a bare `return`, the
+   * query branch's is the `new URL(...)` trio.
+   */
+  pathWhen?: PathWhen[];
   /**
    * The `arg name -> API field name` mapping, recovered ONLY when the observed JSON body differs
    * from what `renderBodyExpr`'s default would have produced — see server/body.ts's header.
@@ -233,9 +246,17 @@ function fetchFromJsonResult(
   return helperCall === undefined ? undefined : fetchCall(helperCall, helperLocal);
 }
 
-/** The declared path, its static-path-style evidence, and the method and unread body argument
- * recovered from `jsonResult(await <helper|helperSend>(...))`. */
-function pathFromJsonResult(
+/**
+ * The declared path, its static-path-style evidence, and the method and unread body argument
+ * recovered from `jsonResult(await <helper|helperSend>(...))`.
+ *
+ * Exported for test/derive/conditional-path.test.ts, which drives `recognizeConditionalPath` with
+ * the REAL return-shape reader rather than a stand-in — a stand-in would be a second definition of
+ * the shape this one already owns, free to accept what this one rejects, which is exactly the
+ * drift `hoists.ts` was extracted to stop. The precedent is `namedRegistrarBody`: exported to be
+ * read by something outside this file, not because anything else here needs it.
+ */
+export function pathFromJsonResult(
   node: AstNode | undefined,
   locals: ReadonlyMap<string, PathLocal>,
   helperLocal: string,
@@ -359,6 +380,67 @@ function recognizeQueryTool(
   };
 }
 
+/**
+ * The conditional-endpoint branch — `renderTool`'s guard ladder (src/emit/server/tools-hand.ts).
+ * Tried before the plain hoists-then-return reader, the same ordering `recognizeQueryTool` gets
+ * for its own disjoint shape: `recognizeHoistedBlock` would refuse a ladder anyway (its tail is
+ * more than one statement), so trying this first only keeps the two refusals from being reported
+ * as each other's.
+ *
+ * `votesHandlerStyle: false`, and it is load-bearing rather than incidental. `renderTool` returns
+ * the block form for a guarded tool regardless of `spec.handlerStyle` — the concise form is gated
+ * on `used.size === 0 && guards.length === 0 && spec.handlerStyle === "concise"` — so a guarded
+ * tool with no hoists is a block a "concise" connector emits too, exactly like the query, stub and
+ * search shapes `ToolShape`'s own docstring lists. Counting it would force `handlerStyle: "block"`
+ * onto a connector that never declared it, and, worse, a connector pairing one concise tool with
+ * one guarded tool would be refused outright by `recognizeTools`' mixed-shape rule — a refusal of
+ * this emitter's own output.
+ */
+function recognizeConditionalTool(
+  arrow: Arrow,
+  helperLocal: string,
+  preamble: RegPreamble,
+): ToolShape | undefined {
+  const statements = blockBody(arrow.body);
+  if (statements === undefined) return undefined;
+
+  // The handler's OWN parameter name, read off the arrow rather than assumed: the corpus writes
+  // `p` 215 times, `parsed` 92 and `data` 4 (measured 2026-08-09 against tree `67c7390a`), and a
+  // reader hardcoding `p.` would refuse 92 handlers while looking exactly like a reader that found
+  // nothing to read. A guarded tool always declares the parameter — every guard's test reads
+  // `<param>.<absent>`, which is why `renderTool`'s `needsParam` counts `guards.length > 0` — so a
+  // parameterless or destructured handler is not this shape at all.
+  const param = arrow.params.length === 1 ? identName(arrow.params[0]) : undefined;
+  if (param === undefined) return undefined;
+
+  // The same split `recognizeHoistedBlock` performs, taken one statement-shape further: a guard's
+  // path is a path like any other and may name a hoisted local, so `locals` has to be resolved
+  // before any rung's return can be read.
+  const section = splitHoists(statements);
+  const ladder = recognizeConditionalPath(section.rest, param, (node) =>
+    pathFromJsonResult(node, section.locals, helperLocal),
+  );
+  if (ladder === undefined) return undefined;
+
+  const mergedArgs = mergeHoistedArgs(preamble.args, section.hoistMeta);
+  if (mergedArgs === undefined) return undefined;
+
+  return {
+    fields: {
+      name: preamble.name,
+      description: preamble.description,
+      args: mergedArgs,
+      path: ladder.path,
+      pathWhen: ladder.pathWhen,
+    },
+    isBlock: true,
+    hasHoists: section.locals.size > 0,
+    votesHandlerStyle: false,
+    staticStyle: ladder.staticStyle,
+    schemaShape: preamble.schemaShape,
+  };
+}
+
 function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined {
   const parts = regCallParts(call);
   if (parts === undefined) return undefined;
@@ -397,23 +479,31 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
     };
   }
 
+  const preamble: RegPreamble = {
+    name,
+    description,
+    args: argsResult.args,
+    schemaShape,
+  };
+
+  // The guard ladder first — see `recognizeConditionalTool`. It refuses anything whose first
+  // statement after the hoists is not a rung, so an ordinary block tool reaches the reader below
+  // unchanged, and `recognizeHoistedBlock` would have refused a ladder in any case.
+  const conditional = recognizeConditionalTool(arrow, helperLocal, preamble);
+  if (conditional !== undefined) return conditional;
+
   // The block form: zero or more hoisted-argument consts, then a single `return jsonResult(...)`.
   // A tool whose block contains anything else (a stub's `throw`, say) is a shape THIS recognizer
   // does not model, and is refused rather than partially read — hoists.ts's
   // `recognizeHoistedBlock` is where that refusal happens, shared with tools-rest.ts, which reads
-  // the identical hoist statements behind a different registrar. The query branch's `new URL(...)`
-  // trio is the one shape that refusal hands on rather than ends at; see below. A stub's throw is
-  // the other: `recognizeTools`'s loop falls on to `recognizeStubShape` once `recognizeOne`
-  // (i.e. this whole function) refuses, rather than teaching this reader a shape with no hoists
-  // and no `jsonResult` at all.
+  // the identical hoist statements behind a different registrar. Two shapes that refusal hands on
+  // rather than ends at: the guard ladder above, and the query branch's `new URL(...)` trio below.
+  // A stub's throw is the third: `recognizeTools`'s loop falls on to `recognizeStubShape` once
+  // `recognizeOne` (i.e. this whole function) refuses, rather than teaching this reader a shape
+  // with no hoists and no `jsonResult` at all.
   const block = recognizeHoistedBlock(arrow.body);
   if (block === undefined) {
-    return recognizeQueryTool(arrow.body, helperLocal, {
-      name,
-      description,
-      args: argsResult.args,
-      schemaShape,
-    });
+    return recognizeQueryTool(arrow.body, helperLocal, preamble);
   }
 
   const recovered = pathFromJsonResult(block.returned, block.locals, helperLocal);
