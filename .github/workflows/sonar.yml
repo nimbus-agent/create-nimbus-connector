@@ -105,12 +105,13 @@ jobs:
           # On a pull request "new code" narrows further, to that pull request's own diff.
           #
           # **The size of that backlog is deliberately not written here.** This paragraph used
-          # to say "58 code smells", three times; the real figure is now 3, and nothing in the
-          # repository checks the sentence, so it rotted silently — the same defect
-          # test/gate-lists.test.ts's header carries a note about. The argument does not
-          # depend on the number and never did: a ratio is not a count, at 3 or at 500.
-          # Re-measure whenever you actually want the figure, with the token this workflow
-          # already needs:
+          # to state it — "58 code smells", three times — and the figure was an order of
+          # magnitude wrong within days, because nothing in the repository checks a sentence
+          # in a comment. That is the same defect test/gate-lists.test.ts's header carries a
+          # note about. The argument never depended on the number: a maintainability rating is
+          # a technical-debt ratio, so the backlog cannot fail this gate however large it
+          # grows. Re-measure whenever you actually want the figure, with the token this
+          # workflow already needs:
           #
           #   curl -s -H "Authorization: Bearer $SONAR_TOKEN" \
           #     "https://sonarcloud.io/api/issues/search?componentKeys=nimbus-agent_create-nimbus-connector&issueStatuses=OPEN,CONFIRMED"
