@@ -130,6 +130,17 @@ import { displayPath } from "../../src/types.ts";
  * abstains from the handlerStyle vote for the same reason a query, stub or search tool does
  * (`renderTool` forces the block form on it whatever `handlerStyle` says), which is what keeps the
  * derived spec free of a `handlerStyle` its author never wrote.
+ *
+ * `codemagic` is the pathWhen fixture's REAL-connector counterpart: two guarded tools (one of them
+ * with a defaulted `limit` hoist) plus a search tool, so it is the only fixture where a ladder
+ * shares a handler with a hoisted argument and the only one with two ladders in one connector.
+ * That it round-trips here and still reports 5/7 in fixtures/expectations.json is not a
+ * contradiction — this list is a LOCAL claim about emit → derive → re-emit, and the two files the
+ * corpus diff loses are lost to the real connector's own byte conventions, not to anything the
+ * deriver failed to recover. `src/server.ts` differs by one statement's POSITION (the real
+ * connector writes `const limit = p.limit ?? 50;` after its guard, `renderTool` writes every hoist
+ * before the ladder); `README.md` is hand-written prose, the same gap mercury/zendesk/bitrise
+ * carry. Both are recorded in docs/ROADMAP.md's Known limitations.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -154,6 +165,7 @@ const ROUND_TRIP = [
   "bitrise",
   "zzwrite",
   "zzcond",
+  "codemagic",
 ];
 
 /**

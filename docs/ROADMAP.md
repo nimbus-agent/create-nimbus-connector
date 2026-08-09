@@ -234,9 +234,49 @@ them on one row.
       [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query)
       for the field and its rejections, and [Known limitations](#known-limitations) for what it
       still doesn't reach.
-- [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
-      still select an endpoint from whether an optional arg is present and map a `z.enum`
-      through a lookup table. Neither construct exists in the spec language.
+- [~] **Conditional endpoint selection.** `pathWhen` — an ordered array of `{ absent, path }`
+      guards, with the tool's own `path` as the unguarded fallthrough — now exists in the spec
+      language (`src/spec.ts`), is emitted as a guard ladder (`renderTool`, in
+      `src/emit/server/tools-hand.ts`) and is read back by `recognizeConditionalPath`
+      (`src/derive/server/conditional-path.ts`). Both halves are built and both fixtures that
+      exercise them (`zzcond`, `codemagic`) round-trip. **The headline count did not move.**
+
+      **The design predicted `codemagic` would go `blocked` → `server-identical`, taking the
+      headline 6/94 → 7/94. It did not.** Measured 2026-08-09 against `packages/mcp-connectors`
+      tree `67c7390a`: `bun run reach` still reports **6/94**, and `codemagic` is still `blocked`
+      on `call:reg`. The prediction is recorded rather than deleted — it was written down in
+      advance so that it could be wrong in public, and what it got wrong is the useful part.
+
+      **The whole of the miss is one statement's position.** `codemagic_list` declares a
+      defaulted `limit`, and the real connector writes `const limit = p.limit ?? 50;` *after* its
+      guard, where the guarded branch (`/apps`) has no use for it. `renderTool` writes every hoist
+      before the ladder, and `splitHoists` (`src/derive/server/hoists.ts`) takes a hoist run only
+      off the *front* of a handler block — so the emitted bytes differ by those two lines, and the
+      deriver refuses the rung run outright rather than reading a shorter ladder. Nothing else
+      about the connector is unreached: `bun run diff:golden` reports `codemagic`'s
+      `src/server.ts` identical apart from those two lines, both ladders, the search tool, the
+      `x-auth-token` accessor and the `CODEMAGIC_API` fetch helper included. The isolation is
+      exact rather than inferred — moving that one statement in a *generated* (MIT) `codemagic`
+      reproduces the real connector's blocker report label-for-label and line-for-line
+      (`call:reg` at lines 27, 45, 60, plus the two downstream search imports).
+
+      **Closing it is a placement rule in both halves, and it is worth one connector.** The
+      emitter would have to write a hoist after the ladder when no guard's path reads it, and
+      `recognizeConditionalPath` would have to accept a hoist run between the last rung and the
+      fallthrough. Measured 2026-08-09 against tree `67c7390a`, **3** corpus connectors place a
+      defaulted-argument hoist after a `=== undefined` guard in the same block — `codemagic`,
+      `snyk` and `sonarqube` — and `snyk` and `sonarqube` are independently blocked on
+      `function:authHeader` (both) plus `function:apiBase` and `function:stripTrailingSlashes`
+      (`sonarqube`), so the rule moves `codemagic` and nothing else. Not built here: it is a
+      change to what the emitter writes, gated on a spec field, for one connector.
+- [ ] **Enum arguments, and the two other shapes `bitrise`'s ladders carry.** `bitrise_list` maps
+      a `z.enum` through a lookup table (`{ "not-finished": 0, … }`) into a `params` array, and
+      the construct does not exist in the spec language. Two smaller shapes sit alongside it and
+      are why `pathWhen` does not reach `bitrise` even setting the enum aside: `bitrise_list`'s
+      guard consequent holds *two* statements (its own `const limit` before the return), where
+      the emitter writes one; and `bitrise_get`'s fallthrough binds `const path = …` and passes
+      the binding, where the emitter inlines the path expression. Both tools stay `impl: "stub"`
+      in `fixtures/bitrise.spec.json`.
 - [ ] **CLI-backed connectors, and both sets now surface.** Nine connectors shell out instead of
       calling `fetch`, in two shapes that used to report very differently:
 
@@ -499,6 +539,14 @@ Four groups are worth naming precisely, because each is a *different* kind of ga
   (`intercom`'s `Intercom-Version`). `auth: "headers"` does not reach them either: it maps each
   var to a header name and emits the binding bare, with no scheme prefix and no literal-valued
   key. A spec-language gap, and a small one.
+- **The lone `statement:IfStatement` bucket is not a guard-ladder near-miss.** It is one
+  connector, `outlook`, and its `if`s are module-scope
+  `if (outlookToolShouldRegister("<tool>", grantedOutlookScopes)) { … }` gates wrapping ten
+  registrations — a scope-conditional registration shape, not a path-conditional handler. Stated
+  because the bucket's name invites the other reading: `blockerFor` only ever sees *top-level*
+  unclaimed statements, and a `pathWhen` ladder's `if`s live inside a `reg(...)` argument, which
+  buckets as `call:reg`. There is no corpus evidence in this bucket for or against the
+  conditional-endpoint work; budgeting it as one would be counting a shape nobody looked at.
 - **`const-call:makeRestToolRegistrar` looks like a recognizer gap and is not.** `gmail`,
   `onedrive` and `outlook` all pass a fifth registrar option, `snippetMax: 200`, which
   `renderRestKitTools` never writes and no spec field carries. Reading it would need the field
@@ -657,10 +705,31 @@ alone.
   neither introduced nor closed it. The cheap close is a read-only-kit × monorepo case in
   `emitted-typecheck.test.ts` — that path IS compiled — which would turn this from an
   uncaught defect into a failing test naming the arg.
-- **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
-  optional arg is present, or mapping a `z.enum` through a lookup table. **Open Stage E work**,
-  not a permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector
-  that needs it.
+- **A `pathWhen` ladder cannot be combined with a hoisted argument the guards do not read.**
+  `renderTool` emits every hoisted-argument const above the guard ladder, and `splitHoists` reads
+  a hoist run only off the front of a handler block. A connector that writes the hoist *below* its
+  guards — because the guarded branch has no use for it — therefore differs by two lines and is
+  refused by the deriver. This is the sole reason `fixtures/codemagic.spec.json` reports 5/7 and
+  the sole reason `codemagic` did not move a tier; the [Stage E
+  bullet](#stage-e--the-corpus-tail-) carries the isolation, the corpus count and what closing it
+  would cost. **Open Stage E work**, not a permanent ceiling.
+- **A `pathWhen` ladder over the write helper is emitted but never read back.** `pathWhen` is
+  legal on a non-GET tool, and `renderTool` writes the ladder correctly — every rung repeats
+  `renderBodyExpr`'s output around its own path. `recognizeConditionalPath` refuses that shape
+  outright (`plainReadPath`, in `src/derive/server/conditional-path.ts`): accepting it would mean
+  pinning the rungs' body expressions equal to each other and to the fallthrough's, and nothing
+  at the tool-recognizer layer can compare two expression *nodes* — only the module source could,
+  which the recognizers do not have. Reading only the fallthrough's body and ignoring the rungs'
+  would claim a module that re-emits with the wrong body in every guard. So the refusal is
+  deliberate and it under-claims into `blocked`, never into a wrong spec: a write ladder shows up
+  by name in the blocker histogram rather than deriving successfully and re-emitting differently.
+  No corpus connector carries the shape (no corpus connector declares a `<local>Send` write helper
+  at all — see *The write helper*, above), so this costs no reach today; it is recorded because
+  the emitter can write something the deriver will not read, which is the asymmetry every other
+  entry here exists to make visible.
+- **Enum arguments.** Mapping a `z.enum` through a lookup table. **Open Stage E work**, not a
+  permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector that
+  needs it, and the two other shapes its handlers carry.
 - **Multi-file connectors.** The generator emits one source file; some connectors split their
   tools into `src/tools.ts`. **Open Stage E work**, and the largest of the three: the
   [Stage E bullet](#stage-e--the-corpus-tail-) carries the count, why `bun run reach` labels these

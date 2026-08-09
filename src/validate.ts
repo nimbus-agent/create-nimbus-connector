@@ -75,7 +75,7 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   //
   // The four at the end of this block were MISSING while their siblings were listed, and the
   // gap is what the standing rule in CLAUDE.md exists to prevent. They were found by scanning
-  // every emitted `.ts` file — all 23 fixtures, both targets, plus the Gateway wiring and the
+  // every emitted `.ts` file — all 24 fixtures, both targets, plus the Gateway wiring and the
   // branch shapes no fixture reaches — for FREE identifiers: names a module references without
   // declaring or importing them. That scan ships as test/emitted-globals.test.ts, so the next
   // emitter to reach for a global fails there instead of arriving as a missing entry here.
