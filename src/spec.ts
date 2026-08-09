@@ -432,14 +432,14 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  *     all of them are refused. `serviceLabel`, `tools[].name`, `env[].prefix`, `env[].suffix`.
  *   - a `RegExp` — the shape an emitter resolves, stripped before the residue is scanned, so
  *     every OTHER `${` is refused. `fetchHelper.base` and `RESOLVED_ENV_REF`, because `${env.X}`
- *     there is a documented feature: it is what 7 of the 22 fixtures write, three of them the
+ *     there is a documented feature: it is what 7 of the 23 fixtures write, three of them the
  *     byte-locked datadog, grafana and sentry, so banning `${` outright would fail diff:golden on
  *     the first run, and `bun run reach --baseline` says the same of the specs the deriver
  *     reconstructs from the corpus. The residue left once the resolved shape is removed is
  *     exactly what survives into the emitted template literal.
  *   - `"path-template"` — the field is the path DSL and `parsePathTemplate` owns the question.
- *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 19 of the
- *     22 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-07 over `fixtures/*.spec.json`).
+ *     `tools[].path`, and this is not a rare case: `${` appears in a `tools[].path` in 20 of the
+ *     23 fixtures, against 7 for `fetchHelper.base` (measured 2026-08-09 over `fixtures/*.spec.json`).
  *     Every one of those is a placeholder the DSL consumes, and `assertNoUnparsedPlaceholders`
  *     already refuses every spelling it did not — which is why a second rule here would produce
  *     two rejections for one mistake.
@@ -452,7 +452,7 @@ function refuseTerminators(field: string, sites: string, v: string, add: AddSpli
  * request and in `serviceLabel` on every non-2xx response. Loud-versus-silent was the wrong line
  * to draw the rule on, because it is a property of one payload rather than of the field.
  *
- * Measured across the 22 fixtures: no guarded field carries a backtick, a block-comment
+ * Measured across the 23 fixtures: no guarded field carries a backtick, a block-comment
  * terminator or a backslash — which this docstring cannot spell out literally, the hazard in
  * miniature.
  *
@@ -1011,7 +1011,10 @@ export const ToolSchema = z
 
     const guarded = new Set<string>();
     (t.pathWhen ?? []).forEach((g, i) => {
-      const arg = t.args?.[g.absent];
+      // `t.args[g.absent]` reaches inherited properties (`"toString"` would find
+      // Object.prototype's method rather than nothing), the same hazard the query loop below
+      // guards with the same fix — Object.hasOwn checks only t.args's own keys.
+      const arg = Object.hasOwn(t.args, g.absent) ? t.args[g.absent] : undefined;
       if (arg === undefined) {
         add({
           path: ["pathWhen", i, "absent"],

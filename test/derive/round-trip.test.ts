@@ -121,6 +121,14 @@ import { displayPath } from "../../src/types.ts";
  * tool in this connector carries any staticPathStyle evidence at all. Neither setting is
  * observable in a single byte this connector emits, so their absence from the derived spec is
  * the correct minimal spec, not a recovery this deriver failed at.
+ *
+ * zzcond is the pathWhen fixture (conditional-endpoint plan, Task 1): one hand-rolled tool, one
+ * optional no-default arg, one guard. Deliberately minimal and deliberately without `query` —
+ * Task 3 refuses `pathWhen` alongside `query` in full, so a fixture pairing the two would stop
+ * parsing the moment that refine lands. It round-trips trivially today because `pathWhen` has no
+ * emitter yet: nothing about it reaches `src/server.ts`, so deriving from that file and re-
+ * emitting can neither recover it nor need to. Task 5 grows this fixture once there is something
+ * to prove.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -144,6 +152,7 @@ const ROUND_TRIP = [
   "zzwriterest",
   "bitrise",
   "zzwrite",
+  "zzcond",
 ];
 
 /**

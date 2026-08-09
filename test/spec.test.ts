@@ -1688,6 +1688,14 @@ describe("ToolSchema pathWhen guards", () => {
     expect(() => condSpec({ pathWhen: [{ absent: "nosuch", path: "/apps" }] })).toThrow(/nosuch/);
   });
 
+  it("rejects a guard named after an inherited Object property with the undeclared-arg message", () => {
+    // t.args[g.absent] would find Object.prototype's own toString instead of nothing, and
+    // report the wrong reason (not "optional") for an arg the tool never declared.
+    expect(() => condSpec({ pathWhen: [{ absent: "toString", path: "/apps" }] })).toThrow(
+      /declares no such arg/,
+    );
+  });
+
   it("rejects a guard on a required arg, whose value can never be undefined", () => {
     // Reuses canOmitQueryValue, so this message names the same clause query's does.
     expect(() => condSpec({ pathWhen: [{ absent: "appId", path: "/apps" }] })).toThrow(
@@ -1803,7 +1811,7 @@ describe("strings the emitter splices raw into generated source", () => {
     );
   });
 
-  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 22
+  // The pin, not a new behaviour: `${env.X}` in `base` is a documented feature — 7 of the 23
   // fixtures use it, three of them byte-locked — so the refinement above has to admit exactly
   // that shape and refuse the rest. A tightening that folded it into the rejection would break
   // the feature; it fails here, in milliseconds, instead of in diff:golden.

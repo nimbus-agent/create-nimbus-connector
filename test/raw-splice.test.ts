@@ -216,7 +216,7 @@ describe("the raw-splice census", () => {
     // Without this, a `stringLeaves` that walked nothing, or an `everyEmittedFile` that returned
     // nothing, would report an empty census — and an empty census compared against an empty
     // expectation is the exact false green this whole file exists to refuse. The numbers are
-    // floors, not measurements: the sweep runs thousands of probes over the 22 fixtures.
+    // floors, not measurements: the sweep runs thousands of probes over the 23 fixtures.
     expect(specDocuments.length).toBeGreaterThan(20);
     expect(CENSUS.probes).toBeGreaterThan(1000);
     expect(CENSUS.inspected).toBeGreaterThan(1000);
@@ -305,7 +305,7 @@ describe("every carrier refuses every sequence that could break out of its const
  * nineteen of the twenty-two fixtures — the second stale count inside one docstring that had
  * just been rewritten to remove the first.
  */
-describe("what the 22 fixtures put in a guarded field", () => {
+describe("what the 23 fixtures put in a guarded field", () => {
   function guardedValues(): { field: string; value: string; file: string }[] {
     const out: { field: string; value: string; file: string }[] = [];
     for (const { file, doc } of specDocuments) {
@@ -335,7 +335,7 @@ describe("what the 22 fixtures put in a guarded field", () => {
     }
     const counts = Object.fromEntries([...byField].map(([f, s]) => [f, s.size]));
     // `undefined` is the disposition of the other four carriers, and none of them may appear.
-    expect(counts).toEqual({ "fetchHelper.base": 7, "tools[].path": 19 });
+    expect(counts).toEqual({ "fetchHelper.base": 7, "tools[].path": 20 });
   });
 });
 

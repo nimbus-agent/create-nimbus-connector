@@ -322,7 +322,7 @@ describe("the checked-in schema document", () => {
     expect(impl["enum"]).toEqual(["rest", "get", "stub", "search"]);
 
     // And the other half of the same difference: the OUTPUT document lists every `.default()`
-    // field as required, so an editor holding it would flag all 22 fixtures/*.spec.json. The
+    // field as required, so an editor holding it would flag all 23 fixtures/*.spec.json. The
     // input document requires only what a spec file must actually write.
     expect(publishedSchema["required"]).toEqual([
       "name",

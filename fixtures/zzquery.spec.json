@@ -25,8 +25,7 @@
         { "name": "after", "arg": "after", "omitWhen": "absent" },
         { "name": "filter", "arg": "filter", "omitWhen": "empty" },
         { "name": "limit", "arg": "limit" }
-      ],
-      "pathWhen": [{ "absent": "after", "path": "/v1/items/recent" }]
+      ]
     },
     {
       "name": "zzquery_item_get",
