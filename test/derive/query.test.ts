@@ -266,6 +266,30 @@ describe("recognizeQueryLines", () => {
   });
 });
 
+/** Mutations of PRISTINE that recognizeQueryBlock must refuse: name, the text to replace, its replacement. */
+const REFUSED_BLOCKS: ReadonlyArray<readonly [string, string, string]> = [
+  [
+    "String(...) around a string-typed arg — a shape wrapsInString cannot write",
+    'set("q", parsed.q)',
+    'set("q", String(parsed.q))',
+  ],
+  [
+    "a bare number-typed arg — wrapsInString always wraps one",
+    'set("limit", String(limit))',
+    'set("limit", limit)',
+  ],
+  [
+    "the corpus's `u.toString()` tail — renderTool writes the template form",
+    "return `${u}`;",
+    "return u.toString();",
+  ],
+  [
+    "the corpus's `${u.pathname}${u.search}` tail",
+    "return `${u}`;",
+    "return `${u.pathname}${u.search}`;",
+  ],
+];
+
 describe("recognizeQueryBlock", () => {
   it("keeps a literal base on the recovered path, and hands back the whole leading quasi", () => {
     const { body, args } = queryCall(PRISTINE);
@@ -301,28 +325,19 @@ describe("recognizeQueryBlock", () => {
     });
   });
 
-  it("refuses String(...) around a string-typed arg — a shape wrapsInString cannot write", () => {
-    const source = corrupt(PRISTINE, 'set("q", parsed.q)', 'set("q", String(parsed.q))');
-    const { body, args } = queryCall(source);
+  // One assertion over a table of mutations, in the shape the other refusal suites here use
+  // (REFUSED_STUBS in tools-rest.test.ts, REFUSED_BODIES in body.test.ts). Each row still names
+  // what it refuses and why, which is the part worth keeping; the three-line body is not.
+  it.each(REFUSED_BLOCKS)("refuses %s", (_name, from, to) => {
+    const { body, args } = queryCall(corrupt(PRISTINE, from, to));
     expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
   });
 
-  it("refuses a bare number-typed arg — wrapsInString always wraps one", () => {
-    const source = corrupt(PRISTINE, 'set("limit", String(limit))', 'set("limit", limit)');
-    const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
-  });
-
-  it("refuses the corpus's `u.toString()` tail — renderTool writes the template form", () => {
-    const source = corrupt(PRISTINE, "return `${u}`;", "return u.toString();");
-    const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
-  });
-
-  it("refuses the corpus's `${u.pathname}${u.search}` tail", () => {
-    const source = corrupt(PRISTINE, "return `${u}`;", "return `${u.pathname}${u.search}`;");
-    const { body, args } = queryCall(source);
-    expect(recognizeQueryBlock(body, args, "returns-url")).toBeUndefined();
+  it("has rows to refuse", () => {
+    // `it.each` over an empty table runs no test and reports no failure, so deleting rows from
+    // REFUSED_BLOCKS quietly shrinks what this suite covers. The same guard test/gate-lists.test.ts
+    // puts on `MATCHER_CASES`, for the same reason.
+    expect(REFUSED_BLOCKS.length).toBeGreaterThan(3);
   });
 
   it("refuses a URL const under any name but `u`", () => {

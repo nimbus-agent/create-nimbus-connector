@@ -161,7 +161,8 @@ export function verdictLine(args: {
   const advice =
     comparison.verdict === "regressed"
       ? ""
-      : "; update fixtures/expectations.json and the design doc's criterion-2 gap report";
+      : "; update fixtures/expectations.json and the gap it closes under " +
+        "Known limitations in docs/ROADMAP.md";
   return (
     `FAIL  ${head}${stubNote} — ` +
     `${comparison.verdict}: ${deltaNote(comparison.lost, comparison.gained)}${advice}`

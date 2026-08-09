@@ -9,9 +9,14 @@ description: >
 
 # create-nimbus-connector — Pre-flight
 
-**There is no `preflight` script.** The gates are separate commands, four of them need a
-Nimbus checkout, and two of them answer different questions that are easy to conflate. Run
-them in this order.
+**`bun run preflight --nimbus-root <path>` runs all eight in order** and is the fastest way to
+answer "is this ready to push". It stops at the first failure, and — this is the part that
+matters — **without `--nimbus-root` it reports the four monorepo gates as `SKIP` by name and
+refuses to print its fully-verified sentence.** A skip is never dressed up as a pass.
+
+The gate list below is what it runs, and is still worth reading: four of the eight need a
+Nimbus checkout, and two of them answer different questions that are easy to conflate. Run an
+individual gate directly when you are iterating on the thing it checks.
 
 ## 1. The gates CI also runs
 
@@ -19,7 +24,13 @@ them in this order.
 bun test
 bunx tsc --noEmit
 bunx biome check src/ test/ scripts/
+bun test --coverage
 ```
+
+**`bun test --coverage` is a gate of its own, not a fancier spelling of the first one.** Bun
+evaluates `bunfig.toml`'s per-file `coverageThreshold` only on a run that carries the flag, so a
+bare `bun test` leaves every floor unchecked. When this one fails and the one above passed, no
+test broke — a file dropped below its floor. `ci.yml` runs the coverage form and gets both.
 
 `bun test` includes `test/emit/emitted-typecheck.test.ts`, which compiles emitted output with
 the real TypeScript compiler. That is the one that catches an unbalanced brace or an unused

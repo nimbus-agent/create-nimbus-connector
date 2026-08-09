@@ -1,15 +1,5 @@
-import type { ConnectorSpec, ToolSpec } from "../spec.ts";
+import { type ConnectorSpec, type ToolSpec, titleIdentifier } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
-
-/**
- * PascalCase identifier fragment for `create<X>Syncable` / `map<X>ItemToItem`.
- * Same derivation as {@link import("../spec.ts").registrarName} — strip everything that
- * is not a JS identifier character from the title. For "Google Meet" this yields
- * "GoogleMeet", matching the real corpus's `createGoogleMeetSyncable`.
- */
-function titleIdentifier(spec: ConnectorSpec): string {
-  return spec.title.replaceAll(/[^A-Za-z0-9]/g, "");
-}
 
 /** snake_case service id — the corpus convention for a hyphenated package name. */
 function serviceId(spec: ConnectorSpec): string {
@@ -68,7 +58,7 @@ function otherListTools(spec: ConnectorSpec, chosen: ToolSpec): ToolSpec[] {
  * it is not — nothing here is pending. Please keep the marker on the emitted side only.
  */
 function renderSync(spec: ConnectorSpec, listTool: ToolSpec): string {
-  const id = titleIdentifier(spec);
+  const id = titleIdentifier(spec.title);
   const svc = serviceId(spec);
   const mappingFn = `map${id}ItemToItem`;
   const defaultIntervalMs = spec.syncInterval * 1000;
@@ -115,7 +105,7 @@ export function create${id}Syncable(): Syncable {
 }
 
 function renderMapping(spec: ConnectorSpec, listTool: ToolSpec): string {
-  const id = titleIdentifier(spec);
+  const id = titleIdentifier(spec.title);
   const mappingFn = `map${id}ItemToItem`;
   const message = JSON.stringify(
     `${mappingFn} is a create-nimbus-connector stub: no connector spec describes ` +
@@ -169,7 +159,7 @@ export function emitWiring(spec: ConnectorSpec): GeneratedFile[] {
  */
 export function renderWiringInstructions(spec: ConnectorSpec): string {
   const listTool = findListTool(spec);
-  const id = titleIdentifier(spec);
+  const id = titleIdentifier(spec.title);
   const svc = serviceId(spec);
   const others = otherListTools(spec, listTool);
   const otherNote =

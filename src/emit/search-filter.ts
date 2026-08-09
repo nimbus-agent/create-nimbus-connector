@@ -4,6 +4,7 @@ import {
   isPathEntry,
   resolveKeyedShape,
   type ToolSpec,
+  titleIdentifier,
 } from "../spec.ts";
 import type { GeneratedFile } from "../types.ts";
 import type { GenerateTarget } from "./index.ts";
@@ -53,7 +54,11 @@ function renderEntry(e: FieldEntry): string {
 
 /**
  * The bespoke-extractor form. The guard is always asObjectish; argocd's asRecord is not
- * derivable from the field list and stays a documented difference (Stage E design).
+ * derivable from the field list — nothing in a list of field names says which of the two
+ * narrowings the connector chose, and they differ semantically (asObjectish admits arrays,
+ * asRecord rejects them). It stays a documented difference rather than a spec knob: see
+ * docs/ROADMAP.md's *Known limitations*, under "Expressible is not the same as
+ * byte-identical".
  */
 function extractorFilter(tool: ToolSpec): string {
   const entries = tool.filter!.fields!;
@@ -98,7 +103,8 @@ function keyedFilter(tool: ToolSpec, shape: KeyedShape): string {
  * stylistic. makeQueryFilter returns a closure that defers to filterByQuery, which calls
  * options.fields(item) once per row — so a throwing extractor never fires on an empty
  * result set and the tool reports `{ matches: [] }` as success. Throwing from the filter
- * position fires on every invocation. See Stage D design §4.3.1.
+ * position fires on every invocation, which is the only placement that makes an unimplemented
+ * filter impossible to mistake for a working one.
  */
 function stubFilter(tool: ToolSpec): string {
   // Deliberately does not name makeQueryFilter/fieldsFromKeys in this string: a stub-only
@@ -195,7 +201,12 @@ export function emitSearchFilter(
 
   const sections = [
     importLines.join("\n"),
-    `export type ${spec.title}SearchMatchOptions = SearchMatchOptions;`,
+    // titleIdentifier, not spec.title: this is a type-alias NAME. The raw title was spliced
+    // here and nowhere else — src/emit/wiring.ts and registrarName both strip — so a spec
+    // named "google-meet" emitted `export type Google-meetSearchMatchOptions` and the
+    // generator failed against its own output. Every existing search fixture has a
+    // single-word alphanumeric title, so stripping moves no byte.
+    `export type ${titleIdentifier(spec.title)}SearchMatchOptions = SearchMatchOptions;`,
     ...tools.map((t) => renderToolFilter(t, shapes.get(t))),
   ];
 

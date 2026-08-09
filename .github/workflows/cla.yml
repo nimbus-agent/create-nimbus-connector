@@ -72,6 +72,16 @@ jobs:
       statuses: write
     if: github.event_name == 'pull_request_target'
     steps:
+      # audit rather than block: this job talks to api.github.com through `gh`, and this
+      # workflow's whole value here is the egress RECORD — it is the one workflow an
+      # external contributor can fire, on `pull_request_target`, with the base repository's
+      # token. First step in the job on purpose: harden-runner only observes what starts
+      # after it.
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
       - name: Report `cla` for an allowlisted author
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,6 +145,33 @@ jobs:
       (github.event.issue.pull_request && contains(fromJSON('["I have read the CLA Document and I hereby sign the CLA","recheck"]'), github.event.comment.body))
       || github.event_name == 'pull_request_target'
     steps:
+      # The one workflow that lacked this, and the one where it is worth most: it runs on
+      # `pull_request_target` — the base repository's token and secrets, on a trigger any
+      # external contributor fires by opening a pull request — and it hands a minted App
+      # token to a third-party action. audit, not block, because contributor-assistant
+      # resolves GitHub's API and the runner's own endpoints and an allowlist that drifts
+      # would fail an outside contributor's pull request for a reason they cannot act on.
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      # Narrowed to exactly what the token's only consumer uses. Read from
+      # contributor-assistant/github-action at the SHA pinned below rather than guessed:
+      # `getPATOctokit()` — the client built from PERSONAL_ACCESS_TOKEN — is imported by
+      # exactly one module, src/persistence/persistence.ts, and backs exactly two calls,
+      # `repos.getContent` and `repos.createOrUpdateFileContents`, both against the
+      # signatures file. Everything else the action does (the PR comments, the `cla` check,
+      # the workflow re-run) goes through `getDefaultOctokitClient()`, i.e. GITHUB_TOKEN,
+      # governed by this job's `permissions:` block above.
+      #
+      # So: `contents: write`, and nothing else. Without `permission-*` inputs this token
+      # carried the App INSTALLATION's entire permission set instead.
+      #
+      # `repositories` narrows for the same reason. persistence.ts always addresses
+      # `input.getRemoteRepoName()`, which `remote-repository-name` below pins to `.github`,
+      # so this repository was never reachable through this token by its only consumer —
+      # it was reachable only by anything else the third-party action might do with it.
       - name: Mint CLA App token
         id: apptoken
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -142,7 +179,8 @@ jobs:
           client-id: ${{ secrets.CLA_BOT_CLIENT_ID }}
           private-key: ${{ secrets.CLA_BOT_PRIVATE_KEY }}
           owner: nimbus-agent
-          repositories: ${{ github.event.repository.name }},.github
+          repositories: .github
+          permission-contents: write
       - name: CLA Assistant
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:

@@ -4,9 +4,9 @@ A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connect
 
 Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary.
 
-This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus a seventh, `src/search-filter.ts`, when the spec declares a search tool — run through the same Biome formatter the real connectors are formatted with.
+This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus `src/search-filter.ts` when the spec declares a search tool, and a `biome.json` when the target is `--standalone` — run through the same Biome formatter the real connectors are formatted with.
 
-The bar it is held to is **byte reproduction**: generate from a spec describing an existing connector, and diff the output against the real directory. `newrelic`, `datadog`, `grafana` and `sentry` come out byte-identical.
+The bar it is held to is **byte reproduction**: generate from a spec describing an existing connector, and diff the output against the real directory. `newrelic`, `datadog`, `grafana` and `sentry` come out byte-identical. How far that reaches across the rest of the corpus, and what stops it, is [*The measured ceiling*](./docs/ROADMAP.md#the-measured-ceiling) — the one place the regeneration counts are written down, carrying the date and the `packages/mcp-connectors` tree they were measured against.
 
 ```bash
 bunx create-nimbus-connector acme --standalone
@@ -14,11 +14,13 @@ bunx create-nimbus-connector acme --standalone
 
 ## Documentation
 
-**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. This README is the *reference*: what the spec language can express, and the rules that reject a spec.
+**New here? Start with [`docs/USAGE.md`](./docs/USAGE.md)** — a start-to-finish walkthrough. The spec language itself is documented in two halves, deliberately: **[`docs/SPEC.md`](./docs/SPEC.md)** is the field reference — every field `ConnectorSpecSchema` accepts, with its type, its default and the constraints on it, generated from that schema so it cannot drift from it — and **[`docs/SPEC-RULES.md`](./docs/SPEC-RULES.md)** is the prose reference, covering how those fields work together and the rules that reject a spec, which are the part no field-by-field table can carry. Look a field up in the first; find out why your spec was refused in the second.
 
 | | |
 | --- | --- |
 | [USAGE.md](./docs/USAGE.md) | Generate your first connector, and verify it |
+| [SPEC.md](./docs/SPEC.md) | Every spec field, generated from the schema |
+| [SPEC-RULES.md](./docs/SPEC-RULES.md) | How the fields work together, and what gets a spec rejected |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
 | [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |
@@ -32,14 +34,14 @@ Stuck on how to express a service as a spec, or wondering whether a change would
 
 The org ships two, and they do different jobs:
 
-- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package byte-identical to the 94 hand-written Nimbus connectors. Reach for it when you are wrapping a REST API and want output that matches the corpus exactly.
-- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project built on `NimbusExtensionServer`, which performs the contract-version handshake before serving MCP. Reach for it when you want a blank project to write by hand, or when you need Python.
+- **`create-nimbus-connector` (this one)** — you describe a connector as a JSON spec and get a package in the shape the hand-written Nimbus connectors share, formatted by the same Biome. Reach for it when you are wrapping a REST API and want output that matches the corpus. Byte-identity is the bar it is held to, not a blanket guarantee across the corpus — [*The measured ceiling*](./docs/ROADMAP.md#the-measured-ceiling) is how much of it regenerates today, and why.
+- **[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)** — templates a greenfield TypeScript **or Python** project that performs the SDK's contract-version handshake on stdio before serving MCP through the same `McpServer` and `StdioServerTransport` this generator emits. Reach for it when you want a blank project to write by hand, or when you need Python.
 
-[ROADMAP.md](./docs/ROADMAP.md#consolidation) states the intent to converge these into one tool and the three capabilities that must land first.
+The intent is to converge these into one tool. [CONSOLIDATION.md](./docs/CONSOLIDATION.md) is what has to be true first — four preconditions, only one of which is a checkbox on this side — and because each of them describes another repository's state, each carries the commit and the date it was checked against.
 
 ## The two targets
 
-**Standalone** connectors are self-contained — installable and runnable anywhere, with no Nimbus checkout. `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, and the package gains `dev` and `build` scripts. This is what a third-party connector wants.
+**Standalone** connectors are self-contained — installable and runnable anywhere, with no Nimbus checkout. `src/server.ts` imports its helpers from a single published entry point, `@nimbus-dev/sdk/connector-kit`, and the package gains `dev` and `build` scripts. It also carries its own `biome.json`, which the monorepo target does not emit — a connector inside the checkout inherits the workspace root's, so emitting one there would be dead weight and would break the six-file byte-diff. This is what a third-party connector wants.
 
 ```bash
 bunx create-nimbus-connector acme --standalone
@@ -53,199 +55,13 @@ bunx create-nimbus-connector acme
 
 **This CLI, and every connector it generates, is Bun-only.** `nimbus.extension.json` declares `"runtime": "bun"`, `test/sandbox.test.ts` imports `bun:test`, the standalone `build` script targets Bun, and `src/cli.ts` carries a `#!/usr/bin/env bun` shebang — so Bun is required however the CLI is invoked, `bunx` included. There is no Node, npm or pnpm path in this project or its output. The one exception is publishing: `.github/workflows/release.yml` runs `npm publish --provenance` in CI, because that is the only way to attach a sigstore attestation to an npm tarball.
 
-## Scope
+## The spec language
 
-Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools.
+Every tool is a single HTTP request against a path built from a small template DSL (`${env.X}`, `${arg.X}`, `${arg.X|enc}`, `${arg.X|num}`, `${arg.X|bool}`). No pagination, no multi-step or multi-fetch tools. A tool that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at. Around that core the language reaches writes and HITL, three registration styles, OAuth client-credentials, conditional query parameters, and substring-search tools with a filter file of their own.
 
-A tool that can't be expressed under that constraint sets `"impl": "stub"` and gets a typed handler that throws `"<tool> not implemented"` rather than being silently dropped or guessed at.
+Two rules shape all of it. **Fields the emitters cannot render are a hard validation error, never an automatic downgrade** — a spec that would silently generate something other than what it describes is rejected instead. And **spec surface is a cost**: a field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff. A generator whose input is harder to write than its output is a failed generator.
 
-**Fields the emitters cannot render are a hard validation error, never an automatic downgrade.** A spec that would silently generate something other than what it describes is rejected instead. `hitl` on a tool is the one field rejected outright; declare write-intent through `effect`.
-
-**Spec surface is a cost, and it is deliberately controlled.** Byte-exactness pushes some purely cosmetic choices into the spec — real connectors hoist defaulted args to hand-picked short names (`const lim = p.limit ?? 10`, `const q = p.query ?? ""`), and there is no derivable rule for that. So `local` and `bindings` are permitted everywhere as optional strings with sensible defaults. Beyond those, a new field that changes only appearance is refused, and the resulting difference is recorded as a documented irreducible diff instead. A generator whose input is harder to write than its output is a failed generator.
-
-### Conditional query parameters: `query`
-
-`path`'s template DSL renders one fixed string per tool, so it cannot express a parameter that
-is only sent when an optional argument is present. A tool that needs that adds a `query` array
-alongside `path` instead:
-
-```jsonc
-{
-  "name": "acme_channel_messages",
-  "description": "List messages in a channel.",
-  "impl": "rest",
-  "path": "/channels/${arg.channelId|enc}/messages",
-  "args": {
-    "channelId": { "type": "string", "min": 1 },
-    "limit": {
-      "type": "number", "int": true, "min": 1, "max": 100,
-      "optional": true, "default": 50
-    },
-    "after": { "type": "string", "optional": true }
-  },
-  "query": [
-    { "name": "limit", "arg": "limit" },
-    { "name": "after", "arg": "after", "omitWhen": "empty" }
-  ]
-}
-```
-
-This emits `const u = new URL(...)`, a `u.searchParams.set(...)` line per entry — guarded where
-`omitWhen` says to guard — and returns the absolute URL. `discord` and `google-meet` are the two
-fixtures that exercise it.
-
-Each entry has three fields:
-
-- **`name`** — the query key as the API spells it. Deliberately not an identifier check —
-  `page[size]` is a real corpus key.
-- **`arg`** — the tool's declared argument supplying the value. Must name a key in that tool's
-  `args`.
-- **`omitWhen`** (optional) — guards the `set` call with one of two predicates: `"absent"`
-  tests `!== undefined`; `"empty"` adds `&& !== ""` and is valid only on a `string` arg.
-  Omitted means the parameter is always sent, unconditionally.
-
-**The value's wrap is type-driven, not guard-driven.** A `number` or `boolean` arg is wrapped
-in `String(...)` before it reaches `searchParams.set`; a `string` arg is passed bare. This holds
-whether or not the entry is guarded — it mirrors the corpus, where `github` and `github-actions`
-wrap their numeric `page` even though it's guarded, and every guarded *string* arg is written
-bare. It is not a style choice with an exception; the type decides it every time.
-
-**`searchParams` percent-encodes on its own, so a `query` entry takes no encoding mode.**
-There is no `|enc` (or any other) option here — applying one would double-encode the value.
-(`path`'s own `${arg.X|enc}` is unrelated and still applies inside `path`.)
-
-**Defaults live on the argument, not the query entry.** `{ "type": "number", "optional": true,
-"default": 50 }` is what makes an unconditional `limit` entry safe to emit with no guard at
-all — the hoist resolves it to a concrete value before the query line ever runs.
-
-**Rejected at parse time:**
-
-- `query` on a `"stub"` tool — it issues no request, so there is nothing to attach it to.
-- `query` on a `"search"` tool — it builds its query string from `filter`, not `query`.
-- `query` together with a `path` that already contains `"?"` — both write the query string;
-  a tool that needs `query` moves its whole query string there instead.
-- `query` on a tool whose `path` does not begin with `"/"` — the `query` branch builds an
-  absolute URL by joining the base to `path` directly, with no separator, so `path` must carry
-  its own leading slash.
-- an entry whose `arg` does not name a key the tool's `args` declares.
-- two entries sharing the same `name` — the second would silently win at runtime.
-- `omitWhen: "empty"` on a non-`string` arg — comparing a `number` or `boolean` to `""` does
-  not typecheck in the generated package.
-- `omitWhen` on an argument whose value can never be `undefined` at the point the guard would
-  read it: not declared `"optional": true`, or declaring a `"default"`, or type `"boolean"`
-  (every boolean argument is hoisted to a `"true"`/`"false"` const, never `undefined`). The
-  guard would be dead code — it could never omit the parameter.
-- **the mirror of that last rule:** an argument that genuinely *can* be `undefined`
-  (`"optional": true`, no `"default"`, not `"boolean"`) but whose entry declares no
-  `omitWhen`. Without a guard, `searchParams.set` receives a value that can be `undefined` —
-  a compile error for a `string` arg, or a literal `"?name=undefined"` sent on the wire for a
-  wrapped one, since `String(undefined) === "undefined"`.
-
-### Writes: `method`, `effect` and `body`
-
-```jsonc
-{
-  "name": "acme_item_create",
-  "description": "Create an item.",
-  "impl": "rest",
-  "method": "POST",
-  "effect": "write",
-  "path": "/v1/items",
-  "args": { "title": { "type": "string", "min": 1 } }
-}
-```
-
-- **`method`** (`"GET" | "POST" | "PUT" | "PATCH" | "DELETE"`, default `"GET"`) is the HTTP verb, nothing more.
-- **`effect`** (`"read" | "write" | "delete"`, default `"read"`) is the author's declaration of intent, and drives the manifest's `hitlRequired` array (the deduplicated set of non-`read` effects, emitted in the corpus's fixed capability order — `write` before `delete`, the order used by all 23 Nimbus manifests declaring both and by none in reverse). It is deliberately **not** derived from `method` — in the Nimbus corpus a POST is not necessarily a write: `dagster` POSTs GraphQL *queries* and `ramp` POSTs to *exchange an OAuth token*. A REST GET may not carry a write or delete effect (a hard validation error); a write or delete effect may pair with any non-GET method, including `DELETE` with `effect: "write"` — deleting a webhook subscription is not destructive to user data, and `effect` is the author's judgement rather than something read off the verb.
-- **`body`** (`Record<string, string>`, arg name → API field name) is optional even on a write tool. **By default the body is every arg *not* referenced in the tool's path** — `PATCH /items/${arg.id}` with args `{id, title}` sends `{title}`, and a `DELETE` whose only arg appears in the path sends no body (and no `Content-Type` header) at all. An explicit `body` mapping overrides the default entirely.
-- **`impl: "get"` is a deprecated alias for `"rest"`**, so specs written before `method` existed still parse; it is normalised at parse time.
-
-**An unset optional boolean renders `false` in the URL but is omitted from a JSON body.** This looks like an inconsistency and is deliberate, so it is pinned by tests rather than left to be "fixed" later. It is reachable only when a spec gives an explicit `body` mapping re-including an arg the path already references. A query string carries text and the corpus decided what that text is — `newrelic` emits `p.only_open === true ? "true" : "false"`, and changing it drops a byte-exact fixture. A JSON body carries types, and every API distinguishes a `false` the caller asserted from a key the caller never sent; emitting `false` for an unset optional would fabricate an assertion the author never made, and would be wrong exactly where the server's own default is `true`.
-
-**rest-kit gets writes almost free.** Its registrar (`makeRestToolRegistrar`) already accepts an optional `buildInit` returning `{ method, body }`. Hand-rolled has no such seam — a second helper (`<fetchHelper.local>Send`) is emitted alongside the read helper, and only when the spec contains a non-GET tool, so a read-only spec never reaches that code path. Prefer **rest-kit** for a new write connector; hand-rolled write support exists for connectors whose auth shape rest-kit does not fit.
-
-### Styles: `rest-kit`, `hand-rolled`, `read-only-kit`
-
-`style` decides how a connector registers its tools, and it has the widest blast radius of any field.
-
-- **`rest-kit`** — `makeRestToolRegistrar` performs the request and wraps the result. **Cannot declare an OAuth `client-credentials` env entry, and cannot declare a search tool** — it does both halves itself, leaving no seam for a token exchange or a filter to run in. Both are hard validation errors.
-- **`hand-rolled`** — the connector builds its own `McpServer`, registrar and fetch helper. The general case.
-- **`read-only-kit`** — the shape **60 of the 94** Nimbus connectors use. Identical to `hand-rolled` except in the server file's first and last lines: instead of constructing an `McpServer`, building a registrar and connecting a transport, the registrations are wrapped in `runReadOnlyMcpConnector`. Every other rule is inherited unchanged.
-
-Two things worth knowing about `read-only-kit`:
-
-- **The name is a bootstrap convention, not a restriction.** It does not prevent a connector from declaring write tools, and nine corpus connectors use it while declaring `hitlRequired: ["write"]`. Generated READMEs say so explicitly, because the name invites the opposite assumption. What a connector may actually do is what its `nimbus.extension.json` declares.
-- **Standalone packages inline the helper.** `runReadOnlyMcpConnector` imports `@modelcontextprotocol/sdk` directly and so cannot move into `@nimbus-dev/sdk`, whose zero runtime dependencies are load-bearing. The monorepo target imports it from `../../shared/`; the standalone target emits an equivalent local definition, and the call site is byte-identical either way.
-
-### Search tools: `impl: "search"`, `rows`, `maxLimit` and `filter`
-
-`impl: "search"` registers a substring-search tool over one endpoint's rows — the form **45 Nimbus connectors** already use.
-
-```jsonc
-{
-  "name": "mercury_search",
-  "description": "Substring search across the user's Mercury accounts.",
-  "impl": "search",
-  "path": "/api/v1/accounts",
-  "rows": "accounts",
-  "maxLimit": 100,
-  "filter": {
-    "export": "filterMercuryAccounts",
-    "fields": ["id", "name", "status", "type", "kind", "legalBusinessName"]
-  }
-}
-```
-
-- **`rows`** (optional) names the property to pluck from the response envelope. Omitted means the response **is** the array. `matchesResult` guards with `Array.isArray` itself, so neither form needs a coercion.
-- **`maxLimit`** (default `100`) is the per-connector result cap. Corpus values: 100 (×24), 200 (×12), 2000 (×2), 50 (×1).
-- **`filter.export`** names the `export const` emitted into the seventh file, `src/search-filter.ts`. Two tools may not share one export name.
-- **`filter.fields`** is a list of entries, each one of three kinds:
-  - a **plain key string**, e.g. `"name"` → `stringField(row, "name")`
-  - a **nested path**, `{ "path": ["a", "b"] }`, two or more non-empty segments → `nestedString(row, ["a", "b"])`
-  - a **tag entry**, `{ "tags": "text" }` or `{ "tags": "objects" }` → `tagText(row)` (a `tags: string[]`) or `tagNamesFromObjects(row)` (a `tags: {name}[]`)
-- **`filter.tags`** (default `false`) additionally matches tag names: `true` appends `tagText(row)` after the keyed fields, emitting `makeQueryFilter(fieldsFromKeys([...], { tags: true }))`. It is not superseded by the tag-entry form above — the two converge on identical bytes — and it is what `zendesk` and `raindrop` are written in, and what `zendesk` byte-matches on today.
-
-  Rendering is derived from which kinds are present, never selected by a spec field: all-plain-string `fields` still emits `makeQueryFilter(fieldsFromKeys([...]))`, unchanged since Stage D. A **trailing** `{ "tags": "text" }` entry converges onto the same form as `filter.tags: true` — `makeQueryFilter(fieldsFromKeys([...], { tags: true }))` — whether or not any plain-string entries precede it: `fields: [{ "tags": "text" }]` alone is legal and emits `fieldsFromKeys([], { tags: true })`, "match on tags only". Convergence holds because `fieldsFromKeys` can only *append* `tagText(row)` after the keyed fields, so a tag entry anywhere else changes field order and cannot converge. Any `path` entry, a non-trailing tag entry, or `{ "tags": "objects" }` takes the bespoke-extractor branch instead: the emitter writes a `function fieldsOf(item: unknown): readonly string[] | null` guarded with `asObjectish`, and `export const <filter.export> = makeQueryFilter(fieldsOf);`.
-
-  **Rejected at parse time**, each with a message naming the offending entry: a `path` with fewer than two segments (a one-segment path emits the same call as the plain-string spelling — write that instead); an empty path segment; `filter.tags: true` together with a `{ "tags": ... }` entry in `fields` (say one); **`filter.tags: true` on a filter whose `fields` force the extractor branch** — the extractor never reads `tags`, so it would be silently dropped and the tool would compile, pass every gate, and just never match on tags. Add `{ "tags": "text" }` as the *last* entry in `fields` instead. And **a connector may declare at most one search tool that takes the extractor branch** — the emitted extractor is always named `fieldsOf`, so a second one in the same `src/search-filter.ts` would be a duplicate declaration.
-- **A search tool is always a read.** `method`, `body` and a non-`read` `effect` are all validation errors on it — unlike a stub, it does not stand in for something that will later write.
-- **Argument-carrying search tools inline their schema.** With no args of its own a tool calls the shared `searchToolInputSchema(maxLimit)`; declaring args means the shared two-key helper cannot express the shape, so the merged `z.object({ …args, query, limit })` is emitted inline instead.
-
-**`filter.fields` is optional, and omitting it is the honest escape hatch.** Path and tag entries reach nested, projected and tag-bearing shapes, but not every hand-written corpus extractor — one that joins across arrays, flattens a computed field, or coerces a non-string value still has no spec expression. Omit `fields` and the emitter writes a **throwing stub** typed as `SearchFilter` for you to replace. The stub replaces the *filter*, not the extractor, and that placement is load-bearing rather than stylistic: `makeQueryFilter` calls the extractor once per row, so a throwing *extractor* never fires on an empty result set and the tool would report `{ matches: [] }` as success. Throwing from the filter position fires on every invocation.
-
-**Standalone search needs `@nimbus-dev/sdk` ≥ 1.15.0**, and only a spec declaring a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is deliberately *not* in the SDK: `searchToolInputSchema` builds a zod schema, and the SDK ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
-
-### OAuth: `client-credentials`
-
-An env entry may declare `"auth": "client-credentials"` instead of `"bearer"`, `"basic"` or `"headers"`:
-
-```jsonc
-{
-  "vars": ["ACME_CLIENT_ID", "ACME_CLIENT_SECRET"],
-  "local": "authHeaders",
-  "auth": "client-credentials",
-  "tokenUrl": "https://api.acme.com/oauth/token",
-  "scope": "items:readwrite",
-  "credentialsIn": "basic"
-}
-```
-
-This exchanges the two `vars` (client id, then secret) for a bearer token by POSTing form-encoded `grant_type=client_credentials` (plus `scope`, when given) to `tokenUrl`, then caches it: `expires_in` is read and the token renewed a little early, with the skew halved for short-lived tokens that would otherwise be treated as already expired and re-exchanged on every call. A response with no `expires_in` is cached for the process lifetime, since treating its absence as "expired" would re-exchange on every call.
-
-There is **no refresh-token flow and no authorization-code flow** — no connector in the corpus has either, so adding them would be speculative.
-
-`credentialsIn` controls how the id and secret reach the token endpoint: `"basic"` sends them as an `Authorization: Basic` header (as Nimbus's `ramp` does); `"body"` puts `client_id`/`client_secret` in the form body (as `looker`, `powerbi`, `teams` and `wiz` do). `scope` is optional. The two `vars` and `style: "hand-rolled"` are required — **`client-credentials` is hand-rolled only**, because the rest-kit registrar resolves a single bearer credential itself and has no seam for a token exchange.
-
-### Reserved identifiers
-
-The emitter declares module-scope names of its own, so a spec may not reuse them. `local` names, `registrar` names and similar spec-supplied identifiers are validated against `RESERVED_IDENTIFIERS` in `src/validate.ts`, which is the authoritative list. Reusing one is a validation error rather than a package that emits two declarations of the same name and fails its own `typecheck`.
-
-The list covers the OAuth path (`token`, `cachedToken`, `encodeBasicAuthHeader`), the write path (`URLSearchParams`, `<local>Send`), the `read-only-kit` and search paths (`runReadOnlyMcpConnector`, `ZodToolRegistrar`, `searchToolInputSchema`, `matchesResult`, `McpListResult`, `ZodObjectSchema`, `SearchMatchOptions`, `root`), and the globals emitted code calls (`fetch`, `process`, `JSON`, …).
-
-They are reserved **unconditionally**, not only for specs that use the feature — the list is checked before any style or tool kind is considered, and conditional entries would mean a spec validating or failing depending on a field elsewhere in the file. Two names are worth calling out:
-
-- **`token`** — a spec that named an env `local` `"token"` and validated under 0.2.2 is now rejected. Rename the local; nothing else changes.
-- **`root`** — an ordinary word, and a search tool with `rows` emits `const root = await <fetchHelper.local>(…)`. A fetch helper named `root` would emit `const root = await root(…)`, a use-before-declaration error rather than a shadow.
+**[`docs/SPEC-RULES.md`](./docs/SPEC-RULES.md) is the reference for all of it** — each feature, the shapes it takes, and the rules that reject a spec, which are the part no field-by-field table can carry. [`docs/SPEC.md`](./docs/SPEC.md) is the other half: every field the schema accepts, generated from the schema itself.
 
 ## CLI reference
 
@@ -254,7 +70,7 @@ bunx create-nimbus-connector <name>   # the published CLI, no checkout needed
 bun src/cli.ts <name>                 # from a checkout of this repo
 ```
 
-With a positional name it runs an interactive prompt session (name, display name, service label, description, base API URL, auth type, credential env var, tools) and writes to `packages/mcp-connectors/<name>/` relative to the current directory, or to `<name>/` when `--standalone` is passed.
+With a positional name it runs an interactive prompt session — display name, service label, description, base API URL, auth type, credential env var, then tool names. The connector name is *not* asked for: it is the positional argument. Run with neither a name nor `--spec` and the session opens by asking for it. One question is conditional: answering `token` or `basic` to the auth question adds a header-name prompt, which `bearer` skips. Generated output goes to `packages/mcp-connectors/<name>/` relative to the current directory, or to `<name>/` when `--standalone` is passed.
 
 ### Flags
 
@@ -267,6 +83,11 @@ With a positional name it runs an interactive prompt session (name, display name
 - `--force` — allow `--gateway-wiring` to overwrite an existing `<name>-sync.ts` or `<name>-mapping.ts`. An **error** without `--gateway-wiring`.
 - `--from-connector <dir>` — the pipeline in reverse: read a connector directory and print the `ConnectorSpec` that would regenerate it, writing nothing. Mutually exclusive with a positional `<name>`, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run`. A connector the spec language cannot fully describe exits non-zero with the constructs that stopped the read, in the same vocabulary `bun run reach --verbose` uses — never a silent approximation. See [`docs/USAGE.md`](./docs/USAGE.md#8-deriving-a-spec-from-an-existing-connector), and [`docs/LICENSING.md`](./docs/LICENSING.md) for why running it against a checkout you already have is not vendoring.
 - `--partial` — with `--from-connector`, print a draft spec instead of only the blocker report. The draft carries a `$partial` marker key that `ConnectorSpecSchema`'s `z.strictObject` refuses by construction, so it cannot be generated until you resolve the blockers and delete the key. An **error** without `--from-connector`.
+- `--from-openapi <doc>` — read an OpenAPI 3 document (JSON or YAML, `$ref`s resolved internally) and print the `ConnectorSpec` for a selection of its operations, writing nothing. Mutually exclusive with a positional `<name>`, `--spec`, `--from-connector` and every flag that shapes a write. Requires either `--list-operations` or at least one `--op`. See [What an OpenAPI document can and cannot supply](#what-an-openapi-document-can-and-cannot-supply).
+- `--list-operations` — with `--from-openapi`, print one `operationId  METHOD  /path` line per operation to stdout, in document order, so `--op` arguments can be copied straight off it. Operations this reader can see but not offer — `head`/`options`/`trace`, and a mis-cased method key like `Post:` — are named on **stderr** with the reason, never silently dropped. An **error** without `--from-openapi`.
+- `--op <operationId>` — with `--from-openapi`, select an operation to become a tool. Repeatable; the tools appear in the order named. An `--op` naming an operation `--list-operations` reported as skipped is refused as *that*, not as a missing operation. An **error** without `--from-openapi`, and an **error** combined with `--list-operations` — both read the same document and only one can produce output.
+
+A bare `--from-openapi` with no `--op` is an **error**, not "map everything". Which operations become tools is a product decision the document does not state: a document describes a whole API, where a connector exposes the few operations an agent should be able to call. Mapping everything would also make one operation the spec language cannot express — of a kind most real documents carry — refuse the whole document, since an operation maps completely or not at all.
 - `--help` — print usage. Every flag in that text is one `parseFlags` actually parses; `test/cli.test.ts` asserts the two agree, so an undocumented flag is a failing test.
 - `--version` — print the version.
 
@@ -279,6 +100,26 @@ bun src/cli.ts --spec fixtures/sentry.spec.json --dry-run
 bun src/cli.ts --spec fixtures/sentry.spec.json --out-dir /tmp/sentry-preview
 bun src/cli.ts acme --standalone --license MIT
 ```
+
+### What an OpenAPI document can and cannot supply
+
+```bash
+bun src/cli.ts --from-openapi widgets.yaml --list-operations
+bun src/cli.ts --from-openapi widgets.yaml --op listWidgets --op getWidget > widgets.spec.json
+bun src/cli.ts --spec widgets.spec.json
+```
+
+The spec goes to **stdout** and every note and refusal to **stderr**, so the redirect above leaves a file that `--spec` reads while the notes stay on screen.
+
+**Read from the document.** The connector `name` (`info.title`, slugified to lower-kebab-case), the fetch helper's `base` and the `network` permission (the one `servers[0].url`), the env auth mode (`components.securitySchemes`: `http`/`bearer`, `http`/`basic`, and an `apiKey` sent in a header), and one tool per selected operation — its name from `operationId`, its description from `summary`, its `path` with each `{widgetId}` turned into `${arg.widgetId|enc}`, its method, its query parameters (including OpenAPI's rule that an operation-level parameter overrides a path-item one of the same name and location), and a flat JSON request body.
+
+**Filled with a placeholder, for you to replace.** `style`, `syncInterval`, `minNimbusVersion`, `displayName`, `serviceLabel`, the connector `description`, and a tool description for an operation with no `summary`. Every prose one carries a `TODO:` marker; `style` and `syncInterval` cannot hold prose, so they carry a value that parses and is obviously provisional.
+
+**Cannot be filled at all, and is noted rather than guessed.** `effect` — the manifest's human-in-the-loop confirmation — is left unset on every operation, and each non-GET carries a note asking for it, because the corpus is emphatic that deriving it from the HTTP method is wrong for a third of connectors. An exclusive `exclusiveMinimum`/`exclusiveMaximum` becomes an inclusive `min`/`max` with a note recording the widening, which is the one knowing divergence in the whole path.
+
+**Refused by name rather than approximated.** At the document level: Swagger 2.0 or any non-3 version; a `$ref` that leaves the document, returns to itself, or names a node that is not there; an operation with no `operationId`, or two sharing one; no `servers`, more than one, a URL carrying server-variable templating, one that is not http(s), and one carrying a query string or fragment; no security scheme, more than one, and a scheme with no env auth mode — oauth2 (whose `credentialsIn` the document cannot state) and an `apiKey` in a query string or a cookie. At the operation level: a header or cookie parameter, an `array` or `object` argument, `oneOf`/`anyOf`/`allOf`, a request body that is not flat `application/json`, a body on a GET, a path that is not `/`-absolute or that uses Express-style `/:id` templating, an argument name no slug can make into a JS identifier, two names slugifying onto one argument, and a name landing on a reserved identifier or on a JavaScript reserved word. An operation maps completely or not at all — a tool missing the one parameter that could not be expressed is a connector that passes every gate and sends the wrong request.
+
+`head`, `options` and `trace` operations, and a mis-cased method key, are the two constructs that are **reported instead of refused**: they are listed by `--list-operations` on stderr and omitted from the selectable set, so one `HEAD /health` cannot take forty mappable operations down with it. Naming one with `--op` is then refused as *that*, rather than as an operation the document does not contain.
 
 ### Licensing of generated connectors
 

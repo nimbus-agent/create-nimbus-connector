@@ -177,7 +177,7 @@ function matchRowsNarrowing(node: AstNode | undefined, rows: string): boolean {
   const typeMembers = typeLiteralMembers(literal);
   if (typeMembers?.length !== 1) return false;
   const prop = propertySignature(typeMembers[0]);
-  if (prop === undefined || prop.key !== rows || !prop.optional) return false;
+  if (prop?.key !== rows || !prop.optional) return false;
 
   const arrayType = prop.valueType;
   if (arrayType?.type !== "TSArrayType") return false;
@@ -346,7 +346,8 @@ function biomeFilterNameOrder(names: readonly string[]): string[] {
     const la = a.charAt(0).toLowerCase();
     const lb = b.charAt(0).toLowerCase();
     if (la !== lb) return la < lb ? -1 : 1;
-    return a < b ? -1 : a > b ? 1 : 0;
+    if (a < b) return -1;
+    return a > b ? 1 : 0;
   });
 }
 

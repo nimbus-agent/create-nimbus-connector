@@ -323,7 +323,8 @@ describe("verdictLine", () => {
 
     expect(line).toBe(
       "FAIL  discord  4/6 files identical, 1 stub tool(s) — improved: newly matching README.md; " +
-        "update fixtures/expectations.json and the design doc's criterion-2 gap report",
+        "update fixtures/expectations.json and the gap it closes under Known limitations " +
+        "in docs/ROADMAP.md",
     );
   });
 

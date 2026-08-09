@@ -75,37 +75,26 @@ see [Consolidation](#consolidation).
 
 ## Consolidation
 
-The org currently ships two connector scaffolders:
-
-| | [`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector) | `create-nimbus-connector` (here) |
-| --- | --- | --- |
-| Approach | fixed templates | JSON spec → emitted source |
-| Languages | TypeScript, Python | TypeScript |
-| Output shape | `NimbusExtensionServer` handshake, then MCP | MCP over stdio, the existing corpus shape |
-| Starting point | greenfield project | a described connector |
-| Verified by | CI generates, installs, builds and runs it | byte-diff against 94 real connectors |
+The org currently ships two connector scaffolders: this one, and
+[`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector)
+in the SDK repository, which templates a greenfield TypeScript or Python project from fixed
+templates rather than emitting source from a spec.
 
 **The intent is that this repository becomes the single scaffolder** and
 `@nimbus-dev/create-connector` is eventually retired. Two tools with near-identical names is a
 choice users should not have to make.
 
-That is a destination, and it has a price. This generator cannot absorb the other until it can
-do three things it currently cannot:
+That is a destination, and it has a price: **four preconditions**, only one of which is a
+checkbox on this side. One is an emitter change this repository could make, one is a thing this
+repository has decided not to do, one belongs to the SDK repository, and one is owned by
+neither. What each is, what it costs, what it blocks and — since each rests on another
+repository's state — the commit and date it was last checked against are in
+**[CONSOLIDATION.md](./CONSOLIDATION.md)**, which also carries the side-by-side comparison of
+the two tools.
 
-- **[ ] Emit Python.** The whole emitter layer is TypeScript-shaped. This is the largest single
-  item on this roadmap and needs its own design.
-- **[ ] Emit the handshake shape.** The template tool produces a connector built on
-  `NimbusExtensionServer`, which performs contract-version negotiation before serving MCP.
-  This generator emits a connector that serves MCP over stdio directly. These are different
-  products, not different formatting — supporting both means a second target on the existing
-  `GenerateTarget` seam.
-- **[ ] Answer `npm create`.** `npm create @nimbus-dev/connector` is a published entry point
-  with users. Retiring it means either owning that name or providing a migration that does not
-  silently change what people get.
-
-Until all three land, both tools ship and the READMEs cross-link so an author can tell which
-one they want. **Nothing here is a deprecation announcement**; it is a stated direction with
-its conditions attached.
+Until they are met, both tools ship and the READMEs cross-link so an author can tell which one
+they want. **Nothing here is a deprecation announcement**; it is a stated direction with its
+conditions attached.
 
 ---
 
@@ -142,6 +131,23 @@ complete inverse of the emitter, every fixture round-trips, and every blocked co
 has a named cause. The *raising* half is not: three bullets below are still `[ ]`, and the
 headline count did not move. See [The measured ceiling](#the-measured-ceiling) for the number,
 its denominator and which of those causes are permanent.
+
+**An open bullet here is also a limitation today, and appears under
+[Known limitations](#known-limitations) as one.** That pairing is deliberate, not a duplicate: the
+two sections answer different questions — *what is planned* and *what an author will hit this
+afternoon* — and deleting either entry leaves a reader who checked the wrong section with the wrong
+answer. What is forbidden is **describing the construct twice**, because two descriptions drift and
+the shorter one is trusted without being checked. So each construct is described in one place and
+linked from the other: this stage owns the three still-open constructs and `query`'s closed
+history, while *Known limitations* owns what `query` still does not reach, and the `[x]` bullet
+points there rather than restating it. Which section owns a given construct is settled by where the
+measurement lives, not by which is more prominent.
+
+**A limitation with no bullet here is one no bullet would help** — a deliberate divergence, a rule
+chosen over a spec field, or a gap this repository cannot close alone. That is a statement about
+the individual entry and not about its category: `frame:tools-in-second-file` has a bullet below
+and `frame:no-registrar` does not, though both are frame gaps and *The measured ceiling* groups
+them on one row.
 
 - [~] **Bespoke field extractors.** `filter.fields` now takes plain keys, `path` entries and
       tag entries, composing the primitives `shared/search-filter.ts` already exports instead
@@ -189,9 +195,10 @@ its denominator and which of those causes are permanent.
       `frame:` prefix names the ceiling, not the stage that detected it.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
-      sent only when an optional argument is present or non-empty. See the README for the
-      field and its rejections, and [Known limitations](#known-limitations) for what it still
-      doesn't reach.
+      sent only when an optional argument is present or non-empty. See
+      [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query)
+      for the field and its rejections, and [Known limitations](#known-limitations) for what it
+      still doesn't reach.
 - [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
@@ -214,23 +221,57 @@ its denominator and which of those causes are permanent.
       corpus tree and a named cause for every connector under it, is
       [The measured ceiling](#the-measured-ceiling).
 
-### Stage F — authoring experience `[ ]`
+### Stage F — authoring experience `[x]`
 
-- [ ] **Spec authoring from an OpenAPI document.** The largest reduction in effort available:
-      most of a spec is endpoints, arguments and descriptions that an OpenAPI file already has.
+**Closed, and each bullet judged on its own.** Two of the four close with a limit stated on the
+bullet rather than silently, because in both cases the gap is permanent and no further work here
+removes it: an OpenAPI document does not carry Nimbus's conventions, and JSON Schema cannot
+express a cross-field refinement. A limit that cannot be closed is a limitation, not an unfinished
+task — `[~]` is for work that is genuinely half-done, which is why [Stage E](#stage-e--the-corpus-tail-)
+still carries it and this stage does not.
+
+- [x] **Spec authoring from an OpenAPI document.** `--from-openapi` reads an OpenAPI 3 document
+      (JSON or YAML, `$ref`s resolved), `--list-operations` prints what it found, and each `--op`
+      selects an operation to become a tool. It fills what the document actually states —
+      endpoints, methods, arguments, request bodies, base URL, network permission, auth mode — and
+      **refuses by name** every construct the spec language cannot express, since an operation maps
+      completely or not at all. What it cannot fill is the part of a connector that encodes *Nimbus*
+      conventions rather than API facts, and that part is placeholders and notes, not omissions. See
+      [What `--from-openapi` cannot fill](#known-limitations) for the constructs, and the
+      [README](../README.md#what-an-openapi-document-can-and-cannot-supply) for the full refusal
+      vocabulary.
 - [x] **`--from-connector`**, deriving a starting spec from an existing connector directory, to
       make regeneration coverage measurable in bulk rather than one hand-written fixture at a
       time. Shipped, with `--partial` for a draft from a module that blocks; `bun run reach` is
       the bulk half, running the same deriver over a whole checkout. See
       [Known limitations](#known-limitations) for what its report does and does not carry.
-- [ ] **Better validation errors**, pointing at the JSON path rather than naming the field.
-- [ ] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
-      file.
+- [x] **Better validation errors**, pointing at the JSON path rather than naming the field. Every
+      `parseSpec` issue now renders as `tools[0].args.limit.max: <why> (received "ten")` — the whole
+      path with bracketed indices, and the value that was actually there. `validateSpec`'s
+      whole-spec rules still locate by name — `Tool "widgets_list" path references "${arg.id}", but
+      declares no arg named "id"` — and that is deliberate: an identifier collision or a dangling
+      reference is a relation between two places, so a single path would name only one end of it.
+- [x] A JSON Schema for `ConnectorSpec`, published so editors can complete and validate a spec
+      file — **structurally**, which is as far as the format reaches.
+      `schema/connector-spec.schema.json` is generated from `ConnectorSpecSchema` itself and
+      byte-compared against a fresh build on every test run, so it cannot drift from the language it
+      describes. It does **not** carry the refinements, and therefore accepts specs the generator
+      rejects. Closed with that limit stated rather than left open, because nothing on this side
+      closes it — see [Known limitations](#known-limitations).
 
 ### Stage G — consolidation `[ ]`
 
-The three items under [Consolidation](#consolidation), then retiring
-`@nimbus-dev/create-connector` with a migration path.
+**Scoped, not started — and scoping is not building.** Its preconditions are now recorded and
+checked rather than guessed at, and one of them turned out to be materially smaller than this
+document used to claim. But none is closed and no emitter path has moved toward any of them, so
+the marker stays `[ ]`. It is not `[~]`: by the test [Stage F](#stage-f--authoring-experience-x)
+states, `[~]` is for work genuinely half-done, and no half of this stage exists yet. Nor is it
+`[x]`-with-a-limit — that form is for a gap no further work *here* closes, and the largest of
+these four is a change to this repository's own emitter.
+
+**[CONSOLIDATION.md](./CONSOLIDATION.md) is the stage**: the four preconditions, what each one
+blocks, what each would cost, and — since every one of them rests on another repository's state
+— the commit and date each was checked against.
 
 ---
 
@@ -450,6 +491,14 @@ cost of closing each is named; none is proposed.**
 
 **Constructs outside the spec language.**
 
+Every entry here says what the generator cannot express **today**, which is not the same as
+saying it never will. Three of them are also open [Stage E](#stage-e--the-corpus-tail-) tasks, and
+those three link to the bullet that carries the measurement rather than restating a shorter version
+of it — a construct described in two places drifts, and the shorter description is the one a reader
+trusts. The rest carry their reason in place, because for those the reason *is* the whole entry:
+a deliberate divergence, a rule chosen over a spec field, or a gap this repository cannot close
+alone.
+
 - **Conditional query parameters, the remaining gaps.** The construct itself — `query` plus
   `omitWhen` — now exists; the gaps are narrower now. An **inlined default**: real connectors
   write `p.pageSize ?? 50` at the call site, but a `default`-bearing arg is always hoisted to a
@@ -493,10 +542,18 @@ cost of closing each is named; none is proposed.**
   "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
   and not fixed here.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
-  optional arg is present, or mapping a `z.enum` through a lookup table.
-- **Multi-file connectors.** Some split tools into `src/tools.ts`; the generator assumes one
-  source file.
-- **CLI-backed connectors.** A handful shell out rather than calling `fetch`.
+  optional arg is present, or mapping a `z.enum` through a lookup table. **Open Stage E work**,
+  not a permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector
+  that needs it.
+- **Multi-file connectors.** The generator emits one source file; some connectors split their
+  tools into `src/tools.ts`. **Open Stage E work**, and the largest of the three: the
+  [Stage E bullet](#stage-e--the-corpus-tail-) carries the count, why `bun run reach` labels these
+  `frame:tools-in-second-file` rather than as import blockers, and which stage of the deriver
+  applies the label. Closing it is a spec-language gap *and* an emitter change, since the emitter
+  cannot today write the file a recognizer would be reading.
+- **CLI-backed connectors.** A handful shell out rather than calling `fetch`. **Open Stage E
+  work**; the [Stage E bullet](#stage-e--the-corpus-tail-) names them, and the two different shapes
+  they split into, only one of which surfaces as a bucket of its own.
 - **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
   `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
   Reported as `frame:no-registrar`.
@@ -612,6 +669,41 @@ cost of closing each is named; none is proposed.**
 - **A connector with no `test/sandbox.test.ts`.** 15 of the 94 lack one; the generator always
   emits it, so the harness reports `MISSING` rather than `DIFF`.
 
+**What the byte gates do not reach.**
+
+Gaps in *verification* rather than in the generator, recorded here because each is a place where
+the fixture list implies coverage that does not exist — and "the write path is byte-verified" is
+the specific belief that is not true. [TESTING.md](./TESTING.md) carries the per-shape matrix and
+the probes behind these; what belongs here is that they are known, and why none is closable from
+this side.
+
+- **No real-connector fixture declares a write tool, so `diff:golden` has zero purchase on the
+  Stage C emitter paths.** Verified at HEAD by reading every `fixtures/*.spec.json`: not one of
+  the fixtures transcribed from a real Nimbus connector declares a tool with `effect: "write"`
+  or a non-`GET` `method`. `method`, `effect`, `body`, `hitlRequired` and the `<local>Send` write
+  helper are exercised only by the synthetic `zz*` fixtures, which byte-match nothing — no
+  `packages/mcp-connectors/zz*` directory exists, so their `fixtures/expectations.json` entries
+  are empty lists and every generated file reports MISSING. That is a pass that compared against
+  nothing, by design. Holding those paths in place instead: `fixtures/snapshots/`,
+  `test/derive/round-trip.test.ts`, and `standalone-acceptance` / `runtime:acceptance` — all
+  real, none ground truth. **No corpus connector closes this**, and *The write helper* above is
+  why: no corpus connector declares `<local>Send` at all, so there is nothing to transcribe a
+  fixture from.
+- **`read-only-kit` + `client-credentials` is documented and has no fixture.** The
+  [SPEC-RULES § OAuth](./SPEC-RULES.md#oauth-client-credentials) section documents the pairing; every
+  `read-only-kit` fixture uses `bearer`, `basic` or plain headers, and the one fixture declaring
+  `client-credentials` is `hand-rolled`. The single check on the combination is the standalone
+  KIT-import ordering case in `test/emit/emitted-typecheck.test.ts`, and that case is a
+  `biome check`, not a compile.
+- **`read-only-kit` × standalone is byte-compared nowhere in this repository.** Both byte
+  comparisons inside `bun test` miss it by construction: `listWriteFixtures`
+  (`src/golden/snapshots.ts`) selects snapshot fixtures on `effect !== "read"` and no
+  `read-only-kit` fixture has a write tool, while `test/derive/round-trip.test.ts` runs at the
+  monorepo target. Measured rather than reasoned — a plain `TS2322` emitted into that file passes
+  the entire suite with zero failures, including the real `biome check`, because an exported const
+  is read by definition and Biome has no type information. `standalone-acceptance` catches it, in
+  `acceptance.yml`, which is outside the merge gate.
+
 **`--from-connector`'s report shape.**
 
 - **`--partial` prints less than the report it replaces.** `partialResult`
@@ -637,6 +729,67 @@ cost of closing each is named; none is proposed.**
   comment in that file claims "one report shape covers every failure"; this is the failure that
   report shape doesn't cover.
 
+**What `--from-openapi` cannot fill.**
+
+The mechanical majority of a spec is in the document — endpoints, methods, arguments, request
+bodies, the base URL, the network host, the auth mode — and the reader takes all of it. What is
+left is not remaining work on this side: it is the part of a connector that encodes *Nimbus*
+conventions rather than API facts, and no document states it. The output is a **starting point a
+human edits**, and the `TODO:` markers are how it says so.
+
+- **The connector's own identity and shape are placeholders.** `style`, `syncInterval`,
+  `minNimbusVersion`, `displayName`, `serviceLabel`, the connector `description`, and a tool
+  description for an operation carrying no `summary`. Each prose one carries a `TODO:` marker;
+  `style` is an enum and `syncInterval` a positive integer, so neither can hold prose and both
+  carry a value that parses and is obviously provisional instead. They live in one `PLACEHOLDER`
+  const (`src/openapi/spec.ts`) so the set is readable at a glance rather than scattered.
+- **`effect` is never guessed from the HTTP method.** It is left unset on every operation — which
+  means `"read"`, so the manifest asks for no confirmation — and each non-GET carries a note asking
+  for it. The corpus does not support deriving human-in-the-loop confirmation from the verb, and a
+  wrong default here is worse than an absent one, because it is the one field whose error ships a
+  mutating tool that runs unconfirmed.
+- **Search tools do not come from a document.** `impl: "search"`, `filter`, `rows` and `maxLimit`
+  describe how a connector presents results to an agent; an OpenAPI operation describes a request.
+  Every mapped operation becomes a plain tool.
+- **Tool names are `operationId`s verbatim, and that collides with the Gateway wiring's one
+  convention.** `mapOperation` (`src/openapi/operation.ts`) sets `name: op.operationId`, while
+  `emitWiring`'s `findListTool` (`src/emit/wiring.ts`) selects the tool whose name
+  `endsWith("_list")` and **throws** when none does — the same corpus convention `src/prompts.ts`
+  defaults a hand-authored tool name to, as `${name}_list`. So a document declaring
+  `operationId: listWidgets` produces a spec `--gateway-wiring` **refuses outright**, not one that
+  merely wires the wrong tool. Rename the tool before wiring it.
+- **A refusal names its operation by method and path, not by `operationId`.** `mapOperation` builds
+  its refusal context as `` where: `${op.method} ${op.path}` ``, and every refusal routes through
+  the one `refuse()` sink, so selecting `--op listWidgets` produces refusals headed `GET /widgets`.
+  Correct, and worth knowing before reading the output.
+- **An exclusive bound is widened to an inclusive one, with a note.** `exclusiveMinimum` /
+  `exclusiveMaximum` have no counterpart in the spec language, so they become `min` / `max` and the
+  note records the widening. This is the one knowing divergence in the whole path — the tool will
+  accept a value the API rejects — and the note is the entirety of its honesty.
+- **Everything else it cannot express is refused by name**, per document and per operation: a
+  header or cookie parameter, an `array` or `object` argument, `oneOf`/`anyOf`/`allOf`, a body that
+  is not flat `application/json`, an absent or ambiguous `servers` entry, a security scheme with no
+  env auth mode. The [README](../README.md#what-an-openapi-document-can-and-cannot-supply) carries
+  the full vocabulary; what belongs here is the rule behind it. **An operation maps completely or
+  not at all** — a tool missing the one parameter that could not be expressed is a connector that
+  compiles, passes every gate, and sends the wrong request.
+
+**The published JSON Schema.**
+
+- **It cannot express the refinements, so it accepts specs the generator rejects.**
+  `schema/connector-spec.schema.json` is generated from `ConnectorSpecSchema` and byte-compared
+  against a fresh build by `test/schema.test.ts`, so it cannot drift from the *shape* of the spec
+  language. The rules that are not shape have no JSON Schema expression and are simply absent from
+  the document: cross-field requirements, `RESERVED_IDENTIFIERS`, style-specific constraints, and
+  the string-safety refinements that stop a spec value becoming executable code in the generated
+  package. An editor therefore reports green on a spec the CLI refuses — a false green in the
+  direction this repository normally removes, kept because the alternative is not publishing a
+  schema at all. It is a property of the format rather than unfinished work: completion and
+  structural checking are what it buys, and `bun src/cli.ts --spec <path> --dry-run` is what says a
+  spec is actually accepted.
+  [SPEC-RULES § Editor support](./SPEC-RULES.md#editor-support-the-published-json-schema-and-what-it-cannot-check)
+  states the same limit beside the editor setup, where somebody wiring it up will meet it.
+
 ## Considered and declined
 
 Recorded so they are not re-proposed. Each was measured before being rejected.
@@ -645,9 +798,8 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   one level down — `matchesResult` does `Array.isArray(rows) ? … : []`, so `undefined`, `null`
   and any non-array already yield an empty match set. The coercion would be dead code that
   changes a byte-exact fixture's bytes.
-- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening (see
-  [the roadmap-completion design](./superpowers/specs/2026-08-05-roadmap-completion-design.md)'s
-  *Application: the rows pluck*): corpus connectors commonly hoist
+- **Recovering `rows` from a hoisted pluck helper.** Proposed as a case-2 widening — the rule
+  is in [GLOSSARY § Reach and derivation](./GLOSSARY.md#reach-and-derivation): corpus connectors commonly hoist
   `function <name>From(root: unknown): unknown[]` above their registrations and pluck the row
   array there, so a recognizer could read that key back as `rows` even though `renderSearchTool`
   writes the narrowing inline. The proposal drew a careful line between the pluck bodies that are
@@ -658,11 +810,13 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   limit: p.limit }); return jsonResult({ matches });` — and `recognizeSearchTool` requires
   `matchesResult` before it inspects a handler body at all. Every corpus `matchesResult` call
   site instead passes a bare identifier, `root` or the narrowed const, which
-  `recognizeNoRowsBody` and `recognizeRowsBody` already read. That same design document's trap
-  list had measured this from the other side — a connector that carries `src/search-filter.ts`
-  without calling `matchesResult` builds its own envelope and is "out of the recognizer's reach
-  by construction, not by omission" — so that proposal and that trap could not both be true, and
-  the trap is the half backed by a measurement.
+  `recognizeNoRowsBody` and `recognizeRowsBody` already read. The proposal was made in a document
+  whose own trap list had measured this from the other side — a connector that carries
+  `src/search-filter.ts` without calling `matchesResult` builds its own envelope and is out of the
+  recognizer's reach *by construction, not by omission* — so the proposal and the trap could not
+  both be true, and the trap is the half backed by a measurement. Recorded because that is the
+  useful part: two halves of one document contradicting each other is what a design document does
+  when it is read once and never re-read.
 
   Recognizing the **hand-written result tail** instead would be a legitimate case-2 widening —
   `matchesResult`'s own docstring calls it the verbatim equivalent of that tail — and is declined
@@ -693,7 +847,8 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   legitimate 2000 would. Warning on response size would be defensible; warning on `maxLimit`
   would train authors to lower a number that is not the problem.
 - **Making the URL/body treatment of an unset optional boolean consistent.** Both halves are
-  right for their medium and one is byte-locked by the corpus. See the README.
+  right for their medium and one is byte-locked by the corpus. See
+  [SPEC-RULES § Writes](./SPEC-RULES.md#writes-method-effect-and-body).
 - **Generating a working Gateway `sync()`.** The shape it would assume fits 6 of the 98 real
   `*-sync.ts` files, and producing it would mean reproducing AGPL source nearly verbatim in an
   MIT repo. (The 6 is a re-measurement: this said 2, which was the two files the shape was
@@ -703,6 +858,61 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   everywhere; beyond those, a field that changes only appearance is refused and the difference
   is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a
   generator whose input is harder to write than its output is a failed generator.
+
+  The bar is sharper than "no cosmetic fields", because `handlerStyle`, `argsSchemaStyle` and
+  `staticPathStyle` are exactly that and were each admitted. It is **no cosmetic field without a
+  fixture that byte-matches *because of* it** — which is why the frame idiom axes get none: no
+  such fixture can exist until what sits behind those frames has itself been measured.
+
+### On the `query` design
+
+Six alternatives, each measured while conditional query parameters were being designed.
+
+- **Extending the path-string DSL** with optionality and default markers (`${arg.after|enc?}`,
+  `${arg.limit|num=50}`). Declined: it encodes control flow as punctuation, `?` and `=` would
+  each mean two things, and query-versus-path would stop being structurally distinguishable. The
+  DSL already rejects `{id}` and `/:id` because ambiguous path syntax caused real bugs.
+- **Setting every parameter unconditionally**, letting absent ones render empty. Declined
+  because it changes the request: `?after=` is not `after` omitted, several APIs treat an empty
+  cursor differently from no cursor, and every corpus connector guards.
+- **A `default` field on the query entry.** Declined as a second source of truth for a value the
+  argument already carries.
+- **An "inline this default" knob** to reach `google-meet`'s form. Declined as a formatting
+  reproduction knob, consistent with the extractor guard/form/name decisions above.
+- **Adding `!== null` to the `omitWhen: "empty"` guard.** Declined because `null` is
+  unreachable: `ArgSchema` types an argument `string`, `number` or `boolean`, and zod's
+  `.optional()` widens to `| undefined`, never `| null` — a JSON `null` fails the schema before a
+  handler runs. Every corpus entry using the `"empty"` predicate guards on exactly
+  `!== undefined && !== ""`. That is a claim about the `"empty"` entries specifically, not about
+  all guarded entries: `circleci` and `github-actions` guard other args on `!== undefined` alone,
+  which is the separate `"absent"` predicate, not this one with a clause missing. A third clause
+  would emit a check that can never fire *and* forfeit every byte match it was added to protect.
+- **Renaming the emitted URL local from `u`** to something less collision-prone (`urlObj`,
+  `__url`). Declined, though the concern is fair. The corpus is genuinely split — across all
+  connectors the name is `search` ×23, `u` ×20, `params` ×15, `qs` ×10, `body` ×2, `q` ×1 — so
+  any choice matches some files and not others, exactly like the registrar naming and the
+  transport tail. `u` is what `discord` and `google-meet` write, the two connectors this branch
+  targets. Reserving it costs a spec author one rename of their own identifier.
+
+### On the search-filter field entries
+
+- **A tagged discriminated union for field entries** — `{ "type": "nested", "path": [...] }`
+  rather than `{ "path": [...] }`. Declined: the required-key sets are already disjoint under
+  `strictObject`, so the untagged form is unambiguous today and stays extensible — a future
+  coercion kind is either a new disjoint shape or an optional key on an existing one. The cost
+  would be paid on every entry an author writes. If union error messages prove poor in practice,
+  the fix is a `superRefine` naming the unrecognised entry shape, not a keyword on every entry.
+- **A deprecation warning on legacy `tags: true`.** Declined, and it would have been actively
+  harmful. `tags: true` is not superseded — it is the *only* spelling that reaches the
+  `fieldsFromKeys` form, which is what `zendesk` byte-matches on today. Steering authors off it
+  would push them to the `fieldsOf` form and break byte matches.
+- **Numeric or boolean extraction primitives** (`nestedNumber`, `booleanField`). Declined on two
+  grounds. `stringField` and `nestedString` do not coerce — both are
+  `typeof v === "string" ? v : ""` — and the connectors that need coercion (`databricks`, `dbt`,
+  `flagsmith`) are among the 14 already out of reach. More decisively,
+  `shared/search-filter.ts` exports no such primitive, and **the emitter may only compose helpers
+  that already ship**: adding one means a change to the AGPL Nimbus repo *and* a release of the
+  MIT SDK, neither of which this repository can make unilaterally.
 
 ## Non-goals
 

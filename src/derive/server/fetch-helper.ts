@@ -117,6 +117,50 @@ type ReconstructedBase = {
  * and extracts the literal it holds, recording `baseConst: "BASE"`. The last expression is the
  * path variable and is excluded from the base.
  */
+/** One non-final interpolation's contribution to the base — its text, and the const it resolved through when it was a hoisted base. */
+type BaseSegment = {
+  readonly text: string;
+  readonly baseConst?: string;
+  readonly constStatement?: AstNode;
+};
+
+/**
+ * One non-final interpolation of the base template, resolved to the text it contributes.
+ *
+ * `sole` says this is the ONLY non-final expression, and it is what gates the hoisted-base
+ * identifier branch — not a judgment call, but what the emitter can produce. `renderBaseConst`
+ * writes exactly ONE const holding the ENTIRE base (`const ${baseConst} = ${JSON.stringify(base)};`),
+ * and FetchHelperSchema's own refine (spec.ts) forbids mixing that const with a `${env.X}` accessor.
+ * So `` `${BASE}${path}` `` is the only shape a hoisted base can produce; `` `${A}${B}${path}` ``
+ * (two consts — unproducible, `baseConst` is a single name with nowhere to put the second) and
+ * `` `${BASE}${apiVersion()}${path}` `` (a const beside an accessor — the schema refinement forbids
+ * the combination) are both refused, by falling through to the zero-argument-call path below, which
+ * rejects a bare Identifier outright.
+ *
+ * Split from `reconstructBase` because the two questions are different: that function walks the
+ * template and decides which pieces are base at all, this one decides what a single piece MEANS.
+ * The branch here is the only part that reads `statements`, and it reads them for one reason —
+ * resolving a hoisted const — which is why the statement list is threaded no further.
+ */
+function baseSegmentFor(
+  expr: AstNode | undefined,
+  sole: boolean,
+  statements: readonly AstNode[],
+): BaseSegment | undefined {
+  const identifier = identName(expr);
+  if (sole && identifier !== undefined) {
+    const resolved = resolveConstString(identifier, statements);
+    if (resolved === undefined) return undefined;
+    return { text: resolved.text, baseConst: identifier, constStatement: resolved.statement };
+  }
+
+  const args = callArgs(expr);
+  if (args?.length !== 0) return undefined;
+  const name = identName(calleeOf(expr));
+  if (name === undefined) return undefined;
+  return { text: `\${env.${name}}` };
+}
+
 function reconstructBase(
   template: AstNode,
   statements: readonly AstNode[],
@@ -145,34 +189,16 @@ function reconstructBase(
     const cooked = quasis[i];
     if (cooked === undefined) return undefined;
     parts.push(cooked);
+    if (i === numToUse) continue;
 
-    if (i < numToUse) {
-      // The hoisted-base identifier branch applies only when it is the SOLE non-final
-      // expression — not a judgment call, but what the emitter can produce. renderBaseConst
-      // writes exactly ONE const holding the ENTIRE base
-      // (`const ${baseConst} = ${JSON.stringify(base)};`), and FetchHelperSchema's own refine
-      // (spec.ts) forbids mixing that const with a ${env.X} accessor. So `` `${BASE}${path}` ``
-      // (numToUse === 1) is the only shape a hoisted base can produce; `` `${A}${B}${path}` ``
-      // (two consts — unproducible, "baseConst" is a single name with nowhere to put the
-      // second) and `` `${BASE}${apiVersion()}${path}` `` (a const beside an accessor — the
-      // schema refinement forbids the combination) are both refused here, by falling through to
-      // the zero-argument-call path below, which rejects a bare Identifier outright.
-      if (numToUse === 1 && identName(expressions[i]) !== undefined) {
-        const name = identName(expressions[i]);
-        const resolved = name === undefined ? undefined : resolveConstString(name, statements);
-        if (resolved === undefined) return undefined;
-        baseConst = name;
-        constStatement = resolved.statement;
-        parts.push(resolved.text);
-        continue;
-      }
-
-      const args = callArgs(expressions[i]);
-      if (args?.length !== 0) return undefined;
-      const name = identName(calleeOf(expressions[i]));
-      if (name === undefined) return undefined;
-      parts.push(`\${env.${name}}`);
-    }
+    const segment = baseSegmentFor(expressions[i], numToUse === 1, statements);
+    if (segment === undefined) return undefined;
+    parts.push(segment.text);
+    // Assigned unconditionally rather than under a guard: `baseSegmentFor` only ever reports a
+    // const when `sole` is true, and `sole` means this loop body runs exactly once — so there is
+    // no iteration that could overwrite a recovered name with `undefined`.
+    baseConst = segment.baseConst;
+    constStatement = segment.constStatement;
   }
 
   // The quasi trailing the path expression (quasis[numToUse + 1], i.e. the template's LAST
@@ -358,7 +384,7 @@ function startsWithLiteral(node: AstNode | undefined, receiver: string, literal:
  * the two sides being able to drift apart is the reason `hoists.ts` exists — but it is defence in
  * depth now, and a reader must not take it for the only thing standing between the two shapes.
  */
-function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undefined {
+function passthroughUrlTemplate(stmt: AstNode | undefined, pathVar: string): AstNode | undefined {
   const decl = constDecl(stmt);
   if (decl?.name !== "url") return undefined;
 
@@ -391,7 +417,7 @@ function passthroughUrlTemplate(stmt: AstNode, pathVar: string): AstNode | undef
  * `let pathPart = ...` passed every check below and was claimed as the documented `const` line,
  * same gap as server/index.ts's isRegistrarConst.
  */
-function matchPathPartConst(stmt: AstNode): { httpArm: boolean } | undefined {
+function matchPathPartConst(stmt: AstNode | undefined): { httpArm: boolean } | undefined {
   const decl = constDecl(stmt);
   if (decl?.name !== "pathPart") return undefined;
 
@@ -422,7 +448,7 @@ function matchPathPartConst(stmt: AstNode): { httpArm: boolean } | undefined {
  * `let res = await fetch(...)` passed every check below and was claimed as the documented
  * `const` line, same gap as server/index.ts's isRegistrarConst.
  */
-function matchFetchStatement(stmt: AstNode): AstNode | undefined {
+function matchFetchStatement(stmt: AstNode | undefined): AstNode | undefined {
   const decl = constDecl(stmt);
   if (decl?.name !== "res") return undefined;
   const call = awaited(decl.init);
@@ -442,7 +468,7 @@ function matchFetchStatement(stmt: AstNode): AstNode | undefined {
  * `hoists.ts`'s module docstring states — a copy is a place for one side to be tightened while
  * the other keeps accepting what its twin just learned to reject.
  */
-export function isTextStatement(stmt: AstNode): boolean {
+export function isTextStatement(stmt: AstNode | undefined): boolean {
   const decl = constDecl(stmt);
   if (decl?.name !== "text") return false;
   const call = awaited(decl.init);
@@ -460,7 +486,7 @@ export function isTextStatement(stmt: AstNode): boolean {
  * name the same service — so it checks the SHELL here and digs the template out itself, which is
  * why this still returns a bare boolean.
  */
-export function isThrowGuard(stmt: AstNode): boolean {
+export function isThrowGuard(stmt: AstNode | undefined): boolean {
   const s = ifStatement(stmt);
   if (s === undefined || s.alternate !== undefined) return false;
 
@@ -611,15 +637,20 @@ type FetchHelperBody = {
 function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undefined {
   let idx = 0;
 
-  const pathPart = idx < body.length ? matchPathPartConst(body[idx]!) : undefined;
+  // `body[idx]` is `AstNode | undefined` past the end, and every matcher below already refuses an
+  // absent node — `constDecl` and `ifStatement` (read.ts) both take `AstNode | undefined` and both
+  // begin by testing `node?.type`. So the bound is enforced once, by the type, rather than five
+  // times by hand. What the hand-written checks added was five `!` assertions asserting exactly
+  // what the ternary beside them had just tested; the WALK is unchanged, and `idx` still never
+  // leaves this function.
+  const pathPart = matchPathPartConst(body[idx]);
   const normalizeLeadingSlash = pathPart !== undefined;
   if (normalizeLeadingSlash) idx++;
 
   // `renderFetchHelper` writes the passthrough over `pathPart` when it wrote that const, and over
   // `path` otherwise — one `pathVar` local in the emitter, one here.
   const pathVar = normalizeLeadingSlash ? "pathPart" : "path";
-  const passthroughTemplate =
-    idx < body.length ? passthroughUrlTemplate(body[idx]!, pathVar) : undefined;
+  const passthroughTemplate = passthroughUrlTemplate(body[idx], pathVar);
   const passthrough = passthroughTemplate !== undefined;
   if (passthrough) idx++;
 
@@ -631,7 +662,7 @@ function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undef
   // them apart from the `normalizeLeadingSlash: true` shape `grafana` is the only fixture to set.
   if (pathPart !== undefined && pathPart.httpArm !== passthrough) return undefined;
 
-  const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
+  const fetchCall = matchFetchStatement(body[idx]);
   if (fetchCall === undefined) return undefined;
   idx++;
 
@@ -643,10 +674,10 @@ function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undef
   // base it never actually requests.
   if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
 
-  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
+  if (!isTextStatement(body[idx])) return undefined;
   idx++;
 
-  if (idx >= body.length || !isThrowGuard(body[idx]!)) return undefined;
+  if (!isThrowGuard(body[idx])) return undefined;
   idx++;
 
   // Exactly one statement left — the plain return or the jsonFallbackRaw try/catch. Not zero
@@ -972,12 +1003,11 @@ type WriteHelperBody = {
 function matchWriteHelperBody(body: readonly AstNode[]): WriteHelperBody | undefined {
   let idx = 0;
 
-  const passthroughTemplate =
-    idx < body.length ? passthroughUrlTemplate(body[idx]!, "path") : undefined;
+  const passthroughTemplate = passthroughUrlTemplate(body[idx], "path");
   const passthrough = passthroughTemplate !== undefined;
   if (passthrough) idx++;
 
-  const fetchCall = idx < body.length ? matchFetchStatement(body[idx]!) : undefined;
+  const fetchCall = matchFetchStatement(body[idx]);
   if (fetchCall === undefined) return undefined;
   idx++;
 
@@ -993,10 +1023,10 @@ function matchWriteHelperBody(body: readonly AstNode[]): WriteHelperBody | undef
   const headers = matchWriteHelperOptions(options);
   if (headers === undefined) return undefined;
 
-  if (idx >= body.length || !isTextStatement(body[idx]!)) return undefined;
+  if (!isTextStatement(body[idx])) return undefined;
   idx++;
 
-  if (idx >= body.length || !isThrowGuard(body[idx]!)) return undefined;
+  if (!isThrowGuard(body[idx])) return undefined;
   idx++;
 
   // Exactly one statement left, and only one shape it can be: renderWriteHelper's tail has no
@@ -1031,7 +1061,7 @@ function matchWriteHelperFunction(
   if (s.type !== "FunctionDeclaration" || !isAsyncFunction(s)) return undefined;
 
   const name = functionName(s);
-  if (name === undefined || !name.endsWith(WRITE_SUFFIX)) return undefined;
+  if (!name?.endsWith(WRITE_SUFFIX)) return undefined;
   const local = name.slice(0, -WRITE_SUFFIX.length);
   // `FetchHelperSchema` keeps `local` non-empty, so a function named exactly "Send" is not a
   // write helper any spec produces.

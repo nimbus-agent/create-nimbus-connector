@@ -1,6 +1,19 @@
 {
   "name": "create-nimbus-connector",
-  "version": "0.10.0",
+  "version": "0.11.2",
+  "description": "Generate a Nimbus MCP connector package from a small JSON spec — for the Nimbus monorepo, or standalone.",
+  "keywords": [
+    "nimbus",
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "connector",
+    "generator",
+    "scaffold",
+    "codegen",
+    "cli",
+    "bun"
+  ],
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -12,6 +25,7 @@
   },
   "files": [
     "src",
+    "schema",
     "README.md"
   ],
   "publishConfig": {
@@ -21,6 +35,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/ scripts/",
     "test": "bun test",
+    "preflight": "bun scripts/preflight.ts",
+    "schema": "bun scripts/build-schema.ts",
+    "build:spec-doc": "bun scripts/build-spec-doc.ts",
     "diff:golden": "bun scripts/diff-golden.ts",
     "reach": "bun scripts/reach.ts",
     "reach:baseline": "bun scripts/reach-baseline.ts",

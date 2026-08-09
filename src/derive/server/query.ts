@@ -151,7 +151,7 @@ function isNotEqual(
   const b = binary(node);
   if (b?.operator !== "!==" || !right(b.right)) return false;
   const left = valueRef(b.left, locals);
-  return left !== undefined && left.arg === value.arg && left.local === value.local;
+  return left?.arg === value.arg && left.local === value.local;
 }
 
 /**
@@ -400,6 +400,33 @@ function readPathConstTail(statements: readonly AstNode[], urlVar: string): AstN
  * `args` is `recognizeArgs`'s result — the schema's declared types, before `mergeHoistedArgs` —
  * which is what the `String(...)` wrapper is held against; see this module's header.
  */
+/**
+ * The recognized query lines as spec `query` entries, cross-checked against the args they name.
+ *
+ * Its own function because it is the one part of `recognizeQueryBlock` that reads neither the URL
+ * const, the tail, nor the hoists: given the lines and the args it is decidable on its own, and
+ * inline it was the block's only nested region.
+ */
+function toQueryEntries(
+  lines: readonly QueryLine[],
+  args: Readonly<Record<string, ArgFields>>,
+): QueryEntry[] | undefined {
+  const query: QueryEntry[] = [];
+  for (const line of lines) {
+    // src/emit/server/query.ts's `wrapsInString`: the wrapper is written iff the declared type
+    // is not "string", regardless of guardedness. Checked rather than recorded — see the header.
+    const declared = args[line.arg]?.type;
+    if (declared === undefined) return undefined;
+    if (line.wrapped !== (declared !== "string")) return undefined;
+    query.push({
+      name: line.name,
+      arg: line.arg,
+      ...(line.omitWhen === undefined ? {} : { omitWhen: line.omitWhen }),
+    });
+  }
+  return query;
+}
+
 export function recognizeQueryBlock(
   body: AstNode,
   args: Readonly<Record<string, ArgFields>>,
@@ -434,19 +461,8 @@ export function recognizeQueryBlock(
   const lines = recognizeQueryLines(section.rest.slice(1, -tailLength), URL_LOCAL, section.locals);
   if (lines === undefined) return undefined;
 
-  const query: QueryEntry[] = [];
-  for (const line of lines) {
-    // src/emit/server/query.ts's `wrapsInString`: the wrapper is written iff the declared type
-    // is not "string", regardless of guardedness. Checked rather than recorded — see the header.
-    const declared = args[line.arg]?.type;
-    if (declared === undefined) return undefined;
-    if (line.wrapped !== (declared !== "string")) return undefined;
-    query.push({
-      name: line.name,
-      arg: line.arg,
-      ...(line.omitWhen === undefined ? {} : { omitWhen: line.omitWhen }),
-    });
-  }
+  const query = toQueryEntries(lines, args);
+  if (query === undefined) return undefined;
 
   return {
     path: prefixed.path,

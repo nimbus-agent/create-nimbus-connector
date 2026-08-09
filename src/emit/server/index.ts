@@ -96,8 +96,9 @@ function searchTools(spec: ConnectorSpec): ToolSpec[] {
  * merged z.object instead (renderSchema in search.ts). On the monorepo target the helper is
  * imported from shared/mcp-search-tool.ts; on standalone it CANNOT be, because it is the one
  * search symbol the SDK deliberately does not export: it constructs a zod schema, and
- * `@nimbus-dev/sdk`'s empty `dependencies` is load-bearing (Stage D design §4.4, and the
- * SDK-side commit says the same). Emitting the import anyway is what standalone acceptance
+ * `@nimbus-dev/sdk` ships an empty `dependencies` so that installing it pulls nothing in —
+ * exporting a schema constructor would put zod back in that list (the SDK-side commit says the
+ * same). Emitting the import anyway is what standalone acceptance
  * caught — `TS2305: Module '"@nimbus-dev/sdk/connector-kit"' has no exported member
  * 'searchToolInputSchema'`, and a matching bundler error, on both search fixtures.
  */

@@ -11,7 +11,9 @@
  * Two of those beliefs were load-bearing and had never been observed:
  *
  *   - that an unset optional boolean reaches the URL as `false` and is *absent* from the
- *     JSON body — decided by argument in the Stage C spec §8, never executed;
+ *     JSON body — the deliberate asymmetry README.md explains under *An unset optional
+ *     boolean renders `false` in the URL but is omitted from a JSON body*, decided by
+ *     argument and never executed;
  *   - that `client-credentials` performs the token exchange before the API call, and reuses
  *     the cached token for the second call rather than exchanging twice.
  *
@@ -307,7 +309,7 @@ async function checkBearerConnector(
     `Authorization: ${describeAuth(list?.auth, "Bearer tok-123")}`,
   );
 
-  // Spec §8's decision, finally observed rather than argued.
+  // The URL half of the asymmetry above, finally observed rather than argued.
   check(
     "unset optional boolean renders false in the URL",
     list?.path === "/items?flag=false",

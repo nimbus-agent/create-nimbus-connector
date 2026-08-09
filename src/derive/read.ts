@@ -1162,7 +1162,7 @@ export function importNames(node: AstNode | undefined): ImportName[] | undefined
  *
  * Routing it through the guarded accessors above would collapse `obj[key]()` from
  * `method-call:.key` into a bare `statement:ExpressionStatement`, merging distinct buckets and
- * destroying the "near-misses stay visible" property the reach design is built on. These readers
+ * destroying the "near-misses stay visible" property the histogram is built on. These readers
  * exist so `blockers.ts` needs no cast of its own — an escape hatch there is one a recognizer
  * could copy.
  */

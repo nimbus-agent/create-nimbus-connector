@@ -26,10 +26,10 @@ export type SdkArgs = Pick<ResolveOptions, "flag"> & {
  * Parse scripts/standalone-acceptance.ts's argv.
  *
  * The SDK root may be given positionally (`bun run standalone-acceptance <path>`, the form
- * README.md documents) or as `--sdk-root <path>` (the form the design doc's pre-release
- * gate table documents, and the name resolveSdkRoot already uses in its error messages and
- * its "Pass --sdk-root <path>" hint). Both are accepted so the two documents agree with the
- * script and with each other.
+ * docs/ARCHITECTURE.md and CONTRIBUTING.md document) or as `--sdk-root <path>` — the name SDK's
+ * `flagName` above already carries, so it is what resolveSdkRoot's own failure message tells
+ * you to pass. Both are accepted because a script that rejects the flag its error message
+ * names is a trap, and the positional form is the one the docs teach.
  *
  * `--registry` selects the published-tarball mode and takes no SDK root; combining the two
  * is a contradiction, not a precedence question, so it errors.

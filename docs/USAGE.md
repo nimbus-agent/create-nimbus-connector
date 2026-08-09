@@ -1,7 +1,8 @@
 # Using create-nimbus-connector
 
-A start-to-finish guide to generating a Nimbus MCP connector. For the spec language as
-reference material see the [README](../README.md); for how the generator is built see
+A start-to-finish guide to generating a Nimbus MCP connector. To look a spec field up, see
+[SPEC.md](./SPEC.md); for the rules that reject a spec, and how the fields work together, see
+the [README](../README.md); for how the generator is built see
 [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 **Bun is required.** The CLI carries a `#!/usr/bin/env bun` shebang, so it needs Bun however
@@ -101,7 +102,8 @@ Then grow it. The pieces you are most likely to reach for next:
 | OAuth | an env entry with `"auth": "client-credentials"`, `tokenUrl`, `credentialsIn` |
 | A tool you cannot express | `"impl": "stub"` — a typed handler that throws, never a silent guess |
 
-The README documents each of these in full, with the corpus measurements behind the defaults.
+[SPEC-RULES.md](./SPEC-RULES.md) documents each of these in full, with the corpus measurements
+behind the defaults.
 `fixtures/*.spec.json` are working examples — `fixtures/sentry.spec.json` for a plain read
 connector, `fixtures/mercury.spec.json` for search, `fixtures/zzwrite.spec.json` for writes.
 

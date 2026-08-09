@@ -1,11 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BIOME_VERSION, emitBiomeJson } from "../../src/emit/biome-json.ts";
 import { generate } from "../../src/emit/index.ts";
 import { emitPackageJson } from "../../src/emit/package-json.ts";
 import { emitReadme } from "../../src/emit/readme.ts";
 import { emitSandboxTest } from "../../src/emit/sandbox-test.ts";
 import { emitTsconfig } from "../../src/emit/tsconfig.ts";
-import { FORMATTER_CONFIG } from "../../src/format.ts";
+import { biomeVersion, FORMATTER_CONFIG } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
@@ -22,6 +25,32 @@ const spec = parseSpec({
     inlineHeaders: { "X-Api-Key": "${env.apiKey}" },
   },
 });
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * The `@biomejs/biome` range this repository pins, READ from package.json rather than restated
+ * here — the whole point being that a second hand-maintained copy of the version is the defect,
+ * not the check.
+ *
+ * The two guards this replaced compared the emitted `$schema` and the emitted devDependency
+ * range against `BIOME_VERSION` itself, so both held for any value the constant took and neither
+ * could ever fail. BIOME_VERSION sat at 2.5.6 while package.json pinned ^2.5.7 and every gate
+ * stayed green.
+ */
+function pinnedBiomeRange(): string {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+    devDependencies: Record<string, string>;
+  };
+  const range = pkg.devDependencies["@biomejs/biome"];
+  if (range === undefined) throw new Error("package.json declares no @biomejs/biome devDependency");
+  return range;
+}
+
+/** The same pin as a bare version, for the `$schema` URL's path segment. */
+function pinnedBiomeVersion(): string {
+  return pinnedBiomeRange().replace(/^\^/, "");
+}
 
 describe("emitPackageJson", () => {
   it("names the package nimbus-mcp-<name> and is AGPL", () => {
@@ -90,7 +119,7 @@ describe("standalone package.json", () => {
     // "command not found" on a clean registry install unless these are declared here.
     expect(pkg().scripts.lint).toBe("biome check src/");
     expect(pkg().scripts.typecheck).toBe("tsc --noEmit");
-    expect(pkg().devDependencies["@biomejs/biome"]).toBe(`^${BIOME_VERSION}`);
+    expect(pkg().devDependencies["@biomejs/biome"]).toBe(pinnedBiomeRange());
     expect(pkg().devDependencies.typescript).toBeDefined();
     expect(pkg().devDependencies["@types/bun"]).toBe("latest");
   });
@@ -157,11 +186,40 @@ describe("emitBiomeJson", () => {
     expect(cfg().javascript).toEqual(FORMATTER_CONFIG.javascript);
   });
 
-  it("pins its $schema to the Biome version it declares as a devDependency", () => {
-    expect(cfg().$schema).toBe(`https://biomejs.dev/schemas/${BIOME_VERSION}/schema.json`);
+  it("BIOME_VERSION matches the Biome this repo actually pins", () => {
+    // The emitted $schema URL and devDependency range are produced by BIOME_VERSION; the bytes
+    // they describe are produced by the Biome in devDependencies. A constant that drifts behind
+    // the pin emits a connector whose biome.json points at a schema for a different formatter.
+    expect(`^${BIOME_VERSION}`).toBe(pinnedBiomeRange());
+  });
+
+  it("matches the Biome ENGINE that produced the bytes, not merely the declared range", () => {
+    // The strongest form of the check above. `@biomejs/biome` (devDependencies) is the CLI the
+    // generated package's own `lint` script runs; `@biomejs/wasm-nodejs` (optionalDependencies)
+    // is what src/format.ts actually formats WITH, and biomeVersion() reads its installed
+    // package.json rather than a range. A caret range admits a newer patch, so the range can
+    // agree with BIOME_VERSION while node_modules does not — and it is the engine, not the
+    // range, that decided the bytes the emitted $schema claims to describe. bun.lock is
+    // committed, so this resolves to one version on every machine and in CI.
+    expect(biomeVersion()).toBe(BIOME_VERSION);
+    expect(`^${biomeVersion()}`).toBe(pinnedBiomeRange());
+  });
+
+  it("pins its $schema to the Biome this repo installs, not to whatever the constant says", () => {
+    expect(cfg().$schema).toBe(`https://biomejs.dev/schemas/${pinnedBiomeVersion()}/schema.json`);
     expect(
       JSON.parse(emitPackageJson(spec, "standalone").content).devDependencies["@biomejs/biome"],
-    ).toBe(`^${BIOME_VERSION}`);
+    ).toBe(pinnedBiomeRange());
+  });
+
+  it("keeps this repo's OWN biome.json on the same release it emits", () => {
+    // Not covered by the two above: those read emitted bytes. This repo's biome.json is the
+    // config `bun run lint` here resolves, and its $schema drifted to 2.5.6 alongside the
+    // constant with nothing asserting on it at all.
+    const own = JSON.parse(readFileSync(join(REPO_ROOT, "biome.json"), "utf8")) as {
+      $schema: string;
+    };
+    expect(own.$schema).toBe(`https://biomejs.dev/schemas/${pinnedBiomeVersion()}/schema.json`);
   });
 
   it("enables the linter, so `biome check src/` is a real gate and not a format-only pass", () => {

@@ -8,3 +8,16 @@ name: create-nimbus-connector CodeQL config
 paths-ignore:
   - dist
   - node_modules
+
+# `security-extended` rather than the default `code-scanning` suite, which is tuned for
+# precision on repositories where a false positive costs a maintainer's afternoon.
+# security-extended is a strict superset: it keeps every default query and adds the
+# lower-precision security ones. This repository is ~12k lines with one maintainer and no
+# alert backlog, so the trade the default makes is the wrong way round here — a missed
+# finding costs more than a triaged false positive.
+#
+# `disable-default-queries` is deliberately NOT set. Setting it would REPLACE the default
+# suite rather than extend it, and a config that reads as "more queries" while silently
+# dropping the baseline is the exact shape this repository keeps deleting.
+queries:
+  - uses: security-extended

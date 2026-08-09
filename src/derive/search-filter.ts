@@ -92,9 +92,50 @@ function matchTitleAlias(stmt: AstNode): string | undefined {
 }
 
 /**
+ * A literal array whose every element is a string literal, or `undefined` if either half fails.
+ *
+ * The two callers — `matchEntryCall`'s `nestedString` path segments and `matchKeyedFilter`'s
+ * `fieldsFromKeys` keys — carried a byte-identical copy of this loop. They are the only two arrays
+ * the emitter writes into a filter file, so one reader covers the construct rather than a subset.
+ */
+function stringArrayElements(node: AstNode | undefined): string[] | undefined {
+  const elements = arrayElements(node);
+  if (elements === undefined) return undefined;
+  const out: string[] = [];
+  for (const el of elements) {
+    const s = stringLit(el);
+    if (s === undefined) return undefined;
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * The `nestedString(row, [...])` arm of `matchEntryCall`, split out because its second argument is
+ * a COMPOSITE: every element has to be a string literal, and then the array as a whole has to be
+ * long enough. `stringField` also validates its second argument, but against one predicate that
+ * fits beside the `row` check; the two tag forms take only `row`. Three guards in sequence were
+ * the whole reason that table of four forms did not read as a table.
+ */
+function matchNestedStringEntry(args: readonly AstNode[]): FieldEntry | undefined {
+  if (!isIdent(args[0], "row")) return undefined;
+  const path = stringArrayElements(args[1]);
+  if (path === undefined) return undefined;
+  // SearchFilterSchema's own superRefine (src/spec.ts) rejects a "path" entry with fewer
+  // than two segments — a one-segment path is indistinguishable from the plain-key form, so
+  // the emitter never writes one and this recognizer must not accept it either.
+  return path.length >= 2 ? { path } : undefined;
+}
+
+/**
  * `stringField(row, "<key>")` / `nestedString(row, [...])` / `tagText(row)` /
  * `tagNamesFromObjects(row)` — one element of the extractor's returned array, the inverse of
  * `renderEntry`.
+ *
+ * Four forms in `renderEntry`'s own order, one return expression each. The arms are mutually
+ * exclusive by callee name, so the sequence is a table rather than a chain of decisions — reaching
+ * the end means the call is none of the four, which is the `undefined` a caller reads as "not an
+ * entry".
  */
 function matchEntryCall(node: AstNode): FieldEntry | undefined {
   const stringArgs = callTo(node, "stringField", 2);
@@ -103,21 +144,7 @@ function matchEntryCall(node: AstNode): FieldEntry | undefined {
   }
 
   const nestedArgs = callTo(node, "nestedString", 2);
-  if (nestedArgs !== undefined) {
-    if (!isIdent(nestedArgs[0], "row")) return undefined;
-    const elements = arrayElements(nestedArgs[1]);
-    if (elements === undefined) return undefined;
-    const path: string[] = [];
-    for (const el of elements) {
-      const s = stringLit(el);
-      if (s === undefined) return undefined;
-      path.push(s);
-    }
-    // SearchFilterSchema's own superRefine (src/spec.ts) rejects a "path" entry with fewer
-    // than two segments — a one-segment path is indistinguishable from the plain-key form, so
-    // the emitter never writes one and this recognizer must not accept it either.
-    return path.length >= 2 ? { path } : undefined;
-  }
+  if (nestedArgs !== undefined) return matchNestedStringEntry(nestedArgs);
 
   const objectsArgs = callTo(node, "tagNamesFromObjects", 1);
   if (objectsArgs !== undefined) {
@@ -152,17 +179,51 @@ function matchFieldsOfReturnType(node: AstNode | undefined): boolean {
  * `asRecord`), the declaration is always a named `function` (never an arrow with a type
  * annotation), the function is always named exactly `fieldsOf`, and it carries no doc comment.
  */
-function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
-  if (stmt.type !== "FunctionDeclaration" || isAsyncFunction(stmt)) return undefined;
-  if (functionName(stmt) !== "fieldsOf" || hasLeadingComment(stmt)) return undefined;
+/**
+ * `function fieldsOf(item: unknown): readonly string[] | null` — the declaration HEAD, every part of
+ * it pinned, and nothing about the body.
+ *
+ * Each clause is one of the gaps docs/ROADMAP.md's "Known limitations" records as the reason almost
+ * none of the 26 expressible corpus files byte-match: the declaration is always a named `function`
+ * (never an arrow with a type annotation), never `async`, always named exactly `fieldsOf`, and
+ * carries no doc comment. Split from the body match below because these read only the node's
+ * header — widening any of them is a decision about which declarations to accept, taken here, and
+ * it should not be interleaved with the question of what the body says.
+ */
+function matchesFieldsOfSignature(stmt: AstNode): boolean {
+  if (stmt.type !== "FunctionDeclaration" || isAsyncFunction(stmt)) return false;
+  if (functionName(stmt) !== "fieldsOf" || hasLeadingComment(stmt)) return false;
 
   const params = functionParams(stmt);
-  if (params?.length !== 1) return undefined;
+  if (params?.length !== 1) return false;
   const param = params[0];
   if (identName(param) !== "item" || identTypeAnnotation(param)?.type !== "TSUnknownKeyword") {
-    return undefined;
+    return false;
   }
-  if (!matchFieldsOfReturnType(functionReturnType(stmt))) return undefined;
+  return matchFieldsOfReturnType(functionReturnType(stmt));
+}
+
+/**
+ * `if (row === undefined) { return null; }` — the extractor's middle statement, matched exactly:
+ * no `else`, no other operator, no second statement in the block.
+ *
+ * `asRecord` is deliberately NOT accepted here or in the declaration above; `emitSearchFilter`
+ * writes `asObjectish`, and accepting the sibling guard would claim a file this generator
+ * re-emits differently.
+ */
+function matchesRowUndefinedGuard(stmt: AstNode): boolean {
+  const guard = ifStatement(stmt);
+  if (guard === undefined || guard.alternate !== undefined) return false;
+  const test = binary(guard.test);
+  if (test?.operator !== "===" || !isIdent(test.left, "row") || !isIdent(test.right, "undefined")) {
+    return false;
+  }
+  const guardBody = blockBody(guard.consequent);
+  return guardBody?.length === 1 && isNullLiteral(returnArgument(guardBody[0]));
+}
+
+function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
+  if (!matchesFieldsOfSignature(stmt)) return undefined;
 
   const body = functionBody(stmt);
   if (body?.length !== 3) return undefined;
@@ -172,16 +233,7 @@ function matchExtractorFunction(stmt: AstNode): FieldEntry[] | undefined {
   if (rowDecl?.name !== "row") return undefined;
   const guardArgs = callTo(rowDecl.init, "asObjectish", 1);
   if (guardArgs === undefined || !isIdent(guardArgs[0], "item")) return undefined;
-
-  // `if (row === undefined) { return null; }` — matched exactly, no `else`.
-  const guard = ifStatement(guardStmt);
-  if (guard === undefined || guard.alternate !== undefined) return undefined;
-  const test = binary(guard.test);
-  if (test?.operator !== "===" || !isIdent(test.left, "row") || !isIdent(test.right, "undefined")) {
-    return undefined;
-  }
-  const guardBody = blockBody(guard.consequent);
-  if (guardBody?.length !== 1 || !isNullLiteral(returnArgument(guardBody[0]))) return undefined;
+  if (!matchesRowUndefinedGuard(guardStmt)) return undefined;
 
   // `return [ <entries> ];`
   const elements = arrayElements(returnArgument(returnStmt));
@@ -233,14 +285,8 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
   const innerArgs = callToAny(outerArgs[0], "fieldsFromKeys");
   if (innerArgs === undefined || innerArgs.length < 1 || innerArgs.length > 2) return undefined;
 
-  const elements = arrayElements(innerArgs[0]);
-  if (elements === undefined) return undefined;
-  const keys: string[] = [];
-  for (const el of elements) {
-    const s = stringLit(el);
-    if (s === undefined) return undefined;
-    keys.push(s);
-  }
+  const keys = stringArrayElements(innerArgs[0]);
+  if (keys === undefined) return undefined;
 
   let tags = false;
   if (innerArgs.length === 2) {
@@ -248,7 +294,7 @@ function matchKeyedFilter(stmt: AstNode): FilterEntry | undefined {
     // identical `tags` flag and re-emits the bare form.
     const props = bareKeyedProps(innerArgs[1]);
     const only = props?.length === 1 ? props[0] : undefined;
-    if (only === undefined || only.key !== "tags" || boolLit(only.value) !== true) {
+    if (only?.key !== "tags" || boolLit(only.value) !== true) {
       return undefined;
     }
     tags = true;
@@ -459,6 +505,29 @@ function matchOneFilter(statements: readonly AstNode[], i: number): FilterMatch 
  * `all-identical` byte-diff tier — a claim about round-tripping every file `generate()` produces
  * has nothing to say about a file it does not produce.
  */
+type TitleAlias = {
+  readonly index: number;
+  readonly statement: AstNode;
+  readonly titleFragment: string;
+};
+
+/**
+ * The `export type <Title>SearchMatchOptions` alias, with the index and fragment its caller needs.
+ *
+ * One pass, because `findIndex` followed by a re-read and a re-run of the same predicate needed two
+ * further `undefined` guards that `findIndex` had already ruled out — `noUncheckedIndexedAccess`
+ * forces the index one, and re-calling `matchTitleAlias` forces the other. Each returned its own
+ * copy of the identical blocker, and both copies were unreachable, which is exactly how they read
+ * in a coverage report. Returning the fragment from the pass that found it removes the question.
+ */
+function findTitleAlias(statements: readonly AstNode[]): TitleAlias | undefined {
+  for (const [index, statement] of statements.entries()) {
+    const titleFragment = matchTitleAlias(statement);
+    if (titleFragment !== undefined) return { index, statement, titleFragment };
+  }
+  return undefined;
+}
+
 export function recognizeSearchFilter(source: string): SearchFilterDerivation {
   let statements: AstNode[];
   try {
@@ -469,31 +538,18 @@ export function recognizeSearchFilter(source: string): SearchFilterDerivation {
 
   const claims = createClaimSet();
 
-  const aliasIdx = statements.findIndex((s) => matchTitleAlias(s) !== undefined);
-  if (aliasIdx === -1) {
+  const alias = findTitleAlias(statements);
+  if (alias === undefined) {
     return blocked(
       "search-filter:no-type-alias",
       "no export type <Title>SearchMatchOptions alias was found",
     );
   }
-  const aliasStmt = statements[aliasIdx];
-  if (aliasStmt === undefined) {
-    return blocked(
-      "search-filter:no-type-alias",
-      "no export type <Title>SearchMatchOptions alias was found",
-    );
-  }
-  const titleFragment = matchTitleAlias(aliasStmt);
-  if (titleFragment === undefined) {
-    return blocked(
-      "search-filter:no-type-alias",
-      "no export type <Title>SearchMatchOptions alias was found",
-    );
-  }
-  claims.claim(aliasStmt, "type-alias");
+  const titleFragment = alias.titleFragment;
+  claims.claim(alias.statement, "type-alias");
 
-  const preamble = statements.slice(0, aliasIdx);
-  const rest = statements.slice(aliasIdx + 1);
+  const preamble = statements.slice(0, alias.index);
+  const rest = statements.slice(alias.index + 1);
 
   const filters: FilterEntry[] = [];
   const claimedFilterStatements: AstNode[] = [];

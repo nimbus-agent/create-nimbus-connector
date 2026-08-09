@@ -11,7 +11,160 @@ its generated section *below* this one rather than above it, so the move is manu
 left here read as unreleased long after they shipped, which is exactly what happened to the
 0.4.0, 0.5.0 and 0.6.0 blocks now filed under those versions.
 
+That is no longer only a convention. `.github/workflows/release.yml` refuses to publish
+unless this section's last non-blank line is the placeholder `*Nothing pending.*` and the
+section carries no `###` sub-heading and no bulleted entry. The gate runs before
+`npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
+is written next to the step.
+
 *Nothing pending.*
+
+## [0.11.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.1...create-nimbus-connector-v0.11.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* move the 0.11.1 notes under their version so the release can publish ([#73](https://github.com/nimbus-agent/create-nimbus-connector/issues/73)) ([434295c](https://github.com/nimbus-agent/create-nimbus-connector/commit/434295ccde1eed19c0b20c1e682b81761522934a))
+
+## [0.11.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.0...create-nimbus-connector-v0.11.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* correct seven shipped README claims, two quadratic regexes, and the Sonar backlog ([#71](https://github.com/nimbus-agent/create-nimbus-connector/issues/71)) ([d9bfe82](https://github.com/nimbus-agent/create-nimbus-connector/commit/d9bfe82e35d4299d45454f2924ac1dfcc073244b))
+
+### Not on npm
+
+**0.11.1 was tagged and GitHub-released, and never published.** The Unreleased-section gate
+refused it: the notes below this paragraph were still filed as unreleased when the release
+workflow ran, which is that gate doing its job on the first release that gave it anything to
+catch. `npm publish` cannot be
+undone after 72 hours, so the recovery path is forward-only and written into
+`.github/workflows/release.yml`: re-running the job checks out the same commit and a fresh run
+sees `release_created=false`, so the notes move under their version and release-please cuts the
+next patch. **Everything described below therefore reaches npm as 0.11.2**, and the registry
+skips from 0.11.0 to it. Publishing 0.11.1 by hand would have lost the provenance attestation.
+
+### Output changes
+
+* **A generated standalone package now pins Biome 2.5.7, where it pinned 2.5.6.** Both the
+  emitted `biome.json`'s `$schema` URL and the emitted `@biomejs/biome` devDependency range
+  move. Nothing about an already-generated package changes until it is regenerated, and the
+  monorepo target is untouched — it emits no `biome.json` at all, inheriting the workspace
+  root's.
+
+  The constant had drifted a patch behind the Biome this repository itself installs, which is
+  the engine `src/format.ts` runs to produce the bytes that config describes. The two guards
+  that existed compared the emitted output against the constant, so they held for any value it
+  took; `test/emit/static.test.ts` now compares it against the pin and against the engine.
+
+### Documentation shipped in the package
+
+`README.md` is one of the three paths `package.json`'s `files` array publishes, so these
+reached npm readers as fact and are corrected here rather than only in the repository:
+
+* **The default request body excluded only path arguments.** It excludes `query` entries too —
+  either one already puts the value on the wire, and mirroring it into the body would send it
+  twice. An explicit `body` mapping still overrides both exclusions verbatim.
+* **A request with no body was described as sending no `Content-Type`.** The hand-rolled write
+  helper sets that header on every call and omits only the body itself, so a bodyless `DELETE`
+  is sent with the header and nothing to describe. rest-kit writes do not go through that
+  helper and genuinely set no `Content-Type` — the two paths differ, and the README claimed the
+  rest-kit behaviour for both.
+* **Byte reproduction was stated as a property of the corpus** ("a package byte-identical to
+  the 94 hand-written Nimbus connectors"). It is the bar four fixtures are held to, not a
+  blanket guarantee; the README now points at *The measured ceiling*, which carries the date
+  and the tree it was measured against.
+* Four smaller corrections in the same pass: the emitted file list omitted `biome.json`,
+  `local`/`bindings` were described as "optional strings" when they are validated identifiers
+  with per-field requiredness, `client-credentials` was said to require `hand-rolled` when
+  `read-only-kit` accepts it too, and the interactive session was described as asking for the
+  connector name it in fact takes from the positional argument.
+
+### Fixed
+
+* Two regexes that backtracked quadratically on their input have been replaced with linear
+  constructions: `src/openapi/spec.ts`'s connector-name slug trim, and the trailing-whitespace
+  trim in the changelog gate that runs before `npm publish`. Neither had a reachable trigger,
+  and neither now depends on one — measured at 4x per doubling of the run before the change.
+
+## [0.11.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.10.0...create-nimbus-connector-v0.11.0) (2026-08-07)
+
+
+### Features
+
+* **openapi:** author a spec from an OpenAPI document, and close Stage F ([#68](https://github.com/nimbus-agent/create-nimbus-connector/issues/68)) ([da03f46](https://github.com/nimbus-agent/create-nimbus-connector/commit/da03f469f0c7088032ef9539f0107c0a532ff8a8))
+
+### Breaking (spec validation)
+
+Written by hand, after the release, because the generated subject line above says nothing about
+any of it. Every entry moves a failure **earlier**: each shape below previously produced a
+package that failed its own parse or typecheck, or — in two of them — one that compiled and then
+behaved wrongly. **No package that already generated correctly changes by a byte**; the four
+byte-locked fixtures are untouched, and every rule here is a refusal at parse or validate time
+rather than an emitter change.
+
+* **spec:** six fields spliced verbatim into generated source — `serviceLabel`,
+  `fetchHelper.base`, `tools[].name`, `tools[].path`, `env[].prefix` and `env[].suffix` — now
+  reject a backtick and a block-comment terminator, and reject interpolation their splice site
+  does not resolve. `fetchHelper.base` still takes `${env.NAME}`, `tools[].path` still takes the
+  path-template DSL, and the other four take no interpolation at all.
+
+  **This closes a code-injection hole.** A backtick, or a `${…}` whose expression referenced
+  nothing outside itself, stopped being text and became executable code in the generated
+  connector — running on every request in `fetchHelper.base` and `env[].prefix`, and on every
+  non-2xx response in `serviceLabel`. It compiled, it linted, `tsc --noEmit --strict` passed it,
+  and Biome reformatted it into place. Nothing downstream reported it.
+
+  A trailing backslash in `fetchHelper.base` is refused for a quieter reason: it escaped the
+  interpolation that followed it, so the connector requested a literal `${path}`.
+
+* **validate:** JavaScript reserved words are rejected in every identifier-valued field —
+  `fetchHelper.local`, `fetchHelper.baseConst`, `fetchHelper.headers`, `env[].local`,
+  `env[].bindings[]`, `env[].tokenLocal`, `filter.export`, `tools[].rows`, an argument's `local`,
+  and tool argument keys. `bindings: ["class"]` previously emitted `const class = …`, a parse
+  error against the generator's own output.
+
+  The refused set is **derived, not transcribed**: each candidate was run through the real
+  generator in all ten identifier positions and the output handed to the real Biome, so the list
+  is what actually breaks emitted source rather than what a table says is reserved.
+  **TypeScript's soft keywords stay legal** — `type`, `as`, `any`, `namespace`, `from` and `of`
+  are ordinary identifiers and a spec using one is unaffected. `package`, `private`, `protected`,
+  `public`, `eval` and `arguments` are refused despite being absent from the tokenizer's
+  keyword list: they are reserved in strict mode, which every emitted module is.
+
+* **validate:** four more identifiers are reserved — `Date`, `Math`, `Number` and `undefined`.
+  The first three are globals the client-credentials token exchange calls directly, and were the
+  missing half of a list that already reserved their siblings. **`undefined` is the one worth
+  reading twice:** an env accessor named `undefined` typechecks cleanly and turns its own guard
+  into `undefined === undefined`, so it throws "not set" however the variable is configured — a
+  connector that fails identically whether or not anything is wrong.
+
+* **validate:** `tools[].rows` and `env[].bindings[]` are now checked against the other
+  identifiers the same package emits. `rows: "root"` emitted a second `const root`; a binding
+  naming what its own accessor reads produced a self-referential initializer. The `bindings` rule
+  is **entry-scoped** — `token`/`cachedToken`/`tokenExpiresAt` refused only on a
+  `client-credentials` entry, `trimTrailingSlash` only alongside
+  `transform: "trimTrailingSlashFn"` — because a flat check against every emitted name would
+  reject `bindings: ["u"]` and `bindings: ["token"]`, both correct and byte-locked today.
+
+* **spec:** an env entry with no `auth`, no `default`, and `required` left at its schema default
+  of `false` is refused rather than emitted. It is the one shape for which no guard is emitted,
+  so the accessor returns `process.env[…]?.trim()` — `string | undefined` — from a function the
+  emitter declares as `(): string`. **An entry setting any one of the three is unaffected**, which
+  is every entry in the fixture corpus.
+
+  Three of its six variants failed the generated package's own typecheck (TS2322, or
+  TS18048/TS2345 once `transform` is set). The other three — those setting `prefix`, `suffix` or
+  both — **typechecked cleanly and returned the eight characters `"undefined"` at runtime**,
+  because the value lands in a template literal, so the fetch helper requested
+  `https://undefined/…`. Set `required: true`, or give the variable a `default`.
+
+* **openapi:** `--from-openapi` refuses an operation whose parameter name is a reserved word,
+  where it previously mapped it. This is the one change here with a real cost, and the only one
+  not measured: the argument name is spec-internal and never reaches the URL, so renaming it
+  would be lossless, and `claimArgument` records that as the thing to revisit. No gate currently
+  measures OpenAPI reach, so the size of the cost is argued rather than known.
 
 ## [0.10.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.9.0...create-nimbus-connector-v0.10.0) (2026-08-07)
 

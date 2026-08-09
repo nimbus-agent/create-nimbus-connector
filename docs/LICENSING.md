@@ -15,12 +15,12 @@ the authoring-aid framing of the same code `bun run reach` already runs over the
 The two differ only in what they do with the answer: `reach` diffs it against a corpus baseline
 and reports a tier; `--from-connector` prints it.
 
-That difference is exactly why the earlier design deferred this question instead of answering it
-inline. [The reach design](./superpowers/specs/2026-08-03-from-connector-reach-design.md#what-it-is-and-what-it-is-not)
+That difference is exactly why `reach` shipped first without this document having to exist. It
 could rely on a structural guarantee that `reach` still has and `--from-connector` cannot:
-`reach` never writes a derived spec to disk — `scripts/reach.ts`'s own header says so — so there
-was no code path through which corpus-derived content could reach this repository's tracked
-files. Printing *is* what `--from-connector` is for: a user who cannot see the derived spec
+**`reach` never writes a derived spec to disk** — `scripts/reach.ts`'s own header says so, and
+`scripts/_lib/reach.ts` holds no write path at all — so there was no code path through which
+corpus-derived content could reach this repository's tracked files. Printing *is* what
+`--from-connector` is for: a user who cannot see the derived spec
 cannot edit it or feed it back through `--spec`. So the "never touches disk" guarantee cannot be
 the answer here, and the guardrail has to live somewhere else — see
 [the one thing that stays forbidden](#the-one-thing-that-stays-forbidden), below.

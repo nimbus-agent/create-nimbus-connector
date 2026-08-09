@@ -65,17 +65,32 @@ bumping a tag comment.
 
 ## Before you merge a release PR
 
-CI covers what it can, but three gates need a Nimbus checkout and therefore cannot run in
-Actions. Run them locally against the release commit:
+CI covers what it can, but **four** gates need a Nimbus checkout and therefore cannot run in
+Actions. Run the whole local sequence against the release commit — one command runs all eight,
+in order, and names any it could not run:
+
+```bash
+bun run preflight --nimbus-root /path/to/Nimbus
+```
+
+The four it adds to CI's three, if you would rather run them individually:
 
 ```bash
 bun run diff:golden --nimbus-root /path/to/Nimbus
-bun run acceptance /path/to/Nimbus
+bun run reach --baseline --nimbus-root /path/to/Nimbus
 bun run wiring:conformance --nimbus-root /path/to/Nimbus
+bun run acceptance /path/to/Nimbus
 ```
 
 `diff:golden` is the one that matters most: it is the check that the emitted bytes still match
 real connectors, and `newrelic`, `datadog`, `grafana` and `sentry` must still report `6/6`.
+`reach --baseline` is the one most easily forgotten, because nothing in CI mentions it: it fails
+when a connector in the corpus has *lost* a derivation tier against `fixtures/reach-baseline.json`,
+which a release that changed `src/derive/` or `src/emit/` can do without moving a single fixture.
+
+**A preflight run that skipped gates does not say the same thing as one that did not.** Quote the
+sentence it actually printed; `scripts/_lib/preflight.ts`'s `verdict` has three of them and only
+one means every gate ran.
 
 If the release changes standalone output, also run both acceptance modes — and read
 [CLAUDE.md](../CLAUDE.md) on why they are not interchangeable:

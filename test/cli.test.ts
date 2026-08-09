@@ -14,6 +14,8 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
+      ops: [],
     });
   });
 
@@ -24,6 +26,8 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
+      ops: [],
     });
   });
 
@@ -35,6 +39,8 @@ describe("parseCliArgs", () => {
       standalone: false,
       force: false,
       partial: false,
+      listOperations: false,
+      ops: [],
     });
   });
 
@@ -101,6 +107,8 @@ describe("parseCliArgs", () => {
         dryRun: false,
         force: false,
         partial: false,
+        listOperations: false,
+        ops: [],
       });
     });
   });
@@ -229,6 +237,18 @@ describe("parseCliArgs", () => {
     it("rejects --from-connector combined with --dry-run, since it never writes files either way", () => {
       expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--dry-run"])).toThrow(/--dry-run/);
     });
+
+    // Previously this fell through to "--force only applies to --gateway-wiring. Add it, or drop
+    // --force." — and --from-connector with --gateway-wiring is refused, so the first half of
+    // that advice led nowhere. It must fail on --from-connector's own rule.
+    it("rejects --from-connector combined with --force on its own rule, not --gateway-wiring's", () => {
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--force"])).toThrow(
+        /--from-connector/,
+      );
+      expect(() => parseCliArgs(["--from-connector", "/tmp/x", "--force"])).not.toThrow(
+        /Add it, or drop --force/,
+      );
+    });
   });
 
   describe("--partial", () => {
@@ -242,6 +262,150 @@ describe("parseCliArgs", () => {
 
     it("rejects --partial without --from-connector rather than ignoring it", () => {
       expect(() => parseCliArgs(["acme", "--partial"])).toThrow(/--from-connector/);
+    });
+  });
+
+  describe("--from-openapi and --list-operations", () => {
+    it("are undefined and false by default", () => {
+      expect(parseCliArgs(["acme"]).fromOpenapi).toBeUndefined();
+      expect(parseCliArgs(["acme"]).listOperations).toBe(false);
+    });
+
+    it("are set by their flags", () => {
+      const opts = parseCliArgs(["--from-openapi", "widgets.yaml", "--list-operations"]);
+      expect(opts.fromOpenapi).toBe("widgets.yaml");
+      expect(opts.listOperations).toBe(true);
+    });
+
+    it("rejects --from-openapi with no following value", () => {
+      expect(() => parseCliArgs(["--from-openapi"])).toThrow(/--from-openapi/);
+    });
+
+    it("rejects --list-operations alone, naming the flag that is missing", () => {
+      expect(() => parseCliArgs(["--list-operations"])).toThrow(/--from-openapi/);
+    });
+
+    it("rejects --from-openapi combined with --from-connector, naming both", () => {
+      const argv = ["--from-openapi", "w.yaml", "--from-connector", "/tmp/x"];
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+      expect(() => parseCliArgs(argv)).toThrow(/--from-connector/);
+    });
+
+    it("rejects --from-openapi combined with --spec, naming both", () => {
+      const argv = ["--from-openapi", "w.yaml", "--spec", "x.json"];
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+      expect(() => parseCliArgs(argv)).toThrow(/--spec/);
+    });
+
+    it("rejects --from-openapi combined with a positional name", () => {
+      expect(() => parseCliArgs(["acme", "--from-openapi", "w.yaml"])).toThrow(/info\.title/);
+    });
+
+    // The write-shaping flags are all dead here for one reason, and they are reported in one
+    // message rather than one run each — and on --from-openapi's own rule, not on the generic
+    // "--license needs --standalone" one, which would send the user to an equally dead flag.
+    it("rejects every write-shaping flag in one message that names each of them", () => {
+      const argv = [
+        "--from-openapi",
+        "w.yaml",
+        "--list-operations",
+        "--standalone",
+        "--license",
+        "MIT",
+        "--out-dir",
+        "/tmp/x",
+        "--dry-run",
+        "--gateway-wiring",
+        "C:/x",
+      ];
+      for (const flag of [
+        "--standalone",
+        "--license",
+        "--out-dir",
+        "--dry-run",
+        "--gateway-wiring",
+      ]) {
+        expect(() => parseCliArgs(argv)).toThrow(flag);
+      }
+      expect(() => parseCliArgs(argv)).toThrow(/--from-openapi/);
+    });
+
+    // --force and --partial are each gated on a flag that is itself refused alongside
+    // --from-openapi, so their own messages ("add --gateway-wiring", "add --from-connector")
+    // point at commands this CLI would also reject. They belong in the group, not after it.
+    it("rejects --force and --partial too, rather than sending the user to a refused flag", () => {
+      const withForce = ["--from-openapi", "w.yaml", "--list-operations", "--force"];
+      expect(() => parseCliArgs(withForce)).toThrow(/--force/);
+      expect(() => parseCliArgs(withForce)).toThrow(/--from-openapi/);
+
+      const withPartial = ["--from-openapi", "w.yaml", "--list-operations", "--partial"];
+      expect(() => parseCliArgs(withPartial)).toThrow(/--partial/);
+      expect(() => parseCliArgs(withPartial)).toThrow(/--from-openapi/);
+    });
+
+    it("still accepts --from-openapi with --list-operations on their own", () => {
+      expect(() => parseCliArgs(["--from-openapi", "w.yaml", "--list-operations"])).not.toThrow();
+    });
+  });
+
+  describe("--op", () => {
+    it("is an empty list by default and collects every occurrence in order", () => {
+      expect(parseCliArgs(["acme"]).ops).toEqual([]);
+      const opts = parseCliArgs(["--from-openapi", "w.yaml", "--op", "b", "--op", "a"]);
+      // Selection order, not document order: it is what the printed spec's tool order follows.
+      expect(opts.ops).toEqual(["b", "a"]);
+    });
+
+    it("rejects --op with no following value", () => {
+      expect(() => parseCliArgs(["--from-openapi", "w.yaml", "--op"])).toThrow(/--op/);
+    });
+
+    it("rejects --op without --from-openapi, naming the flag that is missing", () => {
+      expect(() => parseCliArgs(["acme", "--op", "listWidgets"])).toThrow(/--from-openapi/);
+    });
+
+    // Both flags read the same document and only one of them can produce output, so accepting
+    // the pair would silently discard whichever lost.
+    it("rejects --op combined with --list-operations, naming both", () => {
+      const argv = ["--from-openapi", "w.yaml", "--list-operations", "--op", "listWidgets"];
+      expect(() => parseCliArgs(argv)).toThrow(/--op/);
+      expect(() => parseCliArgs(argv)).toThrow(/--list-operations/);
+    });
+
+    /**
+     * The pinned answer to Task 1's provisional one: a bare `--from-openapi` is an error naming
+     * both flags that give it something to do. Checked at parse time rather than in main(), so it
+     * is a flag-combination rule like every other one in this file.
+     */
+    it("rejects a bare --from-openapi, naming both --op and --list-operations", () => {
+      expect(() => parseCliArgs(["--from-openapi", "w.yaml"])).toThrow(/--op/);
+      expect(() => parseCliArgs(["--from-openapi", "w.yaml"])).toThrow(/--list-operations/);
+    });
+
+    it("accepts --from-openapi with one or more --op", () => {
+      const argv = ["--from-openapi", "w.yaml", "--op", "listWidgets", "--op", "getWidget"];
+      expect(() => parseCliArgs(argv)).not.toThrow();
+    });
+
+    /**
+     * The wrong-advice trap this file closes twice elsewhere. On their own, `--list-operations`
+     * and `--op` say "Add --from-openapi <doc>" — a command that is itself refused alongside
+     * `--spec` and `--from-connector`, so the message must name the real conflict instead.
+     */
+    it("names the flag that already supplies a spec, rather than sending the user to --from-openapi", () => {
+      for (const [argv, conflicting] of [
+        [["--from-connector", "/tmp/x", "--list-operations"], "--from-connector"],
+        [["--from-connector", "/tmp/x", "--op", "listWidgets"], "--from-connector"],
+        [["--spec", "x.json", "--op", "listWidgets"], "--spec"],
+      ] as const) {
+        expect(() => parseCliArgs(argv)).toThrow(conflicting);
+        expect(() => parseCliArgs(argv)).not.toThrow(/Add --from-openapi/);
+      }
+    });
+
+    it("names both OpenAPI-only flags at once rather than one refusal per run", () => {
+      const argv = ["--spec", "x.json", "--list-operations", "--op", "listWidgets"];
+      expect(() => parseCliArgs(argv)).toThrow(/--list-operations and --op/);
     });
   });
 });
@@ -343,9 +507,15 @@ describe("--help", () => {
    * that do not exist, or omits ones that do, and nothing fails. parseFlags is the source of
    * truth, so the flags it compares against are extracted from the source and required to
    * appear in USAGE.
+   *
+   * The extraction reads parseFlags' `case` labels. It read `a === "--flag"` while that function
+   * was an else-if chain, and this assertion is what failed when the chain became a switch — which
+   * is the guard working: an extraction that silently matched nothing would have left `parsed`
+   * empty and passed every loop below it vacuously. The `toBeGreaterThan` is what stops that,
+   * and it is why the pattern may be re-aimed but must never be widened to "match anything".
    */
   it("documents every flag parseFlags accepts", () => {
-    const parsed = [...cliSource.matchAll(/a === "(--[a-z-]+)"/g)].map((m) => m[1]!);
+    const parsed = [...cliSource.matchAll(/^\s*case "(--[a-z-]+)":/gm)].map((m) => m[1]!);
     expect(parsed.length).toBeGreaterThan(5);
     for (const flag of parsed) {
       expect(USAGE).toContain(flag);
