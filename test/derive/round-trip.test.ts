@@ -9,6 +9,14 @@ import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
 /**
+ * ## What this file does NOT cover
+ *
+ * **Shim connectors, whose tools live in `src/tools.ts`.** A round trip is derive → emit →
+ * compare, and the emitter writes ONE source file, so it can never reproduce a two-file input.
+ * There is therefore no fixture here for that path and there cannot be one until the emitter
+ * learns to write the shim. `test/derive/second-file.test.ts` covers it with hand-written pairs
+ * instead — weaker evidence, named as such rather than left for a reader to assume.
+ *
  * Fixtures whose emitted src/server.ts + nimbus.extension.json (+ src/search-filter.ts, for the
  * search fixtures) this plan's recognizers derive, and which then re-emit byte-identical output
  * for every file the fixture produces. Confirmed by running the full parseSpec -> generate ->
