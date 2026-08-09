@@ -1045,6 +1045,23 @@ export const ToolSchema = z
         });
       }
       guarded.add(g.absent);
+
+      // POSITIONAL, not global. Guard i may reference any arg EXCEPT the one it tests: reaching
+      // guard i means every earlier guard's test was false, so those args are non-undefined here.
+      // The naive version — collect every guarded arg and reject any reference to any of them —
+      // rejects athena_list, the shape this feature exists to reach.
+      for (const seg of parsePathTemplate(g.path)) {
+        if (seg.kind === "arg" && seg.name === g.absent) {
+          add({
+            path: ["pathWhen", i, "path"],
+            message:
+              `"pathWhen" guard ${String(i)}'s path interpolates ${JSON.stringify(g.absent)}, ` +
+              'the arg it tests for absence — it would render "undefined" into the URL. A ' +
+              "template literal accepts `string | undefined`, so the generated package compiles " +
+              "and the wrong request is sent silently.",
+          });
+        }
+      }
     });
 
     if (t.query === undefined) return;

@@ -1717,6 +1717,46 @@ describe("ToolSchema pathWhen guards", () => {
   it("rejects an empty pathWhen array", () => {
     expect(() => condSpec({ pathWhen: [] })).toThrow(/at least one/);
   });
+
+  it("rejects a guard whose own path interpolates the arg it tests", () => {
+    // Compiles in the generated package (string | undefined is legal in a template literal), so
+    // the connector would send "/builds/undefined" and nothing would report it.
+    expect(() =>
+      condSpec({ pathWhen: [{ absent: "buildId", path: "/builds/${arg.buildId|enc}" }] }),
+    ).toThrow(/interpolates .*buildId.* it tests/);
+  });
+
+  it("ALLOWS a later guard to reference an earlier guard's arg", () => {
+    // The rule is positional, not global. athena_list does exactly this: reaching guard 2 means
+    // guard 1's test was false, so that arg is non-undefined there. A global "no guarded arg may
+    // be referenced" rule would wrongly reject the real corpus connector this feature targets.
+    const s = parseSpec({
+      name: "acme",
+      displayName: "Acme",
+      description: "d.",
+      serviceLabel: "Acme",
+      style: "hand-rolled",
+      env: [{ vars: ["ACME_TOKEN"], local: "authHeaders", bindings: ["token"], auth: "bearer" }],
+      fetchHelper: { local: "acmeGet", base: "https://api.acme.test", headers: "authHeaders" },
+      tools: [
+        {
+          name: "acme_list",
+          description: "List.",
+          impl: "rest",
+          path: "/c/${arg.catalog|enc}/d/${arg.database|enc}",
+          args: {
+            catalog: { type: "string", min: 1, optional: true },
+            database: { type: "string", min: 1, optional: true },
+          },
+          pathWhen: [
+            { absent: "catalog", path: "/catalogs" },
+            { absent: "database", path: "/c/${arg.catalog|enc}/databases" },
+          ],
+        },
+      ],
+    });
+    expect(s.tools[0]!.pathWhen).toHaveLength(2);
+  });
 });
 
 describe("strings the emitter splices raw into generated source", () => {
