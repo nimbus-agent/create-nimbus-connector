@@ -109,10 +109,14 @@ export async function deriveFromDirectory(
   // that is not by itself a blocker — deriveSpec is what decides whether its absence matters
   // (a recognized search tool with no filter file IS one; see deriveSharedStyleSpec).
   const filter = existsSync(filterPath) ? await Bun.file(filterPath).text() : undefined;
+  const toolsPath = join(dir, "src", "tools.ts");
+  // Optional exactly as search-filter.ts is: most connectors have no second file, and its absence
+  // is not by itself a blocker. deriveSpec decides whether it was needed.
+  const tools = existsSync(toolsPath) ? await Bun.file(toolsPath).text() : undefined;
   // The target is a generate() option rather than a spec field, so it is reported separately.
   const target = server.includes("@nimbus-dev/sdk/connector-kit") ? "standalone" : "monorepo";
 
-  const derivation = deriveSpec({ server, manifest, filter });
+  const derivation = deriveSpec({ server, manifest, filter, tools });
   if (!derivation.ok) {
     if (options.partial !== true) return { ok: false, blockers: derivation.blockers };
     return partialResult(target, derivation.blockers);

@@ -658,6 +658,19 @@ describe("deriveSpec", () => {
         "call:extraCall",
       ]);
     });
+
+    it("accepts a tools source without yet changing what it derives", () => {
+      // Task 2 lands the contract only. Supplying `tools` must be inert until Task 4 reads it, so
+      // this pins the boundary between the two changes rather than the eventual behaviour.
+      const withTools = deriveSpec({
+        server: SHIM_SERVER,
+        manifest: MANIFEST,
+        tools: "export function registerZzshimTools(reg: ZodToolRegistrar) {}\n",
+      });
+      const without = deriveSpec({ server: SHIM_SERVER, manifest: MANIFEST });
+
+      expect(withTools).toEqual(without);
+    });
   });
 
   it("attaches $effectAmbiguity when a stub sits beside a write tool competing for the same declared effect", () => {

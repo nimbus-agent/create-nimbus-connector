@@ -29,7 +29,19 @@ import { recognizeRestRegistrar, recognizeRestTools } from "./server/tools-rest.
  * omission: a search tool whose filter cannot be read must not derive a spec that regenerates a
  * connector with a different filter.
  */
-export type SourceFiles = { server: string; manifest: string; filter?: string };
+export type SourceFiles = {
+  server: string;
+  manifest: string;
+  filter?: string;
+  /**
+   * `src/tools.ts`, when the connector is a shim that registers every tool from it.
+   *
+   * Optional on the precedent `filter` sets: a connector that does not carry the file simply does
+   * not pass it, and every existing call site is unchanged. Supplying it for a NON-shim connector
+   * is inert — `applySecondFile` refuses anything but the exact shim pair.
+   */
+  tools?: string;
+};
 
 /** A shape recognized by `recognizeSearchTool` rather than `recognizeOne` — see `SearchToolFields`'s own docstring for why `impl` is the discriminant. */
 function isSearchTool(t: ToolFields | SearchToolFields): t is SearchToolFields {
