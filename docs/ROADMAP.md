@@ -253,7 +253,7 @@ them on one row.
       before the ladder, and `splitHoists` (`src/derive/server/hoists.ts`) takes a hoist run only
       off the *front* of a handler block — so the emitted bytes differ by those two lines, and the
       deriver refuses the rung run outright rather than reading a shorter ladder. Nothing else
-      about the connector's `src/server.ts` is unreached, and that file alone decides the tier:
+      about the connector's `src/server.ts` is unreached:
       `bun run diff:golden` reports it identical apart from those two lines, both ladders, the
       search tool, the `x-auth-token` accessor and the `CODEMAGIC_API` fetch helper included. The
       isolation is exact rather than inferred — moving that one statement in a *generated* (MIT)
@@ -264,7 +264,19 @@ them on one row.
       `codemagic` reports **5/7**, not 6/7, because `README.md` is hand-written prose as well —
       the [*Hand-authored READMEs*](#known-limitations) gap `mercury`, `zendesk` and `bitrise`
       carry too, independent of this one and untouched by closing it. Closing the placement rule
-      is worth `codemagic` 5/7 → **6/7** and one tier; it is not worth 7/7.
+      is worth `codemagic` 5/7 → **6/7**; it is not worth 7/7.
+
+      **And it is worth no tier at all — closing it would not have made the prediction come
+      true.** A tier is decided by *derivation from the real connector*, and derivation halts at
+      `call:reg` and the two search-tool imports long before any byte is compared. Measured
+      2026-08-10 against `packages/mcp-connectors` tree `67c7390a`:
+      `bun run reach --verbose codemagic` reports the same three blockers on this
+      branch and on `main` — `call:reg`, `import-from:../../shared/mcp-search-tool.ts`,
+      `import-from:./search-filter.ts` — so reading the guard ladder changed `codemagic`'s
+      blocker report not at all. The placement rule is a **byte-diff** gap sitting downstream of
+      a blocker that fires first. The prediction was wrong about which constraint was binding,
+      not merely about a line's position; `codemagic` needs the search-tool frame before the
+      ladder can matter to reach.
 
       **Closing it is a placement rule in both halves, and it is worth one connector.** The
       emitter would have to write a hoist after the ladder when no guard's path reads it, and
@@ -273,7 +285,8 @@ them on one row.
       defaulted-argument hoist after a `=== undefined` guard in the same block — `codemagic`,
       `snyk` and `sonarqube` — and `snyk` and `sonarqube` are independently blocked on
       `function:authHeader` (both) plus `function:apiBase` and `function:stripTrailingSlashes`
-      (`sonarqube`), so the rule moves `codemagic` and nothing else. Not built here: it is a
+      (`sonarqube`), so the rule moves `codemagic`'s byte diff and nothing else — and no
+      connector's tier. Not built here: it is a
       change to what the emitter writes, gated on a spec field, for one connector.
 - [ ] **Enum arguments, and the two other shapes `bitrise`'s ladders carry.** `bitrise_list` maps
       a `z.enum` through a lookup table (`{ "not-finished": 0, … }`) into a `params` array, and
@@ -725,10 +738,13 @@ alone.
   refused by the deriver. This is **one of the two** reasons `fixtures/codemagic.spec.json` reports
   5/7 — it accounts for `src/server.ts`, and `README.md` is the other, the *Hand-authored READMEs*
   gap above that `mercury`, `zendesk` and `bitrise` carry too and that closing this rule would not
-  touch. It **is** the sole reason `codemagic` did not move a tier, which is a claim about reach and
-  not about the byte diff: a tier is decided by `src/server.ts` alone. The [Stage E
+  touch. It is **not** the reason `codemagic` did not move a tier: derivation from the real
+  connector halts at `call:reg` and two search-tool imports before any byte is compared, and those
+  three blockers are identical on this branch and on `main`. This is a byte-diff gap sitting
+  downstream of a blocker that fires first. The [Stage E
   bullet](#stage-e--the-corpus-tail-) carries the isolation, the corpus count and what closing it
-  would cost. **Open Stage E work**, not a permanent ceiling — but it is worth 6/7, not 7/7.
+  would cost. **Open Stage E work**, not a permanent ceiling — but it is worth 6/7, not 7/7, and
+  no tier.
 - **A `pathWhen` ladder over the write helper is emitted but never read back.** `pathWhen` is
   legal on a non-GET tool, and `renderTool` writes the ladder correctly — every rung repeats
   `renderBodyExpr`'s output around its own path. `recognizeConditionalPath` refuses that shape
