@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.11.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.2...create-nimbus-connector-v0.11.3) (2026-08-09)
+
+
+### Bug Fixes
+
+* **validate:** reject a fetch-helper env ref that names no declared local ([#78](https://github.com/nimbus-agent/create-nimbus-connector/issues/78)) ([310701b](https://github.com/nimbus-agent/create-nimbus-connector/commit/310701b9eb760e6c418a3a4e90a21da04e4e71c8))
+
 ## [0.11.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.1...create-nimbus-connector-v0.11.2) (2026-08-08)
 
 
