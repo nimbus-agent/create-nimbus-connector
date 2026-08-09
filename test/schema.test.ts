@@ -374,15 +374,27 @@ describe("the checked-in schema document", () => {
     );
   });
 
-  it("is documented in the prose reference in the same words, alongside the URL it is served from", () => {
+  it("documents the limitation in the same words, inside the section serving the URL", () => {
     // Not a style rule. A reader who learns the schema exists and not that it is incomplete has
     // been handed the false green; the two facts have to travel together, so they are asserted
     // together. Read from docs/SPEC-RULES.md, which is where the editor-setup section lives — it
     // was README.md until the prose reference became a page of its own, and the assertion followed
     // the section rather than staying on the file, since it is the section that has to carry both.
+    //
+    // Scoped to that ONE section rather than to the file, which is the whole point: two whole-file
+    // `toContain`s pass just as happily with the limitation at the top of the page and the URL at
+    // the bottom, which is the arrangement the sentence above says is wrong. Asserting them in one
+    // section is asserting that they travel together; asserting them in one file is not.
     const prose = readFileSync(join(repoRoot, "docs", "SPEC-RULES.md"), "utf8");
-    expect(prose).toContain(SCHEMA_LIMITATION);
-    expect(prose).toContain(SCHEMA_ID);
+    const start = prose.search(/^## Editor support:/m);
+    expect(start).toBeGreaterThan(-1);
+
+    const fromHeading = prose.slice(start);
+    const nextHeading = fromHeading.slice(1).search(/^## /m);
+    const section = nextHeading === -1 ? fromHeading : fromHeading.slice(0, nextHeading + 1);
+
+    expect(section).toContain(SCHEMA_LIMITATION);
+    expect(section).toContain(SCHEMA_ID);
   });
 });
 

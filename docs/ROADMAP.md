@@ -552,8 +552,8 @@ alone.
   applies the label. Closing it is a spec-language gap *and* an emitter change, since the emitter
   cannot today write the file a recognizer would be reading.
 - **CLI-backed connectors.** A handful shell out rather than calling `fetch`. **Open Stage E
-  work**; the [Stage E bullet](#stage-e--the-corpus-tail-) names all nine and the two different
-  shapes they split into, only one of which surfaces as a bucket of its own.
+  work**; the [Stage E bullet](#stage-e--the-corpus-tail-) names them, and the two different shapes
+  they split into, only one of which surfaces as a bucket of its own.
 - **A connector with no `createZodToolRegistrar` at all.** `apple`, `fastmail`, `imap` and
   `protonmail` wire their tools through a bespoke `registerXTools(server, …)` call instead.
   Reported as `frame:no-registrar`.

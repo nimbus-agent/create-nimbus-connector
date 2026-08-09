@@ -44,6 +44,11 @@ function linkTargets(markdown: string, file: string): string[] {
     .map(([, , fragment]) => fragment!);
 }
 
+/** Every `](target)` a markdown source links to, with any `#fragment` stripped. */
+function linkHrefs(markdown: string): string[] {
+  return [...markdown.matchAll(/]\(([^)\s]+)\)/g)].map(([, href]) => href!.split("#")[0]!);
+}
+
 function headingAnchors(markdown: string): Set<string> {
   return new Set(
     [...markdown.matchAll(/^#{1,6} (.+)$/gm)].map(([, heading]) => anchor(heading!.trim())),
@@ -127,12 +132,16 @@ describe("the checked-in spec reference", () => {
     expect(pkg.scripts["build:spec-doc"]).toBe("bun scripts/build-spec-doc.ts");
     // Both halves of the reference have to be indexed, not just this one. The prose half is a
     // separate page now, and a split whose second half nothing links to is a page nobody finds.
+    //
+    // Asserted as a resolved markdown link TARGET, not as a substring of the file: prose naming
+    // `docs/SPEC-RULES.md` in a sentence satisfies a `toContain` while linking nowhere, and a
+    // reader follows links rather than mentions. `linkHrefs` drops any `#fragment`, so a deep link
+    // into a section still counts as indexing the page.
+    const rootLinks = linkHrefs(read("README.md"));
+    const docsLinks = linkHrefs(read("docs/README.md"));
     for (const doc of ["SPEC.md", "SPEC-RULES.md"]) {
-      expect(read("docs/README.md")).toContain(doc);
-      // README's "the reference" sentence is what these pages exist to make true, so it has to
-      // point at both. Asserted as the link, since a mention that does not resolve is what a
-      // reader follows.
-      expect(read("README.md")).toContain(`docs/${doc}`);
+      expect(docsLinks).toContain(`./${doc}`);
+      expect(rootLinks).toContain(`./docs/${doc}`);
     }
   });
 

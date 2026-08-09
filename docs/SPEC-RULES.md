@@ -10,9 +10,12 @@ takes. [`USAGE.md`](./USAGE.md) walks through writing a spec from scratch, and t
 [README](../README.md#cli-reference) documents the flags that feed one to the generator.
 
 **Corpus measurements sit next to the field they justify.** Where a default, a rejection or an
-emitted shape was chosen because of what the 94 Nimbus connectors actually do, the count is on the
-same line as the choice. That is the reasoning behind the rule, not decoration — the rule is only
-as good as the measurement under it.
+emitted shape was chosen because of what the Nimbus connector corpus actually does, the count is on
+the same line as the choice. That is the reasoning behind the rule, not decoration — the rule is
+only as good as the measurement under it. These are measurements of the corpus's *shape*, which is
+what [GOVERNANCE.md](./GOVERNANCE.md) asks to be recorded beside the choice; they are not the live
+regeneration counts, which belong only to
+[ROADMAP § The measured ceiling](./ROADMAP.md#the-measured-ceiling) and to `bun run diff:golden`.
 
 ## Scope
 
