@@ -12,10 +12,24 @@
  *
  * **`tools.ts`'s other module-scope statements are not free.** They travel back as
  * `ForeignStatements` and the totality rule walks them exactly as it walks `server.ts`'s. Its
- * imports, helper functions and type declarations are blockers unless a recognizer claims them,
- * identically to how they would be blockers had the connector written them inline. Skipping them
- * would let a connector with an unrecognizable helper derive successfully, which is the precise
- * false `emits` the totality rule exists to prevent.
+ * imports, helper functions and type declarations are blockers unless a recognizer claims them.
+ * Skipping them would let a connector with an unrecognizable helper derive successfully, which is
+ * the precise false `emits` the totality rule exists to prevent.
+ *
+ * **But only the WALK is symmetric; what gets CLAIMED is not**, and the asymmetry runs strictly
+ * against the second file. In `src/server.ts`, `import { z } from "zod"` and the
+ * `../../shared/mcp-tool-kit.ts` import are claimed by the frame itself (`isFrameImport`,
+ * server/index.ts), and an env accessor and a fetch helper are claimed by `recognizeEnv` /
+ * `recognizeFetchHelper` — every one of which reads `frame.verifyStatements`, which is
+ * `server.ts`'s statements alone and never the ones this function hands back. Here the ONLY thing
+ * claimed is a type-only import. So the very constructs a connector writes for free one file over
+ * are blockers in this one.
+ *
+ * A Task 6 reader must not misattribute that. An `import-from:zod` or `function:<helper>` bucket
+ * coming off a real `tools.ts` records that no recognizer looks in this file yet — it is not the
+ * connector having written something unusual, and the identical statement in `server.ts` produces
+ * no bucket at all. `docs/ROADMAP.md`'s "A real shim can still block, just under a different
+ * bucket" is the same asymmetry stated from the measurement side.
  */
 
 import { type AstNode, parseModule } from "../ast.ts";
@@ -59,6 +73,10 @@ export type SecondFileRefusal =
   | "unparseable"
   | "no-matching-export"
   | "registrar-not-a-declaration"
+  // Unreachable in practice, and kept only so the refusal below is not a silent `pick the first`:
+  // Babel rejects two module-scope bindings of one name at parse time, so such a file lands on
+  // "unparseable" first. Budget no `frame:tools-in-second-file:duplicate-export` histogram bucket
+  // — it cannot appear.
   | "duplicate-export";
 
 export type SecondFileResult = SecondFileSplice | { readonly refused: SecondFileRefusal };
@@ -200,8 +218,9 @@ export function applySecondFile(
   // The type-only imports the registrar's own signature needs, claimed so the histogram measures
   // what the connector DOES rather than what TypeScript required it to write. Nothing else is
   // claimed here: a value import, a helper function, a hoisted const and a local type alias all
-  // stay unclaimed and become blockers, exactly as they would had the connector written them in
-  // src/server.ts. Widening this list is how a false `emits` gets in.
+  // stay unclaimed and become blockers — including the `zod` and `mcp-tool-kit.ts` imports the
+  // frame WOULD have claimed in src/server.ts, per this module's header on the asymmetry.
+  // Widening this list is how a false `emits` gets in.
   for (const statement of rest) {
     if (isValueFreeImport(statement)) {
       foreignClaims.claim(statement, "a type-only import the second file's registrar needs");

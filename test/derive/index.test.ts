@@ -621,10 +621,19 @@ describe("deriveSpec", () => {
      * — this repo's own emitter output for a one-tool read-only-kit connector, with the `reg(...)`
      * call lifted out into `./tools.ts`.
      *
-     * The eleven real shims put the helper in `tools.ts` too, and this deriver never scans the
-     * second file for one (see the `no-fetch-helper` test below, which pins that). So this is the
-     * only arrangement in which a shim can derive at all, and it is the one that proves the splice
-     * feeds the tool recognizers rather than merely silencing a blocker.
+     * A real shim cannot be arranged this way, and that is a DEDUCTION rather than a corpus count
+     * — nobody has run `reach` over the eleven to check. It follows from
+     * `collapseSecondFileBlockers`' own docstring (src/derive/index.ts, the paragraph beginning
+     * "This is the eleven-connector shim shape"): the label is only reached when the unclaimed set
+     * is EXACTLY the import and the call, so a shim's `src/server.ts` is the frame plus those two
+     * statements and nothing else. A fetch helper written there would be a third unclaimed
+     * statement and the connector would not be a shim by this deriver's definition. So the helper
+     * must live in `tools.ts`, where nothing scans for one (see the `no-fetch-helper` test below,
+     * which pins that).
+     *
+     * Which makes this fixture synthetic on purpose: it is the only arrangement in which a shim
+     * derives at all, and it is the one that proves the splice feeds the tool recognizers rather
+     * than merely silencing a blocker.
      */
     const SHIM_SERVER_WITH_HELPER = [
       'import { z } from "zod";',
@@ -654,7 +663,18 @@ describe("deriveSpec", () => {
       "});",
     ].join("\n");
 
-    /** `src/tools.ts` for the connector above: the type-only import and the registrar, nothing else. */
+    /**
+     * `src/tools.ts` for the connector above: the type-only import and the registrar, nothing else.
+     *
+     * **Not a compilable module, and that is the limit of what the tests below prove.** It calls
+     * `z`, `jsonResult` and `zzGet` while importing none of them. Derivation is AST-only, so this
+     * derives fine — but a REAL second file must carry `import { z } from "zod"` and the
+     * `mcp-tool-kit.ts` import for `jsonResult`, and neither is claimed here (see
+     * src/derive/server/second-file.ts's header on the asymmetry: the frame claims both one file
+     * over, nothing claims them in this one). Adding the two lines that make this module compile
+     * would therefore add two foreign blockers and turn every `ok: true` below into `ok: false`.
+     * Omitting them buys the tool-recognizer coverage at the cost of any claim about the corpus.
+     */
     const SHIM_TOOLS = [
       'import type { ZodToolRegistrar } from "../../shared/mcp-tool-kit.ts";',
       "",
@@ -710,7 +730,30 @@ describe("deriveSpec", () => {
       ]);
     });
 
-    it("derives a shim connector when its tools.ts is supplied", () => {
+    it("ignores a supplied tools.ts entirely for a connector that is not a shim", () => {
+      // The one end-to-end guard on this branch's central claim: `tools` changes NOTHING for an
+      // ordinary connector. It rests on a single line — `toolClaims = foreignClaims ?? claims` in
+      // src/derive/index.ts — whose regression risk touches all 94 corpus connectors, and the gate
+      // that would otherwise catch a break (`reach --baseline`) needs an AGPL checkout and cannot
+      // run in CI. So it is pinned here instead.
+      //
+      // SERVER is hand-rolled, so `applySecondFile` refuses with "not-a-shim" and never reads the
+      // source at all; SHIM_TOOLS is deliberately a tools.ts that WOULD splice for a shim, so a
+      // regression that dropped the shim guard would be visible as a difference rather than as
+      // "nothing happened either way". Deep equality, not just `ok`, because a leak would show up
+      // first as an extra tool or an extra blocker.
+      const withTools = deriveSpec({ server: SERVER, manifest: MANIFEST, tools: SHIM_TOOLS });
+      const without = deriveSpec({ server: SERVER, manifest: MANIFEST });
+      expect(withTools).toEqual(without);
+      // Non-vacuity: two identical failures would also be equal.
+      expect(without.ok).toBe(true);
+    });
+
+    it("feeds a supplied tools.ts to the tool recognizers, deriving a SYNTHETIC shim end-to-end", () => {
+      // Synthetic, not "a shim connector": SHIM_TOOLS omits the value imports a real second file
+      // must carry, which would be two unclaimed foreign statements — see its docstring. What this
+      // does prove is the splice itself: a registration written in the other file reaches the tool
+      // recognizers and lands in the spec.
       const result = deriveSpec({
         server: SHIM_SERVER_WITH_HELPER,
         manifest: MANIFEST,
