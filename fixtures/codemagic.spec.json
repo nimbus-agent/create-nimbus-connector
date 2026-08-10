@@ -1,0 +1,62 @@
+{
+  "name": "codemagic",
+  "title": "Codemagic",
+  "displayName": "Codemagic",
+  "description": "Codemagic REST connector (mobile CI/CD builds + apps). Read-only; surfaces build status, workflow id, branch and commit so the local index can correlate mobile CI runs back to PRs and incidents.",
+  "serviceLabel": "Codemagic",
+  "style": "read-only-kit",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.codemagic.io"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["CODEMAGIC_TOKEN"],
+      "local": "authHeader",
+      "bindings": ["t"],
+      "auth": "headers",
+      "headerNames": ["x-auth-token"]
+    }
+  ],
+  "fetchHelper": {
+    "local": "codemagicGet",
+    "base": "https://api.codemagic.io",
+    "baseConst": "CODEMAGIC_API",
+    "headers": "authHeader"
+  },
+  "tools": [
+    {
+      "name": "codemagic_list",
+      "description": "List Codemagic resources. When `appId` is omitted, returns the user's accessible apps via `/apps`. When `appId` is provided, returns the app's recent builds via `/builds?appId=<id>` (limit optional).",
+      "args": {
+        "appId": { "type": "string", "min": 1, "optional": true },
+        "limit": { "type": "number", "int": true, "min": 1, "max": 50, "optional": true, "default": 50 }
+      },
+      "path": "/builds?appId=${arg.appId|enc}&limit=${arg.limit|num}",
+      "pathWhen": [{ "absent": "appId", "path": "/apps" }]
+    },
+    {
+      "name": "codemagic_get",
+      "description": "Fetch a single Codemagic resource. When `buildId` is provided, returns the build via `/builds/<buildId>`. When omitted, returns the app via `/apps` filtered to `appId`.",
+      "args": {
+        "appId": { "type": "string", "min": 1 },
+        "buildId": { "type": "string", "min": 1, "optional": true }
+      },
+      "path": "/builds/${arg.buildId|enc}",
+      "pathWhen": [{ "absent": "buildId", "path": "/apps" }]
+    },
+    {
+      "name": "codemagic_search",
+      "description": "Substring search across a Codemagic app's recent builds. Matches the query against `branch`, `message`, `workflowId`, and `status` (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "args": { "appId": { "type": "string", "min": 1 } },
+      "path": "/builds?appId=${arg.appId|enc}&limit=50",
+      "rows": "builds",
+      "maxLimit": 200,
+      "filter": {
+        "export": "filterCodemagicBuilds",
+        "fields": ["branch", "message", "workflowId", "status"]
+      }
+    }
+  ]
+}

@@ -221,7 +221,7 @@ describe("the raw-splice census", () => {
     // Without this, a `stringLeaves` that walked nothing, or an `everyEmittedFile` that returned
     // nothing, would report an empty census — and an empty census compared against an empty
     // expectation is the exact false green this whole file exists to refuse. The numbers are
-    // floors, not measurements: the sweep runs thousands of probes over the 23 fixtures.
+    // floors, not measurements: the sweep runs thousands of probes over the 24 fixtures.
     expect(specDocuments.length).toBeGreaterThan(20);
     expect(CENSUS.probes).toBeGreaterThan(1000);
     expect(CENSUS.inspected).toBeGreaterThan(1000);
@@ -310,7 +310,7 @@ describe("every carrier refuses every sequence that could break out of its const
  * nineteen of the twenty-two fixtures — the second stale count inside one docstring that had
  * just been rewritten to remove the first.
  */
-describe("what the 23 fixtures put in a guarded field", () => {
+describe("what the 24 fixtures put in a guarded field", () => {
   function guardedValues(): { field: string; value: string; file: string }[] {
     const out: { field: string; value: string; file: string }[] = [];
     for (const { file, doc } of specDocuments) {
@@ -344,7 +344,7 @@ describe("what the 23 fixtures put in a guarded field", () => {
     // to make this field a carrier at all (see EXPECTED_CARRIERS's own comment on it).
     expect(counts).toEqual({
       "fetchHelper.base": 7,
-      "tools[].path": 20,
+      "tools[].path": 21,
       "tools[].pathWhen[].path": 1,
     });
   });
