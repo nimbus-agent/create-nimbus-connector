@@ -62,6 +62,36 @@ describe("resolveSdkRoot", () => {
   it("lists every attempted path when nothing resolves", () => {
     expect(() => resolveSdkRoot({ scriptDir: "/nowhere" })).toThrow(/tried/i);
   });
+
+  it("records a sibling that exists but lacks the marker, rather than failing on it", () => {
+    // The SDK half of the policy resolve-root.ts's docstring states — explicit sources fail
+    // loudly, GUESSES fall through — that resolveNimbusRoot's counterpart test already covers
+    // (test/golden/resolve.test.ts) but this file never reached (#81). Throwing here would turn
+    // an unrelated directory named "nimbus-sdk" sitting beside the checkout into a hard failure
+    // rather than a rejected guess.
+    const workspace = tmp.make("sdk-sibling-");
+    const sibling = join(workspace, "nimbus-sdk");
+    mkdirSync(sibling, { recursive: true });
+    const scriptDir = join(workspace, "some-project", "scripts");
+    mkdirSync(scriptDir, { recursive: true });
+
+    let thrown: unknown;
+    try {
+      resolveSdkRoot({ scriptDir });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+
+    // Scoped to the candidate's own line, not the whole message — asserting on the whole
+    // message (`expect(message).not.toMatch(/does not exist/)`) is fragile: it breaks the
+    // moment any OTHER probed candidate is absent, which has nothing to do with this one.
+    const siblingLine = message.split("\n").find((line) => line.includes(sibling));
+    expect(siblingLine).toBeDefined();
+    expect(siblingLine).not.toMatch(/does not exist/);
+    expect(siblingLine).toMatch(/marker file missing/);
+  });
 });
 
 describe("parseSdkArgs", () => {
