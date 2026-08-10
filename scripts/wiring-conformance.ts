@@ -32,7 +32,7 @@ import { takeValue } from "../src/cli.ts";
 import { emitWiring } from "../src/emit/wiring.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
-import { interfaceMembers } from "./_lib/interface-members.ts";
+import { checkWiring, optionalReport } from "./_lib/wiring-checks.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -59,12 +59,6 @@ function main(argv: readonly string[]): void {
   const typesPath = join(root, "packages", "gateway", "src", "sync", "types.ts");
   const real = readFileSync(typesPath, "utf8");
 
-  const required = interfaceMembers(real, "Syncable");
-  const resultMembers = interfaceMembers(real, "SyncResult");
-  if (required.length === 0 || resultMembers.length === 0) {
-    throw new Error(`Parsed no members out of ${typesPath} — the interface shape has changed.`);
-  }
-
   const spec = parseSpec(
     JSON.parse(readFileSync(join(repoRoot, "fixtures", "zzscratch.spec.json"), "utf8")),
   );
@@ -72,20 +66,10 @@ function main(argv: readonly string[]): void {
   const syncFile = emitted.find((f) => f.path.at(-1)?.endsWith("-sync.ts"));
   if (syncFile === undefined) throw new Error("emitWiring produced no *-sync.ts file");
 
-  const failures: string[] = [];
-
-  // 1. Every required Syncable member must be supplied by the emitted object literal.
-  for (const member of required) {
-    const supplies = new RegExp(String.raw`\b${member}\s*[:(]`).test(syncFile.content);
-    if (!supplies) failures.push(`emitted skeleton does not supply Syncable.${member}`);
-  }
-
-  // 2. The stand-in must agree with the real names, or the typecheck test is checking a
-  //    shape Nimbus does not have.
-  // Scoped to the template literal, NOT the whole file. Searching the file passes vacuously:
-  // that test's own docstring discusses the real member names in prose, so `itemsUpserted`
-  // is present as English whether or not the stand-in type declares it. Caught by reverting
-  // the stand-in to its shipped `upserted`/`deleted` and watching this check stay green.
+  // The stand-in is read from its TEMPLATE LITERAL, not the whole file. Searching the file
+  // passes vacuously: that test's own docstring discusses the real member names in prose, so
+  // `itemsUpserted` is present as English whether or not the stand-in type declares it. Caught
+  // by reverting the stand-in to its shipped `upserted`/`deleted` and watching it stay green.
   const standinFile = readFileSync(
     join(repoRoot, "test", "emit", "emitted-typecheck.test.ts"),
     "utf8",
@@ -97,23 +81,22 @@ function main(argv: readonly string[]): void {
   const standin = standinFile.slice(bodyStart, bodyEnd);
   if (standin.trim() === "") throw new Error("SYNC_TYPES_STANDIN parsed as empty");
 
-  for (const member of resultMembers) {
-    // bytesTransferred is optional in the real interface; the stand-in need not carry it.
-    if (member === "bytesTransferred") continue;
-    if (!standin.includes(member)) {
-      failures.push(
-        `SYNC_TYPES_STANDIN is missing SyncResult.${member} — the stand-in has drifted ` +
-          `from ${typesPath}, so emitted-typecheck.test.ts is compiling against a shape ` +
-          `Nimbus does not have.`,
-      );
-    }
-  }
+  const verdict = checkWiring({
+    realTypes: real,
+    emittedSync: syncFile.content,
+    standin,
+    typesPath,
+  });
 
-  console.log(`Syncable requires: ${required.join(", ")}`);
-  console.log(`SyncResult fields:  ${resultMembers.join(", ")}`);
-  if (failures.length > 0) {
-    for (const f of failures) console.error(`FAIL  ${f}`);
-    throw new Error(`${failures.length} wiring conformance failure(s).`);
+  console.log(`Syncable requires: ${verdict.required.join(", ")}`);
+  console.log(`SyncResult fields:  ${verdict.resultRequired.join(", ")}`);
+  const optional = optionalReport(verdict);
+  if (optional.length > 0) {
+    console.log(`Optional, not required of the skeleton: ${optional.join(", ")}`);
+  }
+  if (verdict.failures.length > 0) {
+    for (const f of verdict.failures) console.error(`FAIL  ${f}`);
+    throw new Error(`${verdict.failures.length} wiring conformance failure(s).`);
   }
   console.log(`\nPASS  emitted wiring conforms to ${typesPath}`);
 }

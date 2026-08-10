@@ -8,14 +8,27 @@
  * here" and "must be 78% covered" mutually exclusive in one file.
  */
 
+/** One member of an interface block, and whether the real interface marks it `?`. */
+export interface InterfaceMember {
+  readonly name: string;
+  readonly optional: boolean;
+}
+
 /**
- * Member names of an `interface X { ... }` block, by brace matching from its opening brace.
+ * Members of an `interface X { ... }` block, by brace matching from its opening brace.
  *
  * Regex rather than a TypeScript parser because the shape being read is one flat interface
  * of scalar members, and the failure mode of getting it wrong is loud: an empty member set
  * fails the harness's "parsed no members" check rather than passing vacuously.
+ *
+ * **Optionality is carried, not discarded**, because the caller's whole question is "must the
+ * emitted skeleton supply this". It was discarded once, and the bill arrived twice: first as a
+ * hard-coded `bytesTransferred` skip in the `SyncResult` loop, then — when Nimbus's `Syncable`
+ * grew an optional `fetchOne` — as a **false red** that failed `preflight` at a gate the
+ * generator had not broken. A gate that cries wolf is how the four checkouts-required gates
+ * stop being run at all, which is the same disease as a false green with the sign flipped.
  */
-export function interfaceMembers(source: string, name: string): string[] {
+export function interfaceMemberDetails(source: string, name: string): InterfaceMember[] {
   const start = source.indexOf(`interface ${name} {`);
   if (start === -1) throw new Error(`interface ${name} not found in the real sync/types.ts`);
   const open = source.indexOf("{", start);
@@ -44,7 +57,18 @@ export function interfaceMembers(source: string, name: string): string[] {
   //
   // `[ \t]` rather than `\s`: `\s` matches `\n`, which under `^…/gm` would let a match run
   // past the end of its own line.
-  return [...body.matchAll(/^[ \t]*(?:readonly[ \t]+)?([A-Za-z_]\w*)[ \t?]*[:(]/gm)].map(
-    (m) => m[1]!,
-  );
+  //
+  // The `?` is read by CAPTURING the same `[ \t?]*` run rather than by splitting it into
+  // `[ \t]*(\??)[ \t]*`. That split is exactly the two-whitespace-quantifiers-around-an-optional
+  // shape the paragraph above removed, so it would reintroduce the quadratic backtracking. A
+  // capture group changes what is reported, never what is matched.
+  return [...body.matchAll(/^[ \t]*(?:readonly[ \t]+)?([A-Za-z_]\w*)([ \t?]*)[:(]/gm)].map((m) => ({
+    name: m[1]!,
+    optional: m[2]!.includes("?"),
+  }));
+}
+
+/** Just the member names, for callers that do not care which are optional. */
+export function interfaceMembers(source: string, name: string): string[] {
+  return interfaceMemberDetails(source, name).map((m) => m.name);
 }
