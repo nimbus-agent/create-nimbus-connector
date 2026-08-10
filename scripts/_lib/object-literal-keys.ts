@@ -53,5 +53,17 @@ export function objectLiteralKeys(source: string, opener: string): string[] {
   // Comments are stripped rather than depth-skipped: a `//` line inside the literal is at depth
   // 1, so prose in it would otherwise read as a key exactly the way the file docstring did.
   const code = topLevel.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-  return [...code.matchAll(/([A-Za-z_]\w*)[ \t?]*[:(]/g)].map((m) => m[1]!);
+
+  // ANCHORED, for the reason interface-members.ts spells out about its own pattern. The
+  // unanchored spelling — `/([A-Za-z_]\w*)[ \t?]*[:(]/g` — is quadratic: over a run of word
+  // characters that never reaches a `:` or `(`, `\w*` backtracks position by position, and the
+  // `g` flag then retries from the next start position, doing that work n times. Sonar flags it
+  // as `typescript:S8786`, and it flagged this file. `^[ \t]*` under `/gm` bounds the start
+  // positions to line starts, so the worst case is per-LINE rather than per-file.
+  //
+  // The cost of anchoring is that a key sharing a line with an earlier key is not seen. That
+  // direction is deliberate: an unseen key makes the caller report a member as NOT SUPPLIED —
+  // a loud false red someone investigates — where over-reporting would hand back a false green,
+  // which is the failure this module was written to remove.
+  return [...code.matchAll(/^[ \t]*([A-Za-z_]\w*)[ \t?]*[:(]/gm)].map((m) => m[1]!);
 }

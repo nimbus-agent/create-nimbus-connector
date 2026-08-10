@@ -86,6 +86,16 @@ describe("objectLiteralKeys", () => {
     expect(objectLiteralKeys(source, "return {")).toEqual(["sync", "serviceId"]);
   });
 
+  it("sees only the first of two keys sharing a line — the safe direction", () => {
+    // The pattern is anchored to line starts because the unanchored form is quadratic
+    // (Sonar typescript:S8786). This is the cost, pinned so it is a known property rather than
+    // a surprise: a missed key makes the harness report a member as NOT supplied, which is a
+    // loud false red. Over-reporting would be a false green, which is what this module removed.
+    const source = "return {\n  a: 1, b: 2,\n};";
+
+    expect(objectLiteralKeys(source, "return {")).toEqual(["a"]);
+  });
+
   it("throws rather than returning nothing when the opener is absent", () => {
     // An empty list would read as "the skeleton supplies no members", which the harness would
     // report as every member missing — a confusing failure in place of a precise one.
