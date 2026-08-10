@@ -312,8 +312,10 @@ measurement behind it.
 
 Every fixture transcribed from a real Nimbus connector — `newrelic`, `datadog`, `grafana`,
 `sentry`, `mercury`, `zendesk`, `bitrise`, `codemagic`, `dependencytrack`, `discord`,
-`google-meet`, `netlify` — is read-only. Verified at HEAD by reading every `fixtures/*.spec.json`: not one has
-a tool with `effect: "write"` or a non-`GET` `method`.
+`google-meet`, `netlify` — is read-only: not one has a tool with `effect: "write"` or a non-`GET`
+`method`. This is a gate, not a claim with a date on it —
+`test/fixture-write-tools.test.ts` derives the list from `expectations.json`'s non-`zz` keys and
+fails the moment a real-connector fixture stops being read-only.
 
 The consequence: **`diff:golden` has zero purchase on the Stage C emitter paths.** `method`,
 `effect`, `body`, `hitlRequired` and the `<local>Send` write helper are exercised only by the

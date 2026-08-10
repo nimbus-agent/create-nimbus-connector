@@ -238,8 +238,11 @@ them on one row.
       guards, with the tool's own `path` as the unguarded fallthrough — now exists in the spec
       language (`src/spec.ts`), is emitted as a guard ladder (`renderTool`, in
       `src/emit/server/tools-hand.ts`) and is read back by `recognizeConditionalPath`
-      (`src/derive/server/conditional-path.ts`). Both halves are built and both fixtures that
-      exercise them (`zzcond`, `codemagic`) round-trip. **The headline count did not move.**
+      (`src/derive/server/conditional-path.ts`). Both halves are built **for read tools**, and
+      both fixtures that exercise them (`zzcond`, `codemagic`) round-trip. A ladder over the
+      *write* helper is emitted but deliberately never read back — see
+      [Known limitations](#known-limitations) for why that asymmetry is a refusal rather than a
+      gap. **The headline count did not move.**
 
       **The design predicted `codemagic` would go `blocked` → `server-identical`, taking the
       headline 6/94 → 7/94. It did not.** Measured 2026-08-09 against `packages/mcp-connectors`
@@ -755,8 +758,9 @@ alone.
   would claim a module that re-emits with the wrong body in every guard. So the refusal is
   deliberate and it under-claims into `blocked`, never into a wrong spec: a write ladder shows up
   by name in the blocker histogram rather than deriving successfully and re-emitting differently.
-  No corpus connector carries the shape (no corpus connector declares a `<local>Send` write helper
-  at all — see *The write helper*, above), so this costs no reach today; it is recorded because
+  No corpus connector carries the shape — measured 2026-08-10 against `packages/mcp-connectors`
+  tree `67c7390a`, none declares a `<local>Send` write helper at all (see *The write helper*,
+  above) — so this costs no reach today; it is recorded because
   the emitter can write something the deriver will not read, which is the asymmetry every other
   entry here exists to make visible.
 - **Enum arguments.** Mapping a `z.enum` through a lookup table. **Open Stage E work**, not a
