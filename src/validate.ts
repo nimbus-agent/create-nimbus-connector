@@ -75,7 +75,7 @@ export const RESERVED_IDENTIFIERS: readonly string[] = [
   //
   // The four at the end of this block were MISSING while their siblings were listed, and the
   // gap is what the standing rule in CLAUDE.md exists to prevent. They were found by scanning
-  // every emitted `.ts` file — all 22 fixtures, both targets, plus the Gateway wiring and the
+  // every emitted `.ts` file — all 23 fixtures, both targets, plus the Gateway wiring and the
   // branch shapes no fixture reaches — for FREE identifiers: names a module references without
   // declaring or importing them. That scan ships as test/emitted-globals.test.ts, so the next
   // emitter to reach for a global fails there instead of arriving as a missing entry here.
@@ -486,6 +486,15 @@ function validateTools(seen: Map<string, string>, spec: ConnectorSpec): void {
 
     if (t.path !== undefined) {
       validateToolPath(spec, t, t.path);
+    }
+    // A guard path is the same DSL in a second position and src/emit/server/tools-hand.ts
+    // renders it through the same code, so it must face the same checks. Unchecked, an
+    // undeclared ${arg.X}/${env.X} reaches the author as TS2339/TS2304 against generated
+    // source; worse, a |bool on a non-boolean arg falls back to a raw reference, which
+    // compiles — the wrong URL is requested and nothing reports it. That silent case is the
+    // whole reason validateArgSegment exists.
+    for (const g of t.pathWhen ?? []) {
+      validateToolPath(spec, t, g.path);
     }
   }
 }

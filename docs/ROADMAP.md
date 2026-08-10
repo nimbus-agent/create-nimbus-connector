@@ -188,7 +188,7 @@ them on one row.
 
       See [Known limitations](#known-limitations) for the separate question of byte-matching,
       which only `dependencytrack` currently achieves.
-- [ ] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
+- [~] **Multi-file connectors.** **16** connectors carry `src/tools.ts` (e.g. `elasticsearch`,
       `storybook`) and `server.ts` imports it in 15 of them; the generator assumes one source
       file. Carrying the file and being *blocked by* it are different questions, and the answer
       is now the sharper of the two: the ones that are pure shims report as
@@ -203,6 +203,31 @@ them on one row.
       `src/server.ts` is nothing but the frame plus those two statements — so the unclaimed set
       is exactly the pair, and the label collapses it into the one thing the pair shares. The
       `frame:` prefix names the ceiling, not the stage that detected it.
+
+      **Measured, and the answer closes the bullet.** `src/derive/server/second-file.ts` splices
+      the registrar body out of `src/tools.ts` and the totality rule walks that file's remaining
+      module-scope statements, so these connectors now report what is actually behind the frame.
+      All eleven splice with zero refusals, and behind the frame are `zod` and `mcp-tool-kit.ts`
+      value imports, hoisted helpers (`isRecord`, `strField`, `asArray`) and unrecognized
+      registrations — every one a spec-language gap the emitter split would not touch. The
+      headline `server-identical` count did not move, exactly as predicted. The histogram, with
+      its date and corpus tree, is [The measured ceiling](#the-measured-ceiling); the decision it
+      informed is in [Considered and declined](#considered-and-declined).
+
+      **So the emitter split is not being built, and this bullet stays `[~]` rather than becoming
+      `[x]`.** The measuring half is done and the raising half is declined, which is not the same
+      as finished — five of the eleven are the CLI-backed connectors this stage lists separately,
+      and their blockers are real work whoever wants it.
+
+      **A real shim can still block, just under a different bucket.** `recognizeEnv`,
+      `recognizeFetchHelper` and `claimSearchImports` all read `frame.verifyStatements`, which is
+      `src/server.ts`'s alone — `applySecondFile` hands `src/tools.ts`'s own statements back
+      separately, as `ForeignStatements`, walked against their own claim set. A shim whose fetch
+      helper or env accessor is written in `tools.ts` rather than `server.ts` is therefore not
+      unblocked by this change: its blocker moves from the collapsed `frame:tools-in-second-file`
+      label to whatever `blockerFor` says about that statement in `tools.ts`'s own coordinates.
+      Whether the corpus's sixteen behave that way, or turn out to be pure shims after all, is
+      part of the same unmeasured number above.
 - [x] **Conditional query parameters.** A `query` array on a tool — `new URL(...)` plus
       guarded `searchParams.set(...)`, the guard chosen by `omitWhen` — lets a parameter be
       sent only when an optional argument is present or non-empty. See
@@ -212,13 +237,24 @@ them on one row.
 - [ ] **Conditional endpoint selection and enum arguments.** `bitrise`'s two non-search tools
       still select an endpoint from whether an optional arg is present and map a `z.enum`
       through a lookup table. Neither construct exists in the spec language.
-- [ ] **CLI-backed connectors.** Five connectors shell out via `shared/safe-cli-arg` rather
-      than `fetch`: `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai`. All five
-      write that CLI logic in `src/tools.ts`, so `bun run reach` reports them as
-      `frame:tools-in-second-file`, not under a CLI-shaped bucket of their own — the construct
-      itself is never reached. A separate set (`aws`, `azure`, `gcp`, `kubernetes`) shells out
-      via `shared/run-cli-json` directly from `server.ts`, without `safe-cli-arg`, and *does*
-      surface as its own bucket, `import-from:../../shared/run-cli-json.ts`.
+- [ ] **CLI-backed connectors, and both sets now surface.** Nine connectors shell out instead of
+      calling `fetch`, in two shapes that used to report very differently:
+
+      | Shape | Bucket | Connectors |
+      | --- | --- | --- |
+      | `shared/safe-cli-arg`, from `src/tools.ts` | `import-from:../../shared/safe-cli-arg.ts` | `athena`, `cloud-logging`, `cloudwatch`, `sagemaker`, `vertex-ai` |
+      | `shared/run-cli-json`, from `src/server.ts` | `import-from:../../shared/run-cli-json.ts` | `aws`, `azure`, `gcp`, `kubernetes` |
+
+      **This bullet used to say the first construct "is never reached"** — true when the deriver
+      stopped at `frame:tools-in-second-file` and never opened the second file, and false as of
+      the 2026-08-09 measurement, which is what reading `src/tools.ts` changed. The five are now
+      reported under the same kind of bucket as the four, so the construct can be counted rather
+      than inferred. Recorded rather than quietly corrected, because the claim was invalidated by
+      this repository's own change and the next reader deserves to know a sentence here moved.
+
+      Nothing about the *gap* changed: shelling out is unexpressible in the spec language either
+      way, and closing it means a spec construct for a subprocess call plus an emitter path for
+      it — not a recognizer.
 - [~] Raise the measured regeneration coverage of the 94-connector corpus, and publish the
       number with its method. **The publishing half is closed; the raising half is not, and
       this bullet stays `[~]` for that reason rather than being marked done.** The method is no
@@ -349,14 +385,20 @@ expectation file. They are listed here so nobody rediscovers them the hard way.
 
 ### The measured ceiling
 
-**Measured 2026-08-06 against `packages/mcp-connectors` tree `94fd3623` (Nimbus commit
-`b3a6f159`).** This is the one place in this repository where the corpus *regeneration* counts
+**Re-measured 2026-08-09 against `packages/mcp-connectors` tree `67c7390a` (Nimbus commit
+`b8ded950`).** This is the one place in this repository where the corpus *regeneration* counts
 are written down, and it carries the date and the corpus tree so a reader can tell when it was
 true. (Source comments carry measurements of their own, inventoried by
 `test/measurement-hygiene.test.ts` — see *How to read this* at the top of this document.) Re-measure
 with `bun run reach --verbose --nimbus-root <path>`; the per-connector tiers for this same tree
 are in `fixtures/reach-baseline.json`, which is regenerated by `bun run reach:baseline` and
 never hand-edited.
+
+The tree moved from `94fd3623` on its own — the corpus is not this repository's to hold still.
+Re-baselining across it changed **one line**, the tree stamp: every per-connector tier is
+identical on both trees, and `reach --baseline` reports *"No connector lost a tier"* against the
+new one. That is what makes this re-baseline a record rather than a reset. **Never re-baseline to
+make a regression pass** — the rule `fixtures/expectations.json` carries applies here unchanged.
 
 **6 of 94 reach `server-identical`. 4 of those 94 reach `all-identical`** — the byte-locked
 fixtures. The remaining **88 are `blocked`, and every one of them has a named cause.**
@@ -369,33 +411,76 @@ achievable.
 
 | Cause | Connectors | Which gap |
 | --- | --- | --- |
-| **Frame** — `frame:tools-in-second-file` (11), `frame:no-registrar` (4) | 15 | **spec-language**, both |
+| **Frame** — `frame:no-registrar` (4) | 4 | **spec-language** |
 | **Manifest** — `manifest:missing-syncInterval` (`iac`) | 1 | **spec-language** |
-| **Tool registration** — `call:reg`, eleven single-connector `call:register<X>Tool` buckets, `const-call:makeRestToolRegistrar` | 68 | mostly **spec-language**; see below |
-| **Hoisted helper functions** — 173 distinct `function:<name>` buckets | 67 | **spec-language** |
-| **Hoisted consts and schemas** — `statement:VariableDeclaration`, `method-call:.object`, `.extend` | 42 | **spec-language**, plus one downstream case |
+| **Tool registration** — `call:reg`, the single-connector `call:register<X>Tool` buckets, `const-call:makeRestToolRegistrar` | 79 | mostly **spec-language**; see below |
+| **Hoisted helper functions** — 196 distinct `function:<name>` buckets | 78 | **spec-language** |
+| **Hoisted consts and schemas** — `statement:VariableDeclaration`, `method-call:.object`, `.extend` | 47 | **spec-language**, plus one downstream case |
 | **Local type declarations** — `TSTypeAliasDeclaration`, `TSInterfaceDeclaration` | 9 | **spec-language** |
-| **Imports** — 23 buckets: shared primitives, node builtins, per-connector modules | 61 | mixed, and mostly downstream |
+| **Imports** — 30 buckets: shared primitives, node builtins, per-connector modules | 72 | mixed, and mostly downstream |
 
 **Those columns do not add to 88, and that is the most important thing to know about them.** A
 connector is blocked by *every* statement nothing claimed, so one refusal upstream produces
 several buckets downstream: a connector whose fetch helper is refused also reports its hoisted
 base-URL const, its imports and its registrations as unclaimed, none of which is an independent
-cause. **19 connectors carry exactly one bucket**, and only for those is the bucket the whole
-story: the 15 frame-only ones, `iac`, and `intercom`/`lever`/`readwise` on `function:authHeader`.
+cause. **8 connectors carry exactly one bucket**, and only for those is the bucket the whole
+story: `apple`/`fastmail`/`imap`/`protonmail` on `frame:no-registrar`, `iac` on its manifest, and
+`intercom`/`lever`/`readwise` on `function:authHeader`.
 Read the histogram as a map of constructs, not as a ranking of causes.
+
+That figure was **19** on the previous tree, and the eleven that left it are the shims: reading
+`src/tools.ts` replaced each one's single `frame:tools-in-second-file` bucket with several real
+ones. Every row above rose for the same reason — the constructs were always there, and the
+deriver could not see them. **A row growing here is the histogram getting more honest, not the
+corpus getting worse**, which is exactly why a number in this table is worth nothing without the
+tree stamp above it.
 
 Four groups are worth naming precisely, because each is a *different* kind of gap:
 
-- **The frame group is the cleanest ceiling in the corpus.** Fifteen connectors are blocked by
-  their wiring shape and nothing else. Eleven put their tools in `src/tools.ts`, and the
-  generator emits one source file; four (`apple`, `fastmail`, `imap`, `protonmail`) wire through
-  a bespoke `registerXTools(server, …)` with no `createZodToolRegistrar`, and `style` has three
-  values, none of which is that. Both are spec-language gaps — no recognizer can close either,
-  because the emitter cannot write what it would be reading.
+- **The frame group is now four connectors, and the eleven that left it answered the question they
+  were blocking.** `apple`, `fastmail`, `imap` and `protonmail` wire through a bespoke
+  `registerXTools(server, …)` with no `createZodToolRegistrar`, and `style` has three values, none
+  of which is that. A spec-language gap: no recognizer can close it, because the emitter cannot
+  write what it would be reading.
+
+  The other eleven — `athena`, `bigquery`, `cloud-logging`, `cloudwatch`, `dataprofile`,
+  `elasticsearch`, `great-expectations`, `localdb`, `sagemaker`, `storybook`, `vertex-ai` — put
+  their tools in `src/tools.ts`, and `frame:tools-in-second-file` was the only thing anyone could
+  say about them. The deriver now reads that file (`src/derive/server/second-file.ts`), **all
+  eleven splice successfully with zero refusals**, and what they were hiding is this:
+
+  | Bucket | Connectors |
+  | --- | --- |
+  | `import-from:zod` | 11 |
+  | `import-from:../../shared/mcp-tool-kit.ts` | 11 |
+  | `statement:ExportNamedDeclaration` | 11 |
+  | `function:isRecord` / `function:strField` | 7 each |
+  | `function:asArray` | 6 |
+  | `import-from:../../shared/safe-cli-arg.ts` | 5 |
+
+  and `call:reg` rose 62 → 73 as their registrations became visible and unrecognized. **The
+  headline did not move**, which was the prediction and is the point: every one of those buckets
+  is a spec-language gap that an emitter split would not touch. **The frame was never the binding
+  constraint** — see [Considered and declined](#considered-and-declined) for why the split is not
+  being built.
 - **The named argument-schema const is the largest single closable-looking shape, and it is
-  not one recognizer.** Twenty connectors hoist `const <name>Schema = z.object({ … })` to module
-  scope — 109 such declarations — and pass it to `reg` by name. **Five** connectors compose with
+  not one recognizer.** **13** connectors hoist `const <name>Schema = z.object({ … })` — **66**
+  such declarations — and pass it to `reg` by name. Re-measured 2026-08-09 against tree
+  `67c7390a` with
+
+  ```bash
+  grep -rE '^const [A-Za-z_$][A-Za-z0-9_$]*Schema\s*=\s*z\.object\(' */src/*.ts
+  ```
+
+  run from `packages/mcp-connectors`, and scoped to `src/*.ts` rather than `src/server.ts`
+  because the deriver now reads both files.
+
+  This paragraph previously said **20** connectors and **109** declarations, taken on tree
+  `94fd3623`. Those figures do not reproduce here under any pattern tried, including a
+  deliberately loose one counting every `const …Schema` however initialised (14 / 92). The
+  earlier method was not written down, so whether the corpus changed or the count was wider than
+  its own description cannot be settled — which is the argument for the command above being
+  printed beside the number rather than the number standing alone. **Five** connectors compose with
   `.extend` (`bitbucket`, `circleci`, `github`, `github-actions`, `gitlab`), and only four of them
   produce a bucket for it: the other four hoist the composed schema into a module-scope const,
   while `circleci` writes `.extend` only inside its registrar call's arguments, where it is part
@@ -551,6 +636,27 @@ alone.
   spec is rejected anyway. `fixtures/google-meet.spec.json` carries `"local":
   "searchPageSize"` purely to work around this. Pre-existing, not introduced by this stage,
   and not fixed here.
+- **An unguarded optional argument interpolated into a path emits a package that does not
+  typecheck.** An arg with `"optional": true` and no `"default"` is `string | undefined` in the
+  emitted `z.object`, and `renderPath`'s `|enc` mode wraps it in `encodeURIComponent`, which
+  accepts `string | number | boolean`. So `"path": "/x/${arg.a|enc}"` with
+  `"a": { "type": "string", "optional": true }` emits
+  `encodeURIComponent(p.a)` and the generated package fails `tsc` under its own strict
+  `tsconfig.json`. Nothing rejects the spec — the arg IS used, so the unreferenced-arg checks
+  pass, and hoisting does not apply because there is no default to hoist. **A `pathWhen` guard
+  narrows only the arg it names**, so this survives the guard ladder: a tool whose fallthrough
+  path interpolates a *second*, unguarded optional arg takes the block form and still emits the
+  uncompilable call. `fixtures/zzcond.spec.json` compiles only because its one guard happens to
+  cover its one path argument; the emitter does not guarantee that pairing.
+
+  **No gate in the merge gate catches it.** `test/emit/emitted-typecheck.test.ts`'s own header
+  (`:71`) records that hand-rolled and rest-kit `src/server.ts` are compiled nowhere in
+  `bun test` at either target; the read-only-kit × monorepo cases that *are* compiled there do
+  not include this shape. `diff:golden` is a byte comparison against real connectors, and no
+  real connector writes it. Pre-existing and unrelated to the conditional-endpoint work, which
+  neither introduced nor closed it. The cheap close is a read-only-kit × monorepo case in
+  `emitted-typecheck.test.ts` — that path IS compiled — which would turn this from an
+  uncaught defect into a failing test naming the arg.
 - **Conditional endpoint selection and enum arguments.** Choosing a path from whether an
   optional arg is present, or mapping a `z.enum` through a lookup table. **Open Stage E work**,
   not a permanent ceiling — the [Stage E bullet](#stage-e--the-corpus-tail-) names the connector
@@ -864,6 +970,30 @@ Recorded so they are not re-proposed. Each was measured before being rejected.
   MIT repo. (The 6 is a re-measurement: this said 2, which was the two files the shape was
   find/replaced from rather than the number carrying it. The licensing half of the reason does
   not depend on the count.)
+- **Splitting the emitter to write `src/tools.ts` and a shim `src/server.ts`.** Declined on a
+  measurement taken 2026-08-09 against tree `67c7390a`, and it is the clearest case in this file
+  of a plausible feature killed by looking rather than by arguing.
+
+  Eleven connectors reported `frame:tools-in-second-file` and nothing else, which reads like a
+  frame problem with an obvious fix: teach the emitter to write two files. Nobody could see
+  inside those second files, so the fix was gated on reading them first. The deriver now does —
+  **all eleven splice with zero refusals** — and behind the frame are `zod` and
+  `mcp-tool-kit.ts` value imports (11 each), `statement:ExportNamedDeclaration` (11), hoisted
+  helpers `isRecord` and `strField` (7 each) and `asArray` (6), five `safe-cli-arg` CLI
+  connectors, and eleven newly-visible unrecognized registrations (`call:reg` 62 → 73).
+
+  Not one of those is a frame gap. **The frame was never the binding constraint**; it was the
+  first thing the deriver happened to refuse on. Splitting the emitter would have moved all
+  eleven from one blocker to several and changed no tier, at the cost of a second emitted file,
+  a spec field to select it, and an emitter path gated on a field the four byte-locked fixtures
+  never set.
+
+  Worth keeping for the method rather than the conclusion: the ROADMAP precedent said frame
+  widening *reveals rather than clears* — measured once, on the split-registrar and
+  inlined-transport axes, where 27 connectors got past the frame and not one reached `emits`.
+  That precedent predicted this result before the work started, and the work was scoped as a
+  measurement because of it. The reading half is kept: it is what makes the eleven's real
+  blockers visible to whoever closes them.
 - **Growing the spec with purely cosmetic fields.** `local` and `bindings` are permitted
   everywhere; beyond those, a field that changes only appearance is refused and the difference
   is recorded as an irreducible diff instead. Spec surface is the cost being controlled — a

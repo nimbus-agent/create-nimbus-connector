@@ -331,6 +331,28 @@
               "additionalProperties": false
             }
           },
+          "pathWhen": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "absent": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "absent",
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          },
           "impl": {
             "default": "rest",
             "type": "string",

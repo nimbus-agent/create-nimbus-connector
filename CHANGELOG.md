@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.12.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.3...create-nimbus-connector-v0.12.0) (2026-08-09)
+
+
+### Features
+
+* **derive:** read a shim connector's src/tools.ts, to make the multi-file ceiling measurable ([#87](https://github.com/nimbus-agent/create-nimbus-connector/issues/87)) ([4da400c](https://github.com/nimbus-agent/create-nimbus-connector/commit/4da400c4806ab0625bbc0ab3101011d7d35da8c1))
+
 ## [0.11.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.2...create-nimbus-connector-v0.11.3) (2026-08-09)
 
 

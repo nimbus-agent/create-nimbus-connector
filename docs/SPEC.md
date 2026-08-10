@@ -121,6 +121,7 @@ content rule while the JSON Schema was being written. Read them where they are e
 | `args` | [Record<string, object>](#toolsargsname) | `{}` | keys matches `^[A-Za-z_$][A-Za-z0-9_$]*$` | The tool's arguments, keyed by the name the generated schema declares. |
 | `path` | `string` | — | — | The request path, a template over `${env.X}` and `${arg.X}` with an optional `\|raw`, `\|enc`, `\|num` or `\|bool` mode. |
 | `query` | [object[]](#toolsquery) | — | minItems 1 | Query-string parameters built beside `path`, each emitted as a `searchParams.set` call — the only way to express a parameter that is sent conditionally. [SPEC-RULES § Conditional query parameters](./SPEC-RULES.md#conditional-query-parameters-query). |
+| `pathWhen` | [object[]](#toolspathwhen) | — | minItems 1 | Guards evaluated in order before `path`, each selecting a different endpoint when its named argument is absent. `path` is the final unguarded return. |
 | `impl` | `"rest" \| "get" \| "stub" \| "search"` | `"rest"` | — | What the tool does: a REST request, a handler that throws `"<tool> not implemented"`, or a substring search over one endpoint's rows. `get` is the Stage A spelling of `rest`, normalised at parse time. |
 | `method` | `"GET" \| "POST" \| "PUT" \| "PATCH" \| "DELETE"` | `"GET"` | — | The HTTP verb, and nothing more. |
 | `effect` | `"read" \| "write" \| "delete"` | `"read"` | — | The author's declaration of intent. The manifest's `hitlRequired` is the deduplicated set of non-`read` effects, and is deliberately not derived from `method`. |
@@ -148,6 +149,13 @@ content rule while the JSON Schema was being written. Read them where they are e
 | `name` **(required)** | `string` | — | minLength 1 | The query key as the API spells it — deliberately not an identifier check, since `page[size]` is a real corpus key. |
 | `arg` **(required)** | `string` | — | minLength 1 | The tool's argument supplying the value. |
 | `omitWhen` | `"absent" \| "empty"` | — | — | Guards the emitted `searchParams.set`: `absent` tests `!== undefined`, `empty` adds `&& !== ""`. Omitted sends the parameter unconditionally. |
+
+## `tools[].pathWhen[]`
+
+| Field | Type | Default | Rules | What it is |
+| --- | --- | --- | --- | --- |
+| `absent` **(required)** | `string` | — | minLength 1 | The argument tested; this rung wins when it is `undefined`. |
+| `path` **(required)** | `string` | — | minLength 1 | The path to use when `absent` is undefined, in the same template DSL as `tools[].path`. |
 
 ## `tools[].filter`
 

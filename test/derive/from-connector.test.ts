@@ -135,6 +135,19 @@ describe("deriveFromDirectory", () => {
   });
 });
 
+describe("renderBlockers", () => {
+  it("names the file when a blocker did not come from src/server.ts", () => {
+    const rendered = renderBlockers("/x", [
+      { kind: "function:shorten", detail: "function shorten…", line: 3, file: "src/tools.ts" },
+      { kind: "call:reg", detail: "reg(…)", line: 9 },
+    ]);
+    expect(rendered).toContain("src/tools.ts line 3");
+    // The file-less form is unchanged, so every blocker that existed before reads exactly as before.
+    expect(rendered).toContain("(line 9)");
+    expect(rendered).not.toContain("src/server.ts line 9");
+  });
+});
+
 describe("ambiguityNote", () => {
   // No fixture in this repo's corpus currently derives with an ambiguous effect — see the
   // comment on ambiguityNote itself — so this is unit-tested directly with a plain string

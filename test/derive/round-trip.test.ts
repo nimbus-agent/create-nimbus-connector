@@ -9,6 +9,14 @@ import { parseSpec } from "../../src/spec.ts";
 import { displayPath } from "../../src/types.ts";
 
 /**
+ * ## What this file does NOT cover
+ *
+ * **Shim connectors, whose tools live in `src/tools.ts`.** A round trip is derive → emit →
+ * compare, and the emitter writes ONE source file, so it can never reproduce a two-file input.
+ * There is therefore no fixture here for that path and there cannot be one until the emitter
+ * learns to write the shim. `test/derive/second-file.test.ts` covers it with hand-written pairs
+ * instead — weaker evidence, named as such rather than left for a reader to assume.
+ *
  * Fixtures whose emitted src/server.ts + nimbus.extension.json (+ src/search-filter.ts, for the
  * search fixtures) this plan's recognizers derive, and which then re-emit byte-identical output
  * for every file the fixture produces. Confirmed by running the full parseSpec -> generate ->
@@ -113,6 +121,8 @@ import { displayPath } from "../../src/types.ts";
  * tool in this connector carries any staticPathStyle evidence at all. Neither setting is
  * observable in a single byte this connector emits, so their absence from the derived spec is
  * the correct minimal spec, not a recovery this deriver failed at.
+ *
+ * zzcond is the pathWhen fixture, and it moved OUT of this list in Task 4 — see BLOCKED.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -177,20 +187,25 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it.
  *
- * **This list is empty**, and the invariant it now records is: every fixture in `fixtures/`
- * derives, and every one of them re-emits byte-identically except `google-meet`, whose single
- * moving file PARTIAL_ROUND_TRIP names and re-checks in both directions. No count appears here
- * deliberately — the "accounts for every fixture" test does that arithmetic on every run, which is
- * this file's own top docstring's rule and CLAUDE.md's ("do not restate live numbers"): a number
- * written down here goes stale silently the next time a fixture is added.
+ * `zzcond` is the pathWhen fixture (conditional-endpoint plan, Task 1): one hand-rolled tool, one
+ * optional no-default arg, one guard. Deliberately minimal and deliberately without `query` —
+ * Task 3 refuses `pathWhen` alongside `query` in full, so a fixture pairing the two would stop
+ * parsing. It sat in ROUND_TRIP while `pathWhen` had no emitter and nothing about it reached
+ * `src/server.ts`; Task 4 emits the guard ladder, and `src/derive/` cannot read one until Task 6,
+ * which restores this entry to ROUND_TRIP. The blocker is `call:reg` — measured by running
+ * `deriveSpec` against this fixture's own emitted output, per the rule below, not inferred:
+ * `recognizeHandTools` reads a handler whose body is hoists plus one `return`, and the `if`
+ * statements the ladder adds are not that shape, so the whole `reg(...)` call goes unclaimed.
  *
- * The list is kept rather than deleted because that same test spans all three: a fixture added
- * later that does NOT derive belongs here, on screen, rather than being quietly absent — the same
- * reason fixtures/expectations.json omits a file instead of hiding it.
+ * No count appears here deliberately — the "accounts for every fixture" test does that arithmetic
+ * on every run, which is this file's own top docstring's rule and CLAUDE.md's ("do not restate
+ * live numbers"): a number written down here goes stale silently the next time a fixture is added.
  *
  * The rule for any future entry is unchanged, and it is the reason this docstring is a rule
  * rather than a narrative: **the reason must be measured by actually running `deriveSpec` against
- * that fixture's emitted output**, never inferred from the spec or the emitter. Three successive
+ * that fixture's emitted output**, never inferred from the spec or the emitter. The measurement
+ * goes in the entry's own `blocker` field, which the test below asserts against
+ * `derivation.blockers` — so an entry cannot go on describing a blocker that has moved. Three successive
  * versions of this comment described gaps that had already closed — a claim that rest-kit's frame
  * never matched, which stopped being true when src/derive/server/index.ts grew its rest-kit
  * branch; a claim that the factory const stayed unclaimed, which stopped being true when
@@ -201,7 +216,12 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * Which recognizer unblocked which fixture is recorded where it can go stale visibly instead —
  * beside the fixture, in ROUND_TRIP's and PARTIAL_ROUND_TRIP's own docstrings above.
  */
-const BLOCKED: Record<string, string> = {};
+const BLOCKED: Record<string, { reason: string; blocker: string }> = {
+  zzcond: {
+    reason: "a pathWhen guard ladder, which src/derive/ cannot read until Task 6",
+    blocker: "call:reg",
+  },
+};
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
@@ -320,10 +340,17 @@ describe("deriveSpec round-trips this repository's own output", () => {
     });
   }
 
-  for (const [name, reason] of Object.entries(BLOCKED)) {
+  for (const [name, { reason, blocker }] of Object.entries(BLOCKED)) {
     it(`blocks ${name} (${reason}) rather than deriving something wrong`, () => {
       const derivation = deriveSpec(emitted(name));
       expect(derivation.ok).toBe(false);
+      // The KIND, not merely the failure. `ok: false` alone passes for any regression that stops
+      // the derivation for an unrelated reason — a broken frame recognizer, a parse error — and
+      // this loop generated zero tests until zzcond joined the list, so nothing has ever held it
+      // to the blocker its entry names. Pinning it is what makes `blocker` the measurement the
+      // docstring above insists every entry must be, rather than an unchecked claim.
+      const kinds = derivation.ok ? [] : derivation.blockers.map((b) => b.kind);
+      expect(kinds).toContain(blocker);
     });
   }
 });
