@@ -32,8 +32,7 @@ import { takeValue } from "../src/cli.ts";
 import { emitWiring } from "../src/emit/wiring.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
-import { type InterfaceMember, interfaceMemberDetails } from "./_lib/interface-members.ts";
-import { objectLiteralKeys } from "./_lib/object-literal-keys.ts";
+import { checkWiring, optionalReport } from "./_lib/wiring-checks.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -60,21 +59,6 @@ function main(argv: readonly string[]): void {
   const typesPath = join(root, "packages", "gateway", "src", "sync", "types.ts");
   const real = readFileSync(typesPath, "utf8");
 
-  const syncable = interfaceMemberDetails(real, "Syncable");
-  const result = interfaceMemberDetails(real, "SyncResult");
-  // Vacuity guard on the PARSED set, not on the required subset: an interface whose members
-  // were all optional would otherwise report "parsed nothing" and mask a real parse failure
-  // behind a plausible-looking message.
-  if (syncable.length === 0 || result.length === 0) {
-    throw new Error(`Parsed no members out of ${typesPath} — the interface shape has changed.`);
-  }
-
-  const names = (ms: readonly InterfaceMember[]): string[] => ms.map((m) => m.name);
-  const required = names(syncable.filter((m) => !m.optional));
-  const optional = names(syncable.filter((m) => m.optional));
-  const resultMembers = names(result.filter((m) => !m.optional));
-  const resultOptional = names(result.filter((m) => m.optional));
-
   const spec = parseSpec(
     JSON.parse(readFileSync(join(repoRoot, "fixtures", "zzscratch.spec.json"), "utf8")),
   );
@@ -82,26 +66,10 @@ function main(argv: readonly string[]): void {
   const syncFile = emitted.find((f) => f.path.at(-1)?.endsWith("-sync.ts"));
   if (syncFile === undefined) throw new Error("emitWiring produced no *-sync.ts file");
 
-  const failures: string[] = [];
-
-  // 1. Every required Syncable member must be supplied by the emitted object literal.
-  //
-  // Scoped to the literal, NOT the whole file — for the same reason check 2 below is scoped to
-  // the template literal, which is a lesson this check had to learn twice. Searching the file
-  // passed vacuously: the emitted docstring says "sync() below throws", so `\bsync\s*[:(]`
-  // matched as ENGLISH whether or not the skeleton declared the method. Caught by renaming the
-  // emitted `sync` to `syncMUTANT` and watching this check stay green.
-  const supplied = new Set(objectLiteralKeys(syncFile.content, "return {"));
-  for (const member of required) {
-    if (!supplied.has(member)) failures.push(`emitted skeleton does not supply Syncable.${member}`);
-  }
-
-  // 2. The stand-in must agree with the real names, or the typecheck test is checking a
-  //    shape Nimbus does not have.
-  // Scoped to the template literal, NOT the whole file. Searching the file passes vacuously:
-  // that test's own docstring discusses the real member names in prose, so `itemsUpserted`
-  // is present as English whether or not the stand-in type declares it. Caught by reverting
-  // the stand-in to its shipped `upserted`/`deleted` and watching this check stay green.
+  // The stand-in is read from its TEMPLATE LITERAL, not the whole file. Searching the file
+  // passes vacuously: that test's own docstring discusses the real member names in prose, so
+  // `itemsUpserted` is present as English whether or not the stand-in type declares it. Caught
+  // by reverting the stand-in to its shipped `upserted`/`deleted` and watching it stay green.
   const standinFile = readFileSync(
     join(repoRoot, "test", "emit", "emitted-typecheck.test.ts"),
     "utf8",
@@ -113,36 +81,22 @@ function main(argv: readonly string[]): void {
   const standin = standinFile.slice(bodyStart, bodyEnd);
   if (standin.trim() === "") throw new Error("SYNC_TYPES_STANDIN parsed as empty");
 
-  // Required members only. The stand-in need not carry an optional field — this used to be a
-  // hard-coded `bytesTransferred` skip, which is the same rule written once per name.
-  for (const member of resultMembers) {
-    if (!standin.includes(member)) {
-      failures.push(
-        `SYNC_TYPES_STANDIN is missing SyncResult.${member} — the stand-in has drifted ` +
-          `from ${typesPath}, so emitted-typecheck.test.ts is compiling against a shape ` +
-          `Nimbus does not have.`,
-      );
-    }
-  }
+  const verdict = checkWiring({
+    realTypes: real,
+    emittedSync: syncFile.content,
+    standin,
+    typesPath,
+  });
 
-  console.log(`Syncable requires: ${required.join(", ")}`);
-  console.log(`SyncResult fields:  ${resultMembers.join(", ")}`);
-
-  // Optional members are reported, never failed on. Reported because the choice not to supply
-  // one is a real product decision that should be made deliberately rather than by silence:
-  // `Syncable.fetchOne` is optional precisely so a connector may omit it, and Nimbus answers
-  // `no_targeted_fetch` for one that does. Whether generated connectors should start supplying
-  // it is a question for a human reading this line, not something this gate can decide.
-  const optionalReport = [
-    ...optional.map((m) => `Syncable.${m}`),
-    ...resultOptional.map((m) => `SyncResult.${m}`),
-  ];
-  if (optionalReport.length > 0) {
-    console.log(`Optional, not required of the skeleton: ${optionalReport.join(", ")}`);
+  console.log(`Syncable requires: ${verdict.required.join(", ")}`);
+  console.log(`SyncResult fields:  ${verdict.resultRequired.join(", ")}`);
+  const optional = optionalReport(verdict);
+  if (optional.length > 0) {
+    console.log(`Optional, not required of the skeleton: ${optional.join(", ")}`);
   }
-  if (failures.length > 0) {
-    for (const f of failures) console.error(`FAIL  ${f}`);
-    throw new Error(`${failures.length} wiring conformance failure(s).`);
+  if (verdict.failures.length > 0) {
+    for (const f of verdict.failures) console.error(`FAIL  ${f}`);
+    throw new Error(`${verdict.failures.length} wiring conformance failure(s).`);
   }
   console.log(`\nPASS  emitted wiring conforms to ${typesPath}`);
 }
