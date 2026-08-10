@@ -32,7 +32,8 @@ import { takeValue } from "../src/cli.ts";
 import { emitWiring } from "../src/emit/wiring.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";
-import { interfaceMembers } from "./_lib/interface-members.ts";
+import { type InterfaceMember, interfaceMemberDetails } from "./_lib/interface-members.ts";
+import { objectLiteralKeys } from "./_lib/object-literal-keys.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -59,11 +60,20 @@ function main(argv: readonly string[]): void {
   const typesPath = join(root, "packages", "gateway", "src", "sync", "types.ts");
   const real = readFileSync(typesPath, "utf8");
 
-  const required = interfaceMembers(real, "Syncable");
-  const resultMembers = interfaceMembers(real, "SyncResult");
-  if (required.length === 0 || resultMembers.length === 0) {
+  const syncable = interfaceMemberDetails(real, "Syncable");
+  const result = interfaceMemberDetails(real, "SyncResult");
+  // Vacuity guard on the PARSED set, not on the required subset: an interface whose members
+  // were all optional would otherwise report "parsed nothing" and mask a real parse failure
+  // behind a plausible-looking message.
+  if (syncable.length === 0 || result.length === 0) {
     throw new Error(`Parsed no members out of ${typesPath} — the interface shape has changed.`);
   }
+
+  const names = (ms: readonly InterfaceMember[]): string[] => ms.map((m) => m.name);
+  const required = names(syncable.filter((m) => !m.optional));
+  const optional = names(syncable.filter((m) => m.optional));
+  const resultMembers = names(result.filter((m) => !m.optional));
+  const resultOptional = names(result.filter((m) => m.optional));
 
   const spec = parseSpec(
     JSON.parse(readFileSync(join(repoRoot, "fixtures", "zzscratch.spec.json"), "utf8")),
@@ -75,9 +85,15 @@ function main(argv: readonly string[]): void {
   const failures: string[] = [];
 
   // 1. Every required Syncable member must be supplied by the emitted object literal.
+  //
+  // Scoped to the literal, NOT the whole file — for the same reason check 2 below is scoped to
+  // the template literal, which is a lesson this check had to learn twice. Searching the file
+  // passed vacuously: the emitted docstring says "sync() below throws", so `\bsync\s*[:(]`
+  // matched as ENGLISH whether or not the skeleton declared the method. Caught by renaming the
+  // emitted `sync` to `syncMUTANT` and watching this check stay green.
+  const supplied = new Set(objectLiteralKeys(syncFile.content, "return {"));
   for (const member of required) {
-    const supplies = new RegExp(String.raw`\b${member}\s*[:(]`).test(syncFile.content);
-    if (!supplies) failures.push(`emitted skeleton does not supply Syncable.${member}`);
+    if (!supplied.has(member)) failures.push(`emitted skeleton does not supply Syncable.${member}`);
   }
 
   // 2. The stand-in must agree with the real names, or the typecheck test is checking a
@@ -97,9 +113,9 @@ function main(argv: readonly string[]): void {
   const standin = standinFile.slice(bodyStart, bodyEnd);
   if (standin.trim() === "") throw new Error("SYNC_TYPES_STANDIN parsed as empty");
 
+  // Required members only. The stand-in need not carry an optional field — this used to be a
+  // hard-coded `bytesTransferred` skip, which is the same rule written once per name.
   for (const member of resultMembers) {
-    // bytesTransferred is optional in the real interface; the stand-in need not carry it.
-    if (member === "bytesTransferred") continue;
     if (!standin.includes(member)) {
       failures.push(
         `SYNC_TYPES_STANDIN is missing SyncResult.${member} — the stand-in has drifted ` +
@@ -111,6 +127,19 @@ function main(argv: readonly string[]): void {
 
   console.log(`Syncable requires: ${required.join(", ")}`);
   console.log(`SyncResult fields:  ${resultMembers.join(", ")}`);
+
+  // Optional members are reported, never failed on. Reported because the choice not to supply
+  // one is a real product decision that should be made deliberately rather than by silence:
+  // `Syncable.fetchOne` is optional precisely so a connector may omit it, and Nimbus answers
+  // `no_targeted_fetch` for one that does. Whether generated connectors should start supplying
+  // it is a question for a human reading this line, not something this gate can decide.
+  const optionalReport = [
+    ...optional.map((m) => `Syncable.${m}`),
+    ...resultOptional.map((m) => `SyncResult.${m}`),
+  ];
+  if (optionalReport.length > 0) {
+    console.log(`Optional, not required of the skeleton: ${optionalReport.join(", ")}`);
+  }
   if (failures.length > 0) {
     for (const f of failures) console.error(`FAIL  ${f}`);
     throw new Error(`${failures.length} wiring conformance failure(s).`);

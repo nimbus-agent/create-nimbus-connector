@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { interfaceMembers } from "../../scripts/_lib/interface-members.ts";
+import { interfaceMemberDetails, interfaceMembers } from "../../scripts/_lib/interface-members.ts";
 
 describe("interfaceMembers", () => {
   it("lists the members of a flat interface", () => {
@@ -30,8 +30,8 @@ export interface SyncResult {
   });
 
   it("includes optional members, without the question mark", () => {
-    // bytesTransferred is optional in the real SyncResult, and the harness skips it by NAME.
-    // Returning "bytesTransferred?" would defeat that skip and report a spurious drift.
+    // The name must come back bare: the harness matches it against emitted source, where a
+    // trailing "?" would never appear.
     const source =
       "interface SyncResult {\n  itemsUpserted: number;\n  bytesTransferred?: number;\n}";
 
@@ -113,5 +113,64 @@ interface Syncable {
     // Not an error here — the harness's own "parsed no members" check is what turns this
     // into a failure, and it needs to see the empty list to do that.
     expect(interfaceMembers("interface Empty {\n}", "Empty")).toEqual([]);
+  });
+});
+
+/**
+ * Optionality, which the name-only extractor discarded.
+ *
+ * This is the half that was missing when Nimbus's `Syncable` grew an optional `fetchOne`:
+ * every member came back looking required, `wiring:conformance` reported that the emitted
+ * skeleton "does not supply Syncable.fetchOne", and `preflight` failed at a gate the generator
+ * had not broken. A false RED, which costs the same thing a false green does — it teaches
+ * people that the gate's opinion can be ignored.
+ */
+describe("interfaceMemberDetails", () => {
+  it("marks a `?:` member optional and a plain one required", () => {
+    const source =
+      "interface SyncResult {\n  itemsUpserted: number;\n  bytesTransferred?: number;\n}";
+
+    expect(interfaceMemberDetails(source, "SyncResult")).toEqual([
+      { name: "itemsUpserted", optional: false },
+      { name: "bytesTransferred", optional: true },
+    ]);
+  });
+
+  it("marks an optional METHOD optional — the shape that produced the false red", () => {
+    // `fetchOne?(ctx, url)` reaches the `[:(]` tail through the `(`, not the `:`. Reading the
+    // `?` off a class that also matches spaces is what makes both spellings work.
+    const source = [
+      "interface Syncable {",
+      "  readonly serviceId: string;",
+      "  sync(ctx: SyncContext, cursor: string | null): Promise<SyncResult>;",
+      "  fetchOne?(ctx: SyncContext, url: string): Promise<FetchOneResult>;",
+      "}",
+    ].join("\n");
+
+    expect(interfaceMemberDetails(source, "Syncable")).toEqual([
+      { name: "serviceId", optional: false },
+      { name: "sync", optional: false },
+      { name: "fetchOne", optional: true },
+    ]);
+  });
+
+  it("reads the `?` through whitespace on either side", () => {
+    // The capture is over `[ \t?]*`, so it must not depend on the `?` hugging the name.
+    const source = "interface X {\n  a ? : string;\n  b\t?\t: number;\n  c: number;\n}";
+
+    expect(interfaceMemberDetails(source, "X")).toEqual([
+      { name: "a", optional: true },
+      { name: "b", optional: true },
+      { name: "c", optional: false },
+    ]);
+  });
+
+  it("keeps `readonly` off the name while still reading optionality", () => {
+    const source = "interface X {\n  readonly id: string;\n  readonly count?: number;\n}";
+
+    expect(interfaceMemberDetails(source, "X")).toEqual([
+      { name: "id", optional: false },
+      { name: "count", optional: true },
+    ]);
   });
 });

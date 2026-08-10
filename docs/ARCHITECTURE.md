@@ -341,9 +341,25 @@ That is not hypothetical: the stand-in once shipped with `upserted`/`deleted` wh
 `SyncResult` spells them `itemsUpserted`/`itemsDeleted`, and every test was green.
 
 This script reads the real interface and checks two things — that the emitted skeleton supplies
-every member `Syncable` requires, and that the stand-in agrees with the real field names. It
+every member `Syncable` **requires**, and that the stand-in agrees with the real field names. It
 reads Nimbus and writes nothing to it. Like `diff:golden` it needs a checkout and so cannot run
 in CI; run it before merging a wiring change.
+
+Both halves of that sentence are load-bearing, and each was wrong once:
+
+- **`requires` means required.** The member parse discarded `?`, so every optional member read as
+  mandatory. `SyncResult.bytesTransferred` was patched around by *name*; when Nimbus's `Syncable`
+  later grew an optional `fetchOne`, there was no such patch and the gate failed `preflight` at a
+  defect the generator did not have. Optional members are now reported, never failed on — a
+  connector may legitimately omit `fetchOne`, and Nimbus answers `no_targeted_fetch` for one that
+  does. A gate that cries wolf stops being run, which costs exactly what a false green costs.
+- **"supplies" means *the object literal* supplies it.** The check searched the whole emitted
+  file, and the file's own generated docstring says `sync() below throws` — so `\bsync\s*[:(]`
+  matched as English regardless of what the skeleton declared. Renaming the emitted method to
+  `syncMUTANT` left the gate green. It now reads the literal's top-level keys
+  (`scripts/_lib/object-literal-keys.ts`), which is the scoping the second check had already
+  been given, with a comment explaining why, while the first check kept the bug that comment
+  describes.
 
 ### 5. The runtime acceptance harness
 
