@@ -53,6 +53,13 @@
     "src/search-filter.ts",
     "tsconfig.json"
   ],
+  "codemagic": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/search-filter.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
   "dependencytrack": [
     "nimbus.extension.json",
     "package.json",

@@ -19,6 +19,19 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.12.0...create-nimbus-connector-v0.13.0) (2026-08-10)
+
+
+### Features
+
+* **derive:** read a pathWhen guard ladder back, and record a failed prediction (PR 2 of 2) ([#93](https://github.com/nimbus-agent/create-nimbus-connector/issues/93)) ([e6f4c92](https://github.com/nimbus-agent/create-nimbus-connector/commit/e6f4c926d2725e8fc3d04a2f464ffcb24c6aae3b))
+* **spec,emit:** pathWhen — conditional endpoint selection (PR 1 of 2) ([#91](https://github.com/nimbus-agent/create-nimbus-connector/issues/91)) ([e616c73](https://github.com/nimbus-agent/create-nimbus-connector/commit/e616c733216cc1c75f072797944cd565f65e8f5d))
+
+
+### Bug Fixes
+
+* **scripts:** wiring:conformance failed on an optional member, and passed on a missing required one ([#96](https://github.com/nimbus-agent/create-nimbus-connector/issues/96)) ([9454826](https://github.com/nimbus-agent/create-nimbus-connector/commit/94548264799e2aeafd428cf9cb901c43fbbc09bb))
+
 ## [0.12.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.11.3...create-nimbus-connector-v0.12.0) (2026-08-09)
 
 

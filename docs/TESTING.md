@@ -36,7 +36,7 @@ are not equally checked.
 | `hand-rolled` × standalone | nothing in `bun test` | `test/emit/generate.test.ts`; `emitted-typecheck.test.ts`'s *read helper emission is conditional on a call site* block, which is substring-only by its own admission | `test/golden/snapshots.test.ts` against `fixtures/snapshots/zzwrite/` and `.../zzwriteonly/` | `standalone-acceptance` (`zzstandalonehand`, `zzwrite`, `zzwriteonly` — the package's own `tsc` and `lint`); `runtime:acceptance`. Both run in `acceptance.yml`, **not** the merge gate. |
 | `rest-kit` × monorepo | nothing in `bun test` | `test/emit/server/tools-rest.test.ts`, `fetch-helper.test.ts`, `env.test.ts`, `test/emit/generate.test.ts`, `test/cli-main.test.ts` (the real binary on `zzstandalone`, via `Bun.spawnSync`) | `test/derive/round-trip.test.ts` — `discord`, `zzstandalone` and `zzwriterest` (the rest-kit write path) fully, `google-meet` all files but `README.md` | `diff:golden` (`discord`, `google-meet`). **Does not run in CI.** |
 | `rest-kit` × standalone | nothing in `bun test` | `test/emit/generate.test.ts`, `test/cli-main.test.ts` (`--standalone`, real binary) | `test/golden/snapshots.test.ts` against `fixtures/snapshots/zzwriterest/` | `standalone-acceptance` (`zzstandalone`, `zzwriterest`); `runtime:acceptance`. `acceptance.yml`, not the merge gate. |
-| `read-only-kit` × monorepo | **`test/emit/emitted-typecheck.test.ts`** — real `tsc --noEmit`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor, conditional query parameter. Each spreads `NIMBUS_COMPILER_OPTIONS` and then overrides `types` and `lib`, a local-only deviation the file names; only the wiring row below uses the constant unmodified | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `env.test.ts`, `test/emit/search-filter.test.ts` | `test/derive/round-trip.test.ts` — `mercury`, `netlify`, `zendesk`, `dependencytrack`, `bitrise`, `zzreadonly`, `zzsearch`, `zzsearchstub`, `zzextract` | `diff:golden` (`mercury`, `zendesk`, `bitrise`, `dependencytrack`, `netlify`). **Does not run in CI.** |
+| `read-only-kit` × monorepo | **`test/emit/emitted-typecheck.test.ts`** — real `tsc --noEmit`, four cases: search-only, stub filter, bespoke `fieldsOf` extractor, conditional query parameter. Each spreads `NIMBUS_COMPILER_OPTIONS` and then overrides `types` and `lib`, a local-only deviation the file names; only the wiring row below uses the constant unmodified | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `env.test.ts`, `test/emit/search-filter.test.ts` | `test/derive/round-trip.test.ts` — `mercury`, `netlify`, `zendesk`, `dependencytrack`, `bitrise`, `codemagic`, `zzreadonly`, `zzsearch`, `zzsearchstub`, `zzextract` | `diff:golden` (`mercury`, `zendesk`, `bitrise`, `codemagic`, `dependencytrack`, `netlify`). **Does not run in CI.** |
 | `read-only-kit` × standalone | **nothing, anywhere.** `test/emit/emitted-typecheck.test.ts` runs a real `biome check src/` under the emitted `biome.json` — a **lint**, not a typecheck | `test/emit/server/read-only-kit.test.ts`, `search.test.ts`, `test/emit/search-filter.test.ts` | **nothing.** No read-only-kit fixture declares a write tool, so none has a snapshot; `round-trip` runs at the monorepo target | `standalone-acceptance` (`zzsearch`, `zzsearchstub`, `zzextract`). `acceptance.yml`, not the merge gate. |
 
 **The *substring-asserts* column is target-agnostic where it names a fragment renderer.**
@@ -267,7 +267,7 @@ that changed nothing related. It is also path-filtered to `src/`, `scripts/`, `f
 | `diff:golden` | Do the emitted bytes match a real hand-written connector? |
 | `reach --baseline` | Has any connector in the corpus lost a tier? |
 | `wiring:conformance` | Does the emitted Gateway skeleton still match Nimbus's real `Syncable`? |
-| `acceptance` | Does a generated connector survive the monorepo's own `tsc`, `biome` and README audit? |
+| `acceptance` | Does a generated package survive the monorepo's `tsc`, `biome` and README audit? |
 
 This is not fixable, and it is not a backlog item. This repository is MIT and the monorepo is
 AGPL-3.0-only; the golden harness reads the monorepo **at runtime** from a path passed on the
@@ -311,9 +311,11 @@ measurement behind it.
 ### No real-connector fixture declares a write tool
 
 Every fixture transcribed from a real Nimbus connector — `newrelic`, `datadog`, `grafana`,
-`sentry`, `mercury`, `zendesk`, `bitrise`, `dependencytrack`, `discord`, `google-meet`,
-`netlify` — is read-only. Verified at HEAD by reading every `fixtures/*.spec.json`: not one has
-a tool with `effect: "write"` or a non-`GET` `method`.
+`sentry`, `mercury`, `zendesk`, `bitrise`, `codemagic`, `dependencytrack`, `discord`,
+`google-meet`, `netlify` — is read-only: not one has a tool with `effect: "write"` or a non-`GET`
+`method`. This is a gate, not a claim with a date on it —
+`test/fixture-write-tools.test.ts` derives the list from `expectations.json`'s non-`zz` keys and
+fails the moment a real-connector fixture stops being read-only.
 
 The consequence: **`diff:golden` has zero purchase on the Stage C emitter paths.** `method`,
 `effect`, `body`, `hitlRequired` and the `<local>Send` write helper are exercised only by the

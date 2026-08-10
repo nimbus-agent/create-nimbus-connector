@@ -122,7 +122,28 @@ import { displayPath } from "../../src/types.ts";
  * observable in a single byte this connector emits, so their absence from the derived spec is
  * the correct minimal spec, not a recovery this deriver failed at.
  *
- * zzcond is the pathWhen fixture, and it moved OUT of this list in Task 4 — see BLOCKED.
+ * zzcond is the HAND-ROLLED conditional fixture — the minimal one, not the only one (`codemagic`
+ * below carries two ladders): one hand-rolled tool, one optional no-default arg, one guard. It
+ * left this list in Task
+ * 4, when the emitter learned to write the ladder and `src/derive/` could not yet read one, and
+ * Task 6 (server/conditional-path.ts) returns it. Deliberately without `query` — ToolSchema
+ * refuses that pairing outright, so a fixture combining the two would not parse. Its guarded tool
+ * abstains from the handlerStyle vote for the same reason a query, stub or search tool does
+ * (`renderTool` forces the block form on it whatever `handlerStyle` says), which is what keeps the
+ * derived spec free of a `handlerStyle` its author never wrote.
+ *
+ * `codemagic` is the pathWhen fixture's REAL-connector counterpart: two guarded tools (one of them
+ * with a defaulted `limit` hoist) plus a search tool, so it is the only fixture where a ladder
+ * shares a handler with a hoisted argument and the only one with two ladders in one connector.
+ * That it round-trips here and still reports a PARTIAL match in fixtures/expectations.json is not
+ * a contradiction — that file and `diff:golden` carry the count, deliberately not restated here
+ * where nothing would fail if it drifted. This list is a LOCAL claim about emit → derive →
+ * re-emit, and the two files the
+ * corpus diff loses are lost to the real connector's own byte conventions, not to anything the
+ * deriver failed to recover. `src/server.ts` differs by one statement's POSITION (the real
+ * connector writes `const limit = p.limit ?? 50;` after its guard, `renderTool` writes every hoist
+ * before the ladder); `README.md` is hand-written prose, the same gap mercury/zendesk/bitrise
+ * carry. Both are recorded in docs/ROADMAP.md's Known limitations.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -146,6 +167,8 @@ const ROUND_TRIP = [
   "zzwriterest",
   "bitrise",
   "zzwrite",
+  "zzcond",
+  "codemagic",
 ];
 
 /**
@@ -187,15 +210,14 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
 /**
  * Fixtures that must derive as BLOCKED, each with the construct that stops it.
  *
- * `zzcond` is the pathWhen fixture (conditional-endpoint plan, Task 1): one hand-rolled tool, one
- * optional no-default arg, one guard. Deliberately minimal and deliberately without `query` —
- * Task 3 refuses `pathWhen` alongside `query` in full, so a fixture pairing the two would stop
- * parsing. It sat in ROUND_TRIP while `pathWhen` had no emitter and nothing about it reached
- * `src/server.ts`; Task 4 emits the guard ladder, and `src/derive/` cannot read one until Task 6,
- * which restores this entry to ROUND_TRIP. The blocker is `call:reg` — measured by running
- * `deriveSpec` against this fixture's own emitted output, per the rule below, not inferred:
- * `recognizeHandTools` reads a handler whose body is hoists plus one `return`, and the `if`
- * statements the ladder adds are not that shape, so the whole `reg(...)` call goes unclaimed.
+ * **Empty, and that is the current state of the deriver, not an oversight.** Its last entry was
+ * `zzcond`, the pathWhen fixture: Task 4 taught the emitter to write the guard ladder while
+ * `src/derive/` could not read one, so the whole `reg(...)` call went unclaimed and the fixture
+ * blocked on `call:reg`. Task 6's server/conditional-path.ts reads it, and the fixture is back in
+ * ROUND_TRIP above.
+ *
+ * An empty list means the loop below generates **zero tests**, so nothing here is being checked —
+ * which is exactly why a new entry must be measured rather than asserted. Adding one re-arms it.
  *
  * No count appears here deliberately — the "accounts for every fixture" test does that arithmetic
  * on every run, which is this file's own top docstring's rule and CLAUDE.md's ("do not restate
@@ -216,12 +238,7 @@ const PARTIAL_ROUND_TRIP: Record<string, PartialGap> = {
  * Which recognizer unblocked which fixture is recorded where it can go stale visibly instead —
  * beside the fixture, in ROUND_TRIP's and PARTIAL_ROUND_TRIP's own docstrings above.
  */
-const BLOCKED: Record<string, { reason: string; blocker: string }> = {
-  zzcond: {
-    reason: "a pathWhen guard ladder, which src/derive/ cannot read until Task 6",
-    blocker: "call:reg",
-  },
-};
+const BLOCKED: Record<string, { reason: string; blocker: string }> = {};
 
 function emitted(name: string): { server: string; manifest: string; filter?: string } {
   const specPath = join(import.meta.dir, "..", "..", "fixtures", `${name}.spec.json`);
@@ -345,10 +362,11 @@ describe("deriveSpec round-trips this repository's own output", () => {
       const derivation = deriveSpec(emitted(name));
       expect(derivation.ok).toBe(false);
       // The KIND, not merely the failure. `ok: false` alone passes for any regression that stops
-      // the derivation for an unrelated reason — a broken frame recognizer, a parse error — and
-      // this loop generated zero tests until zzcond joined the list, so nothing has ever held it
-      // to the blocker its entry names. Pinning it is what makes `blocker` the measurement the
-      // docstring above insists every entry must be, rather than an unchecked claim.
+      // the derivation for an unrelated reason — a broken frame recognizer, a parse error. Pinning
+      // the kind is what makes `blocker` the measurement the docstring above insists every entry
+      // must be, rather than an unchecked claim. BLOCKED is empty as of Task 6, so this loop
+      // generates no tests at all — the check is written and waiting for the next entry, which is
+      // the same reason `emitted()` above stays even though nothing calls it right now.
       const kinds = derivation.ok ? [] : derivation.blockers.map((b) => b.kind);
       expect(kinds).toContain(blocker);
     });
