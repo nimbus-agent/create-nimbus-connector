@@ -6,127 +6,63 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
-# Nothing is granted workflow-wide; each job below declares what it needs.
+# Nothing is granted workflow-wide; the job below declares what it needs.
 #
-# nimbus-sdk declares this set once at workflow level, which gives BOTH jobs the
-# union — `allowlisted-status` receives `actions: write` and `pull-requests:
-# write` to post a single commit status. On a `pull_request_target` workflow,
-# which runs with the base repository's token and secrets, that over-grant is
-# worth closing rather than copying.
+# nimbus-sdk declares this set once at workflow level. On a `pull_request_target` workflow,
+# which runs with the base repository's token and secrets, that over-grant is worth closing
+# rather than copying.
 permissions: {}
 
-# Accounts exempt from signing, for `allowlisted-status` below — and ONLY for it.
+# Accounts exempt from signing, passed to contributor-assistant as its `allowlist` input.
 #
-# Exact logins, no globs, because this list is compared with `=` in shell. Globbing it
-# would be actively harmful here: `[bot]` is a character class in shell `case`, so a
-# `*[bot]` pattern matches every login ending in b, o or t — `robot` included — while
-# never matching a literal `[bot]` suffix.
+# Matching is NOT exact and NOT anchored. checkAllowList.ts at the pinned SHA below escapes
+# each entry, replaces `*` with `.*`, and calls `new RegExp(pattern).test(name)` — an
+# unanchored test — against `committer.login || committer.name` (graphql.ts). So `bot*`
+# becomes /bot.*/ and exempts any committer whose name merely CONTAINS "bot", `robot`
+# included. That over-exemption is real and is accepted here rather than fixed blind:
 #
-# Bots need no entry at all in THIS list: `allowlisted-status` exempts `user.type == "Bot"`
-# directly, which is exact and needs no pattern. The action's list is a separate variable
-# below, because it is a separate consumer with its own matching rules — see the comment
-# there for why conflating the two broke the release bot.
+# PR #39 removed the `bot*` entry, reasoning that GitHub App logins are suffixed
+# (`nimbus-release-bot[bot]`) so a prefix glob could never match. Release PR #35 had passed
+# with `bot*` present and release PR #41 failed without it, nothing else changed — so some
+# release-bot commit is reaching this filter under a name that `*[bot]` and the two literal
+# entries do not cover, and only the containment match caught it. Both forms stay until
+# someone reads that name off a real release PR; removing `bot*` on the reasoning above has
+# already been tried once and it broke the release.
 env:
-  CLA_ALLOWLIST: 'asafgolombek,claude'
-
-  # Passed to contributor-assistant, which is a DIFFERENT consumer with different matching
-  # semantics, so it gets its own value. Splitting these is not tidiness — collapsing them
-  # broke the release bot.
-  #
-  # PR #39 removed a `bot*` entry from the action's allowlist, reasoning that GitHub App
-  # logins are suffixed (`nimbus-release-bot[bot]`) so a prefix glob could never match. The
-  # reasoning was wrong: release PR #35 passed the CLA check with `bot*` present and release
-  # PR #41 failed without it, with nothing else changed. Whatever the action does with that
-  # pattern, it demonstrably covered the bot. Both forms are kept here so the fix does not
-  # depend on knowing which one the action honours.
-  #
-  # `allowlisted-status` below does NOT read this — it matches CLA_ALLOWLIST exactly and
-  # exempts `user.type == "Bot"` outright, which needs no pattern at all.
-  CLA_ASSISTANT_ALLOWLIST: 'bot*,*[bot],nimbus-release-bot[bot],dependabot[bot],asafgolombek,claude'
+  CLA_ALLOWLIST: 'bot*,*[bot],nimbus-release-bot[bot],dependabot[bot],asafgolombek,claude'
 
 # Keyed by head SHA for push events, so two commits pushed in quick succession do not
 # contend: previously both shared one group, and on PR #38 the newer commit's run was
-# dropped, leaving the required `cla` status missing for the head that mattered. Signing
-# comments carry no head SHA and share a single per-PR group, which is what we want —
+# dropped, leaving the required `cla-assistant` check missing for the head that mattered.
+# Signing comments carry no head SHA and share a single per-PR group, which is what we want —
 # concurrent signature writes to the same file should serialize, not race.
 concurrency:
   group: cla-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event.pull_request.head.sha || 'comment' }}
   cancel-in-progress: false
 
 jobs:
-  # `cla` is a required status check on main. contributor-assistant SKIPS allowlisted
-  # authors and posts no status at all, so for every allowlisted author — the maintainer
-  # and, critically, release-please and Dependabot — the required check simply never
-  # appeared and the PR could only be merged by an org-admin bypass. Every merged PR in
-  # this repository to date went that route, including the release bot's.
+  # `cla-assistant` — this job's NAME — is the required status check on main, because the
+  # job's own conclusion is the only verdict this action ever publishes. contributor-assistant
+  # posts no commit status and creates no check run of its own: setupClaCheck.ts at the pinned
+  # SHA below ends in either `core.info("All contributors have signed the CLA")` or
+  # `core.setFailed("Committers of Pull Request number N have to sign the CLA")`, and nothing
+  # else. The job passes or fails; that is the whole signal.
   #
-  # This job closes that gap by reporting `cla` itself for allowlisted authors. Outside
-  # contributors are untouched: they are not allowlisted, so this job no-ops and the
-  # CLA Assistant posts the real (initially failing) status as before.
-  allowlisted-status:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    # It posts one commit status and does nothing else — no checkout, no
-    # comments, no workflow re-runs.
-    permissions:
-      statuses: write
-    if: github.event_name == 'pull_request_target'
-    steps:
-      # audit rather than block: this job talks to api.github.com through `gh`, and this
-      # workflow's whole value here is the egress RECORD — it is the one workflow an
-      # external contributor can fire, on `pull_request_target`, with the base repository's
-      # token. First step in the job on purpose: harden-runner only observes what starts
-      # after it.
-      - name: Harden Runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
-
-      - name: Report `cla` for an allowlisted author
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          matched=""
-
-          # A Bot account cannot comment to sign, so contributor-assistant exempts it
-          # regardless of the allowlist. Mirror that here rather than depending on a
-          # glob: this is the condition the action actually applies.
-          if [ "$AUTHOR_TYPE" = "Bot" ]; then
-            matched="type=Bot"
-          else
-            # Exact comparison, deliberately not glob matching. CLA_ALLOWLIST holds
-            # literal logins; treating them as patterns is how `*[bot]` would silently
-            # exempt `robot`, and over-exempting is the one direction that matters here.
-            IFS=',' read -ra entries <<< "$CLA_ALLOWLIST"
-            for raw in "${entries[@]}"; do
-              entry="$(echo "$raw" | tr -d '[:space:]')"
-              [ -z "$entry" ] && continue
-              if [ "$AUTHOR" = "$entry" ]; then
-                matched="$entry"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$matched" ]; then
-            echo "$AUTHOR is not allowlisted — CLA Assistant owns the \`cla\` status."
-            exit 0
-          fi
-
-          echo "$AUTHOR is exempt ($matched) — reporting cla=success."
-          gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-            -f state=success \
-            -f context=cla \
-            -f description="Allowlisted author — CLA not required"
-
-  # Named `cla-assistant`, not `cla`. A job named `cla` publishes a check-run called
-  # `cla`, which collides with the required commit status of the same name that
-  # `allowlisted-status` posts — two different things reporting under one required
-  # context. Exactly one thing should own that name, and it is the status.
+  # A context named `cla` was required here instead until this change, on the belief that the
+  # action posted a status under that name. Nothing ever did. A companion job supplied `cla`
+  # for allowlisted authors ONLY — the maintainer, release-please, Dependabot — so every pull
+  # request that could merge did, and the one population the check exists for could not: PR
+  # #94's head carried no `cla` status of any kind, every visible check green, un-mergeable
+  # with a required context that no workflow in this repository could produce. The gap was
+  # invisible precisely because it was patched for the authors who did not need it.
+  #
+  # Allowlisted authors need no separate job. checkAllowList() drops them from the committer
+  # list before the signature lookup, leaving `notSigned` empty, so this job reports success
+  # for the release bot the same way it does for a contributor who has signed.
+  #
+  # Renaming this job renames the required context, and a required context nothing produces
+  # blocks every pull request. test/release-workflow-guard.test.ts pins the name for that
+  # reason — it is the one line here that branch protection reads by hand.
   cla-assistant:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -141,6 +77,13 @@ jobs:
       pull-requests: write
       statuses: write
     # Only run on the sign/recheck comment or on a PR event — never on other comments.
+    #
+    # A skipped job reports `skipped`, which branch protection counts as satisfied. That is
+    # harmless only because the `pull_request_target` arm of this condition is unconditional:
+    # every pull request gets a real run of this job against its head. The `issue_comment`
+    # arm's runs attach to the default branch, not to any PR head, so they cannot satisfy
+    # anything. Do not add a condition that can skip this job on a `pull_request_target`
+    # event — that would turn the required check into a green no-op.
     if: >-
       (github.event.issue.pull_request && contains(fromJSON('["I have read the CLA Document and I hereby sign the CLA","recheck"]'), github.event.comment.body))
       || github.event_name == 'pull_request_target'
@@ -161,9 +104,9 @@ jobs:
       # `getPATOctokit()` — the client built from PERSONAL_ACCESS_TOKEN — is imported by
       # exactly one module, src/persistence/persistence.ts, and backs exactly two calls,
       # `repos.getContent` and `repos.createOrUpdateFileContents`, both against the
-      # signatures file. Everything else the action does (the PR comments, the `cla` check,
-      # the workflow re-run) goes through `getDefaultOctokitClient()`, i.e. GITHUB_TOKEN,
-      # governed by this job's `permissions:` block above.
+      # signatures file. Everything else the action does (the PR comment, the workflow
+      # re-run) goes through `getDefaultOctokitClient()`, i.e. GITHUB_TOKEN, governed by
+      # this job's `permissions:` block above.
       #
       # So: `contents: write`, and nothing else. Without `permission-*` inputs this token
       # carried the App INSTALLATION's entire permission set instead.
@@ -191,6 +134,6 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           remote-repository-name: '.github'
           branch: 'cla-signatures'
-          allowlist: ${{ env.CLA_ASSISTANT_ALLOWLIST }}
+          allowlist: ${{ env.CLA_ALLOWLIST }}
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
           custom-notsigned-prcomment: 'Thanks for your PR. Before it can be merged, please sign the [Individual CLA](https://github.com/nimbus-agent/.github/blob/main/CLA/ICLA.md) by commenting exactly: **I have read the CLA Document and I hereby sign the CLA**. Contributing on behalf of an employer? See the [Corporate CLA](https://github.com/nimbus-agent/.github/blob/main/CLA/CCLA.md).'
