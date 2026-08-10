@@ -122,8 +122,9 @@ import { displayPath } from "../../src/types.ts";
  * observable in a single byte this connector emits, so their absence from the derived spec is
  * the correct minimal spec, not a recovery this deriver failed at.
  *
- * zzcond is the pathWhen fixture, and the only one that exercises a conditional-endpoint guard
- * ladder: one hand-rolled tool, one optional no-default arg, one guard. It left this list in Task
+ * zzcond is the HAND-ROLLED conditional fixture — the minimal one, not the only one (`codemagic`
+ * below carries two ladders): one hand-rolled tool, one optional no-default arg, one guard. It
+ * left this list in Task
  * 4, when the emitter learned to write the ladder and `src/derive/` could not yet read one, and
  * Task 6 (server/conditional-path.ts) returns it. Deliberately without `query` — ToolSchema
  * refuses that pairing outright, so a fixture combining the two would not parse. Its guarded tool
@@ -134,8 +135,10 @@ import { displayPath } from "../../src/types.ts";
  * `codemagic` is the pathWhen fixture's REAL-connector counterpart: two guarded tools (one of them
  * with a defaulted `limit` hoist) plus a search tool, so it is the only fixture where a ladder
  * shares a handler with a hoisted argument and the only one with two ladders in one connector.
- * That it round-trips here and still reports 5/7 in fixtures/expectations.json is not a
- * contradiction — this list is a LOCAL claim about emit → derive → re-emit, and the two files the
+ * That it round-trips here and still reports a PARTIAL match in fixtures/expectations.json is not
+ * a contradiction — that file and `diff:golden` carry the count, deliberately not restated here
+ * where nothing would fail if it drifted. This list is a LOCAL claim about emit → derive →
+ * re-emit, and the two files the
  * corpus diff loses are lost to the real connector's own byte conventions, not to anything the
  * deriver failed to recover. `src/server.ts` differs by one statement's POSITION (the real
  * connector writes `const limit = p.limit ?? 50;` after its guard, `renderTool` writes every hoist
