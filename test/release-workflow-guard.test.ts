@@ -469,7 +469,7 @@ describe("the CLA workflow", () => {
     // Read from the action's source at the pinned SHA rather than inferred: `getPATOctokit()`
     // is imported in exactly one module, src/persistence/persistence.ts, where it backs
     // `repos.getContent` and `repos.createOrUpdateFileContents` on the signatures file. Every
-    // other API call — the PR comments, the `cla` check, the workflow re-run — goes through
+    // other API call — the PR comment and the workflow re-run — goes through
     // `getDefaultOctokitClient()`, i.e. GITHUB_TOKEN, governed by this job's own
     // `permissions:` block. So the App token needs `contents: write` and nothing else.
     //
@@ -496,6 +496,46 @@ describe("the CLA workflow", () => {
       )?.with?.["remote-repository-name"],
       "the narrowing above is only sound while the signatures live in a remote repository",
     ).toBe(".github");
+  });
+
+  it("keeps the job name that branch protection requires as a status check", () => {
+    // The one assertion here whose failure mode is a repository nobody can merge into.
+    //
+    // contributor-assistant publishes no status and no check run of its own — setupClaCheck.ts
+    // at the pinned SHA ends in `core.info(...)` or `core.setFailed(...)` and nothing else — so
+    // the ONLY thing branch protection can require is this job's own conclusion, under this
+    // job's own name. Rename the key and the required context names a check no workflow
+    // produces: every pull request then sits at "Expected — Waiting for status to be reported"
+    // with every visible check green, which is exactly how PR #94 stalled while `cla` was
+    // required and nothing in this repository had ever posted it.
+    //
+    // The name is duplicated into the branch ruleset by hand and cannot be read back from
+    // here, so this test is the whole coupling. Changing it means changing the ruleset in the
+    // same breath.
+    expect(
+      Object.keys(cla.jobs),
+      "`cla-assistant` is a required status check on main — renaming the job renames the " +
+        "required context and blocks every pull request until the ruleset is edited to match",
+    ).toContain("cla-assistant");
+  });
+
+  it("cannot skip the required job on a pull request", () => {
+    // A skipped job reports `skipped`, and branch protection counts that as satisfied. So a
+    // condition that can skip `cla-assistant` on a `pull_request_target` event does not turn
+    // the check red — it turns it green, for every pull request, silently. That is the same
+    // false-green shape as a gate that no-ops when its input is missing, and it is worth a
+    // test precisely because the failure produces no signal at all.
+    //
+    // Asserted as "the PR arm is an unconditional disjunct": the `issue_comment` arm may
+    // narrow all it likes, because those runs attach to the default branch rather than to any
+    // pull request head and can satisfy nothing.
+    const condition = (cla.jobs["cla-assistant"]?.if ?? "").replace(/\s+/g, " ");
+    expect(condition, "cla-assistant must have a condition to grade").not.toBe("");
+    expect(
+      condition.split("||").map((arm) => arm.trim()),
+      "one arm of the condition must be the bare `pull_request_target` event test, so the " +
+        "required check always runs for real against a pull request head",
+    ).toContain("github.event_name == 'pull_request_target'");
   });
 });
 
