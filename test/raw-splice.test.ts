@@ -462,6 +462,13 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
  * (see the paragraph above `RAW_MARKER`'s declaration, on a field "guarded by an identifier
  * rule"). Same shape as its sibling — `Record<string, (marker: string) => unknown>` — so the two
  * mechanisms stay symmetric and a field can move between them without a reshape.
+ *
+ * **It is currently EMPTY, and the loop below therefore generates no tests.** Read the docstring
+ * above as what an entry would mean, not as a claim that some field is proven guarded here today.
+ * `env[].authScheme` was the only entry it has ever had, and it left when `zzauth` began setting
+ * the field: a fixture that reaches a position beats a probe that patches one, and the census
+ * assertion below forces the move rather than leaving both. Add an entry when a pattern-guarded
+ * position genuinely has no fixture — that assertion names the position when one appears.
  */
 const REFUSED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {};
 
@@ -496,10 +503,12 @@ describe("the census's coverage of the spec language", () => {
       const ts = files.filter((f) => f.path.at(-1)!.endsWith(".ts"));
       // Non-vacuity for this probe specifically: the patched value has to have reached the
       // generator at all, proven by finding the ESCAPED marker somewhere among the emitted
-      // files — `id`/`filesystem.*` land it in the manifest (whole-document JSON.stringify),
-      // `env[].extraHeaders.*` lands it in src/server.ts (extraProps' own JSON.stringify), and
-      // "somewhere among ALL emitted files" is what lets one loop cover both without assuming
-      // which file the value reaches.
+      // files — every current entry (`id`, `filesystem.*`) lands it in the manifest, through the
+      // whole-document JSON.stringify. Asserting "somewhere among ALL emitted files" rather than
+      // naming that file is deliberate: `env[].extraHeaders.*` was briefly an entry here, before
+      // `zzauth` and `intercom` began setting it, and landed the marker in src/server.ts instead,
+      // through extraProps' own JSON.stringify. One loop covers both kinds because it does not
+      // assume which file a value reaches.
       expect(files.some((f) => f.content.includes('Zq\\"Zq'))).toBe(true);
       expect(ts.filter((f) => f.content.includes(RAW_MARKER)).map((f) => f.path.join("/"))).toEqual(
         [],
@@ -514,10 +523,14 @@ describe("the census's coverage of the spec language", () => {
       // OTHER way would throw just as loudly. The path segment pins the failure to the field this
       // entry claims to probe, so a future entry patching the wrong field, or one whose field
       // turns out not to be guarded after all, fails here instead of passing by accident.
+      // A LITERAL string, not a RegExp: bun's `toThrow(string)` substring-matches the message
+      // (verified against `envX0Y.authScheme`, which a regex `env[0].authScheme` would match and
+      // the literal does not), so the field path needs no escaping and this assertion has no
+      // meta-character to get wrong. The first spelling built a RegExp through a hand-rolled
+      // escaper covering `.`/`[`/`]` and nothing else — CodeQL `js/incomplete-sanitization`,
+      // flagged on the backslash it missed. An escaper is the wrong tool when no regex is needed.
       const fieldPath = field.replace(/\[\]/g, "[0]");
-      expect(() => parseSpec({ ...base, ...(patch(RAW_MARKER) as object) })).toThrow(
-        new RegExp(fieldPath.replace(/[.[\]]/g, "\\$&")),
-      );
+      expect(() => parseSpec({ ...base, ...(patch(RAW_MARKER) as object) })).toThrow(fieldPath);
     });
   }
 });
