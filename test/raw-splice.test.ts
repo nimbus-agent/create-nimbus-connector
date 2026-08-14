@@ -449,6 +449,22 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
   id: (m) => ({ id: `com.nimbus.zz${m}` }),
   "filesystem.read[]": (m) => ({ filesystem: { read: [`/tmp/${m}`], write: [] } }),
   "filesystem.write[]": (m) => ({ filesystem: { read: [], write: [`/tmp/${m}`] } }),
+  // The VALUE half of `env[].extraHeaders`, a record — `stringPositions` walks
+  // `additionalProperties` (the value schema) but never `propertyNames` (the key's own regex),
+  // so the KEY position never enters `declared` at all and needs no probe of its own. The value
+  // has no character restriction and reaches `extraProps` (src/emit/server/env.ts) through
+  // `JSON.stringify`, so this belongs beside `id`/`filesystem.*` rather than in the REFUSED list.
+  "env[].extraHeaders.*": (m) => ({
+    env: [
+      {
+        vars: ["ZZREADONLY_TOKEN"],
+        local: "headers",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "X-Extra": m },
+      },
+    ],
+  }),
 };
 
 /**
@@ -507,9 +523,12 @@ describe("the census's coverage of the spec language", () => {
       const files = everyEmittedFile(spec);
       const ts = files.filter((f) => f.path.at(-1)!.endsWith(".ts"));
       // Non-vacuity for this probe specifically: the patched value has to have reached the
-      // generator at all, which the manifest — where it is JSON-quoted — is the proof of.
-      const manifest = files.find((f) => f.path.at(-1) === "nimbus.extension.json")!;
-      expect(manifest.content).toContain('Zq\\"Zq');
+      // generator at all, proven by finding the ESCAPED marker somewhere among the emitted
+      // files — `id`/`filesystem.*` land it in the manifest (whole-document JSON.stringify),
+      // `env[].extraHeaders.*` lands it in src/server.ts (extraProps' own JSON.stringify), and
+      // "somewhere among ALL emitted files" is what lets one loop cover both without assuming
+      // which file the value reaches.
+      expect(files.some((f) => f.content.includes('Zq\\"Zq'))).toBe(true);
       expect(ts.filter((f) => f.content.includes(RAW_MARKER)).map((f) => f.path.join("/"))).toEqual(
         [],
       );

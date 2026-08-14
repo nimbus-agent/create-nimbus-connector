@@ -400,6 +400,8 @@ const GLOSSES: Readonly<Record<string, string>> = {
   "env[].scope": "The `scope` sent with the client-credentials exchange.",
   "env[].credentialsIn":
     "Where the client id and secret go: an `Authorization: Basic` header, or the form body as `client_id`/`client_secret`.",
+  "env[].extraHeaders":
+    'Static, literal-valued headers emitted between the auth entry and the trailing `Accept` — e.g. `"Intercom-Version"` (intercom), `"Content-Type"` (snowflake). Not valid with `auth: "client-credentials"`, and a key may not collide, case-insensitively, with `Accept`, `Authorization` or a `headerNames` entry.',
 
   // fetchHelper
   "fetchHelper.local":

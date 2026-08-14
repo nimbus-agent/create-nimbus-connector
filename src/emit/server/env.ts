@@ -111,6 +111,13 @@ function bindingValues(e: EnvEntry): string[] {
   return e.vars.map((_, i) => bindingOf(e, i));
 }
 
+/** The static header lines, in spec order, between the auth entries and the trailing Accept. */
+function extraProps(e: EnvEntry): string[] {
+  return Object.entries(e.extraHeaders ?? {}).map(
+    ([name, value]) => `${headerKey(name)}: ${JSON.stringify(value)}`,
+  );
+}
+
 /**
  * The `return { … }` lines, with `Accept` appended last.
  *
@@ -127,7 +134,7 @@ function headerObjectLines(props: readonly string[], expand: boolean): string[] 
 
 function returnLines(e: EnvEntry): string[] {
   if (e.auth === "bearer" || e.auth === "headers") {
-    const props = authProps(e, bindingValues(e));
+    const props = [...authProps(e, bindingValues(e)), ...extraProps(e)];
     // One custom header plus Accept fits on one line, and that is what every corpus connector
     // with a single header writes; two or more expand — datadog, intercom, snowflake.
     return headerObjectLines(props, props.length > 1);
@@ -258,7 +265,7 @@ function renderBasic(e: EnvEntry): string {
     ...readAndGuard,
     // The fused basic object is ALWAYS expanded: airflow and zendesk both write it that way,
     // because `encodeBasicAuthHeader(user, password)` beside Accept overruns Biome's width.
-    ...headerObjectLines(authProps(e, bindingValues(e)), true),
+    ...headerObjectLines([...authProps(e, bindingValues(e)), ...extraProps(e)], true),
     "}",
   ].join("\n");
 }
@@ -298,7 +305,7 @@ function renderBasic(e: EnvEntry): string {
  */
 function renderSplitAccessor(e: EnvEntry): string {
   const call = `${e.tokenLocal}()`;
-  const props = authProps(e, [call]);
+  const props = [...authProps(e, [call]), ...extraProps(e)];
   return [
     `function ${e.tokenLocal}(): string {`,
     ...readLines(e),

@@ -1446,3 +1446,107 @@ describe("authScheme round trip", () => {
     expect(unclaimed).toHaveLength(1);
   });
 });
+
+describe("extraHeaders round trip", () => {
+  const cases = [
+    [
+      "split bearer",
+      {
+        vars: ["INTERCOM_TOKEN"],
+        local: "authHeader",
+        tokenLocal: "apiToken",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Intercom-Version": "2.11" },
+      },
+    ],
+    [
+      "fused bearer",
+      {
+        vars: ["SNOWFLAKE_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Content-Type": "application/json" },
+      },
+    ],
+  ] as const;
+
+  for (const [label, raw] of cases) {
+    it(`recovers a static header from a ${label} accessor`, () => {
+      const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+      expect(unclaimed).toEqual([]);
+      expect(entries[0]?.extraHeaders).toEqual(raw.extraHeaders);
+    });
+  }
+
+  it("preserves the order of two static headers through the whole trip", () => {
+    // Ordering is load-bearing and nothing else in the suite exercises it: each real fixture
+    // carries at most ONE extra header, so a sort introduced anywhere between JSON.parse, zod's
+    // record, Object.entries and splitExtraHeaders would pass every other test. The integer-key
+    // hazard is closed at the schema (keys must start with a letter); this closes the rest.
+    const raw = {
+      vars: ["A_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+      extraHeaders: { "Zzz-Last": "2", "Aaa-First": "1" },
+    } as const;
+    const emitted = renderEnvAccessor(EnvSchema.parse(raw));
+    expect(emitted.indexOf("Zzz-Last")).toBeLessThan(emitted.indexOf("Aaa-First"));
+
+    const { entries, unclaimed } = run(emitted);
+    expect(unclaimed).toEqual([]);
+    expect(Object.keys(entries[0]?.extraHeaders ?? {})).toEqual(["Zzz-Last", "Aaa-First"]);
+  });
+
+  it("recovers a static header from a fused basic accessor", () => {
+    const raw = {
+      vars: ["U", "P"],
+      local: "authHeader",
+      bindings: ["u", "p"],
+      auth: "basic",
+      extraHeaders: { "X-Thing": "1" },
+    } as const;
+    const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.extraHeaders).toEqual({ "X-Thing": "1" });
+  });
+
+  it("refuses a needlessly quoted Accept, which no emitter writes", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "Accept": "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a non-literal static header value", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Thing": someCall(),',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});

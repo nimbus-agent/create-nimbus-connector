@@ -1228,6 +1228,30 @@ export const EnvSchema = z
     scope: z.string().min(1).optional(),
     /** ramp sends Basic; powerbi, looker and teams put client_secret in the body. */
     credentialsIn: z.enum(["basic", "body"]).optional(),
+    /**
+     * Static, literal-valued headers emitted between the auth entry and the trailing `Accept`,
+     * which is where all three corpus instances put them: intercom's `"Intercom-Version"`,
+     * snowflake's `"Content-Type"`, zotero's `"Zotero-API-Version"`.
+     *
+     * The key rule buys two things, both silent if skipped. A key colliding case-insensitively
+     * with another header is not a duplicate object key — `{ accept, Accept }` compiles, lints
+     * and passes every byte gate; the damage is that `fetch` builds a `Headers` from it, which
+     * normalizes field names, and the two combine into one header carrying both values. And a
+     * leading letter is required because JS hoists INTEGER-LIKE keys to the front of an object
+     * in numeric order, so a key of "1" would emit ahead of Authorization wherever the spec put
+     * it. Values reach the emitter through JSON.stringify and are not a raw splice.
+     */
+    extraHeaders: z
+      .record(
+        z
+          .string()
+          .regex(
+            /^[A-Za-z][A-Za-z0-9-]*$/,
+            "a header name must start with a letter and contain only letters, digits and hyphens",
+          ),
+        z.string(),
+      )
+      .optional(),
   })
   .refine((e) => !(e.required && e.default !== undefined), {
     message:
@@ -1356,6 +1380,43 @@ export const EnvSchema = z
     message:
       '"authScheme": "Bearer" is the default — omit it. Two spellings of one emitted value is ' +
       "what this rule exists to prevent",
+  })
+  .refine((e) => e.extraHeaders === undefined || e.auth !== "client-credentials", {
+    message:
+      '"extraHeaders" is not valid with auth: "client-credentials" — its wrapper is a separate ' +
+      "async function with no corpus variance in its header object",
+  })
+  .superRefine((e, ctx) => {
+    // Two collision sources, worded differently on purpose: a clash with the always-emitted
+    // Accept/Authorization names the header itself, while a clash with a "headerNames" entry
+    // says so explicitly — an author fixing the latter has to go edit a DIFFERENT field, and a
+    // message that only repeated the header name back would leave them guessing where it came
+    // from.
+    const reserved = new Map<string, string>([
+      ["accept", "Accept"],
+      ["authorization", "Authorization"],
+    ]);
+    const fromHeaderNames = new Set<string>();
+    for (const name of e.headerNames ?? []) {
+      reserved.set(name.toLowerCase(), name);
+      fromHeaderNames.add(name.toLowerCase());
+    }
+    for (const key of Object.keys(e.extraHeaders ?? {})) {
+      const lower = key.toLowerCase();
+      const clash = reserved.get(lower);
+      if (clash === undefined) continue;
+      const named = fromHeaderNames.has(lower)
+        ? `the "headerNames" entry ${JSON.stringify(clash)}`
+        : JSON.stringify(clash);
+      ctx.addIssue({
+        code: "custom",
+        path: ["extraHeaders", key],
+        message:
+          `collides with ${named}, which this accessor already emits. HTTP field names are ` +
+          "case-insensitive, so fetch's Headers would merge the two into one header carrying " +
+          "both values",
+      });
+    }
   });
 
 export const FetchHelperSchema = z

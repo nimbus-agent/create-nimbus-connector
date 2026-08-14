@@ -35,6 +35,7 @@ import {
   optionalCallCallee,
   optionalMemberName,
   optionalMemberObject,
+  type Prop,
   propertySignature,
   quoteMinimalProps,
   regExpLit,
@@ -69,6 +70,8 @@ export type EnvEntry = {
   tokenUrl?: string;
   scope?: string;
   credentialsIn?: "basic" | "body";
+  /** Static headers recovered from the trailing run before Accept — see `splitExtraHeaders`. */
+  extraHeaders?: Record<string, string>;
 };
 
 /**
@@ -295,16 +298,44 @@ function schemeField(scheme: string): Pick<EnvEntry, "authScheme"> {
 }
 
 type AuthShape =
-  | ({ auth: "bearer" } & Pick<EnvEntry, "authScheme">)
-  | { auth: "headers"; headerNames: string[] };
+  | ({ auth: "bearer" } & Pick<EnvEntry, "authScheme" | "extraHeaders">)
+  | ({ auth: "headers"; headerNames: string[] } & Pick<EnvEntry, "extraHeaders">);
+
+/**
+ * Split a recovered property list into the leading auth properties and the trailing STATIC
+ * ones, given how many auth properties the shape expects. Every trailing property must have a
+ * string-literal value — that is the whole of what `extraProps` can write, and a computed value
+ * in that position is a shape no spec regenerates.
+ *
+ * Returns undefined when a non-literal is found, rather than stopping early: a static run
+ * followed by a computed property is not "a shorter static run", it is a different object.
+ */
+function splitExtraHeaders(
+  rest: readonly Prop[],
+  authCount: number,
+): { readonly auth: Prop[]; readonly extras: Record<string, string> } | undefined {
+  if (rest.length < authCount) return undefined;
+  const extras: Record<string, string> = {};
+  for (const prop of rest.slice(authCount)) {
+    const value = stringLit(prop.value);
+    if (value === undefined) return undefined;
+    extras[prop.key] = value;
+  }
+  return { auth: rest.slice(0, authCount), extras };
+}
+
+/** Omitted when empty, so an accessor with no static headers derives a minimal spec. */
+function extrasField(extras: Record<string, string>): Pick<EnvEntry, "extraHeaders"> {
+  return Object.keys(extras).length === 0 ? {} : { extraHeaders: extras };
+}
 
 /**
  * The two auth return shapes `returnLines` writes: `auth: "bearer"`'s
  * `{ Authorization: \`Bearer ${binding}\`, Accept: "application/json" }`, and
  * `auth: "headers"`'s `{ <name>: <binding>, ..., Accept: "application/json" }` with one entry
- * per var in declaration order. Both always end with the literal `Accept: "application/json"`
- * property — anything else in that position, or a property that isn't a plain key/value pair,
- * is rejected rather than guessed at.
+ * per var in declaration order — each optionally followed by `extraProps`' run of static headers.
+ * Both always end with the literal `Accept: "application/json"` property — anything else in that
+ * position, or a property that isn't a plain key/value pair, is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
   // The widening this comment used to disclose and accept is now closed. `objectProps` merges an
@@ -316,29 +347,31 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
   // `IDENTIFIER_RE` rejects it — so datadog's `"DD-API-KEY"` must arrive quoted and the trailing
   // `Accept` must not. Both mistakes are the same wrong claim, pointed opposite ways.
   const properties = quoteMinimalProps(arg);
-  if (properties?.length !== reads.length + 1) return undefined;
-
+  if (properties === undefined || properties.length < 2) return undefined;
   const last = properties.at(-1)!;
   if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
-
   const rest = properties.slice(0, -1);
 
-  if (rest.length === 1 && reads.length === 1) {
-    const prop = rest[0]!;
-    if (prop.key === "Authorization") {
+  if (reads.length === 1) {
+    const split = splitExtraHeaders(rest, 1);
+    const prop = split?.auth[0];
+    if (split !== undefined && prop?.key === "Authorization") {
       const scheme = matchSchemeTemplate(prop.value, (expr) => isIdent(expr, reads[0]!.binding));
-      if (scheme !== undefined) return { auth: "bearer", ...schemeField(scheme) };
+      if (scheme !== undefined) {
+        return { auth: "bearer", ...schemeField(scheme), ...extrasField(split.extras) };
+      }
     }
   }
 
-  if (rest.length === reads.length) {
+  const headerSplit = splitExtraHeaders(rest, reads.length);
+  if (headerSplit !== undefined) {
     const headerNames: string[] = [];
-    for (let i = 0; i < rest.length; i++) {
-      const prop = rest[i]!;
+    for (let i = 0; i < reads.length; i++) {
+      const prop = headerSplit.auth[i]!;
       if (!isIdent(prop.value, reads[i]!.binding)) return undefined;
       headerNames.push(prop.key);
     }
-    return { auth: "headers", headerNames };
+    return { auth: "headers", headerNames, ...extrasField(headerSplit.extras) };
   }
 
   return undefined;
@@ -422,6 +455,7 @@ function buildAuthEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined {
     ...(authShape.auth === "bearer" && authShape.authScheme !== undefined
       ? { authScheme: authShape.authScheme }
       : {}),
+    ...(authShape.extraHeaders !== undefined ? { extraHeaders: authShape.extraHeaders } : {}),
     ...(ctx.defaultValue !== undefined ? { default: ctx.defaultValue } : {}),
   };
 }
@@ -573,7 +607,7 @@ function matchSplitBearerReader(
 function matchSplitBearerWrapper(
   fn: AstNode,
   readerLocal: string,
-): { local: string; authScheme?: string } | undefined {
+): ({ local: string } & Pick<EnvEntry, "authScheme" | "extraHeaders">) | undefined {
   // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`
   // — both type arguments pinned, not just the head name; see `isStringRecord`.
   if (isAsyncFunction(fn) || !isStringRecord(functionReturnType(fn))) {
@@ -584,14 +618,17 @@ function matchSplitBearerWrapper(
   if (statements?.length !== 1) return undefined;
 
   const arg = returnArgument(statements[0]!);
-  // Both keys hardcoded and bare — `renderSplitBearer` writes this line verbatim, so a quoted
-  // spelling recovers the identical local and re-emits the bare form.
-  const properties = bareKeyedProps(arg);
-  if (properties?.length !== 2) return undefined;
-  const [authProp, acceptProp] = properties;
-  if (authProp?.key !== "Authorization") return undefined;
-  if (acceptProp?.key !== "Accept") return undefined;
-  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+  // `quoteMinimalProps`, NOT `bareKeyedProps`: an extra static header's key comes from
+  // `extraHeaders`, a spec field, and `extraProps` quotes it exactly when `IDENTIFIER_RE`
+  // rejects it — so "Intercom-Version" must arrive quoted, the same asymmetry
+  // `classifyAuthReturn`'s own docstring states for `headerNames`.
+  const properties = quoteMinimalProps(arg);
+  if (properties === undefined || properties.length < 2) return undefined;
+  const last = properties.at(-1)!;
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
+  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  const authProp = split?.auth[0];
+  if (split === undefined || authProp?.key !== "Authorization") return undefined;
 
   const scheme = matchSchemeTemplate(authProp.value, (expr) => {
     if (callArgs(expr)?.length !== 0) return false;
@@ -600,10 +637,15 @@ function matchSplitBearerWrapper(
   if (scheme === undefined) return undefined;
 
   const local = functionName(fn);
-  return local === undefined ? undefined : { local, ...schemeField(scheme) };
+  return local === undefined
+    ? undefined
+    : { local, ...schemeField(scheme), ...extrasField(split.extras) };
 }
 
-type BasicUser = { readonly prefix?: string; readonly suffix?: string };
+type BasicUser = { readonly prefix?: string; readonly suffix?: string } & Pick<
+  EnvEntry,
+  "extraHeaders"
+>;
 
 /**
  * The username expression `renderBasic` passes to `encodeBasicAuthHeader`: the bare binding, or
@@ -674,19 +716,21 @@ function matchBasicHeaderObject(
   userBinding: string,
   passBinding: string,
 ): BasicUser | undefined {
-  const properties = bareKeyedProps(returnArgument(returnStatement));
-  if (properties?.length !== 2) return undefined;
-  const [authProp, acceptProp] = properties;
-  if (authProp?.key !== "Authorization") return undefined;
-  if (acceptProp?.key !== "Accept") return undefined;
-  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+  const properties = quoteMinimalProps(returnArgument(returnStatement));
+  if (properties === undefined || properties.length < 2) return undefined;
+  const last = properties.at(-1)!;
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
+  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  const authProp = split?.auth[0];
+  if (split === undefined || authProp?.key !== "Authorization") return undefined;
 
   const callArguments = callArgs(authProp.value);
   if (callArguments?.length !== 2) return undefined;
   if (!isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader")) return undefined;
   if (!isIdent(callArguments[1], passBinding)) return undefined;
 
-  return matchBasicUserExpr(callArguments[0]!, userBinding);
+  const user = matchBasicUserExpr(callArguments[0]!, userBinding);
+  return user === undefined ? undefined : { ...user, ...extrasField(split.extras) };
 }
 
 function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
@@ -726,6 +770,7 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
     auth: "basic",
     ...(user.prefix !== undefined ? { prefix: user.prefix } : {}),
     ...(user.suffix !== undefined ? { suffix: user.suffix } : {}),
+    ...(user.extraHeaders !== undefined ? { extraHeaders: user.extraHeaders } : {}),
   };
 }
 
@@ -1452,6 +1497,7 @@ function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEnt
     required: false,
     auth: "bearer",
     ...(wrapper.authScheme !== undefined ? { authScheme: wrapper.authScheme } : {}),
+    ...(wrapper.extraHeaders !== undefined ? { extraHeaders: wrapper.extraHeaders } : {}),
   };
 }
 

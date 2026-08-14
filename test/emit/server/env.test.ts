@@ -467,6 +467,99 @@ describe("authScheme rejections", () => {
   });
 });
 
+describe("extraHeaders", () => {
+  it("emits a static header between Authorization and Accept, expanding the object", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["INTERCOM_TOKEN"],
+        local: "authHeader",
+        tokenLocal: "apiToken",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Intercom-Version": "2.11" },
+      }),
+    );
+    expect(out).toContain(`  return {
+    Authorization: \`Bearer \${apiToken()}\`,
+    "Intercom-Version": "2.11",
+    Accept: "application/json",
+  };`);
+  });
+
+  it("emits a static header on a fused accessor", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["SNOWFLAKE_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Content-Type": "application/json" },
+      }),
+    );
+    expect(out).toContain(`  return {
+    Authorization: \`Bearer \${t}\`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };`);
+  });
+
+  it("emits an identifier-safe key bare", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["A_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { Version: "3" },
+      }),
+    );
+    expect(out).toContain('    Version: "3",');
+  });
+});
+
+describe("extraHeaders rejections", () => {
+  const base = { vars: ["A"], local: "authHeader", bindings: ["t"], auth: "bearer" };
+
+  it("refuses a key colliding with Accept, case-insensitively", () => {
+    expect(() => env({ ...base, extraHeaders: { accept: "text/plain" } })).toThrow(/Accept/);
+  });
+
+  it("refuses a key colliding with Authorization, case-insensitively", () => {
+    expect(() => env({ ...base, extraHeaders: { AUTHORIZATION: "x" } })).toThrow(/Authorization/);
+  });
+
+  it("refuses a key colliding with a headerNames entry", () => {
+    expect(() =>
+      env({
+        vars: ["A"],
+        local: "headers",
+        bindings: ["k"],
+        auth: "headers",
+        headerNames: ["X-Api-Key"],
+        extraHeaders: { "x-api-key": "y" },
+      }),
+    ).toThrow(/headerNames/);
+  });
+
+  it("refuses an integer-like key", () => {
+    expect(() => env({ ...base, extraHeaders: { "1": "x" } })).toThrow();
+  });
+
+  it("refuses extraHeaders on client-credentials", () => {
+    expect(() =>
+      env({
+        vars: ["ID", "SECRET"],
+        local: "authHeader",
+        bindings: ["i", "s"],
+        auth: "client-credentials",
+        tokenUrl: "https://example.test/token",
+        credentialsIn: "body",
+        extraHeaders: { "X-Thing": "1" },
+      }),
+    ).toThrow(/client-credentials/);
+  });
+});
+
 describe("renderEnvAccessors, trimTrailingSlashFn", () => {
   function spec(entries: unknown[]) {
     return parseSpec({

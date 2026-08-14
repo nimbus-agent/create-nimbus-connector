@@ -99,6 +99,7 @@ content rule while the JSON Schema was being written. Read them where they are e
 | `tokenUrl` | `string` | — | format `uri` | The token endpoint the client-credentials exchange POSTs to. |
 | `scope` | `string` | — | minLength 1 | The `scope` sent with the client-credentials exchange. |
 | `credentialsIn` | `"basic" \| "body"` | — | — | Where the client id and secret go: an `Authorization: Basic` header, or the form body as `client_id`/`client_secret`. |
+| `extraHeaders` | `Record<string, string>` | — | keys matches `^[A-Za-z][A-Za-z0-9-]*$` | Static, literal-valued headers emitted between the auth entry and the trailing `Accept` — e.g. `"Intercom-Version"` (intercom), `"Content-Type"` (snowflake). Not valid with `auth: "client-credentials"`, and a key may not collide, case-insensitively, with `Accept`, `Authorization` or a `headerNames` entry. |
 
 ## `fetchHelper`
 
