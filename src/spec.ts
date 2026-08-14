@@ -1181,17 +1181,20 @@ export const EnvSchema = z
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
     /**
-     * Split a bearer accessor in two: a `(): string` accessor named by this field, which
-     * reads and guards the variable, and `local`, reduced to a wrapper that builds the
-     * header from a call to it — `function apiToken(): string` plus
-     * `function authHeader(): Record<string, string>` returning `` `Bearer ${apiToken()}` ``.
-     * Omitted keeps the single fused accessor, which is what newrelic/datadog/grafana/sentry
-     * emit.
+     * Split a single-var auth accessor in two: a `(): string` accessor named by this field,
+     * which reads and guards the variable, and `local`, reduced to a wrapper built from
+     * whichever `auth` mode the entry declares — `function apiToken(): string` plus, for
+     * `auth: "bearer"`, `function authHeader(): Record<string, string>` returning
+     * `` `Bearer ${apiToken()}` ``. Omitted keeps the single fused accessor, which is what
+     * newrelic/datadog/grafana/sentry emit. Requires exactly one "vars" entry and an "auth"
+     * mode — see the refine below.
      *
-     * **12** corpus connectors are byte-reproducible by this field. The membership rule is
-     * narrower than "splits the accessor in two", and the difference matters — see
-     * renderSplitBearer in src/emit/server/env.ts, which states the criterion and lists
-     * them.
+     * **12** corpus connectors are byte-reproducible by this field's `auth: "bearer"` form.
+     * The membership rule is narrower than "splits the accessor in two", and the difference
+     * matters — see renderSplitAccessor in src/emit/server/env.ts, which states the criterion
+     * and lists them. That count predates this field reaching `auth: "basic"` (one var, a
+     * literal `""` password — lever, greenhouse) and `auth: "headers"`; it does not cover
+     * those two, and recounting against them is a separate exercise from this change.
      */
     tokenLocal: identifierField().optional(),
     /**
@@ -1336,8 +1339,11 @@ export const EnvSchema = z
         'only an entry with auth: "basic", auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
     },
   )
-  .refine((e) => e.auth !== "basic" || e.vars.length === 2, {
-    message: 'auth: "basic" requires exactly two "vars" — a username and a password',
+  .refine((e) => e.auth !== "basic" || e.vars.length === 1 || e.vars.length === 2, {
+    message:
+      'auth: "basic" takes one or two "vars" — two are a username and a password; one is a ' +
+      'credential passed as the username with a literal "" password, which is what lever and ' +
+      "greenhouse write",
   })
   .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
     message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
@@ -1357,10 +1363,15 @@ export const EnvSchema = z
   .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
     message: '"credentialsIn" is only valid when auth is "client-credentials"',
   })
-  .refine((e) => e.tokenLocal === undefined || e.auth === "bearer", {
+  // One sentence with no exceptions: tokenLocal splits the READ into its own accessor, and the
+  // wrapper is then built from whatever auth mode the entry declares. Two-var basic and
+  // client-credentials are excluded by the var count rather than by a named list, so a future
+  // mode needs no edit here. `required` alone is not enough — without an auth mode there is no
+  // wrapper for the reader to feed, and `local` would be emitted as a plain `(): string`.
+  .refine((e) => e.tokenLocal === undefined || (e.vars.length === 1 && e.auth !== undefined), {
     message:
-      '"tokenLocal" is only valid when auth is "bearer" — it names the raw-token accessor the ' +
-      "bearer header wrapper calls, and no other auth mode emits one",
+      '"tokenLocal" requires a single "vars" entry and an "auth" mode — it names the reader the ' +
+      "header wrapper calls, and an entry with no auth emits no wrapper",
   })
   .refine((e) => e.tokenLocal === undefined || e.tokenLocal !== e.local, {
     message:

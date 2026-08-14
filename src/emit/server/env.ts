@@ -101,7 +101,16 @@ function authProps(e: EnvEntry, values: readonly string[]): string[] {
   }
   if (e.auth === "basic") {
     // prefix/suffix decorate the USERNAME only — see EnvSchema's refine.
-    return [`Authorization: encodeBasicAuthHeader(${wrapped(e, values[0]!)}, ${values[1]!})`];
+    //
+    // One var means the credential goes in the USERNAME position with a literal "" password —
+    // censused 2026-08-14 over every encodeBasicAuthHeader call site in the corpus, the empty
+    // half is always the password (lever, greenhouse) and nothing writes ("", key).
+    //
+    // `values[1] ?? '""'` rather than a `vars.length` test: the absent second value IS the fact,
+    // and the split path supplies a one-element array, so both roads to an empty password meet
+    // here instead of at two separate conditions that could disagree.
+    const pass = values[1] ?? '""';
+    return [`Authorization: encodeBasicAuthHeader(${wrapped(e, values[0]!)}, ${pass})`];
   }
   return [`Authorization: \`${e.authScheme ?? "Bearer"} \${${values[0]!}}\``];
 }
@@ -276,16 +285,22 @@ function renderBasic(e: EnvEntry): string {
  * Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a spec
  * that adds `tokenLocal` to an existing entry only splits the code it already emitted.
  *
- * **12 corpus connectors** are byte-reproducible by `tokenLocal`: canva, figma, hubspot,
- * mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe, vercel, zoom.
+ * **12 corpus connectors** are byte-reproducible by `tokenLocal`'s `auth: "bearer"` form:
+ * canva, figma, hubspot, mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe,
+ * vercel, zoom.
  *
  * The criterion is stated here rather than left to the eye, because "splits the accessor in
  * two" is fuzzy and counting against it produced three wrong numbers in a row (once naming
  * testflight and dbt, which have no split at all; once naming 15 with three wrong members
- * and stripe missing). It is the text this function emits today, and every clause of it is
- * hardcoded below, so anything a connector does differently is a byte the field cannot
- * produce — criteria 2–4 are exactly what later tasks relax, once `tokenLocal` reaches auth
- * modes other than bearer:
+ * and stripe missing). It is the text this function emitted for every `tokenLocal` entry
+ * while `auth: "bearer"` was the only mode the field reached, and every clause of it was
+ * hardcoded below, so anything a connector did differently was a byte the field could not
+ * produce. `tokenLocal` now also reaches `auth: "basic"` (one var, a literal `""` password —
+ * lever, greenhouse) and `auth: "headers"`, through the same `authProps` call every other
+ * mode already went through — this function's OWN shape never changed, only the schema-level
+ * gate that used to send it nothing but bearer entries. Criteria 2–4 below describe the
+ * bearer form specifically; the 12-connector count does not cover the other two, and
+ * recounting against them is a separate exercise from this change:
  *
  *   1. a wrapper FUNCTION returning `Record<string, string>` — not an inline use of the
  *      reader at a call site (mendeley reads `Bearer ${accessToken()}` straight into the

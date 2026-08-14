@@ -470,6 +470,77 @@ describe("recognizeEnv: split-bearer pair (tokenLocal)", () => {
   });
 });
 
+describe("split accessors over non-bearer modes (derive)", () => {
+  const cases = [
+    [
+      "basic with an empty password",
+      {
+        vars: ["LEVER_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "basic",
+      },
+    ],
+    [
+      "a named header",
+      {
+        vars: ["ZOTERO_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["Zotero-API-Key"],
+        extraHeaders: { "Zotero-API-Version": "3" },
+      },
+    ],
+  ] as const;
+
+  for (const [label, raw] of cases) {
+    it(`round-trips a split accessor over ${label}`, () => {
+      const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+      expect(unclaimed).toEqual([]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject(raw);
+    });
+  }
+
+  it("round-trips a fused one-var basic accessor", () => {
+    const raw = { vars: ["K"], local: "authHeader", bindings: ["k"], auth: "basic" } as const;
+    const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]).toMatchObject({ vars: ["K"], local: "authHeader", auth: "basic" });
+  });
+});
+
+describe("split-reader adjacency is not widened by the generalized wrapper", () => {
+  it("derives a plain required accessor followed by an unrelated function", () => {
+    const unrelated = [
+      "function isRecord(v: unknown): boolean {",
+      '  return typeof v === "object" && v !== null;',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(`${REQUIRED}\n\n${unrelated}`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.local).toBe("apiKey");
+    expect(entries[0]?.tokenLocal).toBeUndefined();
+    // The unrelated function is left for the totality rule, not swallowed by the pair.
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a wrapper that calls a different reader", () => {
+    const wrongReader = [
+      "function authHeader(): Record<string, string> {",
+      '  return { Authorization: `Bearer ${somethingElse()}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(`${REQUIRED}\n\n${wrongReader}`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tokenLocal).toBeUndefined();
+    expect(unclaimed).toHaveLength(1);
+  });
+});
+
 describe("recognizeEnv: auth: basic", () => {
   it("recovers auth: basic with a decorated username (zendesk authHeader)", () => {
     const source = [
@@ -577,19 +648,14 @@ describe("recognizeEnv: auth: basic", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("does not recover auth: basic from a ONE-var accessor (lever, excluded by renderBasic's two-var requirement)", () => {
-    // lever is out of scope, but NOT via renderSplitBearer's docstring — that docstring's
-    // membership list is scoped to the split-bearer (tokenLocal) shape alone and names
-    // mendeley, intercom, readwise, dagster and pipedrive; "lever" has never appeared in
-    // src/emit/server/env.ts at all (confirmed: `git log -S"lever" -- src/emit/server/env.ts`
-    // returns no commit). It is excluded by a different mechanism entirely: renderBasic requires
-    // exactly two vars — a username and a password — enforced by EnvSchema's own refine
-    // ('auth: "basic" requires exactly two "vars"', src/spec.ts) and mirrored by
-    // recognizeBasicAuth's own `reads.length !== 2` check below. Lever's real source reads ONE
-    // var and passes a literal empty string as the second encodeBasicAuthHeader argument — a
-    // shape the emitter can never produce (renderBasic always reads and guards every var in
-    // e.vars, never fewer than two), so it is hand-written here the same way REFUSED_SOURCES
-    // hand-writes every other shape the emitter cannot produce.
+  it("recovers auth: basic from a ONE-var accessor (lever/greenhouse: literal empty password)", () => {
+    // Lever and greenhouse read ONE var and pass a literal empty string as the second
+    // encodeBasicAuthHeader argument. This used to be out of scope — renderBasic required
+    // exactly two vars, enforced by EnvSchema's own refine and mirrored by
+    // recognizeBasicAuth's own `reads.length !== 2` check — until this rule relaxed to "one or
+    // two", specifically to reach this shape (see EnvSchema's basic refine in src/spec.ts).
+    // `matchBasicHeaderObject`'s `passBinding` is `undefined` here, so it checks the argument is
+    // the literal `""` rather than a second binding.
     const source = [
       "function authHeader(): Record<string, string> {",
       '  const key = process.env["LEVER_API_KEY"]?.trim();',
@@ -598,6 +664,35 @@ describe("recognizeEnv: auth: basic", () => {
       "  }",
       "  return {",
       '    Authorization: encodeBasicAuthHeader(key, ""),',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([
+      {
+        vars: ["LEVER_API_KEY"],
+        local: "authHeader",
+        bindings: ["key"],
+        required: false,
+        auth: "basic",
+      },
+    ]);
+    expect(unclaimed).toEqual([]);
+  });
+
+  it("refuses a ONE-var accessor whose password is a non-empty literal, not a binding", () => {
+    // The one shape a one-var basic entry can never regenerate: a literal that is not "".
+    // `passBinding` is undefined (only one read exists to bind), so the check is exactly
+    // `stringLit(callArguments[1]) === ""` — anything else, literal or identifier, is refused.
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const key = process.env["LEVER_API_KEY"]?.trim();',
+      '  if (key === undefined || key === "") {',
+      '    throw new Error("LEVER_API_KEY is not set");',
+      "  }",
+      "  return {",
+      '    Authorization: encodeBasicAuthHeader(key, "x"),',
       '    Accept: "application/json",',
       "  };",
       "}",

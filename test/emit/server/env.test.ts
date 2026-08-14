@@ -315,10 +315,81 @@ describe("renderEnvAccessor, HTTP Basic", () => {
     expect(out).toContain("Authorization: encodeBasicAuthHeader(`${email}/token`, token),");
   });
 
-  it("requires exactly two vars — a username and a password", () => {
-    expect(() => env({ vars: ["ONLY_ONE"], local: "authHeader", auth: "basic" })).toThrow(
-      /exactly two \\"vars\\"/,
+  it("refuses three vars — basic takes one or two, never more", () => {
+    expect(() => env({ vars: ["A", "B", "C"], local: "authHeader", auth: "basic" })).toThrow(
+      /one or two \\"vars\\"/,
     );
+  });
+});
+
+describe("split accessors over non-bearer modes", () => {
+  it("emits basic over a single var with a literal empty password", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["LEVER_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "basic",
+      }),
+    );
+    expect(out).toBe(`function apiKey(): string {
+  const t = process.env["LEVER_API_KEY"]?.trim();
+  if (t === undefined || t === "") {
+    throw new Error("LEVER_API_KEY is not set");
+  }
+  return t;
+}
+
+function authHeader(): Record<string, string> {
+  return { Authorization: encodeBasicAuthHeader(apiKey(), ""), Accept: "application/json" };
+}`);
+  });
+
+  it("emits a named header over a split reader", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["ZOTERO_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["Zotero-API-Key"],
+        extraHeaders: { "Zotero-API-Version": "3" },
+      }),
+    );
+    expect(out).toContain(`  return {
+    "Zotero-API-Key": apiKey(),
+    "Zotero-API-Version": "3",
+    Accept: "application/json",
+  };`);
+  });
+
+  it("emits one-var basic on a fused accessor too", () => {
+    const out = renderEnvAccessor(
+      env({ vars: ["K"], local: "authHeader", bindings: ["k"], auth: "basic" }),
+    );
+    expect(out).toContain('Authorization: encodeBasicAuthHeader(k, ""),');
+  });
+});
+
+describe("tokenLocal rejections", () => {
+  it("refuses tokenLocal on a multi-var entry", () => {
+    expect(() =>
+      env({
+        vars: ["U", "P"],
+        local: "authHeader",
+        tokenLocal: "creds",
+        bindings: ["u", "p"],
+        auth: "basic",
+      }),
+    ).toThrow(/single \\"vars\\" entry/);
+  });
+
+  it("refuses tokenLocal with no auth mode", () => {
+    expect(() =>
+      env({ vars: ["U"], local: "baseUrl", tokenLocal: "raw", bindings: ["u"], required: true }),
+    ).toThrow(/auth/);
   });
 });
 
