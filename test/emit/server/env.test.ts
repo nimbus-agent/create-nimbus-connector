@@ -327,9 +327,7 @@ describe("header object line breaks (characterisation)", () => {
     const out = renderEnvAccessor(
       env({ vars: ["A_TOKEN"], local: "authHeader", bindings: ["t"], auth: "bearer" }),
     );
-    expect(out).toContain(
-      '  return { Authorization: `Bearer ${t}`, Accept: "application/json" };',
-    );
+    expect(out).toContain('  return { Authorization: `Bearer ${t}`, Accept: "application/json" };');
   });
 
   it("keeps a split bearer wrapper on one line", () => {
