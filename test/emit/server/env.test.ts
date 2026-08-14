@@ -322,6 +322,76 @@ describe("renderEnvAccessor, HTTP Basic", () => {
   });
 });
 
+describe("header object line breaks (characterisation)", () => {
+  it("keeps a fused bearer object on one line", () => {
+    const out = renderEnvAccessor(
+      env({ vars: ["A_TOKEN"], local: "authHeader", bindings: ["t"], auth: "bearer" }),
+    );
+    expect(out).toContain(
+      '  return { Authorization: `Bearer ${t}`, Accept: "application/json" };',
+    );
+  });
+
+  it("keeps a split bearer wrapper on one line", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["A_TOKEN"],
+        local: "authHeader",
+        tokenLocal: "apiToken",
+        bindings: ["t"],
+        auth: "bearer",
+      }),
+    );
+    expect(out).toContain(
+      '  return { Authorization: `Bearer ${apiToken()}`, Accept: "application/json" };',
+    );
+  });
+
+  it("expands a two-var fused basic object", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["ZENDESK_EMAIL", "ZENDESK_API_TOKEN"],
+        local: "authHeader",
+        bindings: ["email", "token"],
+        auth: "basic",
+        suffix: "/token",
+      }),
+    );
+    expect(out).toContain(`  return {
+    Authorization: encodeBasicAuthHeader(\`\${email}/token\`, token),
+    Accept: "application/json",
+  };`);
+  });
+
+  it("expands a two-var headers object and keeps a one-var one inline", () => {
+    const two = renderEnvAccessor(
+      env({
+        vars: ["DD_API_KEY", "DD_APP_KEY"],
+        local: "headers",
+        bindings: ["k", "a"],
+        auth: "headers",
+        headerNames: ["DD-API-KEY", "DD-APPLICATION-KEY"],
+      }),
+    );
+    expect(two).toContain(`  return {
+    "DD-API-KEY": k,
+    "DD-APPLICATION-KEY": a,
+    Accept: "application/json",
+  };`);
+
+    const one = renderEnvAccessor(
+      env({
+        vars: ["CODEMAGIC_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["x-auth-token"],
+      }),
+    );
+    expect(one).toContain('  return { "x-auth-token": t, Accept: "application/json" };');
+  });
+});
+
 describe("renderEnvAccessors, trimTrailingSlashFn", () => {
   function spec(entries: unknown[]) {
     return parseSpec({
