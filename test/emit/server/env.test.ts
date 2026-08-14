@@ -390,6 +390,83 @@ describe("header object line breaks (characterisation)", () => {
   });
 });
 
+describe("authScheme", () => {
+  it("replaces the Bearer literal on a fused accessor", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["DBT_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        authScheme: "Token",
+      }),
+    );
+    expect(out).toContain('  return { Authorization: `Token ${t}`, Accept: "application/json" };');
+  });
+
+  it("replaces the Bearer literal on a split accessor", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["READWISE_TOKEN"],
+        local: "authHeader",
+        tokenLocal: "apiToken",
+        bindings: ["t"],
+        auth: "bearer",
+        authScheme: "Token",
+      }),
+    );
+    expect(out).toContain(
+      '  return { Authorization: `Token ${apiToken()}`, Accept: "application/json" };',
+    );
+  });
+
+  it("accepts a lowercase scheme, which snyk writes", () => {
+    const out = renderEnvAccessor(
+      env({
+        vars: ["SNYK_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        authScheme: "token",
+      }),
+    );
+    expect(out).toContain("Authorization: `token ${t}`");
+  });
+});
+
+describe("authScheme rejections", () => {
+  const base = { vars: ["A"], local: "authHeader", bindings: ["t"], auth: "bearer" };
+
+  it("refuses the default spelling", () => {
+    expect(() => env({ ...base, authScheme: "Bearer" })).toThrow(/omit it/);
+  });
+
+  it("refuses a scheme with a space", () => {
+    expect(() => env({ ...base, authScheme: "Token " })).toThrow();
+  });
+
+  it("refuses an interpolation opener", () => {
+    expect(() => env({ ...base, authScheme: "${process.exit(1)}" })).toThrow();
+  });
+
+  it("refuses a scheme on a non-bearer entry", () => {
+    expect(
+      () =>
+        env({
+          vars: ["A", "B"],
+          local: "authHeader",
+          bindings: ["u", "p"],
+          auth: "basic",
+          authScheme: "Token",
+        }),
+      // `env()` calls `EnvSchema.parse` directly rather than `parseSpec`, so the thrown
+      // ZodError's `.message` is zod's own JSON-encoded issue list — the refine message's
+      // embedded quotes come back backslash-escaped, same as the "exactly two \"vars\"" case
+      // above. `toThrow` matches against that raw string, hence the escaped quotes here.
+    ).toThrow(/only valid when auth is \\"bearer\\"/);
+  });
+});
+
 describe("renderEnvAccessors, trimTrailingSlashFn", () => {
   function spec(entries: unknown[]) {
     return parseSpec({

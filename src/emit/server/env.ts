@@ -103,7 +103,7 @@ function authProps(e: EnvEntry, values: readonly string[]): string[] {
     // prefix/suffix decorate the USERNAME only — see EnvSchema's refine.
     return [`Authorization: encodeBasicAuthHeader(${wrapped(e, values[0]!)}, ${values[1]!})`];
   }
-  return [`Authorization: \`Bearer \${${values[0]!}}\``];
+  return [`Authorization: \`${e.authScheme ?? "Bearer"} \${${values[0]!}}\``];
 }
 
 /** One value expression per var, for the fused accessors. */

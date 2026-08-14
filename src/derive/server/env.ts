@@ -63,6 +63,8 @@ export type EnvEntry = {
   headerNames?: string[];
   /** Split-bearer's raw-token accessor name — see matchSplitBearerReader/-Wrapper below. */
   tokenLocal?: string;
+  /** The non-`Bearer` scheme word — see `matchSchemeTemplate` below. */
+  authScheme?: string;
   /** The three `auth: "client-credentials"` fields — see `matchClientCredentials` below. */
   tokenUrl?: string;
   scope?: string;
@@ -263,7 +265,38 @@ function classifyPlainReturn(
   return { ...inner, prefix, suffix };
 }
 
-type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] };
+/**
+ * The Authorization template `authProps` writes — `` `<scheme> ${<value>}` `` — reporting the
+ * scheme and checking the value node. Returns the scheme WITHOUT its trailing space, or
+ * undefined when the node is not that shape.
+ *
+ * Shared between the fused reading (classifyAuthReturn) and the split one
+ * (matchSplitBearerWrapper) because the emitter writes one template for both; a second copy is
+ * how the two would drift, which is `src/spec.ts`'s own IDENTIFIER_RE lesson.
+ */
+function matchSchemeTemplate(
+  node: AstNode,
+  valueMatches: (expr: AstNode) => boolean,
+): string | undefined {
+  const t = templateLiteral(node);
+  if (t?.expressions.length !== 1 || t.quasis[1] !== "") return undefined;
+  const head = t.quasis[0];
+  if (head === undefined || !head.endsWith(" ")) return undefined;
+  const scheme = head.slice(0, -1);
+  // The same allowlist EnvSchema enforces. A head this rejects is bytes no spec produces, so
+  // claiming it would derive a spec that re-emits differently.
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(scheme)) return undefined;
+  return valueMatches(t.expressions[0]!) ? scheme : undefined;
+}
+
+/** `"Bearer"` is the emitter's default and is recorded as an ABSENT field, never as a value. */
+function schemeField(scheme: string): Pick<EnvEntry, "authScheme"> {
+  return scheme === "Bearer" ? {} : { authScheme: scheme };
+}
+
+type AuthShape =
+  | ({ auth: "bearer" } & Pick<EnvEntry, "authScheme">)
+  | { auth: "headers"; headerNames: string[] };
 
 /**
  * The two auth return shapes `returnLines` writes: `auth: "bearer"`'s
@@ -292,15 +325,9 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
 
   if (rest.length === 1 && reads.length === 1) {
     const prop = rest[0]!;
-    const t = templateLiteral(prop.value);
-    if (
-      prop.key === "Authorization" &&
-      t?.expressions.length === 1 &&
-      t.quasis[0] === "Bearer " &&
-      t.quasis[1] === "" &&
-      isIdent(t.expressions[0], reads[0]!.binding)
-    ) {
-      return { auth: "bearer" };
+    if (prop.key === "Authorization") {
+      const scheme = matchSchemeTemplate(prop.value, (expr) => isIdent(expr, reads[0]!.binding));
+      if (scheme !== undefined) return { auth: "bearer", ...schemeField(scheme) };
     }
   }
 
@@ -392,6 +419,9 @@ function buildAuthEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined {
     required: false,
     auth: authShape.auth,
     ...(authShape.auth === "headers" ? { headerNames: authShape.headerNames } : {}),
+    ...(authShape.auth === "bearer" && authShape.authScheme !== undefined
+      ? { authScheme: authShape.authScheme }
+      : {}),
     ...(ctx.defaultValue !== undefined ? { default: ctx.defaultValue } : {}),
   };
 }
@@ -540,7 +570,10 @@ function matchSplitBearerReader(
  * functions as one joined string and `renderEnvAccessors` joins `spec.env` in array order, so no
  * spec can produce a layout with a statement between them.
  */
-function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
+function matchSplitBearerWrapper(
+  fn: AstNode,
+  readerLocal: string,
+): { local: string; authScheme?: string } | undefined {
   // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`
   // — both type arguments pinned, not just the head name; see `isStringRecord`.
   if (isAsyncFunction(fn) || !isStringRecord(functionReturnType(fn))) {
@@ -560,15 +593,14 @@ function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | und
   if (acceptProp?.key !== "Accept") return undefined;
   if (stringLit(acceptProp.value) !== "application/json") return undefined;
 
-  const t = templateLiteral(authProp.value);
-  if (t?.expressions.length !== 1 || t.quasis[0] !== "Bearer " || t.quasis[1] !== "") {
-    return undefined;
-  }
-  const call = t.expressions[0]!;
-  if (callArgs(call)?.length !== 0) return undefined;
-  if (!isIdent(calleeOf(call), readerLocal)) return undefined;
+  const scheme = matchSchemeTemplate(authProp.value, (expr) => {
+    if (callArgs(expr)?.length !== 0) return false;
+    return isIdent(calleeOf(expr), readerLocal);
+  });
+  if (scheme === undefined) return undefined;
 
-  return functionName(fn);
+  const local = functionName(fn);
+  return local === undefined ? undefined : { local, ...schemeField(scheme) };
 }
 
 type BasicUser = { readonly prefix?: string; readonly suffix?: string };
@@ -1409,16 +1441,17 @@ export type RecognizedEnv = {
 function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEntry | undefined {
   const reader = matchSplitBearerReader(statements[i]!);
   if (reader === undefined) return undefined;
-  const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
-  if (wrapperLocal === undefined) return undefined;
+  const wrapper = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
+  if (wrapper === undefined) return undefined;
 
   return {
     vars: [reader.var],
-    local: wrapperLocal,
+    local: wrapper.local,
     tokenLocal: reader.local,
     bindings: [reader.binding],
     required: false,
     auth: "bearer",
+    ...(wrapper.authScheme !== undefined ? { authScheme: wrapper.authScheme } : {}),
   };
 }
 

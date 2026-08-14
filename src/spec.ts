@@ -1195,6 +1195,29 @@ export const EnvSchema = z
      */
     tokenLocal: identifierField().optional(),
     /**
+     * The Authorization scheme word, replacing the literal `Bearer`. Omitted means `Bearer`.
+     *
+     * The separating space is the EMITTER's, not part of this value: every corpus alternate is
+     * one word plus one space — `Token ` (dbt, flagsmith, readwise), `token ` (snyk), `Bot `
+     * (discord) — so a field carrying the space could express a spacing nothing writes, and the
+     * deriver would have an open string to invert instead of one quasi shape.
+     *
+     * The character class is the security guard, and it is deliberately an ALLOWLIST rather
+     * than `rawSplicedString`'s denylist. This value is spliced into a template literal, which
+     * is exactly where `env[].prefix` admitted an executable IIFE into the Authorization header
+     * of every request. A denylist enumerates the sequences that are known to be dangerous; this
+     * makes every one of them unrepresentable. `test/raw-splice.test.ts` probes through
+     * `parseSpec`, so a field guarded this way is correctly absent from its census — see that
+     * file's own docstring on identifier-guarded fields.
+     */
+    authScheme: z
+      .string()
+      .regex(
+        /^[A-Za-z][A-Za-z0-9-]*$/,
+        'must be a single scheme word — letters, digits and hyphens, starting with a letter. The separating space is the emitter\'s, so write "Token", not "Token "',
+      )
+      .optional(),
+    /**
      * Token endpoint, required when auth === "client-credentials".
      *
      * `z.url()` rather than the deprecated `z.string().url()`: in zod 4 the string-method
@@ -1319,6 +1342,20 @@ export const EnvSchema = z
     message:
       '"tokenLocal" must differ from "local" — the two name two functions declared in the ' +
       "same module",
+  })
+  .refine((e) => e.authScheme === undefined || e.auth === "bearer", {
+    message:
+      '"authScheme" is only valid when auth is "bearer" — it names the scheme word in the ' +
+      "Authorization value, and no other auth mode emits one",
+  })
+  // A second spelling of the omitted form is the defect the ROADMAP's `tags: true` note
+  // records: two inputs, one output, and the shorter one gets trusted without being checked.
+  // It also keeps the deriver total — recovering "Bearer " omits the field, and no other legal
+  // input produces those bytes.
+  .refine((e) => e.authScheme !== "Bearer", {
+    message:
+      '"authScheme": "Bearer" is the default — omit it. Two spellings of one emitted value is ' +
+      "what this rule exists to prevent",
   });
 
 export const FetchHelperSchema = z

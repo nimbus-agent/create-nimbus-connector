@@ -1390,3 +1390,59 @@ describe("recognizeEnv: auth: client-credentials refusals", () => {
     });
   }
 });
+
+describe("authScheme round trip", () => {
+  it("recovers an alternate scheme from a fused accessor", () => {
+    const spec = EnvSchema.parse({
+      vars: ["DBT_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+      authScheme: "Token",
+    });
+    const { entries, unclaimed } = run(renderEnvAccessor(spec));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.authScheme).toBe("Token");
+  });
+
+  it("recovers an alternate scheme from a split accessor", () => {
+    const spec = EnvSchema.parse({
+      vars: ["READWISE_TOKEN"],
+      local: "authHeader",
+      tokenLocal: "apiToken",
+      bindings: ["t"],
+      auth: "bearer",
+      authScheme: "Token",
+    });
+    const { entries, unclaimed } = run(renderEnvAccessor(spec));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.authScheme).toBe("Token");
+    expect(entries[0]?.tokenLocal).toBe("apiToken");
+  });
+
+  it("omits the field for the default scheme rather than recording it", () => {
+    const spec = EnvSchema.parse({
+      vars: ["A_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+    });
+    const { entries } = run(renderEnvAccessor(spec));
+    expect(entries[0]?.authScheme).toBeUndefined();
+  });
+
+  it("refuses a scheme with no separating space", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      '  return { Authorization: `Token${t}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});

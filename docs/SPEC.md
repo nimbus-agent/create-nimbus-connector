@@ -95,6 +95,7 @@ content rule while the JSON Schema was being written. Read them where they are e
 | `auth` | `"bearer" \| "basic" \| "headers" \| "client-credentials"` | — | — | Which auth wrapper the accessor's value is built into. Omitted means the accessor returns the value itself. |
 | `headerNames` | `string[]` | — | items minLength 1 | The header name each variable's value is sent under. |
 | `tokenLocal` | `string` | — | matches `^[A-Za-z_$][A-Za-z0-9_$]*$` | Splits the accessor in two: a `(): string` of this name that reads and guards the raw token, leaving `local` a wrapper that builds the header from a call to it. |
+| `authScheme` | `string` | — | matches `^[A-Za-z][A-Za-z0-9-]*$` | The Authorization scheme word, replacing the literal `Bearer` — e.g. `"Token"` (dbt, flagsmith, readwise) or `"token"` (snyk). Omitted means `Bearer`; only valid when `auth` is `"bearer"`. |
 | `tokenUrl` | `string` | — | format `uri` | The token endpoint the client-credentials exchange POSTs to. |
 | `scope` | `string` | — | minLength 1 | The `scope` sent with the client-credentials exchange. |
 | `credentialsIn` | `"basic" \| "body"` | — | — | Where the client id and secret go: an `Authorization: Basic` header, or the form body as `client_id`/`client_secret`. |

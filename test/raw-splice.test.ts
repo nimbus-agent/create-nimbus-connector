@@ -451,6 +451,18 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
   "filesystem.write[]": (m) => ({ filesystem: { read: [], write: [`/tmp/${m}`] } }),
 };
 
+/**
+ * String positions no fixture writes, exempted WITHOUT a probe because there is nothing a probe
+ * could patch in: the field's own schema pattern refuses `RAW_MARKER` before `parseSpec` ever
+ * reaches emission — the same fact this file's own opening docstring states about a field
+ * "guarded by an identifier rule" (see the paragraph above `RAW_MARKER`'s declaration). That
+ * reasoning is what keeps such a field correctly absent from the CARRIER census at the top of
+ * this file; this is where it also excuses the field from the separate coverage census below,
+ * for the identical reason — `PROBED_WITHOUT_A_FIXTURE`'s probe assumes `parseSpec` accepts the
+ * marker, which a pattern-guarded field never does.
+ */
+const IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE: readonly string[] = ["env[].authScheme"];
+
 describe("the census's coverage of the spec language", () => {
   const declared = new Set<string>();
   stringPositions(SCHEMA, "", declared);
@@ -459,7 +471,9 @@ describe("the census's coverage of the spec language", () => {
 
   it("reaches every free-string position the schema declares, or probes it by hand", () => {
     const unreached = [...declared].filter((p) => !reached.has(p)).sort();
-    expect(unreached).toEqual(Object.keys(PROBED_WITHOUT_A_FIXTURE).sort());
+    expect(unreached).toEqual(
+      [...Object.keys(PROBED_WITHOUT_A_FIXTURE), ...IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE].sort(),
+    );
   });
 
   it("is non-vacuous: the schema walk found positions and the fixtures reached most of them", () => {
@@ -467,7 +481,9 @@ describe("the census's coverage of the spec language", () => {
     // once the list were emptied, and a `positionsReached` that returned everything would too.
     expect(declared.size).toBeGreaterThan(20);
     expect(reached.size).toBeGreaterThan(20);
-    expect(declared.size - reached.size).toBe(Object.keys(PROBED_WITHOUT_A_FIXTURE).length);
+    expect(declared.size - reached.size).toBe(
+      Object.keys(PROBED_WITHOUT_A_FIXTURE).length + IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE.length,
+    );
   });
 
   for (const [field, patch] of Object.entries(PROBED_WITHOUT_A_FIXTURE)) {
