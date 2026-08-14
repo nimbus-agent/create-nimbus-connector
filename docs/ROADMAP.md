@@ -293,12 +293,15 @@ them on one row.
       `statement:VariableDeclaration`, `function:apiBase` and `function:stripTrailingSlashes`. So
       the rule moves `codemagic`'s byte diff and nothing else — and no connector's tier. Not built
       here: it is a change to what the emitter writes, gated on a spec field, for one connector.
-- [x] **The env `Authorization` shapes `auth: "bearer"` could not state.** Four constructs, all
-      `env[]` fields, all emitted and read back: `authScheme` (the scheme word, replacing the
-      literal `Bearer`), `extraHeaders` (static literal-valued headers between the auth entry and
-      the trailing `Accept`), a `tokenLocal` no longer restricted to bearer — valid on any single-var
-      entry declaring an `auth` mode — and `auth: "basic"` accepting one var as well as two, one
-      meaning a literal `""` password. See
+- [x] **The env `Authorization` shapes the `auth` modes could not state.** Four constructs, all
+      `env[]` fields, all emitted and read back, and only the first two of them bearer's:
+      `authScheme` (the scheme word, replacing the literal `Bearer`, and bearer-only), and
+      `extraHeaders` (static literal-valued headers between the auth entry and the trailing
+      `Accept`, valid under `bearer`, `basic` and `headers` alike). The other two are not header
+      shapes at all: a `tokenLocal` no longer restricted to bearer — it splits the READ into its
+      own accessor, and is valid on any single-var entry declaring an `auth` mode — and
+      `auth: "basic"` accepting one var as well as two, the one meaning a literal `""` password.
+      See
       [SPEC-RULES § Env auth](./SPEC-RULES.md#env-auth-authscheme-extraheaders-tokenlocal-and-one-var-basic)
       for each field's rejections and the corpus measurement under it.
 
@@ -768,9 +771,11 @@ alone.
   generator shortcoming, and it is why `discord` and `google-meet` do not byte-match
   `src/server.ts` even though both now use `query` for real, non-stub tools.
 - **`auth: "bearer"` could not express two real shapes. The spec language now expresses both, and
-  `discord` — the fixture this entry was written against — still cannot use either.** Rewritten
-  rather than deleted: the general claim stopped being true, the connector-specific one did not,
-  and collapsing the two is how this entry got written imprecisely in the first place.
+  `discord` — the fixture this entry was written against — still cannot use either FIELD.**
+  Rewritten rather than deleted: the general claim stopped being true, the connector-specific one
+  did not, and collapsing the two is how this entry got written imprecisely in the first place.
+  "Cannot use either field" is not "cannot reach either shape", and the paragraphs below keep them
+  apart — one of the two shapes was always reachable on this connector by another route.
 
   The two shapes are Discord's literal `Bot ${token}` scheme and the static `User-Agent` header it
   sends alongside `Authorization`. `env[].authScheme` and `env[].extraHeaders` carry them — see
@@ -892,15 +897,21 @@ alone.
   registrar rather than an env accessor. (An extra *static* header is the one part of this that is
   expressible, through `fetchHelper.inlineHeaders`; it was listed here as unreachable and was not.)
 
-  **The env-side auth fields are accepted on a rest-kit spec and silently dropped**, which is the
-  "validated then discarded" class this repository keeps closing elsewhere. Verified 2026-08-14 by
+  **The env-side auth fields were accepted on a rest-kit spec and silently dropped. They are now
+  refused**, by one style-scoped rule rather than three per-field ones. Measured 2026-08-14 by
   generating `fixtures/discord.spec.json` with `authScheme`, `extraHeaders` and `tokenLocal` added
-  to its env entry: the spec parses, validates and emits a `src/server.ts` carrying none of the
-  three. It is not a *new* hole — `local` and `bindings` have always been accepted and ignored on
-  rest-kit, since that style emits no env accessor for them to name — but it is one more field
-  reaching it, and the honest fix is a style-scoped refusal rather than three more per-field rules.
-  Not built here: it is a validator change with no fixture to prove it against, and no corpus
-  connector writes the shape.
+  to its env entry: each parsed, validated and emitted a `src/server.ts` carrying none of the
+  three — the "validated then discarded" class this repository keeps closing elsewhere, reached by
+  a field that had no rule yet rather than by a new mechanism.
+
+  The rule names those three and stops there, and the pre-existing
+  *exactly one `auth: "bearer"` single-var entry* rule is what makes that exhaustive rather than
+  arbitrary: under the shape it pins, `prefix`/`suffix`/`transform` are already refused beside any
+  `auth`, `headerNames` needs `auth: "headers"` and `tokenUrl` needs client-credentials. `local`
+  and `bindings` stay accepted-and-ignored, and that IS the older hole this one sat next to —
+  `local` is required by `EnvSchema` and every rest-kit spec including `discord` sets it, so
+  refusing it would refuse the style. Naming a required field as droppable is the one thing a rule
+  here cannot do.
 - **Registrar and helper naming.** Derived by formula. A connector whose author picked a
   shorter name by hand will differ on that line.
 - **A recovered rest-kit `title` is verified against only one of its two consumers.** For

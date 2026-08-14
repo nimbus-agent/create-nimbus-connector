@@ -148,8 +148,10 @@ import { displayPath } from "../../src/types.ts";
  * `intercom`/`lever` are Task 5's real-connector auth fixtures: `intercom` sets `extraHeaders`
  * (`env[].extraHeaders`, the value position) and `lever` sets `auth: "basic"` with a single "vars"
  * entry (the literal `""`-password form). Both round-trip HERE — this repo's own spec -> emit ->
- * derive -> re-emit — even though fixtures/expectations.json still reports each `5/7` against the
- * real corpus connector: `README.md` is the same hand-written-prose gap mercury/zendesk/bitrise
+ * derive -> re-emit — even though `fixtures/expectations.json` still declares a PARTIAL match for
+ * each against the real corpus connector. That file and `diff:golden` are where the count lives;
+ * restating it here is what goes stale silently. Two files are outside the match either way:
+ * `README.md` is the same hand-written-prose gap mercury/zendesk/bitrise
  * carry, and `src/search-filter.ts` diverges because each real connector's extractor hand-writes
  * its own local helper (`categoryField` for lever's nested `categories.<key>`, a doubly-nested
  * `row.tags.tags[]` unwrap for intercom) that this generator's `path`/`tags` entry kinds cannot
