@@ -452,16 +452,30 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
 };
 
 /**
- * String positions no fixture writes, exempted WITHOUT a probe because there is nothing a probe
- * could patch in: the field's own schema pattern refuses `RAW_MARKER` before `parseSpec` ever
- * reaches emission — the same fact this file's own opening docstring states about a field
- * "guarded by an identifier rule" (see the paragraph above `RAW_MARKER`'s declaration). That
- * reasoning is what keeps such a field correctly absent from the CARRIER census at the top of
- * this file; this is where it also excuses the field from the separate coverage census below,
- * for the identical reason — `PROBED_WITHOUT_A_FIXTURE`'s probe assumes `parseSpec` accepts the
- * marker, which a pattern-guarded field never does.
+ * String positions no fixture writes, each paired with a patch that proves — by actually calling
+ * `parseSpec`, not by a comment claiming it — that the field's own schema pattern refuses
+ * `RAW_MARKER` before the marker can reach emission. This is `PROBED_WITHOUT_A_FIXTURE`'s mirror:
+ * that loop below proves the marker SURVIVES to emission at each of its fields, this one proves
+ * it never gets past `parseSpec` at each of its fields. A field belongs here rather than there
+ * exactly when its patch cannot even be applied — `PROBED_WITHOUT_A_FIXTURE`'s own probe assumes
+ * `parseSpec` accepts the patched value, which is false for an identifier/pattern-guarded field
+ * (see the paragraph above `RAW_MARKER`'s declaration, on a field "guarded by an identifier
+ * rule"). Same shape as its sibling — `Record<string, (marker: string) => unknown>` — so the two
+ * mechanisms stay symmetric and a field can move between them without a reshape.
  */
-const IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE: readonly string[] = ["env[].authScheme"];
+const REFUSED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {
+  "env[].authScheme": (m) => ({
+    env: [
+      {
+        vars: ["ZZREADONLY_TOKEN"],
+        local: "headers",
+        bindings: ["t"],
+        auth: "bearer",
+        authScheme: m,
+      },
+    ],
+  }),
+};
 
 describe("the census's coverage of the spec language", () => {
   const declared = new Set<string>();
@@ -472,7 +486,7 @@ describe("the census's coverage of the spec language", () => {
   it("reaches every free-string position the schema declares, or probes it by hand", () => {
     const unreached = [...declared].filter((p) => !reached.has(p)).sort();
     expect(unreached).toEqual(
-      [...Object.keys(PROBED_WITHOUT_A_FIXTURE), ...IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE].sort(),
+      [...Object.keys(PROBED_WITHOUT_A_FIXTURE), ...Object.keys(REFUSED_WITHOUT_A_FIXTURE)].sort(),
     );
   });
 
@@ -482,7 +496,7 @@ describe("the census's coverage of the spec language", () => {
     expect(declared.size).toBeGreaterThan(20);
     expect(reached.size).toBeGreaterThan(20);
     expect(declared.size - reached.size).toBe(
-      Object.keys(PROBED_WITHOUT_A_FIXTURE).length + IDENTIFIER_GUARDED_WITHOUT_A_FIXTURE.length,
+      Object.keys(PROBED_WITHOUT_A_FIXTURE).length + Object.keys(REFUSED_WITHOUT_A_FIXTURE).length,
     );
   });
 
@@ -498,6 +512,20 @@ describe("the census's coverage of the spec language", () => {
       expect(manifest.content).toContain('Zq\\"Zq');
       expect(ts.filter((f) => f.content.includes(RAW_MARKER)).map((f) => f.path.join("/"))).toEqual(
         [],
+      );
+    });
+  }
+
+  for (const [field, patch] of Object.entries(REFUSED_WITHOUT_A_FIXTURE)) {
+    it(`probes "${field}", which no fixture sets, and finds parseSpec refuses the marker`, () => {
+      const base = specDocuments.find((s) => s.file === "zzreadonly.spec.json")!.doc as object;
+      // Asserting merely "throws" would pass for the wrong reason too — a patch malformed in some
+      // OTHER way would throw just as loudly. The path segment pins the failure to the field this
+      // entry claims to probe, so a future entry patching the wrong field, or one whose field
+      // turns out not to be guarded after all, fails here instead of passing by accident.
+      const fieldPath = field.replace(/\[\]/g, "[0]");
+      expect(() => parseSpec({ ...base, ...(patch(RAW_MARKER) as object) })).toThrow(
+        new RegExp(fieldPath.replace(/[.[\]]/g, "\\$&")),
       );
     });
   }
