@@ -1386,6 +1386,29 @@ export const EnvSchema = z
       '"extraHeaders" is not valid with auth: "client-credentials" — its wrapper is a separate ' +
       "async function with no corpus variance in its header object",
   })
+  // A POSITIVE allowlist, not merely "not client-credentials": the client-credentials refine
+  // above catches that one auth mode by name (a message worth keeping distinct — it explains
+  // WHY, via the token wrapper being a separate function), but it says nothing about `auth`
+  // being ABSENT. With no `auth`, `renderEnvAccessor` (src/emit/server/env.ts) dispatches to the
+  // plain `(): string` branch, whose `returnLines` never calls `extraProps` — so an entry with
+  // `extraHeaders` set and no `auth` validated here and then had the field silently vanish at
+  // emission, the exact "accepted at parse time, discarded at emit time" class this repo keeps
+  // removing (see `isEnvRefHeaderValue`'s own docstring for a prior instance of it). The
+  // allowlist form is what cannot go stale as a new `auth` value is added later: a denylist would
+  // need a new clause for each one, an allowlist needs none.
+  .refine(
+    (e) =>
+      e.extraHeaders === undefined ||
+      e.auth === "bearer" ||
+      e.auth === "basic" ||
+      e.auth === "headers",
+    {
+      message:
+        '"extraHeaders" requires "auth" to be "bearer", "basic" or "headers" — with no auth ' +
+        "wrapper there is no returned header object for a static entry to join, so it would be " +
+        "silently dropped at emission",
+    },
+  )
   .superRefine((e, ctx) => {
     // Two collision sources, worded differently on purpose: a clash with the always-emitted
     // Accept/Authorization names the header itself, while a clash with a "headerNames" entry

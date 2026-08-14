@@ -558,6 +558,22 @@ describe("extraHeaders rejections", () => {
       }),
     ).toThrow(/client-credentials/);
   });
+
+  it("refuses extraHeaders with no auth mode set, which would otherwise be silently dropped at emission", () => {
+    // With `auth` absent, `renderEnvAccessor` dispatches to the plain `(): string` branch —
+    // `returnLines`' bare-scalar return, which never calls `extraProps` — so an entry that
+    // validated here would emit with the field silently gone. `required: true` is set only to
+    // clear the PRE-EXISTING "no auth and no default" refine, so this test isolates the new rule.
+    expect(() =>
+      env({
+        vars: ["A"],
+        local: "value",
+        bindings: ["v"],
+        required: true,
+        extraHeaders: { "X-Thing": "1" },
+      }),
+    ).toThrow(/silently dropped/);
+  });
 });
 
 describe("renderEnvAccessors, trimTrailingSlashFn", () => {
