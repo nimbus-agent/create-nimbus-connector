@@ -144,6 +144,38 @@ import { displayPath } from "../../src/types.ts";
  * connector writes `const limit = p.limit ?? 50;` after its guard, `renderTool` writes every hoist
  * before the ladder); `README.md` is hand-written prose, the same gap mercury/zendesk/bitrise
  * carry. Both are recorded in docs/ROADMAP.md's Known limitations.
+ *
+ * `intercom`/`lever` are Task 5's real-connector auth fixtures: `intercom` sets `extraHeaders`
+ * (`env[].extraHeaders`, the value position) and `lever` sets `auth: "basic"` with a single "vars"
+ * entry (the literal `""`-password form). Both round-trip HERE — this repo's own spec -> emit ->
+ * derive -> re-emit — even though fixtures/expectations.json still reports each `5/7` against the
+ * real corpus connector: `README.md` is the same hand-written-prose gap mercury/zendesk/bitrise
+ * carry, and `src/search-filter.ts` diverges because each real connector's extractor hand-writes
+ * its own local helper (`categoryField` for lever's nested `categories.<key>`, a doubly-nested
+ * `row.tags.tags[]` unwrap for intercom) that this generator's `path`/`tags` entry kinds cannot
+ * reproduce byte-for-byte — a LOCAL claim, not a corpus one, same distinction the block above
+ * draws for mercury/netlify/zendesk/dependencytrack. `readwise`, the third real connector this
+ * task read, has no fixture at all: both of its search tools (`fieldsOf` for highlights,
+ * `bookFieldsOf` for books) take the bespoke-extractor branch (each field list ends in
+ * `{"tags":"objects"}`, which forces the extractor branch — see `resolveKeyedShape`'s own
+ * docstring), and `validateSingleExtractor` (src/validate.ts) refuses more than one such filter
+ * per connector. This is the documented, measured outcome, not a gap nobody looked at — see that
+ * function's own docstring and docs/ROADMAP.md's *Bespoke field extractors* bullet, which names
+ * readwise by corpus measurement as the one connector this single-extractor rule alone keeps
+ * unreachable.
+ *
+ * `zzauth` is Task 5's synthetic fixture for the three auth shapes no real fixture combines: a
+ * FUSED (no `tokenLocal`) `authScheme` accessor, a FUSED one-var `auth: "basic"` accessor, and a
+ * FUSED accessor with TWO `extraHeaders` entries — every real fixture that sets `extraHeaders`
+ * carries exactly one, so this is the only fixture that puts key ORDER in front of both
+ * `deriveSpec` and `renderEnvAccessor`'s `extraProps` (src/emit/server/env.ts): a recognizer that
+ * silently sorted or reversed the record's keys would still pass every other fixture here and
+ * only fail on this one, on the second (re-emitted) pass. Its `fetchHelper` wires only the first
+ * of the three env entries into `headers`; the other two are unclaimed by anything downstream of
+ * `spec.env`, same as every OTHER env entry in this spec language may be — nothing here requires
+ * an accessor to be referenced outside its own declaration, and `hand-rolled src/server.ts` is
+ * not typechecked anywhere in `bun test` (see test/emit/emitted-typecheck.test.ts's own header),
+ * so an author-visible "unused local" defect, if one existed, would not show up here either way.
  */
 const ROUND_TRIP = [
   "newrelic",
@@ -169,6 +201,9 @@ const ROUND_TRIP = [
   "zzwrite",
   "zzcond",
   "codemagic",
+  "intercom",
+  "lever",
+  "zzauth",
 ];
 
 /**

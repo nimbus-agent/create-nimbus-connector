@@ -221,7 +221,7 @@ describe("the raw-splice census", () => {
     // Without this, a `stringLeaves` that walked nothing, or an `everyEmittedFile` that returned
     // nothing, would report an empty census — and an empty census compared against an empty
     // expectation is the exact false green this whole file exists to refuse. The numbers are
-    // floors, not measurements: the sweep runs thousands of probes over the 24 fixtures.
+    // floors, not measurements: the sweep runs thousands of probes over the 27 fixtures.
     expect(specDocuments.length).toBeGreaterThan(20);
     expect(CENSUS.probes).toBeGreaterThan(1000);
     expect(CENSUS.inspected).toBeGreaterThan(1000);
@@ -310,7 +310,7 @@ describe("every carrier refuses every sequence that could break out of its const
  * nineteen of the twenty-two fixtures — the second stale count inside one docstring that had
  * just been rewritten to remove the first.
  */
-describe("what the 24 fixtures put in a guarded field", () => {
+describe("what the 27 fixtures put in a guarded field", () => {
   function guardedValues(): { field: string; value: string; file: string }[] {
     const out: { field: string; value: string; file: string }[] = [];
     for (const { file, doc } of specDocuments) {
@@ -344,7 +344,7 @@ describe("what the 24 fixtures put in a guarded field", () => {
     // to make this field a carrier at all (see EXPECTED_CARRIERS's own comment on it).
     expect(counts).toEqual({
       "fetchHelper.base": 7,
-      "tools[].path": 21,
+      "tools[].path": 24,
       "tools[].pathWhen[].path": 1,
     });
   });
@@ -449,22 +449,6 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
   id: (m) => ({ id: `com.nimbus.zz${m}` }),
   "filesystem.read[]": (m) => ({ filesystem: { read: [`/tmp/${m}`], write: [] } }),
   "filesystem.write[]": (m) => ({ filesystem: { read: [], write: [`/tmp/${m}`] } }),
-  // The VALUE half of `env[].extraHeaders`, a record — `stringPositions` walks
-  // `additionalProperties` (the value schema) but never `propertyNames` (the key's own regex),
-  // so the KEY position never enters `declared` at all and needs no probe of its own. The value
-  // has no character restriction and reaches `extraProps` (src/emit/server/env.ts) through
-  // `JSON.stringify`, so this belongs beside `id`/`filesystem.*` rather than in the REFUSED list.
-  "env[].extraHeaders.*": (m) => ({
-    env: [
-      {
-        vars: ["ZZREADONLY_TOKEN"],
-        local: "headers",
-        bindings: ["t"],
-        auth: "bearer",
-        extraHeaders: { "X-Extra": m },
-      },
-    ],
-  }),
 };
 
 /**
@@ -479,19 +463,7 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
  * rule"). Same shape as its sibling — `Record<string, (marker: string) => unknown>` — so the two
  * mechanisms stay symmetric and a field can move between them without a reshape.
  */
-const REFUSED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {
-  "env[].authScheme": (m) => ({
-    env: [
-      {
-        vars: ["ZZREADONLY_TOKEN"],
-        local: "headers",
-        bindings: ["t"],
-        auth: "bearer",
-        authScheme: m,
-      },
-    ],
-  }),
-};
+const REFUSED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {};
 
 describe("the census's coverage of the spec language", () => {
   const declared = new Set<string>();
