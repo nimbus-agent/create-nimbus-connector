@@ -78,7 +78,7 @@ export type EnvEntry = {
  * `Record<string, string>` exactly — the head name AND both type arguments.
  *
  * Every accessor this module recognizes that returns a header record returns that instantiation
- * and no other: `renderEnvAccessor`'s auth branch, `renderSplitBearer`'s wrapper, `renderBasic`,
+ * and no other: `renderEnvAccessor`'s auth branch, `renderSplitAccessor`'s wrapper, `renderBasic`,
  * and `renderClientCredentials` inside a `Promise<…>` (all in src/emit/server/env.ts). The four
  * matchers below used to pin it with `typeAnnotationName(...) === "Record"`, which reports the
  * head name only — so `Record<string, number>` and `Record<unknown, unknown>` satisfied it, and a
@@ -568,7 +568,7 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
 function matchSplitBearerReader(
   fn: AstNode,
 ): { readonly var: string; readonly binding: string; readonly local: string } | undefined {
-  // renderSplitBearer's reader half is never async and always returns exactly `string`.
+  // renderSplitAccessor's reader half is never async and always returns exactly `string`.
   if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "string") {
     return undefined;
   }
@@ -763,9 +763,14 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * reads the return argument and the two binding names, and nothing else — no statement list, no
  * claim, no function node — which is what makes the seam a seam rather than a cut.
  *
- * Both keys hardcoded and bare, as in `matchSplitBearerWrapper`: `renderBasic` writes this two-key
- * object verbatim, so a module writing the same two headers in the other order, or quoting a key,
- * is refused rather than normalized.
+ * `Authorization` and the trailing `Accept` are hardcoded and bare — `renderBasic` always writes
+ * them in that order, verbatim, so a module writing the two in the other order is refused rather
+ * than normalized. Between them `renderBasic` can also write `extraProps`' run of static headers
+ * (Task 3's `extraHeaders`), so this reads through `quoteMinimalProps`/`splitExtraHeaders` rather
+ * than pinning exactly two bare keys, the same reasoning `matchSplitBearerWrapper` and
+ * `classifyAuthReturn` apply to their own trailing runs: an extra key's name comes from a spec
+ * field and is quoted exactly when `IDENTIFIER_RE` requires it, so a quoted one (a name shaped
+ * like intercom's `"Intercom-Version"`) is accepted, not refused.
  */
 function matchBasicHeaderObject(
   returnStatement: AstNode,
@@ -1425,7 +1430,10 @@ function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
   if (statements?.length !== 1) return undefined;
   // renderClientCredentials writes no comment in the wrapper — see the section header.
   if (!commentsAre(statements[0]!, [])) return undefined;
-  // Both keys hardcoded and bare, as in the two synchronous header objects above.
+  // Both keys hardcoded and bare — unlike the two synchronous header objects above, which now
+  // read through `quoteMinimalProps`/`splitExtraHeaders` to admit `extraHeaders`. `auth:
+  // "client-credentials"` never carries that field (EnvSchema's own refine), so this pair stays
+  // pinned to exactly two bare keys with no static-header run to admit.
   const properties = bareKeyedProps(returnArgument(statements[0]!));
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;

@@ -435,12 +435,12 @@ describe("recognizeEnv: split-bearer pair (tokenLocal)", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("does not form a pair when the wrapper carries a THIRD header (intercom, named OUT by renderSplitBearer's own docstring)", () => {
-    // Criterion 3 of renderSplitBearer's docstring: "with exactly two keys, Authorization then
+  it("does not form a pair when the wrapper carries a THIRD header (intercom, named OUT by renderSplitAccessor's own docstring)", () => {
+    // Criterion 3 of renderSplitAccessor's docstring: "with exactly two keys, Authorization then
     // Accept — a third header cannot be emitted (intercom adds "Intercom-Version": "2.11": OUT)".
     // This is the one exclusion the brief names by name that had no pinning test before this
-    // fix round — the emitter itself can never produce this shape (renderSplitBearer's own
-    // template writes exactly two properties), so this is hand-written, the same way
+    // fix round — the emitter can never place a header AFTER Accept (extraHeaders always come
+    // before it, headerObjectLines' own shape), so this is hand-written, the same way
     // REFUSED_SOURCES hand-writes every other shape the emitter cannot produce.
     //
     // Authorization and Accept deliberately stay FIRST and SECOND, with the extra header
@@ -816,7 +816,7 @@ describe("recognizeEnv: the key SPELLING of every emitted header object", () => 
       SPLIT_BEARER_WRAPPER.replace('Accept: "application/json"', '"Accept": "application/json"'),
     ],
   ] as const) {
-    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitBearer writes both bare`, () => {
+    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitAccessor writes both bare`, () => {
       expect(wrapper).not.toBe(SPLIT_BEARER_WRAPPER);
       const source = [SPLIT_BEARER_READER, "", wrapper].join("\n\n");
       const { entries, unclaimed } = run(source);
@@ -935,7 +935,7 @@ describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
  * cannot silently stop testing anything.
  */
 describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
-  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitBearer always writes `(): string`", () => {
+  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitAccessor always writes `(): string`", () => {
     const corruptedReader = SPLIT_BEARER_READER.replace(
       "function apiToken(): string {",
       "function apiToken(): unknown {",
@@ -951,7 +951,7 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
     expect(unclaimed).toHaveLength(2);
   });
 
-  it("refuses an async split-bearer wrapper — renderSplitBearer never writes `async` on either half", () => {
+  it("refuses an async split-bearer wrapper — renderSplitAccessor never writes `async` on either half", () => {
     const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace(
       "function authHeader(): Record<string, string> {",
       "async function authHeader(): Promise<Record<string, string>> {",
@@ -1028,7 +1028,7 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
  * defining defect class: the four matchers Finding B pinned checked `typeAnnotationName(...) ===
  * "Record"`, and `typeAnnotationName` reports a type reference's HEAD NAME only (its own
  * docstring). `Record<string, number>` and `Record<unknown, unknown>` satisfied that check, while
- * `renderEnvAccessor`, `renderSplitBearer`, `renderBasic` and `renderClientCredentials`
+ * `renderEnvAccessor`, `renderSplitAccessor`, `renderBasic` and `renderClientCredentials`
  * (src/emit/server/env.ts) write exactly `Record<string, string>` and no other instantiation. Such
  * a module recovers IDENTICAL `EnvEntry` fields and re-emits `Record<string, string>` — different
  * bytes, an unchanged spec, and nothing that could see it: `diff:golden` compares emitted output
@@ -1103,7 +1103,7 @@ describe("recognizeEnv: Record's type arguments, not just its head name", () => 
   );
 
   it.each(WRONG_RECORDS)(
-    "refuses a split-bearer wrapper returning %s — renderSplitBearer writes Record<string, string>",
+    "refuses a split-bearer wrapper returning %s — renderSplitAccessor writes Record<string, string>",
     (wrong) => {
       const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace("Record<string, string>", wrong);
       expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
