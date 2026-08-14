@@ -1455,7 +1455,15 @@ export const EnvSchema = z
     for (const key of Object.keys(e.extraHeaders ?? {})) {
       const lower = key.toLowerCase();
       const clash = reserved.get(lower);
-      if (clash === undefined) continue;
+      if (clash === undefined) {
+        // Each accepted key joins `reserved`, so the NEXT one is checked against it too. Without
+        // this line the rule only caught collisions with headers emitted from somewhere else, and
+        // `{ "X-Api": "1", "x-api": "2" }` — two keys of this same record — validated. The emitted
+        // defect is identical either way: `extraProps` writes both properties and fetch's Headers
+        // merges them into one header carrying both values.
+        reserved.set(lower, key);
+        continue;
+      }
       const named = fromHeaderNames.has(lower)
         ? `the "headerNames" entry ${JSON.stringify(clash)}`
         : JSON.stringify(clash);
@@ -1623,6 +1631,32 @@ export const ConnectorSpecSchema = z
     {
       message:
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
+    },
+  )
+  // The same rule as the fetchHelper one above, for the env half: a field only `renderEnvAccessor`
+  // reads is dead on a style that emits no accessor, and validating it would let it vanish between
+  // spec and output with nothing on screen. `makeRestToolRegistrar` resolves the credential itself
+  // and writes its own `Authorization`; rest-kit's header seam is `fetchHelper.inlineHeaders`,
+  // which is where a static extra header goes on this style.
+  //
+  // These three and no others, which the refine above is what makes exhaustive: it already pins a
+  // rest-kit entry to one var with `auth: "bearer"`, and that shape leaves `prefix`/`suffix`/
+  // `transform` (refused beside any `auth`), `headerNames` (needs `auth: "headers"`) and
+  // `tokenUrl` (needs client-credentials) unreachable already. `local` is required by EnvSchema
+  // and every rest-kit spec sets it, so it is structural rather than droppable.
+  .refine(
+    (s) =>
+      s.style !== "rest-kit" ||
+      s.env.every(
+        (e) =>
+          e.authScheme === undefined && e.extraHeaders === undefined && e.tokenLocal === undefined,
+      ),
+    {
+      message:
+        '"authScheme", "extraHeaders" and "tokenLocal" apply only to a style that emits an env ' +
+        "accessor — a rest-kit connector emits none, so each would be silently dropped at " +
+        "emission. makeRestToolRegistrar writes the Authorization header itself; a static extra " +
+        "header goes in fetchHelper.inlineHeaders",
     },
   )
   // Not a validate.ts identifier claim, because the colliding names are not spec-authored:

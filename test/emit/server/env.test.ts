@@ -646,6 +646,22 @@ describe("extraHeaders rejections", () => {
     expect(() => env({ ...base, extraHeaders: { "1": "x" } })).toThrow();
   });
 
+  // The sibling case of the three above, and the one the first spelling of this rule missed: it
+  // seeded `reserved` with Accept/Authorization/headerNames and never added the extraHeaders keys
+  // it walked, so a key could collide with an emitted header but not with another extraHeaders
+  // key. Both spellings reach the SAME emitted defect — `extraProps` writes two properties, and
+  // fetch's Headers merges them into one header carrying both values — so a rule that catches one
+  // and not the other is drawing a line the runtime does not.
+  it("refuses two extraHeaders keys differing only in case", () => {
+    expect(() => env({ ...base, extraHeaders: { "X-Api": "1", "x-api": "2" } })).toThrow(/X-Api/);
+  });
+
+  it("accepts two extraHeaders keys that differ by more than case", () => {
+    expect(() =>
+      env({ ...base, extraHeaders: { "X-Api": "1", "X-Api-Version": "2" } }),
+    ).not.toThrow();
+  });
+
   it("refuses extraHeaders on client-credentials", () => {
     expect(() =>
       env({

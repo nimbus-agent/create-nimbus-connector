@@ -676,6 +676,42 @@ describe("parseSpec", () => {
     expect(() => parseSpec(ok)).not.toThrow();
   });
 
+  // The three fields the auth-expressiveness work added are all read by `renderEnvAccessor`, and
+  // a rest-kit connector emits no env accessor at all (`renderEnvAccessors` is gated on
+  // `isHandStyle` in src/emit/server/index.ts) — `makeRestToolRegistrar` resolves the credential
+  // itself and writes its own `Authorization`. So each would validate and then vanish at emission,
+  // the same failure the "no auth mode set" rule refuses one layer down and the same one the
+  // fetchHelper rule above refuses for `headers`/`normalizeLeadingSlash`/`jsonFallbackRaw`.
+  //
+  // Only these three, deliberately. `local` is REQUIRED by EnvSchema and `discord` sets it, so
+  // rest-kit cannot refuse it without refusing every rest-kit spec; `prefix`/`suffix`/`transform`
+  // are already refused beside any `auth`, and `headerNames`/`tokenUrl` need a mode the rule
+  // above already denies rest-kit. Under rest-kit's one-bearer-entry shape these are the only
+  // optional env fields left that emit nothing.
+  for (const [field, value] of [
+    ["authScheme", "Bot"],
+    ["extraHeaders", { "X-Extra": "yes" }],
+    ["tokenLocal", "apiToken"],
+  ] as const) {
+    it(`rejects rest-kit whose env entry declares ${field}, which emits nothing`, () => {
+      const bad = {
+        ...MINIMAL,
+        style: "rest-kit",
+        env: [
+          {
+            vars: ["DISCORD_BOT_TOKEN"],
+            local: "tokenHeaders",
+            bindings: ["t"],
+            auth: "bearer",
+            [field]: value,
+          },
+        ],
+        fetchHelper: { local: "discordFetch", base: "https://discord.com/api/v10" },
+      };
+      expect(() => parseSpec(bad)).toThrow(field);
+    });
+  }
+
   it("rejects rest-kit with two env entries, one auth bearer and one plain", () => {
     const bad = {
       ...MINIMAL,

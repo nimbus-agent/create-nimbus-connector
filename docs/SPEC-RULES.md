@@ -265,6 +265,15 @@ is a plain `(): string` handing back the variable's trimmed value. With it, the 
 `Accept: "application/json"`. The four fields below shape that object; `client-credentials`, the
 fifth mode, is a different construct and has [its own section](#oauth-client-credentials).
 
+**All of this is `hand-rolled` and `read-only-kit` only.** A `rest-kit` connector emits no env
+accessor — `makeRestToolRegistrar` resolves the credential itself and writes its own
+`Authorization` — so `authScheme`, `extraHeaders` and `tokenLocal` are **rejected at parse time**
+on `style: "rest-kit"` rather than accepted and dropped at emission. rest-kit's static-header seam
+is `fetchHelper.inlineHeaders`; it has no equivalent for a scheme word, which is a
+[recorded gap](./ROADMAP.md#known-limitations). The style's other env rules make that list
+exhaustive: a rest-kit connector already must declare exactly one `auth: "bearer"` single-var
+entry, and under that shape no other optional env field survives to be dropped.
+
 ### `authScheme` — the scheme word in the `Authorization` value
 
 `auth: "bearer"` emits `` Authorization: `Bearer ${t}` ``. `authScheme` replaces the word:
@@ -328,12 +337,14 @@ ordinary header-name hygiene, no more.
   `"bearer"`, `"basic"`, `"headers"` — rather than "not client-credentials", because with no `auth`
   the accessor takes the plain `(): string` branch and returns no header object at all: the field
   would validate and then silently vanish at emission.
-- a key colliding **case-insensitively** with `Accept`, with `Authorization`, or with one of this
-  entry's own `headerNames`. This is not a duplicate object key — `{ accept, Accept }` compiles,
-  lints and passes every byte gate — but `fetch` builds a `Headers` from the object, which
-  normalizes field names, and the two would combine into one header carrying both values. A clash
-  with a `headerNames` entry says so in the message, because fixing it means editing a different
-  field.
+- a key colliding **case-insensitively** with `Accept`, with `Authorization`, with one of this
+  entry's own `headerNames`, or with **another `extraHeaders` key of the same entry**. This is not a
+  duplicate object key — `{ accept, Accept }` compiles, lints and passes every byte gate — but
+  `fetch` builds a `Headers` from the object, which normalizes field names, and the two would
+  combine into one header carrying both values. All four sources are checked against one set, so
+  `{ "X-Api": "1", "x-api": "2" }` is refused for the same reason and by the same rule as a clash
+  with `Accept`. A clash with a `headerNames` entry says so in the message, because fixing it means
+  editing a different field.
 
 ### `tokenLocal` — splitting the read out of the wrapper
 
