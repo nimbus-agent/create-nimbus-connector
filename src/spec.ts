@@ -1378,6 +1378,23 @@ export const EnvSchema = z
       '"tokenLocal" must differ from "local" — the two name two functions declared in the ' +
       "same module",
   })
+  // `auth: "basic"` is the one mode whose prefix/suffix refine above stays enabled with
+  // `tokenLocal` set (that refine's exception is unconditional on `auth === "basic"`, with no
+  // check against `tokenLocal`) — so without this rule, a spec could ask the split wrapper to
+  // pass `encodeBasicAuthHeader` a DECORATED call: `` encodeBasicAuthHeader(`${prefix}${apiKey()}`, "") ``.
+  // No recognizer reads a decorated call — `matchSplitWrapperShape`'s basic arm only ever
+  // matches a BARE call to the reader, the one shape `authProps`/`wrapped()` produce when no
+  // affix is set — so accepting this would emit a package the deriver silently misreads: the
+  // reader recovers as a plain accessor, the wrapper stays unclaimed, and `tokenLocal`/`auth`/
+  // `prefix` all vanish rather than round-tripping. Refused instead, at zero cost: no corpus
+  // connector needs the decorated split form (lever/greenhouse write the bare call; zendesk's
+  // decorated username is fused two-var, never split), so there is no shape here to preserve.
+  .refine((e) => e.tokenLocal === undefined || (e.prefix === undefined && e.suffix === undefined), {
+    message:
+      '"tokenLocal" cannot be combined with "prefix" or "suffix" — decorate the credential in ' +
+      'a fused accessor (drop "tokenLocal") instead, since no recognizer reads a decorated ' +
+      "split reader call back out of the emitted wrapper",
+  })
   .refine((e) => e.authScheme === undefined || e.auth === "bearer", {
     message:
       '"authScheme" is only valid when auth is "bearer" — it names the scheme word in the ' +

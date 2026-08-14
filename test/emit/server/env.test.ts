@@ -391,6 +391,36 @@ describe("tokenLocal rejections", () => {
       env({ vars: ["U"], local: "baseUrl", tokenLocal: "raw", bindings: ["u"], required: true }),
     ).toThrow(/auth/);
   });
+
+  it("refuses tokenLocal combined with prefix, even under auth: basic", () => {
+    // auth: "basic" is the one mode whose prefix/suffix refine stays enabled with an auth set,
+    // so this combination is schema-valid EXCEPT for this rule — and the shape it would emit
+    // (a decorated call spliced into encodeBasicAuthHeader's username argument) is one no
+    // recognizer reads back: matchSplitWrapperShape's basic arm only matches a bare call.
+    expect(() =>
+      env({
+        vars: ["K"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["k"],
+        auth: "basic",
+        prefix: "svc_",
+      }),
+    ).toThrow(/cannot be combined with \\"prefix\\"/);
+  });
+
+  it("refuses tokenLocal combined with suffix, even under auth: basic", () => {
+    expect(() =>
+      env({
+        vars: ["K"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["k"],
+        auth: "basic",
+        suffix: "/token",
+      }),
+    ).toThrow(/cannot be combined with \\"prefix\\"/);
+  });
 });
 
 describe("header object line breaks (characterisation)", () => {

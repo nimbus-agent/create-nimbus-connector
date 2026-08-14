@@ -452,8 +452,10 @@ type Credential = {
 /**
  * The one security scheme as an auth mode, or `undefined` once it has been refused.
  *
- * `basic` carries TWO suffixes because `EnvSchema`'s own refine requires exactly two variables for
- * that mode — a username and a password. Refusing a scheme the spec language models natively would
+ * `basic` carries TWO suffixes because an OpenAPI `http`/`basic` security scheme says only "basic
+ * auth is used" — it carries no signal for the one-var, literal-`""`-password shape `EnvSchema`
+ * also accepts (lever, greenhouse), so a username and a password is the only mapping this reader
+ * can infer from the document alone. Refusing a scheme the spec language models natively would
  * be a gap in this mapper rather than a limit of the generator, and that is the test applied to
  * every arm here **with one stated exception**: `auth: "client-credentials"` IS modelled natively,
  * and an oauth2 `clientCredentials` flow is still refused. The reason is not that the mode is
