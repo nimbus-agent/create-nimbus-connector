@@ -1181,19 +1181,45 @@ export const EnvSchema = z
     /** Header name per var, required when auth === "headers". */
     headerNames: z.array(z.string().min(1)).optional(),
     /**
-     * Split a bearer accessor in two: a `(): string` accessor named by this field, which
-     * reads and guards the variable, and `local`, reduced to a wrapper that builds the
-     * header from a call to it — `function apiToken(): string` plus
-     * `function authHeader(): Record<string, string>` returning `` `Bearer ${apiToken()}` ``.
-     * Omitted keeps the single fused accessor, which is what newrelic/datadog/grafana/sentry
-     * emit.
+     * Split a single-var auth accessor in two: a `(): string` accessor named by this field,
+     * which reads and guards the variable, and `local`, reduced to a wrapper built from
+     * whichever `auth` mode the entry declares — `function apiToken(): string` plus, for
+     * `auth: "bearer"`, `function authHeader(): Record<string, string>` returning
+     * `` `Bearer ${apiToken()}` ``. Omitted keeps the single fused accessor, which is what
+     * newrelic/datadog/grafana/sentry emit. Requires exactly one "vars" entry and an "auth"
+     * mode — see the refine below.
      *
-     * **12** corpus connectors are byte-reproducible by this field. The membership rule is
-     * narrower than "splits the accessor in two", and the difference matters — see
-     * renderSplitBearer in src/emit/server/env.ts, which states the criterion and lists
-     * them.
+     * **12** corpus connectors are byte-reproducible by this field's `auth: "bearer"` form.
+     * The membership rule is narrower than "splits the accessor in two", and the difference
+     * matters — see renderSplitAccessor in src/emit/server/env.ts, which states the criterion
+     * and lists them. That count predates this field reaching `auth: "basic"` (one var, a
+     * literal `""` password — lever, greenhouse) and `auth: "headers"`; it does not cover
+     * those two, and recounting against them is a separate exercise from this change.
      */
     tokenLocal: identifierField().optional(),
+    /**
+     * The Authorization scheme word, replacing the literal `Bearer`. Omitted means `Bearer`.
+     *
+     * The separating space is the EMITTER's, not part of this value: every corpus alternate is
+     * one word plus one space — `Token ` (dbt, flagsmith, readwise), `token ` (snyk), `Bot `
+     * (discord) — so a field carrying the space could express a spacing nothing writes, and the
+     * deriver would have an open string to invert instead of one quasi shape.
+     *
+     * The character class is the security guard, and it is deliberately an ALLOWLIST rather
+     * than `rawSplicedString`'s denylist. This value is spliced into a template literal, which
+     * is exactly where `env[].prefix` admitted an executable IIFE into the Authorization header
+     * of every request. A denylist enumerates the sequences that are known to be dangerous; this
+     * makes every one of them unrepresentable. `test/raw-splice.test.ts` probes through
+     * `parseSpec`, so a field guarded this way is correctly absent from its census — see that
+     * file's own docstring on identifier-guarded fields.
+     */
+    authScheme: z
+      .string()
+      .regex(
+        /^[A-Za-z][A-Za-z0-9-]*$/,
+        'must be a single scheme word — letters, digits and hyphens, starting with a letter. The separating space is the emitter\'s, so write "Token", not "Token "',
+      )
+      .optional(),
     /**
      * Token endpoint, required when auth === "client-credentials".
      *
@@ -1205,6 +1231,30 @@ export const EnvSchema = z
     scope: z.string().min(1).optional(),
     /** ramp sends Basic; powerbi, looker and teams put client_secret in the body. */
     credentialsIn: z.enum(["basic", "body"]).optional(),
+    /**
+     * Static, literal-valued headers emitted between the auth entry and the trailing `Accept`,
+     * which is where all three corpus instances put them: intercom's `"Intercom-Version"`,
+     * snowflake's `"Content-Type"`, zotero's `"Zotero-API-Version"`.
+     *
+     * The key rule buys two things, both silent if skipped. A key colliding case-insensitively
+     * with another header is not a duplicate object key — `{ accept, Accept }` compiles, lints
+     * and passes every byte gate; the damage is that `fetch` builds a `Headers` from it, which
+     * normalizes field names, and the two combine into one header carrying both values. And a
+     * leading letter is required because JS hoists INTEGER-LIKE keys to the front of an object
+     * in numeric order, so a key of "1" would emit ahead of Authorization wherever the spec put
+     * it. Values reach the emitter through JSON.stringify and are not a raw splice.
+     */
+    extraHeaders: z
+      .record(
+        z
+          .string()
+          .regex(
+            /^[A-Za-z][A-Za-z0-9-]*$/,
+            "a header name must start with a letter and contain only letters, digits and hyphens",
+          ),
+        z.string(),
+      )
+      .optional(),
   })
   .refine((e) => !(e.required && e.default !== undefined), {
     message:
@@ -1289,8 +1339,11 @@ export const EnvSchema = z
         'only an entry with auth: "basic", auth: "headers" or auth: "client-credentials" may declare multiple "vars"',
     },
   )
-  .refine((e) => e.auth !== "basic" || e.vars.length === 2, {
-    message: 'auth: "basic" requires exactly two "vars" — a username and a password',
+  .refine((e) => e.auth !== "basic" || e.vars.length === 1 || e.vars.length === 2, {
+    message:
+      'auth: "basic" takes one or two "vars" — two are a username and a password; one is a ' +
+      'credential passed as the username with a literal "" password, which is what lever and ' +
+      "greenhouse write",
   })
   .refine((e) => e.auth !== "client-credentials" || e.vars.length === 2, {
     message: 'auth: "client-credentials" requires exactly two "vars" — a client id and a secret',
@@ -1310,15 +1363,119 @@ export const EnvSchema = z
   .refine((e) => e.credentialsIn === undefined || e.auth === "client-credentials", {
     message: '"credentialsIn" is only valid when auth is "client-credentials"',
   })
-  .refine((e) => e.tokenLocal === undefined || e.auth === "bearer", {
+  // One sentence with no exceptions: tokenLocal splits the READ into its own accessor, and the
+  // wrapper is then built from whatever auth mode the entry declares. Two-var basic and
+  // client-credentials are excluded by the var count rather than by a named list, so a future
+  // mode needs no edit here. `required` alone is not enough — without an auth mode there is no
+  // wrapper for the reader to feed, and `local` would be emitted as a plain `(): string`.
+  .refine((e) => e.tokenLocal === undefined || (e.vars.length === 1 && e.auth !== undefined), {
     message:
-      '"tokenLocal" is only valid when auth is "bearer" — it names the raw-token accessor the ' +
-      "bearer header wrapper calls, and no other auth mode emits one",
+      '"tokenLocal" requires a single "vars" entry and an "auth" mode — it names the reader the ' +
+      "header wrapper calls, and an entry with no auth emits no wrapper",
   })
   .refine((e) => e.tokenLocal === undefined || e.tokenLocal !== e.local, {
     message:
       '"tokenLocal" must differ from "local" — the two name two functions declared in the ' +
       "same module",
+  })
+  // `auth: "basic"` is the one mode whose prefix/suffix refine above stays enabled with
+  // `tokenLocal` set (that refine's exception is unconditional on `auth === "basic"`, with no
+  // check against `tokenLocal`) — so without this rule, a spec could ask the split wrapper to
+  // pass `encodeBasicAuthHeader` a DECORATED call: `` encodeBasicAuthHeader(`${prefix}${apiKey()}`, "") ``.
+  // No recognizer reads a decorated call — `matchSplitWrapperShape`'s basic arm only ever
+  // matches a BARE call to the reader, the one shape `authProps`/`wrapped()` produce when no
+  // affix is set — so accepting this would emit a package the deriver silently misreads: the
+  // reader recovers as a plain accessor, the wrapper stays unclaimed, and `tokenLocal`/`auth`/
+  // `prefix` all vanish rather than round-tripping. Refused instead, at zero cost: no corpus
+  // connector needs the decorated split form (lever/greenhouse write the bare call; zendesk's
+  // decorated username is fused two-var, never split), so there is no shape here to preserve.
+  .refine((e) => e.tokenLocal === undefined || (e.prefix === undefined && e.suffix === undefined), {
+    message:
+      '"tokenLocal" cannot be combined with "prefix" or "suffix" — decorate the credential in ' +
+      'a fused accessor (drop "tokenLocal") instead, since no recognizer reads a decorated ' +
+      "split reader call back out of the emitted wrapper",
+  })
+  .refine((e) => e.authScheme === undefined || e.auth === "bearer", {
+    message:
+      '"authScheme" is only valid when auth is "bearer" — it names the scheme word in the ' +
+      "Authorization value, and no other auth mode emits one",
+  })
+  // A second spelling of the omitted form is the defect the ROADMAP's `tags: true` note
+  // records: two inputs, one output, and the shorter one gets trusted without being checked.
+  // It also keeps the deriver total — recovering "Bearer " omits the field, and no other legal
+  // input produces those bytes.
+  .refine((e) => e.authScheme !== "Bearer", {
+    message:
+      '"authScheme": "Bearer" is the default — omit it. Two spellings of one emitted value is ' +
+      "what this rule exists to prevent",
+  })
+  .refine((e) => e.extraHeaders === undefined || e.auth !== "client-credentials", {
+    message:
+      '"extraHeaders" is not valid with auth: "client-credentials" — its wrapper is a separate ' +
+      "async function with no corpus variance in its header object",
+  })
+  // A POSITIVE allowlist, not merely "not client-credentials": the client-credentials refine
+  // above catches that one auth mode by name (a message worth keeping distinct — it explains
+  // WHY, via the token wrapper being a separate function), but it says nothing about `auth`
+  // being ABSENT. With no `auth`, `renderEnvAccessor` (src/emit/server/env.ts) dispatches to the
+  // plain `(): string` branch, whose `returnLines` never calls `extraProps` — so an entry with
+  // `extraHeaders` set and no `auth` validated here and then had the field silently vanish at
+  // emission, the exact "accepted at parse time, discarded at emit time" class this repo keeps
+  // removing (see `isEnvRefHeaderValue`'s own docstring for a prior instance of it). The
+  // allowlist form is what cannot go stale as a new `auth` value is added later: a denylist would
+  // need a new clause for each one, an allowlist needs none.
+  .refine(
+    (e) =>
+      e.extraHeaders === undefined ||
+      e.auth === "bearer" ||
+      e.auth === "basic" ||
+      e.auth === "headers",
+    {
+      message:
+        '"extraHeaders" requires "auth" to be "bearer", "basic" or "headers" — with no auth ' +
+        "wrapper there is no returned header object for a static entry to join, so it would be " +
+        "silently dropped at emission",
+    },
+  )
+  .superRefine((e, ctx) => {
+    // Two collision sources, worded differently on purpose: a clash with the always-emitted
+    // Accept/Authorization names the header itself, while a clash with a "headerNames" entry
+    // says so explicitly — an author fixing the latter has to go edit a DIFFERENT field, and a
+    // message that only repeated the header name back would leave them guessing where it came
+    // from.
+    const reserved = new Map<string, string>([
+      ["accept", "Accept"],
+      ["authorization", "Authorization"],
+    ]);
+    const fromHeaderNames = new Set<string>();
+    for (const name of e.headerNames ?? []) {
+      reserved.set(name.toLowerCase(), name);
+      fromHeaderNames.add(name.toLowerCase());
+    }
+    for (const key of Object.keys(e.extraHeaders ?? {})) {
+      const lower = key.toLowerCase();
+      const clash = reserved.get(lower);
+      if (clash === undefined) {
+        // Each accepted key joins `reserved`, so the NEXT one is checked against it too. Without
+        // this line the rule only caught collisions with headers emitted from somewhere else, and
+        // `{ "X-Api": "1", "x-api": "2" }` — two keys of this same record — validated. The emitted
+        // defect is identical either way: `extraProps` writes both properties and fetch's Headers
+        // merges them into one header carrying both values.
+        reserved.set(lower, key);
+        continue;
+      }
+      const named = fromHeaderNames.has(lower)
+        ? `the "headerNames" entry ${JSON.stringify(clash)}`
+        : JSON.stringify(clash);
+      ctx.addIssue({
+        code: "custom",
+        path: ["extraHeaders", key],
+        message:
+          `collides with ${named}, which this accessor already emits. HTTP field names are ` +
+          "case-insensitive, so fetch's Headers would merge the two into one header carrying " +
+          "both values",
+      });
+    }
   });
 
 export const FetchHelperSchema = z
@@ -1474,6 +1631,32 @@ export const ConnectorSpecSchema = z
     {
       message:
         'a rest-kit connector must declare exactly one env entry, with auth: "bearer" and a single var — makeRestToolRegistrar resolves the token itself and no env accessors are emitted',
+    },
+  )
+  // The same rule as the fetchHelper one above, for the env half: a field only `renderEnvAccessor`
+  // reads is dead on a style that emits no accessor, and validating it would let it vanish between
+  // spec and output with nothing on screen. `makeRestToolRegistrar` resolves the credential itself
+  // and writes its own `Authorization`; rest-kit's header seam is `fetchHelper.inlineHeaders`,
+  // which is where a static extra header goes on this style.
+  //
+  // These three and no others, which the refine above is what makes exhaustive: it already pins a
+  // rest-kit entry to one var with `auth: "bearer"`, and that shape leaves `prefix`/`suffix`/
+  // `transform` (refused beside any `auth`), `headerNames` (needs `auth: "headers"`) and
+  // `tokenUrl` (needs client-credentials) unreachable already. `local` is required by EnvSchema
+  // and every rest-kit spec sets it, so it is structural rather than droppable.
+  .refine(
+    (s) =>
+      s.style !== "rest-kit" ||
+      s.env.every(
+        (e) =>
+          e.authScheme === undefined && e.extraHeaders === undefined && e.tokenLocal === undefined,
+      ),
+    {
+      message:
+        '"authScheme", "extraHeaders" and "tokenLocal" apply only to a style that emits an env ' +
+        "accessor — a rest-kit connector emits none, so each would be silently dropped at " +
+        "emission. makeRestToolRegistrar writes the Authorization header itself; a static extra " +
+        "header goes in fetchHelper.inlineHeaders",
     },
   )
   // Not a validate.ts identifier claim, because the colliding names are not spec-authored:

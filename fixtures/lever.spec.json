@@ -1,0 +1,61 @@
+{
+  "name": "lever",
+  "title": "Lever",
+  "displayName": "Lever",
+  "description": "Lever connector (read-only). Surfaces the company's published Lever job postings as `lever:posting` items in the local index — the posting title, the team/department/location/commitment/level categories, the workflow state, tags, the hosted job-page URL and apply URL, and the requisition code. Useful for answering recruiting questions (\"which backend roles are open?\", \"find the posting for the staff SRE position\") without leaving Nimbus. HTTP Basic auth where the Lever API key is the username and the password is empty (`Authorization: Basic base64(<api_key>:)` — the trailing colon is the empty password; never logged). The SaaS host (api.lever.co) is fixed. Lever paginates `/v1/postings` with a `hasNext` flag plus a `next` offset cursor, returning the `{ data, hasNext, next }` envelope. `createdAt` / `updatedAt` are epoch MILLISECONDS (passed through verbatim on index — NO parse, NO ×1000). Opportunities / candidates are deliberately deferred (candidate PII; out of scope for v1) — v1 indexes job postings only.",
+  "serviceLabel": "Lever",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.lever.co"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["LEVER_API_KEY"],
+      "local": "authHeader",
+      "tokenLocal": "apiKey",
+      "bindings": ["t"],
+      "auth": "basic"
+    }
+  ],
+  "fetchHelper": {
+    "local": "leverGet",
+    "base": "https://api.lever.co",
+    "baseConst": "BASE",
+    "headers": "authHeader",
+    "staticPathStyle": "template"
+  },
+  "tools": [
+    {
+      "name": "lever_list",
+      "description": "List the company's published Lever job postings (`GET /v1/postings?limit=100`). Returns the offset-cursor envelope `{ data: [...], hasNext: boolean, next?: string }` — `data` holds the posting objects.",
+      "path": "/v1/postings?limit=100"
+    },
+    {
+      "name": "lever_get",
+      "description": "Fetch one Lever job posting by its id (`GET /v1/postings/{id}`). Returns the `{ data: {...} }` envelope. Throws when no match is found.",
+      "args": { "id": { "type": "string", "min": 1 } },
+      "path": "/v1/postings/${arg.id|enc}"
+    },
+    {
+      "name": "lever_search",
+      "description": "Substring search across the company's Lever job postings (first page only). Matches the query against the posting text (title), state, and the team/department/location categories and tags (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "path": "/v1/postings?limit=100",
+      "rows": "data",
+      "maxLimit": 100,
+      "filter": {
+        "export": "filterLeverPostings",
+        "fields": [
+          "text",
+          "state",
+          { "path": ["categories", "team"] },
+          { "path": ["categories", "department"] },
+          { "path": ["categories", "location"] },
+          { "tags": "text" }
+        ]
+      }
+    }
+  ]
+}

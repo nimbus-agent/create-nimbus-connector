@@ -221,7 +221,7 @@ describe("the raw-splice census", () => {
     // Without this, a `stringLeaves` that walked nothing, or an `everyEmittedFile` that returned
     // nothing, would report an empty census — and an empty census compared against an empty
     // expectation is the exact false green this whole file exists to refuse. The numbers are
-    // floors, not measurements: the sweep runs thousands of probes over the 24 fixtures.
+    // floors, not measurements: the sweep runs thousands of probes over the 27 fixtures.
     expect(specDocuments.length).toBeGreaterThan(20);
     expect(CENSUS.probes).toBeGreaterThan(1000);
     expect(CENSUS.inspected).toBeGreaterThan(1000);
@@ -310,7 +310,7 @@ describe("every carrier refuses every sequence that could break out of its const
  * nineteen of the twenty-two fixtures — the second stale count inside one docstring that had
  * just been rewritten to remove the first.
  */
-describe("what the 24 fixtures put in a guarded field", () => {
+describe("what the 27 fixtures put in a guarded field", () => {
   function guardedValues(): { field: string; value: string; file: string }[] {
     const out: { field: string; value: string; file: string }[] = [];
     for (const { file, doc } of specDocuments) {
@@ -344,7 +344,7 @@ describe("what the 24 fixtures put in a guarded field", () => {
     // to make this field a carrier at all (see EXPECTED_CARRIERS's own comment on it).
     expect(counts).toEqual({
       "fetchHelper.base": 7,
-      "tools[].path": 21,
+      "tools[].path": 24,
       "tools[].pathWhen[].path": 1,
     });
   });
@@ -451,6 +451,27 @@ const PROBED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unkn
   "filesystem.write[]": (m) => ({ filesystem: { read: [], write: [`/tmp/${m}`] } }),
 };
 
+/**
+ * String positions no fixture writes, each paired with a patch that proves — by actually calling
+ * `parseSpec`, not by a comment claiming it — that the field's own schema pattern refuses
+ * `RAW_MARKER` before the marker can reach emission. This is `PROBED_WITHOUT_A_FIXTURE`'s mirror:
+ * that loop below proves the marker SURVIVES to emission at each of its fields, this one proves
+ * it never gets past `parseSpec` at each of its fields. A field belongs here rather than there
+ * exactly when its patch cannot even be applied — `PROBED_WITHOUT_A_FIXTURE`'s own probe assumes
+ * `parseSpec` accepts the patched value, which is false for an identifier/pattern-guarded field
+ * (see the paragraph above `RAW_MARKER`'s declaration, on a field "guarded by an identifier
+ * rule"). Same shape as its sibling — `Record<string, (marker: string) => unknown>` — so the two
+ * mechanisms stay symmetric and a field can move between them without a reshape.
+ *
+ * **It is currently EMPTY, and the loop below therefore generates no tests.** Read the docstring
+ * above as what an entry would mean, not as a claim that some field is proven guarded here today.
+ * `env[].authScheme` was the only entry it has ever had, and it left when `zzauth` began setting
+ * the field: a fixture that reaches a position beats a probe that patches one, and the census
+ * assertion below forces the move rather than leaving both. Add an entry when a pattern-guarded
+ * position genuinely has no fixture — that assertion names the position when one appears.
+ */
+const REFUSED_WITHOUT_A_FIXTURE: Readonly<Record<string, (marker: string) => unknown>> = {};
+
 describe("the census's coverage of the spec language", () => {
   const declared = new Set<string>();
   stringPositions(SCHEMA, "", declared);
@@ -459,7 +480,9 @@ describe("the census's coverage of the spec language", () => {
 
   it("reaches every free-string position the schema declares, or probes it by hand", () => {
     const unreached = [...declared].filter((p) => !reached.has(p)).sort();
-    expect(unreached).toEqual(Object.keys(PROBED_WITHOUT_A_FIXTURE).sort());
+    expect(unreached).toEqual(
+      [...Object.keys(PROBED_WITHOUT_A_FIXTURE), ...Object.keys(REFUSED_WITHOUT_A_FIXTURE)].sort(),
+    );
   });
 
   it("is non-vacuous: the schema walk found positions and the fixtures reached most of them", () => {
@@ -467,7 +490,9 @@ describe("the census's coverage of the spec language", () => {
     // once the list were emptied, and a `positionsReached` that returned everything would too.
     expect(declared.size).toBeGreaterThan(20);
     expect(reached.size).toBeGreaterThan(20);
-    expect(declared.size - reached.size).toBe(Object.keys(PROBED_WITHOUT_A_FIXTURE).length);
+    expect(declared.size - reached.size).toBe(
+      Object.keys(PROBED_WITHOUT_A_FIXTURE).length + Object.keys(REFUSED_WITHOUT_A_FIXTURE).length,
+    );
   });
 
   for (const [field, patch] of Object.entries(PROBED_WITHOUT_A_FIXTURE)) {
@@ -477,12 +502,35 @@ describe("the census's coverage of the spec language", () => {
       const files = everyEmittedFile(spec);
       const ts = files.filter((f) => f.path.at(-1)!.endsWith(".ts"));
       // Non-vacuity for this probe specifically: the patched value has to have reached the
-      // generator at all, which the manifest — where it is JSON-quoted — is the proof of.
-      const manifest = files.find((f) => f.path.at(-1) === "nimbus.extension.json")!;
-      expect(manifest.content).toContain('Zq\\"Zq');
+      // generator at all, proven by finding the ESCAPED marker somewhere among the emitted
+      // files — every current entry (`id`, `filesystem.*`) lands it in the manifest, through the
+      // whole-document JSON.stringify. Asserting "somewhere among ALL emitted files" rather than
+      // naming that file is deliberate: `env[].extraHeaders.*` was briefly an entry here, before
+      // `zzauth` and `intercom` began setting it, and landed the marker in src/server.ts instead,
+      // through extraProps' own JSON.stringify. One loop covers both kinds because it does not
+      // assume which file a value reaches.
+      expect(files.some((f) => f.content.includes('Zq\\"Zq'))).toBe(true);
       expect(ts.filter((f) => f.content.includes(RAW_MARKER)).map((f) => f.path.join("/"))).toEqual(
         [],
       );
+    });
+  }
+
+  for (const [field, patch] of Object.entries(REFUSED_WITHOUT_A_FIXTURE)) {
+    it(`probes "${field}", which no fixture sets, and finds parseSpec refuses the marker`, () => {
+      const base = specDocuments.find((s) => s.file === "zzreadonly.spec.json")!.doc as object;
+      // Asserting merely "throws" would pass for the wrong reason too — a patch malformed in some
+      // OTHER way would throw just as loudly. The path segment pins the failure to the field this
+      // entry claims to probe, so a future entry patching the wrong field, or one whose field
+      // turns out not to be guarded after all, fails here instead of passing by accident.
+      // A LITERAL string, not a RegExp: bun's `toThrow(string)` substring-matches the message
+      // (verified against `envX0Y.authScheme`, which a regex `env[0].authScheme` would match and
+      // the literal does not), so the field path needs no escaping and this assertion has no
+      // meta-character to get wrong. The first spelling built a RegExp through a hand-rolled
+      // escaper covering `.`/`[`/`]` and nothing else — CodeQL `js/incomplete-sanitization`,
+      // flagged on the backslash it missed. An escaper is the wrong tool when no regex is needed.
+      const fieldPath = field.replace(/\[\]/g, "[0]");
+      expect(() => parseSpec({ ...base, ...(patch(RAW_MARKER) as object) })).toThrow(fieldPath);
     });
   }
 });

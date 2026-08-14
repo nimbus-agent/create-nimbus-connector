@@ -1,0 +1,32 @@
+{
+  "name": "zzauth",
+  "title": "Zzauth",
+  "displayName": "ZZ Auth",
+  "description": "Throwaway auth-expressiveness fixture, hand-rolled style. Matches no real connector. Exercises a fused authScheme accessor, a fused one-var basic accessor, and a fused accessor carrying two extraHeaders — none of which any single real-connector fixture combines.",
+  "serviceLabel": "ZZ Auth",
+  "style": "hand-rolled",
+  "network": ["api.zzauth.test"],
+  "syncInterval": 300,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    { "vars": ["ZZAUTH_TOKEN"], "local": "authHeaders", "bindings": ["t"], "auth": "bearer", "authScheme": "Token" },
+    { "vars": ["ZZAUTH_KEY"], "local": "basicHeaders", "bindings": ["k"], "auth": "basic" },
+    {
+      "vars": ["ZZAUTH_SECRET"],
+      "local": "extraHeadersAuth",
+      "bindings": ["s"],
+      "auth": "bearer",
+      "extraHeaders": { "X-Zzauth-Second": "2", "X-Zzauth-First": "1" }
+    }
+  ],
+  "fetchHelper": { "local": "zzauthGet", "base": "https://api.zzauth.test", "headers": "authHeaders" },
+  "tools": [
+    { "name": "zzauth_item_list", "description": "List items.", "path": "/v1/items" },
+    {
+      "name": "zzauth_item_get",
+      "description": "Get one item by id.",
+      "args": { "itemId": { "type": "string", "min": 1 } },
+      "path": "/v1/items/${arg.itemId|enc}"
+    }
+  ]
+}

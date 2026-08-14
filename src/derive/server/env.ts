@@ -35,6 +35,7 @@ import {
   optionalCallCallee,
   optionalMemberName,
   optionalMemberObject,
+  type Prop,
   propertySignature,
   quoteMinimalProps,
   regExpLit,
@@ -61,19 +62,23 @@ export type EnvEntry = {
   suffix?: string;
   auth?: "bearer" | "basic" | "headers" | "client-credentials";
   headerNames?: string[];
-  /** Split-bearer's raw-token accessor name — see matchSplitBearerReader/-Wrapper below. */
+  /** The split accessor's raw-credential reader name — see matchSplitBearerReader/-Wrapper below. */
   tokenLocal?: string;
+  /** The non-`Bearer` scheme word — see `matchSchemeTemplate` below. */
+  authScheme?: string;
   /** The three `auth: "client-credentials"` fields — see `matchClientCredentials` below. */
   tokenUrl?: string;
   scope?: string;
   credentialsIn?: "basic" | "body";
+  /** Static headers recovered from the trailing run before Accept — see `splitExtraHeaders`. */
+  extraHeaders?: Record<string, string>;
 };
 
 /**
  * `Record<string, string>` exactly — the head name AND both type arguments.
  *
  * Every accessor this module recognizes that returns a header record returns that instantiation
- * and no other: `renderEnvAccessor`'s auth branch, `renderSplitBearer`'s wrapper, `renderBasic`,
+ * and no other: `renderEnvAccessor`'s auth branch, `renderSplitAccessor`'s wrapper, `renderBasic`,
  * and `renderClientCredentials` inside a `Promise<…>` (all in src/emit/server/env.ts). The four
  * matchers below used to pin it with `typeAnnotationName(...) === "Record"`, which reports the
  * head name only — so `Record<string, number>` and `Record<unknown, unknown>` satisfied it, and a
@@ -263,15 +268,83 @@ function classifyPlainReturn(
   return { ...inner, prefix, suffix };
 }
 
-type AuthShape = { auth: "bearer" } | { auth: "headers"; headerNames: string[] };
+/**
+ * The Authorization template `authProps` writes — `` `<scheme> ${<value>}` `` — reporting the
+ * scheme and checking the value node. Returns the scheme WITHOUT its trailing space, or
+ * undefined when the node is not that shape.
+ *
+ * Shared between the fused reading (classifyAuthReturn) and the split one
+ * (matchSplitBearerWrapper) because the emitter writes one template for both; a second copy is
+ * how the two would drift, which is `src/spec.ts`'s own IDENTIFIER_RE lesson.
+ */
+function matchSchemeTemplate(
+  node: AstNode,
+  valueMatches: (expr: AstNode) => boolean,
+): string | undefined {
+  const t = templateLiteral(node);
+  if (t?.expressions.length !== 1 || t.quasis[1] !== "") return undefined;
+  const head = t.quasis[0];
+  if (head === undefined || !head.endsWith(" ")) return undefined;
+  const scheme = head.slice(0, -1);
+  // The same allowlist EnvSchema enforces. A head this rejects is bytes no spec produces, so
+  // claiming it would derive a spec that re-emits differently.
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(scheme)) return undefined;
+  return valueMatches(t.expressions[0]!) ? scheme : undefined;
+}
+
+/** `"Bearer"` is the emitter's default and is recorded as an ABSENT field, never as a value. */
+function schemeField(scheme: string): Pick<EnvEntry, "authScheme"> {
+  return scheme === "Bearer" ? {} : { authScheme: scheme };
+}
+
+type AuthShape =
+  | ({ auth: "bearer" } & Pick<EnvEntry, "authScheme" | "extraHeaders">)
+  | ({ auth: "headers"; headerNames: string[] } & Pick<EnvEntry, "extraHeaders">);
+
+/**
+ * Split a recovered property list into the leading auth properties and the trailing STATIC
+ * ones, given how many auth properties the shape expects. Every trailing property must have a
+ * string-literal value — that is the whole of what `extraProps` can write, and a computed value
+ * in that position is a shape no spec regenerates.
+ *
+ * Returns undefined when a non-literal is found, rather than stopping early: a static run
+ * followed by a computed property is not "a shorter static run", it is a different object.
+ */
+function splitExtraHeaders(
+  rest: readonly Prop[],
+  authCount: number,
+): { readonly auth: Prop[]; readonly extras: Record<string, string> } | undefined {
+  if (rest.length < authCount) return undefined;
+  const extras: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const prop of rest.slice(authCount)) {
+    const value = stringLit(prop.value);
+    if (value === undefined) return undefined;
+    // A repeat would OVERWRITE, and the entry would derive to a spec re-emitting one property
+    // where the module had two — the same "claimed function regenerating non-identical bytes"
+    // this file closed once already at `classifyAuthReturn`, and equally invisible to every gate.
+    // Case-insensitively, because `EnvSchema` refuses two `extraHeaders` keys differing only in
+    // case: recovering both would hand back a spec this repo's own `parseSpec` rejects.
+    const lower = prop.key.toLowerCase();
+    if (seen.has(lower)) return undefined;
+    seen.add(lower);
+    extras[prop.key] = value;
+  }
+  return { auth: rest.slice(0, authCount), extras };
+}
+
+/** Omitted when empty, so an accessor with no static headers derives a minimal spec. */
+function extrasField(extras: Record<string, string>): Pick<EnvEntry, "extraHeaders"> {
+  return Object.keys(extras).length === 0 ? {} : { extraHeaders: extras };
+}
 
 /**
  * The two auth return shapes `returnLines` writes: `auth: "bearer"`'s
  * `{ Authorization: \`Bearer ${binding}\`, Accept: "application/json" }`, and
  * `auth: "headers"`'s `{ <name>: <binding>, ..., Accept: "application/json" }` with one entry
- * per var in declaration order. Both always end with the literal `Accept: "application/json"`
- * property — anything else in that position, or a property that isn't a plain key/value pair,
- * is rejected rather than guessed at.
+ * per var in declaration order — each optionally followed by `extraProps`' run of static headers.
+ * Both always end with the literal `Accept: "application/json"` property — anything else in that
+ * position, or a property that isn't a plain key/value pair, is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
   // The widening this comment used to disclose and accept is now closed. `objectProps` merges an
@@ -283,35 +356,31 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
   // `IDENTIFIER_RE` rejects it — so datadog's `"DD-API-KEY"` must arrive quoted and the trailing
   // `Accept` must not. Both mistakes are the same wrong claim, pointed opposite ways.
   const properties = quoteMinimalProps(arg);
-  if (properties?.length !== reads.length + 1) return undefined;
-
+  if (properties === undefined || properties.length < 2) return undefined;
   const last = properties.at(-1)!;
   if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
-
   const rest = properties.slice(0, -1);
 
-  if (rest.length === 1 && reads.length === 1) {
-    const prop = rest[0]!;
-    const t = templateLiteral(prop.value);
-    if (
-      prop.key === "Authorization" &&
-      t?.expressions.length === 1 &&
-      t.quasis[0] === "Bearer " &&
-      t.quasis[1] === "" &&
-      isIdent(t.expressions[0], reads[0]!.binding)
-    ) {
-      return { auth: "bearer" };
+  if (reads.length === 1) {
+    const split = splitExtraHeaders(rest, 1);
+    const prop = split?.auth[0];
+    if (split !== undefined && prop?.key === "Authorization") {
+      const scheme = matchSchemeTemplate(prop.value, (expr) => isIdent(expr, reads[0]!.binding));
+      if (scheme !== undefined) {
+        return { auth: "bearer", ...schemeField(scheme), ...extrasField(split.extras) };
+      }
     }
   }
 
-  if (rest.length === reads.length) {
+  const headerSplit = splitExtraHeaders(rest, reads.length);
+  if (headerSplit !== undefined) {
     const headerNames: string[] = [];
-    for (let i = 0; i < rest.length; i++) {
-      const prop = rest[i]!;
+    for (let i = 0; i < reads.length; i++) {
+      const prop = headerSplit.auth[i]!;
       if (!isIdent(prop.value, reads[i]!.binding)) return undefined;
       headerNames.push(prop.key);
     }
-    return { auth: "headers", headerNames };
+    return { auth: "headers", headerNames, ...extrasField(headerSplit.extras) };
   }
 
   return undefined;
@@ -392,6 +461,10 @@ function buildAuthEntry(arg: AstNode, ctx: EntryContext): EnvEntry | undefined {
     required: false,
     auth: authShape.auth,
     ...(authShape.auth === "headers" ? { headerNames: authShape.headerNames } : {}),
+    ...(authShape.auth === "bearer" && authShape.authScheme !== undefined
+      ? { authScheme: authShape.authScheme }
+      : {}),
+    ...(authShape.extraHeaders !== undefined ? { extraHeaders: authShape.extraHeaders } : {}),
     ...(ctx.defaultValue !== undefined ? { default: ctx.defaultValue } : {}),
   };
 }
@@ -486,13 +559,14 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
 }
 
 /**
- * The reader half of a split-bearer pair — renderSplitBearer's first function: `readLines` +
+ * The reader half of a split-bearer pair — renderSplitAccessor's first function: `readLines` +
  * `guardLines` for exactly one var, then a bare `return <binding>;`. Mirrors criterion 5 of
- * renderSplitBearer's own docstring (src/emit/server/env.ts): the field only ever carries ONE
+ * renderSplitAccessor's own docstring (src/emit/server/env.ts): the field only ever carries ONE
  * var (EnvSchema's multi-var refine admits only auth "basic"/"headers"/"client-credentials",
- * none of which coexist with `tokenLocal`), and the guard is always present — `auth: "bearer"`
- * forces `guardLines`' `needsGuard` regardless of `required`, and no split-bearer entry in the
- * corpus sets a `default` (which would suppress the guard entirely).
+ * none of which coexist with `tokenLocal`), and the guard is always present — `tokenLocal`
+ * requires an `auth` mode (EnvSchema's own refine), which forces `guardLines`' `needsGuard`
+ * regardless of `required`, and no split-bearer entry in the corpus sets a `default` (which
+ * would suppress the guard entirely).
  *
  * This shape is BYTE-IDENTICAL to a plain "required" accessor (recognizeOne's REQUIRED case in
  * the test file) — from this function alone the two are indistinguishable. What tells them
@@ -503,7 +577,7 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
 function matchSplitBearerReader(
   fn: AstNode,
 ): { readonly var: string; readonly binding: string; readonly local: string } | undefined {
-  // renderSplitBearer's reader half is never async and always returns exactly `string`.
+  // renderSplitAccessor's reader half is never async and always returns exactly `string`.
   if (isAsyncFunction(fn) || typeAnnotationName(functionReturnType(fn)) !== "string") {
     return undefined;
   }
@@ -526,22 +600,82 @@ function matchSplitBearerReader(
   return local === undefined ? undefined : { var: read.var, binding: read.binding, local };
 }
 
+type SplitWrapperShape =
+  | ({ readonly auth: "bearer" } & Pick<EnvEntry, "authScheme">)
+  | { readonly auth: "headers"; readonly headerNames: [string] }
+  | { readonly auth: "basic" };
+
 /**
- * The wrapper half — renderSplitBearer's second function: one statement,
- * `return { Authorization: \`Bearer ${<reader>()}\`, Accept: "application/json" };`, calling the
- * reader BY NAME with no arguments. `readerLocal` is the reader's own function name, matched here
- * rather than assumed: a wrapper calling any OTHER function is not this pair (mendeley's inline
- * `` `Bearer ${accessToken()}` `` has no wrapper at all — criterion 1 of renderSplitBearer's
- * docstring, OUT). Shape is not the only membership test: `recognizeEnv` only ever offers this
- * function the statement immediately following a matched reader, so figma/salesforce/
- * stackoverflow/vercel — whose reader and wrapper each satisfy every shape criterion above but
- * have a third accessor (`teamId`/`instanceUrl`/`teamSlug`) sitting between the two — are refused
- * on adjacency instead, correctly rather than conservatively: `renderSplitBearer` emits both
- * functions as one joined string and `renderEnvAccessors` joins `spec.env` in array order, so no
- * spec can produce a layout with a statement between them.
+ * Whether `authProp.value` is a bare, zero-argument call to `readerLocal` — the one value shape
+ * `authProps` ever writes for the split path, whichever auth mode wraps it: `<tokenLocal>()`
+ * with no arguments and no prefix/suffix. A prefix/suffix-decorated split username (`wrapped()`
+ * around the call, `auth: "basic"` only) is not modeled here and is left unclaimed rather than
+ * guessed — no corpus connector or brief fixture exercises that combination, and `matchBasicUserExpr`
+ * stays fused-only (identifier bindings only) for exactly that reason.
  */
-function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | undefined {
-  // renderSplitBearer's wrapper half is never async and always returns `Record<string, string>`
+function callsReader(expr: AstNode, readerLocal: string): boolean {
+  return callTo(expr, readerLocal, 0) !== undefined;
+}
+
+/**
+ * The three shapes `authProps` can write around a SINGLE value — `<tokenLocal>()` — reporting
+ * which one `authProp` is. Mirrors `classifyAuthReturn`'s bearer/headers split for the fused
+ * case, plus a third arm `classifyAuthReturn` never needs: `auth: "basic"` never reaches
+ * `classifyAuthReturn` (its interleaved read/guard/read/guard body shape is refused by
+ * `collectReadLines` before any return is even classified — `recognizeBasicAuth`'s own docstring
+ * says so), but the split wrapper has no such body of its own to disqualify it, so this function
+ * tries it directly.
+ *
+ * Order matters only in that bearer and basic both require `authProp.key === "Authorization"`
+ * and a specific wrapping of the call (a template, or an `encodeBasicAuthHeader(...)` argument);
+ * headers requires the BARE call and accepts any key. The three are structurally disjoint — a
+ * bare call satisfies only the headers arm, a template only the bearer arm, an
+ * `encodeBasicAuthHeader` call only the basic arm — so trying them in sequence never mis-selects.
+ */
+function matchSplitWrapperShape(
+  authProp: Prop,
+  readerLocal: string,
+): SplitWrapperShape | undefined {
+  const bareCall = (expr: AstNode) => callsReader(expr, readerLocal);
+
+  if (authProp.key === "Authorization") {
+    const scheme = matchSchemeTemplate(authProp.value, bareCall);
+    if (scheme !== undefined) return { auth: "bearer", ...schemeField(scheme) };
+
+    const callArguments = callArgs(authProp.value);
+    if (
+      callArguments?.length === 2 &&
+      isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader") &&
+      bareCall(callArguments[0]!) &&
+      stringLit(callArguments[1]) === ""
+    ) {
+      return { auth: "basic" };
+    }
+  }
+
+  return bareCall(authProp.value) ? { auth: "headers", headerNames: [authProp.key] } : undefined;
+}
+
+/**
+ * The wrapper half — renderSplitAccessor's second function: one statement, `return { ... };`,
+ * built by `authProps` from a single value (`<tokenLocal>()`) exactly as it is for the fused
+ * accessors — see `matchSplitWrapperShape` for the three shapes that value can sit inside.
+ * `readerLocal` is the reader's own function name, matched here rather than assumed: a wrapper
+ * calling any OTHER function is not this pair (mendeley's inline `` `Bearer ${accessToken()}` ``
+ * has no wrapper at all — criterion 1 of renderSplitAccessor's docstring, OUT). Shape is not the
+ * only membership test: `recognizeEnv` only ever offers this function the statement immediately
+ * following a matched reader, so figma/salesforce/stackoverflow/vercel — whose reader and wrapper
+ * each satisfy every shape criterion above but have a third accessor (`teamId`/`instanceUrl`/
+ * `teamSlug`) sitting between the two — are refused on adjacency instead, correctly rather than
+ * conservatively: `renderSplitAccessor` emits both functions as one joined string and
+ * `renderEnvAccessors` joins `spec.env` in array order, so no spec can produce a layout with a
+ * statement between them.
+ */
+function matchSplitBearerWrapper(
+  fn: AstNode,
+  readerLocal: string,
+): ({ local: string } & SplitWrapperShape & Pick<EnvEntry, "extraHeaders">) | undefined {
+  // renderSplitAccessor's wrapper half is never async and always returns `Record<string, string>`
   // — both type arguments pinned, not just the head name; see `isStringRecord`.
   if (isAsyncFunction(fn) || !isStringRecord(functionReturnType(fn))) {
     return undefined;
@@ -551,27 +685,31 @@ function matchSplitBearerWrapper(fn: AstNode, readerLocal: string): string | und
   if (statements?.length !== 1) return undefined;
 
   const arg = returnArgument(statements[0]!);
-  // Both keys hardcoded and bare — `renderSplitBearer` writes this line verbatim, so a quoted
-  // spelling recovers the identical local and re-emits the bare form.
-  const properties = bareKeyedProps(arg);
-  if (properties?.length !== 2) return undefined;
-  const [authProp, acceptProp] = properties;
-  if (authProp?.key !== "Authorization") return undefined;
-  if (acceptProp?.key !== "Accept") return undefined;
-  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+  // `quoteMinimalProps`, NOT `bareKeyedProps`: an extra static header's key comes from
+  // `extraHeaders`, a spec field, and `extraProps` quotes it exactly when `IDENTIFIER_RE`
+  // rejects it — so "Intercom-Version" must arrive quoted, the same asymmetry
+  // `classifyAuthReturn`'s own docstring states for `headerNames`. The auth property's OWN key
+  // is quoted or bare on the same rule, since for `auth: "headers"` it too comes from a spec
+  // field (`headerNames`).
+  const properties = quoteMinimalProps(arg);
+  if (properties === undefined || properties.length < 2) return undefined;
+  const last = properties.at(-1)!;
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
+  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  const authProp = split?.auth[0];
+  if (split === undefined || authProp === undefined) return undefined;
 
-  const t = templateLiteral(authProp.value);
-  if (t?.expressions.length !== 1 || t.quasis[0] !== "Bearer " || t.quasis[1] !== "") {
-    return undefined;
-  }
-  const call = t.expressions[0]!;
-  if (callArgs(call)?.length !== 0) return undefined;
-  if (!isIdent(calleeOf(call), readerLocal)) return undefined;
+  const shape = matchSplitWrapperShape(authProp, readerLocal);
+  if (shape === undefined) return undefined;
 
-  return functionName(fn);
+  const local = functionName(fn);
+  return local === undefined ? undefined : { local, ...shape, ...extrasField(split.extras) };
 }
 
-type BasicUser = { readonly prefix?: string; readonly suffix?: string };
+type BasicUser = { readonly prefix?: string; readonly suffix?: string } & Pick<
+  EnvEntry,
+  "extraHeaders"
+>;
 
 /**
  * The username expression `renderBasic` passes to `encodeBasicAuthHeader`: the bare binding, or
@@ -616,12 +754,13 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
 }
 
 /**
- * `auth: "basic"` — the airflow/zendesk shape `renderBasic` writes: `collectBasicPairs`' read+
- * guard pairs (EnvSchema pins this to exactly two, a username and a password) followed by one
- * `return { Authorization: encodeBasicAuthHeader(<user>, <password>), Accept:
- * "application/json" };`. Structurally distinct from every shape `recognizeOne` models — its
- * `collectReadLines` requires ALL reads before the first guard, which `renderBasic`'s interleaved
- * read/guard/read/guard never satisfies — so the two never compete for the same statement.
+ * `auth: "basic"` — the airflow/zendesk/lever shape `renderBasic` writes: `collectBasicPairs`'
+ * read+guard pairs (EnvSchema pins this to one or two — a username alone, with a literal `""`
+ * password, or a username and a password) followed by one `return { Authorization:
+ * encodeBasicAuthHeader(<user>, <password>), Accept: "application/json" };`. Structurally
+ * distinct from every shape `recognizeOne` models — its `collectReadLines` requires ALL reads
+ * before the first guard, which `renderBasic`'s interleaved read/guard/read/guard never
+ * satisfies — so the two never compete for the same statement.
  */
 /**
  * `renderBasic`'s returned header object — `{ Authorization: encodeBasicAuthHeader(<user>, <pass>),
@@ -633,28 +772,42 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * reads the return argument and the two binding names, and nothing else — no statement list, no
  * claim, no function node — which is what makes the seam a seam rather than a cut.
  *
- * Both keys hardcoded and bare, as in `matchSplitBearerWrapper`: `renderBasic` writes this two-key
- * object verbatim, so a module writing the same two headers in the other order, or quoting a key,
- * is refused rather than normalized.
+ * `Authorization` and the trailing `Accept` are hardcoded and bare — `renderBasic` always writes
+ * them in that order, verbatim, so a module writing the two in the other order is refused rather
+ * than normalized. Between them `renderBasic` can also write `extraProps`' run of static headers
+ * (Task 3's `extraHeaders`), so this reads through `quoteMinimalProps`/`splitExtraHeaders` rather
+ * than pinning exactly two bare keys, the same reasoning `matchSplitBearerWrapper` and
+ * `classifyAuthReturn` apply to their own trailing runs: an extra key's name comes from a spec
+ * field and is quoted exactly when `IDENTIFIER_RE` requires it, so a quoted one (a name shaped
+ * like intercom's `"Intercom-Version"`) is accepted, not refused.
  */
 function matchBasicHeaderObject(
   returnStatement: AstNode,
   userBinding: string,
-  passBinding: string,
+  passBinding: string | undefined,
 ): BasicUser | undefined {
-  const properties = bareKeyedProps(returnArgument(returnStatement));
-  if (properties?.length !== 2) return undefined;
-  const [authProp, acceptProp] = properties;
-  if (authProp?.key !== "Authorization") return undefined;
-  if (acceptProp?.key !== "Accept") return undefined;
-  if (stringLit(acceptProp.value) !== "application/json") return undefined;
+  const properties = quoteMinimalProps(returnArgument(returnStatement));
+  if (properties === undefined || properties.length < 2) return undefined;
+  const last = properties.at(-1)!;
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
+  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  const authProp = split?.auth[0];
+  if (split === undefined || authProp?.key !== "Authorization") return undefined;
 
   const callArguments = callArgs(authProp.value);
   if (callArguments?.length !== 2) return undefined;
   if (!isIdent(calleeOf(authProp.value), "encodeBasicAuthHeader")) return undefined;
-  if (!isIdent(callArguments[1], passBinding)) return undefined;
+  // `passBinding` is undefined for a one-var entry: authProps' emitter side then has no second
+  // BINDING to pass and writes the literal `""` instead — the absent second value IS the fact,
+  // mirrored here rather than re-derived from a var count that this function never sees.
+  const passOk =
+    passBinding === undefined
+      ? stringLit(callArguments[1]) === ""
+      : isIdent(callArguments[1], passBinding);
+  if (!passOk) return undefined;
 
-  return matchBasicUserExpr(callArguments[0]!, userBinding);
+  const user = matchBasicUserExpr(callArguments[0]!, userBinding);
+  return user === undefined ? undefined : { ...user, ...extrasField(split.extras) };
 }
 
 function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
@@ -670,8 +823,10 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
 
   const section = collectBasicPairs(statements);
   if (section === undefined) return undefined;
-  // "auth: basic requires exactly two vars" — src/spec.ts's EnvSchema refine.
-  if (section.reads.length !== 2 || section.rest.length !== 1) return undefined;
+  // "auth: basic takes one or two vars" — src/spec.ts's EnvSchema refine.
+  if (section.reads.length < 1 || section.reads.length > 2 || section.rest.length !== 1) {
+    return undefined;
+  }
 
   const local = functionName(fn);
   if (local === undefined) return undefined;
@@ -679,7 +834,7 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
   const user = matchBasicHeaderObject(
     section.rest[0]!,
     section.reads[0]!.binding,
-    section.reads[1]!.binding,
+    section.reads[1]?.binding,
   );
   if (user === undefined) return undefined;
 
@@ -694,6 +849,7 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
     auth: "basic",
     ...(user.prefix !== undefined ? { prefix: user.prefix } : {}),
     ...(user.suffix !== undefined ? { suffix: user.suffix } : {}),
+    ...(user.extraHeaders !== undefined ? { extraHeaders: user.extraHeaders } : {}),
   };
 }
 
@@ -1283,7 +1439,10 @@ function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
   if (statements?.length !== 1) return undefined;
   // renderClientCredentials writes no comment in the wrapper — see the section header.
   if (!commentsAre(statements[0]!, [])) return undefined;
-  // Both keys hardcoded and bare, as in the two synchronous header objects above.
+  // Both keys hardcoded and bare — unlike the two synchronous header objects above, which now
+  // read through `quoteMinimalProps`/`splitExtraHeaders` to admit `extraHeaders`. `auth:
+  // "client-credentials"` never carries that field (EnvSchema's own refine), so this pair stays
+  // pinned to exactly two bare keys with no static-header run to admit.
   const properties = bareKeyedProps(returnArgument(statements[0]!));
   if (properties?.length !== 2) return undefined;
   const [authProp, acceptProp] = properties;
@@ -1400,7 +1559,11 @@ export type RecognizedEnv = {
 };
 
 /**
- * Group A at `statements[i]`: the split bearer reader and the wrapper that names it, as one entry.
+ * Group A at `statements[i]`: the split reader and the wrapper that names it, as one entry — the
+ * `auth` mode and every field the wrapper reports (`headerNames`, `authScheme`, `extraHeaders`)
+ * come from `wrapper` itself, not from an assumption made here. "SplitBearer" in this and the
+ * sibling functions' names is history, not a scope limit: bearer was the only mode `tokenLocal`
+ * reached when they were written, and `matchSplitWrapperShape` is what widened past it.
  *
  * Shaped to match `matchClientCredentials`, which the next loop in `recognizeEnv` already calls the
  * same way — the two loops were asymmetric only because this one built its entry inline, which is
@@ -1409,16 +1572,21 @@ export type RecognizedEnv = {
 function matchSplitBearerPair(statements: readonly AstNode[], i: number): EnvEntry | undefined {
   const reader = matchSplitBearerReader(statements[i]!);
   if (reader === undefined) return undefined;
-  const wrapperLocal = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
-  if (wrapperLocal === undefined) return undefined;
+  const wrapper = matchSplitBearerWrapper(statements[i + 1]!, reader.local);
+  if (wrapper === undefined) return undefined;
 
   return {
     vars: [reader.var],
-    local: wrapperLocal,
+    local: wrapper.local,
     tokenLocal: reader.local,
     bindings: [reader.binding],
     required: false,
-    auth: "bearer",
+    auth: wrapper.auth,
+    ...(wrapper.auth === "headers" ? { headerNames: wrapper.headerNames } : {}),
+    ...(wrapper.auth === "bearer" && wrapper.authScheme !== undefined
+      ? { authScheme: wrapper.authScheme }
+      : {}),
+    ...(wrapper.extraHeaders !== undefined ? { extraHeaders: wrapper.extraHeaders } : {}),
   };
 }
 

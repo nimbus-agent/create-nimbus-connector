@@ -5,7 +5,7 @@ type EnvEntry = z.infer<typeof EnvSchema>;
 
 const STRIP = String.raw`replace(/\/$/, "")`;
 
-/** A header name that needs no quotes as an object key. */
+/** Matches a bare JS identifier — see `headerKey`, its only caller. */
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
@@ -74,29 +74,79 @@ function guardLines(e: EnvEntry): string[] {
   return [`  if (${conds}) {`, `    throw new Error(${JSON.stringify(message)});`, `  }`];
 }
 
-function returnLines(e: EnvEntry): string[] {
-  if (e.auth === "bearer") {
-    const b = bindingOf(e, 0);
-    return [`  return { Authorization: \`Bearer \${${b}}\`, Accept: "application/json" };`];
-  }
+/** A header name that needs no quotes as an object key. */
+function headerKey(name: string): string {
+  return IDENTIFIER_RE.test(name) ? name : JSON.stringify(name);
+}
+
+/**
+ * The auth property lines of the returned header object, WITHOUT the trailing `Accept`.
+ *
+ * `values` is what makes this shared between the fused accessor and the split one: the fused
+ * form passes one expression per var (the bindings), the split form passes exactly one
+ * (`<tokenLocal>()`). Everything else about the object — which keys, in which order, with which
+ * quoting — is identical between the two, and it was three near-copies before this.
+ *
+ * An ARRAY rather than an `(i: number) => string` callback, deliberately. The split form has one
+ * value and no index to vary, so a callback there has to ignore its argument — and a callback
+ * that ignores its index returns the SAME expression for `valueOf(1)` as for `valueOf(0)`, which
+ * would emit `encodeBasicAuthHeader(apiKey(), apiKey())` if anything ever reached the two-value
+ * branch through the split path. `EnvSchema` forbids that today (`tokenLocal` requires one var),
+ * so the callback form is safe only because a rule in another file says so. A one-element array
+ * cannot yield a second element, which makes it safe structurally.
+ */
+function authProps(e: EnvEntry, values: readonly string[]): string[] {
   if (e.auth === "headers") {
-    // A key that is a valid identifier is emitted bare, the way `Authorization` and
-    // `Accept` are written everywhere in the corpus; `"DD-API-KEY"` and `"x-auth-token"`
-    // have to stay quoted.
-    const field = (i: number) => {
-      const header = e.headerNames![i]!;
-      const key = IDENTIFIER_RE.test(header) ? header : JSON.stringify(header);
-      return `${key}: ${bindingOf(e, i)}`;
-    };
-    // One custom header plus Accept fits on one line, and that is what every corpus
-    // connector with a single header writes (bitrise's `{ Authorization: t, … }`,
-    // `{ "x-api-key": k, … }`, `{ "X-Api-Key": k, … }`). Two or more expand — datadog,
-    // intercom, snowflake — with no counterexample either way.
-    if (e.vars.length === 1) {
-      return [`  return { ${field(0)}, Accept: "application/json" };`];
-    }
-    const entries = e.vars.map((_, i) => `    ${field(i)},`);
-    return ["  return {", ...entries, `    Accept: "application/json",`, "  };"];
+    return e.vars.map((_, i) => `${headerKey(e.headerNames![i]!)}: ${values[i]!}`);
+  }
+  if (e.auth === "basic") {
+    // prefix/suffix decorate the USERNAME only — see EnvSchema's refine.
+    //
+    // One var means the credential goes in the USERNAME position with a literal "" password —
+    // censused 2026-08-14 over every encodeBasicAuthHeader call site in the corpus, the empty
+    // half is always the password (lever, greenhouse) and nothing writes ("", key).
+    //
+    // `values[1] ?? '""'` rather than a `vars.length` test: the absent second value IS the fact,
+    // and the split path supplies a one-element array, so both roads to an empty password meet
+    // here instead of at two separate conditions that could disagree.
+    const pass = values[1] ?? '""';
+    return [`Authorization: encodeBasicAuthHeader(${wrapped(e, values[0]!)}, ${pass})`];
+  }
+  return [`Authorization: \`${e.authScheme ?? "Bearer"} \${${values[0]!}}\``];
+}
+
+/** One value expression per var, for the fused accessors. */
+function bindingValues(e: EnvEntry): string[] {
+  return e.vars.map((_, i) => bindingOf(e, i));
+}
+
+/** The static header lines, in spec order, between the auth entries and the trailing Accept. */
+function extraProps(e: EnvEntry): string[] {
+  return Object.entries(e.extraHeaders ?? {}).map(
+    ([name, value]) => `${headerKey(name)}: ${JSON.stringify(value)}`,
+  );
+}
+
+/**
+ * The `return { … }` lines, with `Accept` appended last.
+ *
+ * `expand` is decided by the CALLER rather than by counting keys here, and that is deliberate:
+ * the corpus's two-key fused basic object is expanded (airflow, zendesk) while its two-key
+ * bearer object is one line (mercury, sentry). That is Biome breaking the longer line for
+ * width, not a rule about key counts, so it cannot be re-derived from the props list.
+ */
+function headerObjectLines(props: readonly string[], expand: boolean): string[] {
+  const all = [...props, 'Accept: "application/json"'];
+  if (!expand) return [`  return { ${all.join(", ")} };`];
+  return ["  return {", ...all.map((p) => `    ${p},`), "  };"];
+}
+
+function returnLines(e: EnvEntry): string[] {
+  if (e.auth === "bearer" || e.auth === "headers") {
+    const props = [...authProps(e, bindingValues(e)), ...extraProps(e)];
+    // One custom header plus Accept fits on one line, and that is what every corpus connector
+    // with a single header writes; two or more expand — datadog, intercom, snowflake.
+    return headerObjectLines(props, props.length > 1);
   }
   return [`  return ${wrapped(e, transformed(e, bindingOf(e, 0)))};`];
 }
@@ -219,35 +269,38 @@ function renderBasic(e: EnvEntry): string {
       "  }",
     ];
   });
-  // prefix/suffix decorate the username only — see EnvSchema's refine. `wrapped` returns
-  // the bare binding when neither is set, which is airflow's form.
-  const user = wrapped(e, bindingOf(e, 0));
   return [
     `function ${e.local}(): Record<string, string> {`,
     ...readAndGuard,
-    "  return {",
-    `    Authorization: encodeBasicAuthHeader(${user}, ${bindingOf(e, 1)}),`,
-    '    Accept: "application/json",',
-    "  };",
+    // The fused basic object is ALWAYS expanded: airflow and zendesk both write it that way,
+    // because `encodeBasicAuthHeader(user, password)` beside Accept overruns Biome's width.
+    ...headerObjectLines([...authProps(e, bindingValues(e)), ...extraProps(e)], true),
     "}",
   ].join("\n");
 }
 
 /**
- * The two-function form of a bearer accessor: a `(): string` reader named by `tokenLocal`
- * that carries the read and the guard, and `local` reduced to the header wrapper that calls
- * it. Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a
- * spec that adds `tokenLocal` to an existing entry only splits the code it already emitted.
+ * The two-function form of an accessor: a `(): string` reader named by `tokenLocal` that
+ * carries the read and the guard, and `local` reduced to the header wrapper that calls it.
+ * Nothing else changes — the reader's body is `readLines`/`guardLines` verbatim, so a spec
+ * that adds `tokenLocal` to an existing entry only splits the code it already emitted.
  *
- * **12 corpus connectors** are byte-reproducible by `tokenLocal`: canva, figma, hubspot,
- * mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe, vercel, zoom.
+ * **12 corpus connectors** are byte-reproducible by `tokenLocal`'s `auth: "bearer"` form:
+ * canva, figma, hubspot, mercury, miro, netlify, raindrop, salesforce, stackoverflow, stripe,
+ * vercel, zoom.
  *
  * The criterion is stated here rather than left to the eye, because "splits the accessor in
  * two" is fuzzy and counting against it produced three wrong numbers in a row (once naming
  * testflight and dbt, which have no split at all; once naming 15 with three wrong members
- * and stripe missing). It is the text this function emits, and every clause of it is
- * hardcoded below, so anything a connector does differently is a byte the field cannot
- * produce:
+ * and stripe missing). It is the text this function emitted for every `tokenLocal` entry
+ * while `auth: "bearer"` was the only mode the field reached, and every clause of it was
+ * hardcoded below, so anything a connector did differently was a byte the field could not
+ * produce. `tokenLocal` now also reaches `auth: "basic"` (one var, a literal `""` password —
+ * lever, greenhouse) and `auth: "headers"`, through the same `authProps` call every other
+ * mode already went through — this function's OWN shape never changed, only the schema-level
+ * gate that used to send it nothing but bearer entries. Criteria 2–4 below describe the
+ * bearer form specifically; the 12-connector count does not cover the other two, and
+ * recounting against them is a separate exercise from this change:
  *
  *   1. a wrapper FUNCTION returning `Record<string, string>` — not an inline use of the
  *      reader at a call site (mendeley reads `Bearer ${accessToken()}` straight into the
@@ -265,17 +318,18 @@ function renderBasic(e: EnvEntry): string {
  * Counted mechanically over all 95 connector directories, not by eye; the script and its
  * output are in the task-10 report's fix-round-2 section.
  */
-function renderSplitBearer(e: EnvEntry): string {
-  const binding = bindingOf(e, 0);
+function renderSplitAccessor(e: EnvEntry): string {
+  const call = `${e.tokenLocal}()`;
+  const props = [...authProps(e, [call]), ...extraProps(e)];
   return [
     `function ${e.tokenLocal}(): string {`,
     ...readLines(e),
     ...guardLines(e),
-    `  return ${binding};`,
+    `  return ${bindingOf(e, 0)};`,
     "}",
     "",
     `function ${e.local}(): Record<string, string> {`,
-    `  return { Authorization: \`Bearer \${${e.tokenLocal}()}\`, Accept: "application/json" };`,
+    ...headerObjectLines(props, props.length > 1),
     "}",
   ].join("\n");
 }
@@ -287,16 +341,9 @@ function renderSplitBearer(e: EnvEntry): string {
  * unaffected.
  */
 export function renderEnvAccessor(e: EnvEntry, serviceLabel = "Connector"): string {
-  if (e.auth === "client-credentials") {
-    return renderClientCredentials(e, serviceLabel);
-  }
-  if (e.auth === "basic") {
-    return renderBasic(e);
-  }
-  // EnvSchema guarantees tokenLocal implies auth === "bearer".
-  if (e.tokenLocal !== undefined) {
-    return renderSplitBearer(e);
-  }
+  if (e.auth === "client-credentials") return renderClientCredentials(e, serviceLabel);
+  if (e.tokenLocal !== undefined) return renderSplitAccessor(e);
+  if (e.auth === "basic") return renderBasic(e);
   const returnType = e.auth === undefined ? "string" : "Record<string, string>";
   return [
     `function ${e.local}(): ${returnType} {`,

@@ -435,12 +435,12 @@ describe("recognizeEnv: split-bearer pair (tokenLocal)", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("does not form a pair when the wrapper carries a THIRD header (intercom, named OUT by renderSplitBearer's own docstring)", () => {
-    // Criterion 3 of renderSplitBearer's docstring: "with exactly two keys, Authorization then
+  it("does not form a pair when the wrapper carries a THIRD header (intercom, named OUT by renderSplitAccessor's own docstring)", () => {
+    // Criterion 3 of renderSplitAccessor's docstring: "with exactly two keys, Authorization then
     // Accept — a third header cannot be emitted (intercom adds "Intercom-Version": "2.11": OUT)".
     // This is the one exclusion the brief names by name that had no pinning test before this
-    // fix round — the emitter itself can never produce this shape (renderSplitBearer's own
-    // template writes exactly two properties), so this is hand-written, the same way
+    // fix round — the emitter can never place a header AFTER Accept (extraHeaders always come
+    // before it, headerObjectLines' own shape), so this is hand-written, the same way
     // REFUSED_SOURCES hand-writes every other shape the emitter cannot produce.
     //
     // Authorization and Accept deliberately stay FIRST and SECOND, with the extra header
@@ -466,6 +466,77 @@ describe("recognizeEnv: split-bearer pair (tokenLocal)", () => {
     expect(entries).toEqual([
       { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
     ]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});
+
+describe("split accessors over non-bearer modes (derive)", () => {
+  const cases = [
+    [
+      "basic with an empty password",
+      {
+        vars: ["LEVER_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "basic",
+      },
+    ],
+    [
+      "a named header",
+      {
+        vars: ["ZOTERO_API_KEY"],
+        local: "authHeader",
+        tokenLocal: "apiKey",
+        bindings: ["t"],
+        auth: "headers",
+        headerNames: ["Zotero-API-Key"],
+        extraHeaders: { "Zotero-API-Version": "3" },
+      },
+    ],
+  ] as const;
+
+  for (const [label, raw] of cases) {
+    it(`round-trips a split accessor over ${label}`, () => {
+      const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+      expect(unclaimed).toEqual([]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject(raw);
+    });
+  }
+
+  it("round-trips a fused one-var basic accessor", () => {
+    const raw = { vars: ["K"], local: "authHeader", bindings: ["k"], auth: "basic" } as const;
+    const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]).toMatchObject({ vars: ["K"], local: "authHeader", auth: "basic" });
+  });
+});
+
+describe("split-reader adjacency is not widened by the generalized wrapper", () => {
+  it("derives a plain required accessor followed by an unrelated function", () => {
+    const unrelated = [
+      "function isRecord(v: unknown): boolean {",
+      '  return typeof v === "object" && v !== null;',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(`${REQUIRED}\n\n${unrelated}`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.local).toBe("apiKey");
+    expect(entries[0]?.tokenLocal).toBeUndefined();
+    // The unrelated function is left for the totality rule, not swallowed by the pair.
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a wrapper that calls a different reader", () => {
+    const wrongReader = [
+      "function authHeader(): Record<string, string> {",
+      '  return { Authorization: `Bearer ${somethingElse()}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(`${REQUIRED}\n\n${wrongReader}`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tokenLocal).toBeUndefined();
     expect(unclaimed).toHaveLength(1);
   });
 });
@@ -577,19 +648,14 @@ describe("recognizeEnv: auth: basic", () => {
     expect(unclaimed).toHaveLength(1);
   });
 
-  it("does not recover auth: basic from a ONE-var accessor (lever, excluded by renderBasic's two-var requirement)", () => {
-    // lever is out of scope, but NOT via renderSplitBearer's docstring — that docstring's
-    // membership list is scoped to the split-bearer (tokenLocal) shape alone and names
-    // mendeley, intercom, readwise, dagster and pipedrive; "lever" has never appeared in
-    // src/emit/server/env.ts at all (confirmed: `git log -S"lever" -- src/emit/server/env.ts`
-    // returns no commit). It is excluded by a different mechanism entirely: renderBasic requires
-    // exactly two vars — a username and a password — enforced by EnvSchema's own refine
-    // ('auth: "basic" requires exactly two "vars"', src/spec.ts) and mirrored by
-    // recognizeBasicAuth's own `reads.length !== 2` check below. Lever's real source reads ONE
-    // var and passes a literal empty string as the second encodeBasicAuthHeader argument — a
-    // shape the emitter can never produce (renderBasic always reads and guards every var in
-    // e.vars, never fewer than two), so it is hand-written here the same way REFUSED_SOURCES
-    // hand-writes every other shape the emitter cannot produce.
+  it("recovers auth: basic from a ONE-var accessor (lever/greenhouse: literal empty password)", () => {
+    // Lever and greenhouse read ONE var and pass a literal empty string as the second
+    // encodeBasicAuthHeader argument. This used to be out of scope — renderBasic required
+    // exactly two vars, enforced by EnvSchema's own refine and mirrored by
+    // recognizeBasicAuth's own `reads.length !== 2` check — until this rule relaxed to "one or
+    // two", specifically to reach this shape (see EnvSchema's basic refine in src/spec.ts).
+    // `matchBasicHeaderObject`'s `passBinding` is `undefined` here, so it checks the argument is
+    // the literal `""` rather than a second binding.
     const source = [
       "function authHeader(): Record<string, string> {",
       '  const key = process.env["LEVER_API_KEY"]?.trim();',
@@ -598,6 +664,35 @@ describe("recognizeEnv: auth: basic", () => {
       "  }",
       "  return {",
       '    Authorization: encodeBasicAuthHeader(key, ""),',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([
+      {
+        vars: ["LEVER_API_KEY"],
+        local: "authHeader",
+        bindings: ["key"],
+        required: false,
+        auth: "basic",
+      },
+    ]);
+    expect(unclaimed).toEqual([]);
+  });
+
+  it("refuses a ONE-var accessor whose password is a non-empty literal, not a binding", () => {
+    // The one shape a one-var basic entry can never regenerate: a literal that is not "".
+    // `passBinding` is undefined (only one read exists to bind), so the check is exactly
+    // `stringLit(callArguments[1]) === ""` — anything else, literal or identifier, is refused.
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const key = process.env["LEVER_API_KEY"]?.trim();',
+      '  if (key === undefined || key === "") {',
+      '    throw new Error("LEVER_API_KEY is not set");',
+      "  }",
+      "  return {",
+      '    Authorization: encodeBasicAuthHeader(key, "x"),',
       '    Accept: "application/json",',
       "  };",
       "}",
@@ -721,7 +816,7 @@ describe("recognizeEnv: the key SPELLING of every emitted header object", () => 
       SPLIT_BEARER_WRAPPER.replace('Accept: "application/json"', '"Accept": "application/json"'),
     ],
   ] as const) {
-    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitBearer writes both bare`, () => {
+    it(`does not form a split-bearer pair from a wrapper with ${reason} — renderSplitAccessor writes both bare`, () => {
       expect(wrapper).not.toBe(SPLIT_BEARER_WRAPPER);
       const source = [SPLIT_BEARER_READER, "", wrapper].join("\n\n");
       const { entries, unclaimed } = run(source);
@@ -840,7 +935,7 @@ describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
  * cannot silently stop testing anything.
  */
 describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
-  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitBearer always writes `(): string`", () => {
+  it("refuses a split-bearer reader annotated something other than `: string` — renderSplitAccessor always writes `(): string`", () => {
     const corruptedReader = SPLIT_BEARER_READER.replace(
       "function apiToken(): string {",
       "function apiToken(): unknown {",
@@ -856,7 +951,7 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
     expect(unclaimed).toHaveLength(2);
   });
 
-  it("refuses an async split-bearer wrapper — renderSplitBearer never writes `async` on either half", () => {
+  it("refuses an async split-bearer wrapper — renderSplitAccessor never writes `async` on either half", () => {
     const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace(
       "function authHeader(): Record<string, string> {",
       "async function authHeader(): Promise<Record<string, string>> {",
@@ -933,7 +1028,7 @@ describe("recognizeEnv: return-type and async pinning (Finding B)", () => {
  * defining defect class: the four matchers Finding B pinned checked `typeAnnotationName(...) ===
  * "Record"`, and `typeAnnotationName` reports a type reference's HEAD NAME only (its own
  * docstring). `Record<string, number>` and `Record<unknown, unknown>` satisfied that check, while
- * `renderEnvAccessor`, `renderSplitBearer`, `renderBasic` and `renderClientCredentials`
+ * `renderEnvAccessor`, `renderSplitAccessor`, `renderBasic` and `renderClientCredentials`
  * (src/emit/server/env.ts) write exactly `Record<string, string>` and no other instantiation. Such
  * a module recovers IDENTICAL `EnvEntry` fields and re-emits `Record<string, string>` — different
  * bytes, an unchanged spec, and nothing that could see it: `diff:golden` compares emitted output
@@ -1008,7 +1103,7 @@ describe("recognizeEnv: Record's type arguments, not just its head name", () => 
   );
 
   it.each(WRONG_RECORDS)(
-    "refuses a split-bearer wrapper returning %s — renderSplitBearer writes Record<string, string>",
+    "refuses a split-bearer wrapper returning %s — renderSplitAccessor writes Record<string, string>",
     (wrong) => {
       const corruptedWrapper = SPLIT_BEARER_WRAPPER.replace("Record<string, string>", wrong);
       expect(corruptedWrapper).not.toBe(SPLIT_BEARER_WRAPPER);
@@ -1389,4 +1484,214 @@ describe("recognizeEnv: auth: client-credentials refusals", () => {
       expect(unclaimed).toHaveLength(4);
     });
   }
+});
+
+describe("authScheme round trip", () => {
+  it("recovers an alternate scheme from a fused accessor", () => {
+    const spec = EnvSchema.parse({
+      vars: ["DBT_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+      authScheme: "Token",
+    });
+    const { entries, unclaimed } = run(renderEnvAccessor(spec));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.authScheme).toBe("Token");
+  });
+
+  it("recovers an alternate scheme from a split accessor", () => {
+    const spec = EnvSchema.parse({
+      vars: ["READWISE_TOKEN"],
+      local: "authHeader",
+      tokenLocal: "apiToken",
+      bindings: ["t"],
+      auth: "bearer",
+      authScheme: "Token",
+    });
+    const { entries, unclaimed } = run(renderEnvAccessor(spec));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.authScheme).toBe("Token");
+    expect(entries[0]?.tokenLocal).toBe("apiToken");
+  });
+
+  it("omits the field for the default scheme rather than recording it", () => {
+    const spec = EnvSchema.parse({
+      vars: ["A_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+    });
+    const { entries } = run(renderEnvAccessor(spec));
+    expect(entries[0]?.authScheme).toBeUndefined();
+  });
+
+  it("refuses a scheme with no separating space", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      '  return { Authorization: `Token${t}`, Accept: "application/json" };',
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+});
+
+describe("extraHeaders round trip", () => {
+  const cases = [
+    [
+      "split bearer",
+      {
+        vars: ["INTERCOM_TOKEN"],
+        local: "authHeader",
+        tokenLocal: "apiToken",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Intercom-Version": "2.11" },
+      },
+    ],
+    [
+      "fused bearer",
+      {
+        vars: ["SNOWFLAKE_TOKEN"],
+        local: "authHeader",
+        bindings: ["t"],
+        auth: "bearer",
+        extraHeaders: { "Content-Type": "application/json" },
+      },
+    ],
+  ] as const;
+
+  for (const [label, raw] of cases) {
+    it(`recovers a static header from a ${label} accessor`, () => {
+      const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+      expect(unclaimed).toEqual([]);
+      expect(entries[0]?.extraHeaders).toEqual(raw.extraHeaders);
+    });
+  }
+
+  it("preserves the order of two static headers through the whole trip", () => {
+    // Ordering is load-bearing and nothing else in the suite exercises it: each real fixture
+    // carries at most ONE extra header, so a sort introduced anywhere between JSON.parse, zod's
+    // record, Object.entries and splitExtraHeaders would pass every other test. The integer-key
+    // hazard is closed at the schema (keys must start with a letter); this closes the rest.
+    const raw = {
+      vars: ["A_TOKEN"],
+      local: "authHeader",
+      bindings: ["t"],
+      auth: "bearer",
+      extraHeaders: { "Zzz-Last": "2", "Aaa-First": "1" },
+    } as const;
+    const emitted = renderEnvAccessor(EnvSchema.parse(raw));
+    expect(emitted.indexOf("Zzz-Last")).toBeLessThan(emitted.indexOf("Aaa-First"));
+
+    const { entries, unclaimed } = run(emitted);
+    expect(unclaimed).toEqual([]);
+    expect(Object.keys(entries[0]?.extraHeaders ?? {})).toEqual(["Zzz-Last", "Aaa-First"]);
+  });
+
+  it("recovers a static header from a fused basic accessor", () => {
+    const raw = {
+      vars: ["U", "P"],
+      local: "authHeader",
+      bindings: ["u", "p"],
+      auth: "basic",
+      extraHeaders: { "X-Thing": "1" },
+    } as const;
+    const { entries, unclaimed } = run(renderEnvAccessor(EnvSchema.parse(raw)));
+    expect(unclaimed).toEqual([]);
+    expect(entries[0]?.extraHeaders).toEqual({ "X-Thing": "1" });
+  });
+
+  it("refuses a needlessly quoted Accept, which no emitter writes", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "Accept": "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses a non-literal static header value", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Thing": someCall(),',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  // A repeated key is the same class as the non-literal value above, reached differently: the
+  // static run is collected into a Record, so a second property with the same key OVERWRITES the
+  // first and the accessor derives to a spec that re-emits one property where the module had two
+  // — a claimed function regenerating non-identical bytes, which no gate can see. No emitter path
+  // writes either shape; refusing them keeps the recognizer's claim true of every input rather
+  // than only of the inputs this emitter happens to produce.
+  //
+  // Case-INSENSITIVELY, and not merely because HTTP field names are: `EnvSchema` refuses two
+  // extraHeaders keys that differ only in case, so recovering both would hand back a spec this
+  // repo's own `parseSpec` rejects — a worse failure than declining to claim the function.
+  it("refuses a repeated static header key", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Api": "1",',
+      '    "X-Api": "2",',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses two static header keys differing only in case", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Api": "1",',
+      '    "x-api": "2",',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
 });

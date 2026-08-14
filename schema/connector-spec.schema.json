@@ -156,6 +156,10 @@
             "type": "string",
             "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
           },
+          "authScheme": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9-]*$"
+          },
           "tokenUrl": {
             "type": "string",
             "format": "uri"
@@ -170,6 +174,16 @@
               "basic",
               "body"
             ]
+          },
+          "extraHeaders": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": [

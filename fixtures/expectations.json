@@ -70,6 +70,21 @@
   "discord": ["README.md", "test/sandbox.test.ts", "tsconfig.json"],
   "google-meet": ["nimbus.extension.json", "test/sandbox.test.ts"],
   "netlify": ["nimbus.extension.json", "package.json", "test/sandbox.test.ts", "tsconfig.json"],
+  "intercom": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/server.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
+  "lever": [
+    "nimbus.extension.json",
+    "package.json",
+    "src/server.ts",
+    "test/sandbox.test.ts",
+    "tsconfig.json"
+  ],
+  "zzauth": [],
   "zzcond": [],
   "zzextract": [],
   "zzquery": [],

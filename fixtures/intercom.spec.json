@@ -1,0 +1,61 @@
+{
+  "name": "intercom",
+  "title": "Intercom",
+  "displayName": "Intercom",
+  "description": "Intercom support connector (read-only). Surfaces the user's recent Intercom conversations as `intercom:conversation` items in the local index — the conversation subject/title, state (open/closed/snoozed), priority, the read flag, the source message author + first message body, the linked contact ids, the admin + team assignees, tags, and the created / updated dates. Useful for answering support questions (\"what conversations are still open?\", \"find the thread about the billing bug\") without leaving Nimbus. Bearer access-token auth (`Authorization: Bearer <token>` — an Intercom Access Token; never logged) plus the `Intercom-Version: 2.11` and `Accept: application/json` request headers. The SaaS host (api.intercom.io, US) is fixed — EU/AU regional hosts are a deferred follow-up. Intercom paginates the `/conversations` endpoint with a cursor (`pages.next.starting_after`, per_page=150), returning the `{ type: \"conversation.list\", conversations, pages, total_count }` envelope. `created_at` / `updated_at` are epoch SECONDS (converted to epoch-ms on index). Contacts / companies / tickets / admins-as-items and write tools are deferred follow-ups; v1 indexes conversations only.",
+  "serviceLabel": "Intercom",
+  "style": "read-only-kit",
+  "handlerStyle": "block",
+  "argsSchemaStyle": "expanded",
+  "network": ["api.intercom.io"],
+  "syncInterval": 600,
+  "minNimbusVersion": "0.2.0",
+  "env": [
+    {
+      "vars": ["INTERCOM_TOKEN"],
+      "local": "authHeader",
+      "tokenLocal": "apiToken",
+      "bindings": ["t"],
+      "auth": "bearer",
+      "extraHeaders": { "Intercom-Version": "2.11" }
+    }
+  ],
+  "fetchHelper": {
+    "local": "intercomGet",
+    "base": "https://api.intercom.io",
+    "baseConst": "BASE",
+    "headers": "authHeader",
+    "staticPathStyle": "template"
+  },
+  "tools": [
+    {
+      "name": "intercom_list",
+      "description": "List the user's Intercom conversations (`GET /conversations?per_page=150`). Returns the `{ type: \"conversation.list\", conversations: [...], pages, total_count }` envelope — `conversations` holds the conversation objects.",
+      "path": "/conversations?per_page=150"
+    },
+    {
+      "name": "intercom_get",
+      "description": "Fetch one Intercom conversation by its id (`GET /conversations/{id}` — note the PLURAL `conversations` in the get-by-id path). Returns the conversation object directly. Throws when no match is found.",
+      "args": { "id": { "type": "string", "min": 1 } },
+      "path": "/conversations/${arg.id|enc}"
+    },
+    {
+      "name": "intercom_search",
+      "description": "Substring search across the user's Intercom conversations (first page only). Matches the query against the conversation subject, the source message body, the state, the source author name + email, and the tags (case-insensitive). Returns a `{ matches: [...] }` envelope.",
+      "impl": "search",
+      "path": "/conversations?per_page=150",
+      "rows": "conversations",
+      "maxLimit": 100,
+      "filter": {
+        "export": "filterIntercomConversations",
+        "fields": [
+          { "path": ["source", "subject"] },
+          { "path": ["source", "body"] },
+          "state",
+          { "path": ["source", "author", "name"] },
+          { "path": ["source", "author", "email"] }
+        ]
+      }
+    }
+  ]
+}

@@ -256,6 +256,144 @@ Two things worth knowing about `read-only-kit`:
 
 **Standalone search needs `@nimbus-dev/sdk` ≥ 1.15.0**, and only a spec declaring a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is deliberately *not* in the SDK: `searchToolInputSchema` builds a zod schema, and the SDK ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
 
+## Env auth: `authScheme`, `extraHeaders`, `tokenLocal` and one-var `basic`
+
+An env entry's `auth` decides what the function named by `local` returns. Without it, that function
+is a plain `(): string` handing back the variable's trimmed value. With it, the function returns a
+`Record<string, string>`: an `Authorization` entry (or, under `auth: "headers"`, one entry per
+`headerNames` name), then anything `extraHeaders` adds, then a trailing
+`Accept: "application/json"`. The four fields below shape that object; `client-credentials`, the
+fifth mode, is a different construct and has [its own section](#oauth-client-credentials).
+
+**All of this is `hand-rolled` and `read-only-kit` only.** A `rest-kit` connector emits no env
+accessor — `makeRestToolRegistrar` resolves the credential itself and writes its own
+`Authorization` — so `authScheme`, `extraHeaders` and `tokenLocal` are **rejected at parse time**
+on `style: "rest-kit"` rather than accepted and dropped at emission. rest-kit's static-header seam
+is `fetchHelper.inlineHeaders`; it has no equivalent for a scheme word, which is a
+[recorded gap](./ROADMAP.md#known-limitations). The style's other env rules make that list
+exhaustive: a rest-kit connector already must declare exactly one `auth: "bearer"` single-var
+entry, and under that shape no other optional env field survives to be dropped.
+
+### `authScheme` — the scheme word in the `Authorization` value
+
+`auth: "bearer"` emits `` Authorization: `Bearer ${t}` ``. `authScheme` replaces the word:
+
+```jsonc
+{ "vars": ["ACME_TOKEN"], "local": "authHeader", "auth": "bearer", "authScheme": "Token" }
+```
+
+emits `` Authorization: `Token ${t}` ``.
+
+**The separating space is the emitter's, not part of the value** — write `"Token"`, never
+`"Token "`. Measured 2026-08-14 over `packages/mcp-connectors` at tree `23c90b92`, re-run with
+
+```bash
+grep -rhoE 'Authorization: *`[A-Za-z][A-Za-z0-9-]* \$\{' --include=*.ts .
+```
+
+from that directory: 53 sites write `Bearer `, and every one of the six alternate sites is a single
+word followed by exactly one space — `Token ` ×3 (`dbt`, `flagsmith`, `readwise`), `token `
+(`snyk`), `Bot ` (`discord`), `ApiKey ` (`elasticsearch`) and `Basic ` (`ramp`'s
+client-credentials exchange, which is not an `env[]` accessor at all). A field carrying its own
+space could express a spacing nothing writes, and would leave the deriver an open string to invert
+instead of one quasi shape.
+
+**The character class is an allowlist on purpose**, `^[A-Za-z][A-Za-z0-9-]*$`, and that is a
+security decision rather than a tidiness one. The value is spliced into a template literal — the
+same position in which `env[].prefix` once admitted an executable IIFE into the `Authorization`
+header of every request — so an allowlist makes every dangerous sequence unrepresentable, where a
+denylist would only enumerate the ones somebody thought of.
+
+**Rejected at parse time:** `authScheme` on any `auth` mode other than `"bearer"` (no other mode
+emits a scheme word), and `"authScheme": "Bearer"` — that is the default, and two spellings of one
+emitted value is exactly what this rule prevents. It also keeps the deriver total: recovering
+`Bearer ` omits the field, and no other legal input produces those bytes.
+
+### `extraHeaders` — static, literal-valued headers beside the auth one
+
+```jsonc
+{
+  "vars": ["INTERCOM_TOKEN"], "local": "authHeader", "auth": "bearer",
+  "extraHeaders": { "Intercom-Version": "2.11" }
+}
+```
+
+Entries are emitted **between the `Authorization` entry and the trailing `Accept`**, in the order
+the spec writes them — the position all three corpus instances use. Measured 2026-08-14 over
+`packages/mcp-connectors` at tree `23c90b92`: `intercom`'s `"Intercom-Version": "2.11"`,
+`snowflake`'s `"Content-Type": "application/json"` and `zotero`'s `"Zotero-API-Version": "3"`, each
+sitting in exactly that slot. Values reach the emitter through `JSON.stringify` and are not a raw
+splice, so no guard beyond the key rule is needed on them.
+
+**The key rule is `^[A-Za-z][A-Za-z0-9-]*$`, and the leading *letter* is the load-bearing half.**
+JS hoists integer-like keys to the front of an object in numeric order, so a key of `"1"` would
+emit ahead of `Authorization` wherever the spec put it — position is the whole point of this field,
+and a rule that let one key jump the queue would break it silently. The rest of the class is
+ordinary header-name hygiene, no more.
+
+**Rejected at parse time:**
+
+- `extraHeaders` with `auth` absent, or `auth: "client-credentials"`. The allowlist is positive —
+  `"bearer"`, `"basic"`, `"headers"` — rather than "not client-credentials", because with no `auth`
+  the accessor takes the plain `(): string` branch and returns no header object at all: the field
+  would validate and then silently vanish at emission.
+- a key colliding **case-insensitively** with `Accept`, with `Authorization`, with one of this
+  entry's own `headerNames`, or with **another `extraHeaders` key of the same entry**. This is not a
+  duplicate object key — `{ accept, Accept }` compiles, lints and passes every byte gate — but
+  `fetch` builds a `Headers` from the object, which normalizes field names, and the two would
+  combine into one header carrying both values. All four sources are checked against one set, so
+  `{ "X-Api": "1", "x-api": "2" }` is refused for the same reason and by the same rule as a clash
+  with `Accept`. A clash with a `headerNames` entry says so in the message, because fixing it means
+  editing a different field.
+
+### `tokenLocal` — splitting the read out of the wrapper
+
+`tokenLocal` splits a single-var auth accessor into two functions: a `(): string` reader named by
+this field, which reads and guards the variable, and `local`, reduced to a wrapper built from
+whichever `auth` mode the entry declares. `lever` is the shape:
+
+```jsonc
+{ "vars": ["LEVER_API_KEY"], "local": "authHeader", "tokenLocal": "apiKey", "auth": "basic" }
+```
+
+emits `function apiKey(): string` doing the read, and
+`function authHeader(): Record<string, string>` returning
+`{ Authorization: encodeBasicAuthHeader(apiKey(), ""), Accept: "application/json" }`.
+
+**The rule is one sentence with no mode list: a single `vars` entry and any `auth` mode.** It was
+bearer-only; two-var `basic` and `client-credentials` are excluded by the var count rather than by
+name, so a future mode needs no edit to this rule. Omitting `tokenLocal` keeps the single fused
+accessor, which is what `newrelic`, `datadog`, `grafana` and `sentry` emit.
+
+**Rejected at parse time:** more than one `vars` entry; no `auth` mode at all (there would be no
+wrapper for the reader to feed, and `local` would be emitted as a plain `(): string`); a
+`tokenLocal` equal to `local`, since the two name two functions in the same module; and
+`tokenLocal` combined with `prefix` or `suffix`. That last one matters only under `auth: "basic"`,
+the one mode that permits affixes at all, and it is a refusal rather than a gap: the split wrapper
+would emit `` encodeBasicAuthHeader(`${prefix}${apiKey()}`, "") ``, and no recognizer reads a
+decorated call — the deriver would recover the reader as a plain accessor, leave the wrapper
+unclaimed, and drop `tokenLocal`, `auth` and `prefix` rather than round-tripping. Decorate the
+credential in a fused accessor instead.
+
+### One-var `basic`
+
+`auth: "basic"` takes **one or two** `vars`. Two are a username and a password. One is a credential
+passed as the **username**, with a literal `""` password:
+`encodeBasicAuthHeader(apiKey(), "")`.
+
+**There is no field choosing which half is empty, because the corpus never chooses.** Measured
+2026-08-14 over `packages/mcp-connectors` at tree `23c90b92`, re-run with
+`grep -rn "encodeBasicAuthHeader(" --include=*.ts .` from that directory and excluding `shared/`:
+five call sites, of which two supply an empty half — `greenhouse` and `lever`, both
+`encodeBasicAuthHeader(apiKey(), "")` — and **nothing writes `("", key)`**. The other three
+(`airflow`, `jenkins`, `zendesk`) pass two real values. A direction field would be a spec surface
+with one legal setting.
+
+`prefix`/`suffix` stay legal on a `basic` entry — the one exception to the rule that an entry
+declaring `auth` may not declare them — because on this mode they have a position to occupy: they
+decorate the **username** argument to `encodeBasicAuthHeader`, which is `zendesk`'s
+`` `${email}/token` ``. They may not be combined with `tokenLocal`; see above.
+
 ## OAuth: `client-credentials`
 
 An env entry may declare `"auth": "client-credentials"` instead of `"bearer"`, `"basic"` or `"headers"`:

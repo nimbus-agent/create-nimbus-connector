@@ -930,7 +930,7 @@ export function typeOperator(node: AstNode | undefined): TypeOperator | undefine
  * `(): string`.
  *
  * **The head name alone is never sufficient for a generic, and this docstring used to argue that it
- * was.** It reasoned that because `renderBasic`/`renderSplitBearer`/`renderEnvAccessor` write
+ * was.** It reasoned that because `renderBasic`/`renderSplitAccessor`/`renderEnvAccessor` write
  * exactly `Record<string, string>` and no other instantiation, the head name distinguishes them —
  * which confuses what the EMITTER writes with what the READER accepts. `Record<string, number>`
  * shares the head name, recovers identical `EnvEntry` fields, and re-emits `Record<string, string>`.

@@ -394,10 +394,14 @@ const GLOSSES: Readonly<Record<string, string>> = {
   "env[].headerNames": "The header name each variable's value is sent under.",
   "env[].tokenLocal":
     "Splits the accessor in two: a `(): string` of this name that reads and guards the raw token, leaving `local` a wrapper that builds the header from a call to it.",
+  "env[].authScheme":
+    'The Authorization scheme word, replacing the literal `Bearer` — e.g. `"Token"` (dbt, flagsmith, readwise) or `"token"` (snyk). Omitted means `Bearer`; only valid when `auth` is `"bearer"`.',
   "env[].tokenUrl": "The token endpoint the client-credentials exchange POSTs to.",
   "env[].scope": "The `scope` sent with the client-credentials exchange.",
   "env[].credentialsIn":
     "Where the client id and secret go: an `Authorization: Basic` header, or the form body as `client_id`/`client_secret`.",
+  "env[].extraHeaders":
+    'Static, literal-valued headers emitted between the auth entry and the trailing `Accept` — e.g. `"Intercom-Version"` (intercom), `"Content-Type"` (snowflake). Not valid with `auth: "client-credentials"`, and a key may not collide, case-insensitively, with `Accept`, `Authorization` or a `headerNames` entry.',
 
   // fetchHelper
   "fetchHelper.local":
