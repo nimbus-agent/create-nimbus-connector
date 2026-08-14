@@ -1644,4 +1644,54 @@ describe("extraHeaders round trip", () => {
     expect(entries).toEqual([]);
     expect(unclaimed).toHaveLength(1);
   });
+
+  // A repeated key is the same class as the non-literal value above, reached differently: the
+  // static run is collected into a Record, so a second property with the same key OVERWRITES the
+  // first and the accessor derives to a spec that re-emits one property where the module had two
+  // — a claimed function regenerating non-identical bytes, which no gate can see. No emitter path
+  // writes either shape; refusing them keeps the recognizer's claim true of every input rather
+  // than only of the inputs this emitter happens to produce.
+  //
+  // Case-INSENSITIVELY, and not merely because HTTP field names are: `EnvSchema` refuses two
+  // extraHeaders keys that differ only in case, so recovering both would hand back a spec this
+  // repo's own `parseSpec` rejects — a worse failure than declining to claim the function.
+  it("refuses a repeated static header key", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Api": "1",',
+      '    "X-Api": "2",',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
+
+  it("refuses two static header keys differing only in case", () => {
+    const source = [
+      "function authHeader(): Record<string, string> {",
+      '  const t = process.env["A"]?.trim();',
+      '  if (t === undefined || t === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      "  return {",
+      "    Authorization: `Bearer ${t}`,",
+      '    "X-Api": "1",',
+      '    "x-api": "2",',
+      '    Accept: "application/json",',
+      "  };",
+      "}",
+    ].join("\n");
+    const { entries, unclaimed } = run(source);
+    expect(entries).toEqual([]);
+    expect(unclaimed).toHaveLength(1);
+  });
 });

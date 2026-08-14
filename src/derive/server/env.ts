@@ -316,9 +316,18 @@ function splitExtraHeaders(
 ): { readonly auth: Prop[]; readonly extras: Record<string, string> } | undefined {
   if (rest.length < authCount) return undefined;
   const extras: Record<string, string> = {};
+  const seen = new Set<string>();
   for (const prop of rest.slice(authCount)) {
     const value = stringLit(prop.value);
     if (value === undefined) return undefined;
+    // A repeat would OVERWRITE, and the entry would derive to a spec re-emitting one property
+    // where the module had two — the same "claimed function regenerating non-identical bytes"
+    // this file closed once already at `classifyAuthReturn`, and equally invisible to every gate.
+    // Case-insensitively, because `EnvSchema` refuses two `extraHeaders` keys differing only in
+    // case: recovering both would hand back a spec this repo's own `parseSpec` rejects.
+    const lower = prop.key.toLowerCase();
+    if (seen.has(lower)) return undefined;
+    seen.add(lower);
     extras[prop.key] = value;
   }
   return { auth: rest.slice(0, authCount), extras };
