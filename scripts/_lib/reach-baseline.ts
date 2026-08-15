@@ -171,18 +171,43 @@ export const BASELINE_PATH = join(
  * write a false 0/94 baseline that then passes forever. The two copies of these guards were
  * identical down to the error strings.
  */
-export async function requireDeriveToolchain(): Promise<void> {
-  await initFormatter();
-  if (!formatterAvailable()) {
+export type DeriveToolchain = {
+  initFormatter: () => Promise<unknown>;
+  formatterAvailable: () => boolean;
+  formatterUnavailableReason: () => string | undefined;
+  initParser: () => Promise<unknown>;
+  parserAvailable: () => boolean;
+  parserUnavailableReason: () => string | undefined;
+};
+
+/** The real toolchain — what both harnesses get when they pass no argument. */
+const REAL_TOOLCHAIN: DeriveToolchain = {
+  initFormatter,
+  formatterAvailable,
+  formatterUnavailableReason,
+  initParser,
+  parserAvailable,
+  parserUnavailableReason,
+};
+
+export async function requireDeriveToolchain(
+  // Injected for the same reason `resolveComparableTree` takes `git`: the interesting cases
+  // here are the two REFUSALS, and they are unreachable from a test that can only observe a
+  // machine where both packages are installed — which is every machine that can run this
+  // suite, since both are devDependencies. Defaulted, so neither caller passes anything.
+  toolchain: DeriveToolchain = REAL_TOOLCHAIN,
+): Promise<void> {
+  await toolchain.initFormatter();
+  if (!toolchain.formatterAvailable()) {
     throw new Error(
       "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
-        `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
+        `would produce spurious diffs that read as reach regressions. ${toolchain.formatterUnavailableReason()}`,
     );
   }
-  await initParser();
-  if (!parserAvailable()) {
+  await toolchain.initParser();
+  if (!toolchain.parserAvailable()) {
     throw new Error(
-      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
+      `@babel/parser is required here — this harness derives every connector. ${toolchain.parserUnavailableReason()}`,
     );
   }
 }
