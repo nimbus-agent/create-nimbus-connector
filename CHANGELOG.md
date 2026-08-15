@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.0...create-nimbus-connector-v0.13.1) (2026-08-15)
+
+
+### Reverts
+
+* **ci:** drop environment: release from the npm publish job ([#101](https://github.com/nimbus-agent/create-nimbus-connector/issues/101)) ([0dd67a1](https://github.com/nimbus-agent/create-nimbus-connector/commit/0dd67a16ba07f54451db9a8da5dc83ebb277959a))
+
 ## [0.13.0](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.12.0...create-nimbus-connector-v0.13.0) (2026-08-10)
 
 
