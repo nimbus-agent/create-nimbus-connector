@@ -1,6 +1,6 @@
 {
   "name": "create-nimbus-connector",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Generate a Nimbus MCP connector package from a small JSON spec — for the Nimbus monorepo, or standalone.",
   "keywords": [
     "nimbus",
