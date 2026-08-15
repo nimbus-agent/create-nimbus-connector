@@ -132,9 +132,9 @@ describe("recognizeConditionalPath", () => {
       "}",
       "return jsonResult(await acmeGet(`/builds/${encodeURIComponent(parsed.buildId)}`));",
     ];
-    expect(recognizeConditionalPath(handlerStatements("parsed", lines), "p", readReturn)).toBe(
-      undefined,
-    );
+    expect(
+      recognizeConditionalPath(handlerStatements("parsed", lines), "p", readReturn),
+    ).toBeUndefined();
   });
 
   it("refuses a guard testing anything other than === undefined", () => {

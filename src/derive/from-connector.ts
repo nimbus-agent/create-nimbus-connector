@@ -152,12 +152,8 @@ export function renderBlockers(dir: string, blockers: readonly Blocker[]): strin
     // `file` is omitted for src/server.ts, which is where every blocker came from until the
     // deriver learned to read a second file — so the un-prefixed form stays byte-identical and
     // only a foreign blocker gains a qualifier.
-    const where =
-      b.line > 0
-        ? b.file === undefined
-          ? `  (line ${b.line})`
-          : `  (${b.file} line ${b.line})`
-        : "";
+    const at = b.file === undefined ? `line ${String(b.line)}` : `${b.file} line ${String(b.line)}`;
+    const where = b.line > 0 ? `  (${at})` : "";
     return `  ${b.kind}${where}`;
   });
   return (
