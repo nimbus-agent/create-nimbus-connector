@@ -832,6 +832,43 @@ function resolveSearchFilter(
  * exists to prevent. A rest-kit frame cannot be a shim anyway (its `toolStatements` is the whole
  * module, never the single call `applySecondFile` requires), so nothing is lost by scoping it.
  */
+/**
+ * Splice a shim connector's `src/tools.ts` into the frame, if there is one.
+ *
+ * A shim connector's tools live in a second file. Splicing before the recognizers run is
+ * the whole point: afterwards they would have already found nothing, which is how these
+ * connectors came to report `frame:tools-in-second-file` at the totality rule instead.
+ *
+ * Lifted out of {@link deriveSharedStyleSpec} to bring it back under the
+ * cognitive-complexity gate (Sonar `S3776`). It also removes four `let`s from that
+ * function, so the values it produces are now visibly assigned once.
+ */
+function spliceSecondFileIfShim(
+  inputFrame: Frame,
+  claims: ClaimSet,
+  toolsSource: string | undefined,
+): {
+  frame: Frame;
+  foreign?: ForeignStatements;
+  foreignClaims?: ClaimSet;
+  secondFileRefusal?: SecondFileRefusal;
+} {
+  if (toolsSource === undefined) return { frame: inputFrame };
+  const spliced = applySecondFile(inputFrame, claims, toolsSource);
+  if ("refused" in spliced) {
+    // "not-a-shim" stays undefined: the connector is not a shim, so nothing about it
+    // changed and its ordinary blockers are already the right report.
+    return spliced.refused === "not-a-shim"
+      ? { frame: inputFrame }
+      : { frame: inputFrame, secondFileRefusal: spliced.refused };
+  }
+  return {
+    frame: spliced.frame,
+    foreign: spliced.foreign,
+    foreignClaims: spliced.foreignClaims,
+  };
+}
+
 function deriveSharedStyleSpec(
   inputFrame: Frame,
   claims: ClaimSet,
@@ -840,25 +877,11 @@ function deriveSharedStyleSpec(
   filterSource: string | undefined,
   toolsSource: string | undefined,
 ): Derivation {
-  // A shim connector's tools live in src/tools.ts. Splicing before the recognizers run is the
-  // whole point: afterwards they would have already found nothing, which is how these connectors
-  // came to report frame:tools-in-second-file at the totality rule instead.
-  let frame = inputFrame;
-  let foreign: ForeignStatements | undefined;
-  let foreignClaims: ClaimSet | undefined;
-  let secondFileRefusal: SecondFileRefusal | undefined;
-  if (toolsSource !== undefined) {
-    const spliced = applySecondFile(frame, claims, toolsSource);
-    if ("refused" in spliced) {
-      // "not-a-shim" stays undefined: the connector is not a shim, so nothing about it changed and
-      // its ordinary blockers are already the right report.
-      if (spliced.refused !== "not-a-shim") secondFileRefusal = spliced.refused;
-    } else {
-      frame = spliced.frame;
-      foreign = spliced.foreign;
-      foreignClaims = spliced.foreignClaims;
-    }
-  }
+  const { frame, foreign, foreignClaims, secondFileRefusal } = spliceSecondFileIfShim(
+    inputFrame,
+    claims,
+    toolsSource,
+  );
 
   const { entries: env, tokenServiceLabels } = recognizeEnv(frame.verifyStatements, claims);
   const recognizedHelper = recognizeFetchHelper(frame.verifyStatements, claims);

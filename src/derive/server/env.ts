@@ -284,7 +284,10 @@ function matchSchemeTemplate(
   const t = templateLiteral(node);
   if (t?.expressions.length !== 1 || t.quasis[1] !== "") return undefined;
   const head = t.quasis[0];
-  if (head === undefined || !head.endsWith(" ")) return undefined;
+  // `!head?.endsWith(" ")` covers both cases the long form spelled out: an absent head
+  // makes the optional chain `undefined`, and `!undefined` is true, so it returns here
+  // exactly as before.
+  if (!head?.endsWith(" ")) return undefined;
   const scheme = head.slice(0, -1);
   // The same allowlist EnvSchema enforces. A head this rejects is bytes no spec produces, so
   // claiming it would derive a spec that re-emits differently.

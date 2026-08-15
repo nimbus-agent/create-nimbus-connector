@@ -754,6 +754,47 @@ type QueryIssue = { path: (string | number)[]; message: string };
 type AddQueryIssue = (issue: QueryIssue) => void;
 
 /**
+ * The structural rejections for `pathWhen`, checked ahead of the per-guard loop in the
+ * tool `superRefine`: a tool that may not carry `pathWhen` at all should not ALSO be
+ * told its individual guards are malformed — the guards are meaningless in a shape that
+ * cannot have them, so the caller skips the loop entirely once this returns `true`. Same
+ * one-mistake-one-rejection convention the duplicate/self-reference checks follow.
+ *
+ * Lifted out of `superRefine` to bring that refinement back under the
+ * cognitive-complexity gate (Sonar `S3776`). Typed structurally rather than against the
+ * inferred zod output so it does not have to name a type zod builds; every field it
+ * reads is listed.
+ */
+function checkPathWhenShape(
+  t: { pathWhen?: unknown; impl: string; query?: unknown },
+  add: AddQueryIssue,
+): boolean {
+  if (t.pathWhen === undefined) return false;
+  let invalid = false;
+  if (t.impl === "stub" || t.impl === "search") {
+    invalid = true;
+    add({
+      path: ["pathWhen"],
+      message:
+        t.impl === "stub"
+          ? '"pathWhen" is not valid on a "stub" tool — a stub issues no request to select a path for'
+          : '"pathWhen" is not valid on a "search" tool — its path is the endpoint its rows come from',
+    });
+  }
+  if (t.query !== undefined) {
+    invalid = true;
+    add({
+      path: ["pathWhen"],
+      message:
+        '"pathWhen" and "query" cannot be combined: both decide the request line, and no ' +
+        "corpus connector needs both. Refused in full rather than only for guarded query " +
+        "entries, because a rule can be loosened later and cannot be tightened.",
+    });
+  }
+  return invalid;
+}
+
+/**
  * renderPath (src/emit/server/path-template.ts) threads the query branch's prefix
  * (the fetch helper's base) straight into the template with no separator — it never
  * applies the leading-slash normalization renderFetchHelper's own `pathPart` guard
@@ -1009,34 +1050,7 @@ export const ToolSchema = z
     const add: AddQueryIssue = ({ path, message }) =>
       ctx.addIssue({ code: "custom", path, message });
 
-    // Structural rejections, ahead of the per-guard loop below: a tool that may not carry
-    // pathWhen at all should not also be told its individual guards are malformed — the guards
-    // are meaningless in a shape that cannot have them, so the loop is skipped entirely once one
-    // of these fires. Same one-mistake-one-rejection convention the duplicate/self-reference
-    // checks in the loop below follow.
-    let pathWhenInvalid = false;
-    if (t.pathWhen !== undefined) {
-      if (t.impl === "stub" || t.impl === "search") {
-        pathWhenInvalid = true;
-        add({
-          path: ["pathWhen"],
-          message:
-            t.impl === "stub"
-              ? '"pathWhen" is not valid on a "stub" tool — a stub issues no request to select a path for'
-              : '"pathWhen" is not valid on a "search" tool — its path is the endpoint its rows come from',
-        });
-      }
-      if (t.query !== undefined) {
-        pathWhenInvalid = true;
-        add({
-          path: ["pathWhen"],
-          message:
-            '"pathWhen" and "query" cannot be combined: both decide the request line, and no ' +
-            "corpus connector needs both. Refused in full rather than only for guarded query " +
-            "entries, because a rule can be loosened later and cannot be tightened.",
-        });
-      }
-    }
+    const pathWhenInvalid = checkPathWhenShape(t, add);
 
     const guarded = new Set<string>();
     (pathWhenInvalid ? [] : (t.pathWhen ?? [])).forEach((g, i) => {
