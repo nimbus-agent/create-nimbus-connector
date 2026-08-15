@@ -12,13 +12,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initParser, parserAvailable, parserUnavailableReason } from "../src/derive/ast.ts";
-import {
-  biomeVersion,
-  formatterAvailable,
-  formatterUnavailableReason,
-  initFormatter,
-} from "../src/format.ts";
+import { biomeVersion } from "../src/format.ts";
 import { checkBiomeVersion } from "../src/golden/biome-version.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import {
@@ -31,14 +25,14 @@ import {
   walkConnector,
 } from "./_lib/reach.ts";
 import {
-  assertComparable,
+  BASELINE_PATH,
   baselineScopeRefusal,
   compareBaseline,
-  connectorsTreeRefusal,
+  requireDeriveToolchain,
+  resolveComparableTree,
 } from "./_lib/reach-baseline.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const BASELINE_PATH = join(scriptDir, "..", "fixtures", "reach-baseline.json");
 
 /**
  * Deliberately NOT `localeCompare`, which is what SonarCloud's S2871 message suggests.
@@ -126,34 +120,20 @@ export function measure(name: string, root: string): ConnectorResult {
  * a status for `main()` to re-dispatch on would be a second place to get that mapping wrong.
  */
 function compareAgainstBaseline(root: string, results: readonly ConnectorResult[]): void {
-  const head = git(root, ["rev-parse", "HEAD"]);
-  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
-  // A failed `git status` must not be read as "clean": status.value === "" either way, so
-  // status.error (not just head.error) has to reach assertComparable or a non-zero exit here
-  // makes the dirty gate silently disappear.
-  const refusal = assertComparable({
-    commit: head.value,
-    dirty: status.value !== "",
-    gitError: head.error !== "" ? head.error : status.error,
-  });
-  if (refusal !== undefined) {
-    console.log(`\n${refusal}`);
+  const comparable = resolveComparableTree(root, git);
+  if ("refusal" in comparable) {
+    console.log(`\n${comparable.refusal}`);
     process.exit(2);
   }
 
-  // Keyed on the tree object of packages/mcp-connectors — the only path this harness reads —
-  // not on HEAD: see reach-baseline.ts's assertComparable docstring for why a commit SHA is the
-  // wrong key.
-  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
-  const treeRefusal = connectorsTreeRefusal(connectorsTree.error);
-  if (treeRefusal !== undefined) {
-    console.log(`\n${treeRefusal}`);
-    process.exit(2);
-  }
   const stored = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parameters<
     typeof compareBaseline
   >[0];
-  const { refusal: mismatch, regressions } = compareBaseline(stored, results, connectorsTree.value);
+  const { refusal: mismatch, regressions } = compareBaseline(
+    stored,
+    results,
+    comparable.connectorsTree,
+  );
   if (mismatch !== undefined) {
     console.log(`\n${mismatch}`);
     process.exit(2);
@@ -170,21 +150,7 @@ function compareAgainstBaseline(root: string, results: readonly ConnectorResult[
 }
 
 async function main(argv: readonly string[]): Promise<void> {
-  await initFormatter();
-  if (!formatterAvailable()) {
-    throw new Error(
-      "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
-        `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
-    );
-  }
-  // Without this, every connector would derive as blocked:parse-error and the run would report
-  // a false 0/94 that reads as a real (if bad) measurement rather than a broken toolchain.
-  await initParser();
-  if (!parserAvailable()) {
-    throw new Error(
-      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
-    );
-  }
+  await requireDeriveToolchain();
 
   const { names, nimbusRoot, baseline, verbose } = parseArgs(argv);
 

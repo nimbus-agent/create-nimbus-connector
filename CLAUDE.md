@@ -30,9 +30,10 @@ Three repos, three roles, and the split is load-bearing:
 repository.** Not into `src/`, not into `test/`, not into `fixtures/`. That is a licensing
 violation, not a style preference.
 
-**The one carve-out: description strings.** All eleven real-connector fixtures reproduce that
-connector's `nimbus.extension.json` description and its tool descriptions verbatim — roughly
-8,452 characters across the corpus. This is required, not sloppiness: `nimbus.extension.json`
+**The one carve-out: description strings.** All fourteen real-connector fixtures reproduce that
+connector's `nimbus.extension.json` description and its tool descriptions verbatim — 12,688
+characters across the corpus (derived, and pinned by `test/fixture-description-budget.test.ts`;
+do not hand-edit either number). This is required, not sloppiness: `nimbus.extension.json`
 and `src/server.ts` cannot byte-match the real connector without the exact string, and the
 four protected 6/6 fixtures (`newrelic`, `datadog`, `grafana`, `sentry`) depend on it. Both
 repositories are `nimbus-agent`-owned, which is what makes this a carve-out rather than an
@@ -82,9 +83,9 @@ everything", and a gate no list names is a gate that silently stops being run.
 | P | Command | What it proves | Needs |
 | --- | --- | --- | --- |
 | P | `bun test` | Unit + emitted-source typecheck | — |
-| P | `bun test --coverage` | `bunfig.toml`'s **per-file** floors, which a bare `bun test` never evaluates | — |
 | P | `bunx tsc --noEmit` | This repo typechecks | — |
 | P | `bunx biome check src/ test/ scripts/` | This repo lints | — |
+| P | `bun test --coverage` | `bunfig.toml`'s **per-file** floors, which a bare `bun test` never evaluates | — |
 | P | `bun run diff:golden --nimbus-root <path>` | Emitted bytes match real connectors | Nimbus checkout |
 |  | `bun run reach --nimbus-root <path>` | How much of the corpus the spec language reaches | Nimbus checkout |
 | P | `bun run reach --baseline --nimbus-root <path>` | No connector lost a tier against `fixtures/reach-baseline.json` | Nimbus checkout |

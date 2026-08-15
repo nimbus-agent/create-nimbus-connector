@@ -1,4 +1,8 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { takeValue } from "../../src/cli.ts";
+import { initParser, parserAvailable, parserUnavailableReason } from "../../src/derive/ast.ts";
+import { formatterAvailable, formatterUnavailableReason, initFormatter } from "../../src/format.ts";
 import type { ConnectorResult, Tier } from "./reach.ts";
 
 export type Baseline = { connectorsTree: string; tiers: Record<string, Tier> };
@@ -139,4 +143,87 @@ export function compareBaseline(
     if (RANK.indexOf(to) < RANK.indexOf(from)) regressions.push({ name, from, to });
   }
   return { regressions };
+}
+
+/**
+ * The recorded baseline's path — the one definition.
+ *
+ * `scripts/reach.ts` and `scripts/reach-baseline.ts` each computed this identically, which is
+ * a shape this pair specifically must not have: one writes the file and the other reads it,
+ * so two definitions of where it lives is a way for the writer and the reader to disagree
+ * about which file the gate is even about. The `..` count differs from theirs because this
+ * module sits one directory deeper.
+ */
+export const BASELINE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "fixtures",
+  "reach-baseline.json",
+);
+
+/**
+ * Bring up Biome and Babel, or refuse with the reason.
+ *
+ * Both harnesses need both, for reasons that are not interchangeable: without the formatter a
+ * byte-comparison reports spurious diffs that read as reach regressions, and without the parser
+ * every connector derives as `blocked:parse-error` — which on the recording side would silently
+ * write a false 0/94 baseline that then passes forever. The two copies of these guards were
+ * identical down to the error strings.
+ */
+export async function requireDeriveToolchain(): Promise<void> {
+  await initFormatter();
+  if (!formatterAvailable()) {
+    throw new Error(
+      "@biomejs/biome is required here — this harness byte-compares, and unformatted output " +
+        `would produce spurious diffs that read as reach regressions. ${formatterUnavailableReason()}`,
+    );
+  }
+  await initParser();
+  if (!parserAvailable()) {
+    throw new Error(
+      `@babel/parser is required here — this harness derives every connector. ${parserUnavailableReason()}`,
+    );
+  }
+}
+
+/**
+ * The comparability preamble both harnesses run before they may record or compare: HEAD is
+ * readable, `packages/mcp-connectors` is clean, and the tree object resolves.
+ *
+ * This is the part that most needed to be shared. These rules decide whether a baseline may be
+ * written or compared **at all**, so the writer and the reader disagreeing about them is
+ * exactly the single failure `scripts/reach-baseline.ts`'s header says this pair must not have
+ * — the reason it already imports `measure`, `connectorDirs` and `git` rather than
+ * reimplementing them. The comparability rules were the one part left copied.
+ *
+ * `git` is injected rather than imported because it lives in `scripts/reach.ts`, which imports
+ * this module; taking it as a parameter keeps that edge one-way.
+ *
+ * Returns the refusal text for the caller to print and exit(2) on, or the resolved tree object.
+ * The caller formats it — `reach.ts` prefixes a blank line, `reach-baseline.ts` does not.
+ */
+export function resolveComparableTree(
+  root: string,
+  git: (root: string, args: string[]) => { value: string; error: string },
+): { refusal: string } | { connectorsTree: string; head: string } {
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const status = git(root, ["status", "--porcelain", "--", "packages/mcp-connectors"]);
+  // A failed `git status` must not be read as "clean": status.value === "" either way, so
+  // status.error (not just head.error) has to reach assertComparable, or a non-zero exit
+  // here makes the dirty gate silently disappear.
+  const refusal = assertComparable({
+    commit: head.value,
+    dirty: status.value !== "",
+    gitError: head.error !== "" ? head.error : status.error,
+  });
+  if (refusal !== undefined) return { refusal };
+
+  // Keyed on the tree object of packages/mcp-connectors — the only path this harness reads —
+  // not on HEAD: see assertComparable's docstring for why a commit SHA is the wrong key.
+  const connectorsTree = git(root, ["rev-parse", "HEAD:packages/mcp-connectors"]);
+  const treeRefusal = connectorsTreeRefusal(connectorsTree.error);
+  if (treeRefusal !== undefined) return { refusal: treeRefusal };
+
+  return { connectorsTree: connectorsTree.value, head: head.value };
 }

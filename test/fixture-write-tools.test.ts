@@ -43,7 +43,9 @@ function writeTools(name: string): readonly string[] {
 
 describe("real-connector fixtures are read-only", () => {
   // Non-vacuity: if expectations.json is ever restructured, an empty list would make every
-  // assertion below pass while checking nothing. The twelve are named in docs/TESTING.md.
+  // assertion below pass while checking nothing. The set is named in docs/TESTING.md — a
+  // floor, not an equality, so adding a fixture does not fail here (which is why the doc's
+  // enumeration silently fell two behind the corpus and had to be corrected by hand).
   it("finds the real-connector fixtures", () => {
     expect(realConnectorFixtures().length).toBeGreaterThanOrEqual(12);
   });

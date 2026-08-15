@@ -113,7 +113,7 @@ only when the spec declares a search tool.
 `deriveSpec(files)` turns a connector's `src/server.ts`, `nimbus.extension.json` and (when
 present) `src/search-filter.ts` back into a spec, or into named blockers. It is what
 `--from-connector` and `bun run reach` both run; it ships, because `package.json`'s `files` is
-`["src", "README.md"]`.
+`["src", "schema", "README.md"]`.
 
 ```text
 ast.ts             the Babel boundary — parseModule, the AstNode type
@@ -125,7 +125,11 @@ search-filter.ts   src/search-filter.ts -> filter entries
 index.ts           deriveSpec(files) -> Derivation
 from-connector.ts  a connector DIRECTORY -> a spec, or a blocker report
 server/            mirrors src/emit/server/ — one recognizer per emitter module, plus
-                   frame.ts and hoists.ts, which have no emitter counterpart
+                   frame.ts, hoists.ts, second-file.ts and conditional-path.ts, which
+                   have no emitter counterpart (second-file.ts recognizes the shim
+                   connector, whose tools live in a ./tools.ts the emitter never writes;
+                   conditional-path.ts inverts part of tools-hand.ts's guard ladder
+                   rather than mirroring a module of its own)
 ```
 
 Three properties hold it honest, and each exists because its absence produced a false pass:

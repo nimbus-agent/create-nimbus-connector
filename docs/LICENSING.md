@@ -66,7 +66,7 @@ from the same connector it is diffed against removes that independence: `deriveS
 repository — to pass. `test/derive/round-trip.test.ts` already runs exactly that round trip, in
 memory, as a coverage measurement; running it again on disk, permanently, as an "acceptance
 test" would launder a tautology as verification. `diff:golden`'s four protected 6/6 fixtures stay
-meaningful only because none of the eleven real-connector fixtures were produced this way.
+meaningful only because none of the fourteen real-connector fixtures were produced this way.
 
 ## What the user owns
 
@@ -86,7 +86,7 @@ authored.
 [CLAUDE.md](../CLAUDE.md) already states the carve-out and its bound: description strings only,
 never connector code, `shared/` source or filter bodies. A spec `--from-connector` derives from a
 real connector will contain that connector's exact description strings, because `deriveSpec`
-reads them verbatim off the manifest — the same as the eleven hand-written fixtures do by hand.
+reads them verbatim off the manifest — the same as the fourteen hand-written fixtures do by hand.
 That is consistent with the carve-out, not an extension of it: the strings are the one thing the
 carve-out already allows to be reproduced exactly. What it does not allow — and what a derived
 fixture would add on top — is everything else in the file being extracted too.
