@@ -185,18 +185,46 @@ const BY_LENGTH_DESC = [...EVERY_GATE].sort((a, b) => b.length - a.length);
  * `reach --baseline`, which is the drift this file exists for.
  */
 function gatesNamedIn(text: string): Set<string> {
-  const named = new Set<string>();
+  return new Set(gateMentionsIn(text));
+}
+
+/**
+ * The same scan, but keeping the sequence and every repeat — the raw mention list.
+ *
+ * `gatesNamedIn` collapses to a `Set` because every rule above asks a membership question.
+ * The order rule below cannot: `CLAUDE.md` promised its table ran "in that order" while
+ * listing `bun test --coverage` second, ahead of the typecheck and lint that really precede
+ * it, and `CONTRIBUTING.md` stated the correct order three files away. Two documents
+ * contradicting each other about the sequence, and every existing rule passed, because a
+ * `Set` cannot hold a wrong order.
+ */
+function gateMentionsIn(text: string): string[] {
+  const mentions: string[] = [];
   for (let i = 0; i < text.length; i++) {
     if (i > 0 && NAME_CONTINUES_LEFT.test(text[i - 1] ?? "")) continue;
     for (const gate of BY_LENGTH_DESC) {
       if (!text.startsWith(gate, i)) continue;
       if (!nameEndsAt(text, i + gate.length)) continue;
-      named.add(gate);
+      mentions.push(gate);
       i += gate.length - 1;
       break;
     }
   }
-  return named;
+  return mentions;
+}
+
+/**
+ * The order a document first mentions each gate in, restricted to the gates it names at all.
+ *
+ * First mention, not every mention: a document is free to discuss `acceptance` again in a
+ * later paragraph without that counting as a claim about the sequence.
+ */
+function gateOrderIn(text: string): string[] {
+  const seen: string[] = [];
+  for (const gate of gateMentionsIn(text)) {
+    if (!seen.includes(gate)) seen.push(gate);
+  }
+  return seen;
 }
 
 const isYaml = (path: string): boolean => path.endsWith(".yml") || path.endsWith(".yaml");
@@ -593,5 +621,68 @@ describe("the command-block rule, on a document that is wrong", () => {
     // make this identical to the whole-document rule and close nothing.
     const doc = `Run ${EVERY_GATE.map((g) => `\`${g}\``).join(", ")}.\n\n\`\`\`sh\nbun test\n\`\`\``;
     expect(commandBlockLinesOf(doc).trim()).toBe("bun test");
+  });
+});
+
+/**
+ * A document that tells the reader the gates run *in a particular order* is making a second
+ * claim beyond naming them, and nothing graded it. `CLAUDE.md` said "runs the eight gates
+ * marked **P** below, in that order" over a table whose second row was `bun test --coverage`
+ * — which `GATES` runs fourth, after the typecheck and the lint. `CONTRIBUTING.md` had the
+ * correct sequence all along, so the repository shipped two canonical documents contradicting each
+ * other about the order in which its own merge gate runs.
+ *
+ * The trigger is the claim itself: a document only comes under this rule if it says so, and
+ * what is graded is the document's gate TABLE, not the whole file. Both claimants present
+ * their sequence as a Markdown table, and reading the whole document instead is wrong in a
+ * way that first showed up as a false failure here: `CLAUDE.md` discusses `diff:golden` in
+ * the licensing section, pages above its table, and a whole-document scan called that a
+ * mis-ordered list. Keying on the table is the same structural move `gatesMissingABox` and
+ * `gatesMissingFromBlocks` already make — the shape carries the claim, and no heading text
+ * has to be transcribed here to find it.
+ */
+// `\s+`, not a literal space: CLAUDE.md's claim wraps as "in that\norder", and the
+// space-matching first draft silently skipped the one document that was actually wrong.
+const ORDER_CLAIM =
+  /\bin\s+(?:that|the following|this)\s+order\b|\bin\s+the\s+order\s+it\s+runs\s+them\b/i;
+
+/** A document's Markdown table rows, which is where both claimants put their sequence. */
+function tableRowsOf(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("|"))
+    .join("\n");
+}
+
+describe("a document that claims an order states the real one", () => {
+  const claimants = CANONICAL.filter(({ path }) => ORDER_CLAIM.test(proseOf(path)));
+
+  it("finds the documents that make the claim", () => {
+    // Non-vacuity. The rule is trigger-driven, so a regex that stopped matching would leave it
+    // grading nothing while still reporting green — the exact failure mode this file exists to
+    // eliminate, and one this rule hit during development: the first `ORDER_CLAIM` matched a
+    // literal space and so missed CLAUDE.md, whose claim wraps across a line. It is the only
+    // document the rule had anything to say about, so the rule graded nothing that mattered
+    // and the other assertion passed.
+    //
+    // A floor rather than an equality: a third document may legitimately start making the
+    // claim, and it should come under the rule rather than fail this one.
+    const paths = claimants.map((c) => c.path);
+    expect(paths).toContain("CLAUDE.md");
+    expect(paths).toContain("CONTRIBUTING.md");
+  });
+
+  it.each(claimants.map((c) => [c.path] as const))("%s orders its gates as GATES does", (path) => {
+    const named = gateOrderIn(tableRowsOf(proseOf(path)));
+    // Second non-vacuity guard, per-document: a claimant whose table names nothing would
+    // compare [] against [] and pass while grading no order at all.
+    expect(named.length, `${path} claims an order but its table names no gate`).toBeGreaterThan(1);
+    // Compare against GATES filtered to what this table actually names, so a document that
+    // legitimately covers a subset is judged on its own subset — the same courtesy the scope
+    // discriminant gives the two `needs-root` documents.
+    const expected = EVERY_GATE.filter((g) => named.includes(g));
+    expect(named, `${path} lists the gates in an order GATES does not run them in`).toEqual(
+      expected,
+    );
   });
 });

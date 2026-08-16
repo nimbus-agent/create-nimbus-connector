@@ -25,7 +25,16 @@ It is the inverse of the rest of the repo: `src/emit/` turns a spec into source,
 scripts/reach.ts               the CLI: measure, histogram, --baseline comparison
 scripts/reach-baseline.ts      records fixtures/reach-baseline.json (full corpus, always)
 scripts/_lib/reach.ts          measure(), tiering, histogram, summary lines
-scripts/_lib/reach-baseline.ts assertComparable, compareBaseline, connectorsTreeRefusal
+scripts/_lib/reach-baseline.ts the shared decision logic BOTH scripts above run, so the
+                               writer and the reader of the baseline cannot disagree:
+                               assertComparable, compareBaseline, connectorsTreeRefusal,
+                               buildBaseline, parseArgs, baselineScopeRefusal, plus
+                               BASELINE_PATH, requireDeriveToolchain (Biome + Babel, or
+                               refuse) and resolveComparableTree (HEAD readable, tree
+                               clean, tree object resolves). The two scripts above keep
+                               only argv plumbing and process.exit dispatch — which is
+                               why they are the ones sonar-project.properties excludes
+                               from coverage and this file is not.
 src/derive/
   ast.ts        the Babel boundary — parseModule, the AstNode type
   read.ts       THE ONLY module that reads a node's fields
@@ -36,8 +45,12 @@ src/derive/
   index.ts      deriveSpec(files) -> Derivation
   from-connector.ts  a connector DIRECTORY -> a spec, or named blockers (--from-connector)
   server/       one recognizer module per src/emit/server/ module:
-                args, body, env, fetch-helper, frame, hoists, index,
-                path-template, query, search, tools-hand, tools-rest
+                args, body, env, fetch-helper, index, path-template,
+                query, search, tools-hand, tools-rest
+                ...plus four with NO emitter counterpart: frame, hoists,
+                second-file (the shim connector, whose tools live in a
+                ./tools.ts the emitter never writes) and conditional-path
+                (the inverse of tools-hand's guard ladder, not a module mirror)
 test/derive/*.test.ts          a test file per deriver module, plus the round trip
 ```
 

@@ -5,6 +5,8 @@ import {
   buildBaseline,
   compareBaseline,
   connectorsTreeRefusal,
+  requireDeriveToolchain,
+  resolveComparableTree,
 } from "../../scripts/_lib/reach-baseline.ts";
 
 const results = [
@@ -112,5 +114,145 @@ describe("connectorsTreeRefusal", () => {
     const message = connectorsTreeRefusal("fatal: not a valid object name HEAD");
     expect(message).toMatch(/fatal: not a valid object name HEAD/);
     expect(message).toMatch(/packages\/mcp-connectors/);
+  });
+});
+
+describe("resolveComparableTree", () => {
+  // The comparability preamble, hoisted here so `scripts/reach.ts` (which compares against the
+  // baseline) and `scripts/reach-baseline.ts` (which writes it) cannot disagree about whether a
+  // checkout may be compared at all. Both harnesses need a Nimbus checkout and neither runs in
+  // CI — but `git` is injected, precisely so the decision logic is reachable without one.
+  const fakeGit =
+    (responses: Record<string, { value: string; error: string }>) =>
+    (_root: string, args: string[]) =>
+      responses[args.join(" ")] ?? { value: "", error: `unstubbed: ${args.join(" ")}` };
+
+  const CLEAN = {
+    "rev-parse HEAD": { value: "abc1234", error: "" },
+    "status --porcelain -- packages/mcp-connectors": { value: "", error: "" },
+    "rev-parse HEAD:packages/mcp-connectors": { value: "f4e9d93d", error: "" },
+  };
+
+  it("returns the tree and HEAD for a clean, readable checkout", () => {
+    expect(resolveComparableTree("/nimbus", fakeGit(CLEAN))).toEqual({
+      connectorsTree: "f4e9d93d",
+      head: "abc1234",
+    });
+  });
+
+  it("refuses a dirty packages/mcp-connectors rather than measuring it", () => {
+    const result = resolveComparableTree(
+      "/nimbus",
+      fakeGit({
+        ...CLEAN,
+        "status --porcelain -- packages/mcp-connectors": {
+          value: " M packages/mcp-connectors/sentry/src/server.ts",
+          error: "",
+        },
+      }),
+    );
+    expect(result).toHaveProperty("refusal");
+  });
+
+  it("routes a FAILED git status to the refusal, never reading it as clean", () => {
+    // The bug this preserves through the hoist: `status.value` is "" both when the tree is
+    // clean and when the command failed, so `status.error` — not just `head.error` — has to
+    // reach assertComparable. Miss it and the dirty gate silently disappears.
+    const result = resolveComparableTree(
+      "/nimbus",
+      fakeGit({
+        ...CLEAN,
+        "status --porcelain -- packages/mcp-connectors": {
+          value: "",
+          error: "fatal: not a git repository",
+        },
+      }),
+    );
+    expect(result).toHaveProperty("refusal");
+    expect((result as { refusal: string }).refusal).toMatch(/not a git repository/);
+  });
+
+  it("refuses when HEAD itself cannot be read", () => {
+    const result = resolveComparableTree(
+      "/nimbus",
+      fakeGit({ ...CLEAN, "rev-parse HEAD": { value: "", error: "fatal: bad revision" } }),
+    );
+    expect(result).toHaveProperty("refusal");
+  });
+
+  it("refuses when the connectors tree object cannot be resolved", () => {
+    // Otherwise the tree key becomes "", which reads as a valid key on both sides.
+    const result = resolveComparableTree(
+      "/nimbus",
+      fakeGit({
+        ...CLEAN,
+        "rev-parse HEAD:packages/mcp-connectors": {
+          value: "",
+          error: "fatal: not a valid object name",
+        },
+      }),
+    );
+    expect(result).toHaveProperty("refusal");
+    expect((result as { refusal: string }).refusal).toMatch(/packages\/mcp-connectors/);
+  });
+});
+
+describe("requireDeriveToolchain", () => {
+  it("resolves when Biome and Babel are both present", async () => {
+    // Both are devDependencies, so this is the path every real run takes. It is worth pinning
+    // because the alternative is silent: without the parser every connector derives as
+    // blocked:parse-error, and `reach:baseline` would WRITE that corpus-wide zero as the baseline.
+    expect(await requireDeriveToolchain()).toBeUndefined();
+  });
+
+  const working = {
+    initFormatter: async () => undefined,
+    formatterAvailable: () => true,
+    formatterUnavailableReason: () => "unused",
+    initParser: async () => undefined,
+    parserAvailable: () => true,
+    parserUnavailableReason: () => "unused",
+  };
+
+  it("refuses without Biome, naming the byte-compare reason", async () => {
+    // Not interchangeable with the parser refusal below: an absent formatter makes the
+    // byte-comparison report spurious diffs that read as REACH REGRESSIONS, so the message
+    // has to say so or a developer chases a corpus change that never happened.
+    await expect(
+      requireDeriveToolchain({
+        ...working,
+        formatterAvailable: () => false,
+        formatterUnavailableReason: () => "biome not installed",
+      }),
+    ).rejects.toThrow(/@biomejs\/biome is required here[\s\S]*biome not installed/);
+  });
+
+  it("refuses without Babel before deriving anything", async () => {
+    // The dangerous one. Without the parser every connector derives as blocked:parse-error,
+    // so `reach:baseline` would RECORD a corpus-wide zero as the baseline and every later
+    // run would compare green against it. Failing loudly here is what prevents that.
+    await expect(
+      requireDeriveToolchain({
+        ...working,
+        parserAvailable: () => false,
+        parserUnavailableReason: () => "babel not installed",
+      }),
+    ).rejects.toThrow(/@babel\/parser is required here[\s\S]*babel not installed/);
+  });
+
+  it("checks the formatter FIRST, so the parser is never initialised without it", async () => {
+    let parserInitialised = false;
+    await expect(
+      requireDeriveToolchain({
+        ...working,
+        formatterAvailable: () => false,
+        formatterUnavailableReason: () => "biome not installed",
+        initParser: async () => {
+          parserInitialised = true;
+          return undefined;
+        },
+      }),
+    ).rejects.toThrow(/@biomejs/);
+    expect(parserInitialised).toBe(false);
   });
 });
