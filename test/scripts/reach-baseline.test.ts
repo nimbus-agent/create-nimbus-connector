@@ -201,7 +201,7 @@ describe("requireDeriveToolchain", () => {
   it("resolves when Biome and Babel are both present", async () => {
     // Both are devDependencies, so this is the path every real run takes. It is worth pinning
     // because the alternative is silent: without the parser every connector derives as
-    // blocked:parse-error, and `reach:baseline` would WRITE that false 0/94 as the baseline.
+    // blocked:parse-error, and `reach:baseline` would WRITE that corpus-wide zero as the baseline.
     expect(await requireDeriveToolchain()).toBeUndefined();
   });
 

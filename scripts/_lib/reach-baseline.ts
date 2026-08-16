@@ -168,8 +168,8 @@ export const BASELINE_PATH = join(
  * Both harnesses need both, for reasons that are not interchangeable: without the formatter a
  * byte-comparison reports spurious diffs that read as reach regressions, and without the parser
  * every connector derives as `blocked:parse-error` — which on the recording side would silently
- * write a false 0/94 baseline that then passes forever. The two copies of these guards were
- * identical down to the error strings.
+ * write a false corpus-wide zero as the baseline, and every later run would compare green
+ * against it forever. The two copies of these guards were identical down to the error strings.
  */
 export type DeriveToolchain = {
   initFormatter: () => Promise<unknown>;

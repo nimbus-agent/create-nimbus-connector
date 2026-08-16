@@ -45,9 +45,20 @@ describe("the licensing carve-out's stated bound matches the corpus", () => {
     // Non-vacuity floor. Both assertions below compare derived numbers against document
     // text, so a scan that silently produced 0 fixtures / 0 characters would otherwise
     // fail in a way that looks like a docs problem rather than a broken scan.
+    //
+    // Every fixture, not just the first sorted one: the character total is a SUM, so one
+    // fixture quietly reading zero — a renamed `tools` key, a spec that lost its
+    // `description` — only makes the total smaller, and the fix that follows is someone
+    // updating CLAUDE.md to the new number. Checking one fixture cannot see that; the
+    // floor has to be per-fixture to be a floor on the scan rather than on the corpus.
     const fixtures = realConnectorFixtures();
     expect(fixtures.length).toBeGreaterThanOrEqual(14);
-    expect(describedCharacters(fixtures[0] as string)).toBeGreaterThan(0);
+    for (const fixture of fixtures) {
+      expect(
+        describedCharacters(fixture),
+        `${fixture} contributes no described characters`,
+      ).toBeGreaterThan(0);
+    }
   });
 
   it("CLAUDE.md and docs/LICENSING.md state the real fixture count", () => {
