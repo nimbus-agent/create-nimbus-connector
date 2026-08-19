@@ -11,6 +11,31 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
+      # Listed BEFORE dev-dependencies: Dependabot assigns each dependency to the
+      # first group it matches, and `@biomejs/biome` is a devDependency that would
+      # otherwise be swallowed by the type-based group below.
+      #
+      # The two Biome packages MUST move together, for the same reason the
+      # github-actions block below gives about codeql-action's init and analyze
+      # steps. `@biomejs/wasm-nodejs` (optionalDependencies) is the ENGINE
+      # src/format.ts formats with; `@biomejs/biome` (devDependencies) is the CLI
+      # `bun run lint` runs here and the range every emitted standalone package
+      # declares. They sat in different groups — one production-typed, one
+      # development-typed — so Dependabot could never propose them in one pull
+      # request, and did not: #106 bumped the engine to 2.5.8 and left the CLI at
+      # 2.5.7. test/emit/static.test.ts's "matches the Biome ENGINE that produced
+      # the bytes" caught it, which is exactly what that test exists for, but a
+      # split bump cannot be made to pass by anything Dependabot can write.
+      #
+      # Grouping does not make a Biome bump mergeable unattended, and is not meant
+      # to. src/emit/biome-json.ts's BIOME_VERSION and this repo's own biome.json
+      # $schema both have to move by hand, and `diff:golden` has to be re-run
+      # against a Nimbus checkout that CI does not have. What grouping buys is that
+      # a human finishing the job has ONE coherent pull request to finish, instead
+      # of two that are each broken until the other lands.
+      biome:
+        patterns:
+          - "@biomejs/*"
       dev-dependencies:
         dependency-type: "development"
 
