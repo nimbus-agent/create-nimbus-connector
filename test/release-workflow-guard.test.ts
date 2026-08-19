@@ -564,6 +564,32 @@ describe("the static-analysis gates", () => {
     expect(scan?.with?.args ?? "").toContain("-Dsonar.qualitygate.wait=true");
   });
 
+  it("never lets the sonar job skip itself on a missing token", () => {
+    // sonar.yml's header rejects `if: env.SONAR_TOKEN != ''` at length, and until now that
+    // rejection was prose — the exact shape test/measurement-hygiene.test.ts exists because of.
+    // A token-presence guard fails open twice over: the workflow goes green while analysing
+    // nothing, and it stays green forever if the secret is never added, so the one signal that
+    // the prerequisite is unmet is the one it deletes.
+    //
+    // The job's `if` is allowed to skip the runs where GitHub structurally withholds the
+    // Actions secret store — a fork's pull request, and a Dependabot-triggered one. Those are
+    // conditions on WHO triggered the run, checkable from the event payload alone. Reading the
+    // secret is a different thing, and this asserts the difference rather than the wording:
+    // the condition may say anything at all except "is the token set".
+    const sonar = workflows.find((w) => w.file === "sonar.yml")?.workflow;
+    expect(sonar, "sonar.yml must exist").toBeDefined();
+    const condition = sonar?.jobs?.["sonar"]?.if ?? "";
+    expect(condition, "the sonar job must carry a condition").not.toBe("");
+    expect(condition).not.toContain("SONAR_TOKEN");
+    expect(condition).not.toContain("secrets.");
+
+    // And the push-to-main run stays unguarded, which is what makes a missing secret loud:
+    // widen the skip to cover `push` and forgetting SONAR_TOKEN produces silence instead of a
+    // red main. Pinned as a substring for the same reason the scanner arg above is — the
+    // property is one clause of an expression no test can evaluate.
+    expect(condition).toContain("github.event_name != 'pull_request'");
+  });
+
   it("runs CodeQL's security-extended suite without dropping the default one", () => {
     const config = Bun.YAML.parse(read(CODEQL_CONFIG)) as {
       queries?: { uses?: string }[];
