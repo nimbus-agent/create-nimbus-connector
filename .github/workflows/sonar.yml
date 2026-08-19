@@ -15,19 +15,50 @@ name: sonar
 # removing elsewhere — and it would stay green forever if the secret were never added. A
 # loud failure is the correct behaviour for a workflow whose prerequisites are unmet.
 #
-# The job-level `if` below is NOT that guard, and the difference is the whole point. GitHub
-# withholds secrets from a pull request opened from a fork, so SONAR_TOKEN is empty there no
-# matter how correctly the repository is configured — the scan failed on every external
-# contribution for a reason the contributor could not fix or act on, which trains everyone to
-# read a red check as noise. Skipping on that one condition cannot hide a missing secret,
-# because pushes to main and same-repo pull requests still run unguarded: forget to add
-# SONAR_TOKEN and main goes red on the very next merge. `env.SONAR_TOKEN != ''` would have
-# suppressed that too, and that is why it stays rejected.
+# The job-level `if` below is NOT that guard, and the difference is the whole point. It skips
+# exactly the runs where GitHub structurally withholds the Actions secret store, so
+# SONAR_TOKEN is empty no matter how correctly the repository is configured. There are two
+# such runs, and BOTH are needed — the second was missing until the date below:
 #
-# Nothing is lost by skipping the whole job rather than only the upload: ci.yml already runs
-# `bun test --coverage`, so bunfig.toml's per-file coverageThreshold is enforced on a fork's
-# pull request there. This job's unique contribution is the LCOV upload, and that is exactly
-# the part a fork cannot do.
+#   1. A pull request opened from a fork. The scan failed on every external contribution for a
+#      reason the contributor could not fix or act on, which trains everyone to read a red
+#      check as noise.
+#   2. A pull request opened by Dependabot. A `pull_request` run whose triggering actor is
+#      dependabot[bot] resolves `secrets.*` against the DEPENDABOT store, not the Actions
+#      store, and SONAR_TOKEN lives only in the latter (an org secret, `SELECTED` visibility).
+#
+# Case 2 is why the condition below is two clauses rather than one. The original was written
+# as "the head branch lives in this repository" on the stated reasoning that this *is* the
+# condition governing secret availability — and it is not, because a Dependabot branch lives
+# in this repository and still gets a different store. Re-measured 2026-08-19: every sonar run
+# on a `dependabot/*` branch had failed, 5 of 5 since the first one on 2026-08-11, while every
+# other run since was green. Re-derive with:
+#
+#   gh run list --workflow sonar.yml --limit 100 \
+#     --json conclusion,headBranch --jq '.[]|select(.headBranch|startswith("dependabot"))'
+#
+# Skipping on those two conditions cannot hide a missing secret, because pushes to main and
+# human same-repo pull requests still run unguarded: forget to add SONAR_TOKEN and main goes
+# red on the very next merge. `env.SONAR_TOKEN != ''` would have suppressed that too, and that
+# is why it stays rejected — test/release-workflow-guard.test.ts now enforces that rejection
+# rather than leaving it as prose here.
+#
+# The alternative to case 2 is to put SONAR_TOKEN in the Dependabot secret store as well. It
+# was considered and declined. The step below is the same job that has already run
+# `bun test --coverage`, which executes the freshly bumped dependency's code in-process — zod,
+# @babel/parser and @biomejs/wasm-nodejs all run during the suite, and a wasm-nodejs bump is
+# among the PRs this would apply to. `--ignore-scripts` closes the postinstall vector but not
+# that one, and step-scoped `env:` is defence in depth rather than a boundary, since any step
+# can append to $GITHUB_PATH. The purchase is close to nil: the bound gate grades `new_*`
+# metrics against the pull request's own diff, and a Dependabot diff is bun.lock, package.json
+# and workflow SHAs — no analysable source, so no condition has anything to grade.
+#
+# Nothing is lost by skipping the whole job rather than only the upload. ci.yml already runs
+# `bun test --coverage`, so bunfig.toml's per-file coverageThreshold is enforced on both kinds
+# of pull request there. This job's unique contribution is the LCOV upload, and that is
+# exactly the part these two cannot do. Nor does anything go permanently unanalysed: this
+# workflow also runs on `push: [main]`, so merging the pull request scans the result with the
+# token. Skipping defers the analysis by one merge; it does not skip it.
 
 on:
   push:
@@ -44,12 +75,25 @@ concurrency:
 
 jobs:
   sonar:
-    # Compares head repo to this one rather than reading `head.repo.fork`: the condition that
-    # actually governs secret availability is "the head branch does not live in this
-    # repository", and saying that directly survives the fork-of-a-fork case.
+    # Two clauses, one per case in the header. Neither is a stand-in for "is SONAR_TOKEN set".
+    #
+    # Compares head repo to this one rather than reading `head.repo.fork`, which survives the
+    # fork-of-a-fork case.
+    #
+    # `github.actor`, not `github.event.pull_request.user.login`: what selects the Dependabot
+    # secret store is who triggered THIS run, not who opened the pull request. A human pushing
+    # a commit to a Dependabot branch — a rebase, a lockfile fixup — triggers a run with the
+    # Actions store available, and that run should be scanned. Keying on the pull request's
+    # author would skip it forever.
+    #
+    # Every line below sits at ONE indent level on purpose: `>-` folds equally-indented lines
+    # into a single line with spaces, and preserves a more-indented one as a literal newline.
+    # Indenting the parenthesised clause for readability puts raw newlines into the expression
+    # GitHub parses.
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     runs-on: ubuntu-24.04
     # 15, not 10, because the scan step now waits on the quality gate: the scanner's own
     # `sonar.qualitygate.timeout` defaults to 300s, and 10 minutes left the run able to be
