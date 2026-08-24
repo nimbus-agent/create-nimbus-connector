@@ -71,6 +71,20 @@ const ZZBODY_SPEC = {
       path: "/v1/items/${arg.itemId|enc}",
     },
     {
+      // The QUOTED spelling. `renderBodyExpr` quotes an API field name exactly when
+      // IDENTIFIER_KEY_RE rejects it, and `fieldName` (src/derive/server/body.ts) accepts a
+      // quoted key only for exactly those names — refusing `{ "title": … }`, which the emitter
+      // would have written bare. A hyphenated field is what real APIs use, and it is the only
+      // shape that exercises the accepting half of that rule.
+      name: "zzbody_item_label",
+      description: "Label an item.",
+      method: "POST",
+      effect: "write",
+      args: { itemId: { type: "string", min: 1 }, title: { type: "string", min: 1 } },
+      body: { title: "display-name" },
+      path: "/v1/items/${arg.itemId|enc}/label",
+    },
+    {
       // `fieldValue`'s defaulted case: `scope` is not in the path, so the DEFAULT body carries it,
       // and it arrives through the hoisted const — which renders as the shorthand `{ scope }`.
       name: "zzbody_item_tag",
@@ -131,6 +145,7 @@ const ZZBODY_SPEC = {
 const AUTHORED_BODY: Record<string, Record<string, string> | undefined> = {
   zzbody_item_create: undefined,
   zzbody_item_rename: { title: "display_name" },
+  zzbody_item_label: { title: "display-name" },
   zzbody_item_tag: undefined,
   zzbody_item_move: { scope: "scope", note: "note" },
   zzbody_item_delete: undefined,
@@ -150,12 +165,15 @@ describe("recognizeBodyExpr", () => {
   // The emitted shapes each case below is read back off, pinned here so a change in
   // renderBodyExpr fails on THIS assertion — naming what moved — rather than as an opaque
   // recognizer refusal further down.
-  it("reads back the five expressions renderBodyExpr actually writes", () => {
+  it("reads back the six expressions renderBodyExpr actually writes", () => {
     const server = serverOf(ZZBODY_SPEC);
     // The default, with a boolean reaching past its hoist to the raw arg.
     expect(server).toContain("JSON.stringify({ title: p.title, draft: p.draft })");
     // An explicit mapping that renames.
     expect(server).toContain("JSON.stringify({ display_name: p.title })");
+    // The same, for a field name IDENTIFIER_KEY_RE rejects: emitted quoted, and read back
+    // through `fieldName`'s quoted arm rather than refused.
+    expect(server).toContain('JSON.stringify({ "display-name": p.title })');
     // A defaulted arg, through its hoisted const — and therefore as a shorthand property.
     expect(server).toContain("JSON.stringify({ scope })");
     // The same case with a renamed const, for an arg the URL also carries.

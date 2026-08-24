@@ -1,4 +1,4 @@
-import type { ArgSpec, QueryParam } from "../../spec.ts";
+import type { ArgSpec, PathSegment, QueryParam } from "../../spec.ts";
 
 export type QueryContext = {
   readonly param: string;
@@ -70,6 +70,38 @@ export function queryArgsUsed(
   const used = new Set<string>();
   for (const q of query) {
     if (hoisted.has(q.arg)) used.add(q.arg);
+  }
+  return used;
+}
+
+/**
+ * The hoisted consts one tool's emitted callback actually reads — see renderHoists for why only
+ * those may be emitted.
+ *
+ * The path consumes every hoisted arg it names, and a query entry reads the same hoisted const
+ * the path would, so its args must join the set or the hoist is never emitted and the reference
+ * dangles. `seed` is the caller's own contribution: the hand-rolled emitter passes the BODY's
+ * usage (which excludes booleans — a boolean reaches the body as the raw parameter, never
+ * through its hoist), and the rest-kit emitter passes nothing, because its hoists are emitted
+ * inside the path callback and the init callback is a separate arrow with its own scope.
+ *
+ * Lives here, beside `queryArgsUsed`, rather than once per caller: tools-hand.ts and
+ * tools-rest.ts each held a copy, identical but for that seed, and a fix to one would not have
+ * reached the other. Getting the set too small is a TS6133 in the generated package
+ * (noUnusedLocals) — reachable from a rest-kit POST with one boolean arg and a static path.
+ */
+export function usedHoists(
+  segments: readonly PathSegment[],
+  hoisted: ReadonlyMap<string, string>,
+  query: readonly QueryParam[] | undefined,
+  seed: Iterable<string>,
+): Set<string> {
+  const used = new Set<string>(seed);
+  for (const s of segments) {
+    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
+  }
+  if (query !== undefined) {
+    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
   }
   return used;
 }
