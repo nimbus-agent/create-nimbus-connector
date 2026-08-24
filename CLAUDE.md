@@ -135,6 +135,12 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
   excluded from the metric because they are driven through `Bun.spawnSync` on the real binary,
   which Bun cannot instrument. Do **not** "raise coverage" by adding in-process tests that
   duplicate the subprocess ones — see `bunfig.toml`, which explains this at length.
+- **A pure refactor can drop a file onto the floor with no test change.** Deleting a *covered*
+  function from a file takes one off both halves of its ratio, and `(h-1)/(f-1) < h/f` whenever
+  anything in that file is uncovered — so hoisting a shared helper OUT lowers the donor's
+  function coverage. `src/emit/server/tools-rest.ts` sits at 90.91% functions today, tied with
+  `src/format.ts` for the floor, and no test moved. Run `bun test --coverage` after a dedup, not
+  only after adding code.
 
 ## The byte-safety invariant
 
@@ -174,11 +180,21 @@ test asks the emitters rather than enumerating the names by hand.
 src/spec.ts        zod schema + parseSpec, and the spec language's own parsers
                    (parsePathTemplate, resolveKeyedShape) that emit/ and derive/ share
 src/validate.ts    identifier collision rules, RESERVED_IDENTIFIERS
+src/types.ts       GeneratedFile — the { path: segments[], content } every emitter returns —
+                   and displayPath, the one place those segments become a "/" string
+src/license.ts     MONOREPO_LICENSE / DEFAULT_STANDALONE_LICENSE and validateLicense, the
+                   --license SPDX-expression check (a syntax check, never a registry lookup)
 src/emit/          one module per emitted file; emit/server/ splits by concern
 src/derive/        the spec deriver — the inverse of src/emit/
 src/openapi/       the OpenAPI document reader — the mirror of src/derive/, producing a
                    spec from a foreign document instead of from emitted source
 src/format.ts      the Biome integration
+src/optional-dep.ts
+                   isMissingModule — tells a genuinely absent optionalDependency from one
+                   that is installed but whose OWN import failed. src/format.ts and
+                   src/derive/ast.ts both branch on it and must NOT degrade alike: a
+                   missing formatter falls back to unformatted output, a missing parser
+                   cannot fall back at all
 src/golden/        fixture resolution, expectations, snapshots, the subprocess wrapper
 src/cli.ts         arg parsing, the flag combinations, writeFiles
 src/prompts.ts     the interactive spec questionnaire (excluded from coverage with cli.ts)

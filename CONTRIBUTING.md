@@ -47,7 +47,7 @@ Run an individual gate directly when you are iterating on the thing it checks.
 
 ## CI's permanent ceiling — the four gates you have to run yourself
 
-**CI runs three of those eight, and that will never change.** The four in the table above need a checkout of the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harnesses read it at runtime from a path you pass, and a CI runner has no such path.
+**CI runs four of those eight, and that will never change.** It gets those four in *three* commands — `ci.yml` runs `bun test --coverage`, `bun run typecheck` and `bun run lint`, and the coverage form satisfies the `bun test` gate and the `bun test --coverage` gate at once — so do not read the command count as a gate count. The other four in the table above need a checkout of the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harnesses read it at runtime from a path you pass, and a CI runner has no such path.
 
 **This is not a backlog item, and the tempting fix is refused explicitly**: do not add a CI job that skips when the root is absent. A job that is green because it did nothing is worse than a job that is absent, because the absent one is visible. [`docs/TESTING.md`](./docs/TESTING.md) states, per emitted shape, exactly what a green CI run does and does not prove.
 

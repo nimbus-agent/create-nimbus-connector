@@ -21,11 +21,15 @@ coverageSkipTestFiles = true
 # Bun enforces this PER FILE, not against the aggregate — verified: 0.30 passes, 0.95 fails,
 # and src/cli.ts is one of the files that fails 0.95. That is the stronger reading (an average
 # lets one well-covered file hide an uncovered one), so the floor is set by the weakest file
-# rather than by the mean, which — before any exclusion — currently reads 97.26% lines /
-# 98.13% functions.
+# rather than by the mean, which — before any exclusion — reads 98.15% lines / 98.55%
+# functions. Re-measured 2026-08-24 with `bun --config=<scratch>.toml test --coverage`, the
+# scratch config being this one with coveragePathIgnorePatterns emptied. Use the flag rather
+# than editing this file: these four numbers cannot be read any other way — the two files
+# below are ABSENT from the normal report, not sitting at 0% in it — and a temporary edit
+# here is a weakened gate that can be committed by accident.
 #
 # That PRE-exclusion floor is src/prompts.ts at 35.42% lines / 42.86% functions, with
-# src/cli.ts close behind at 51.85% lines / 65.00% functions, and NEITHER is a testing gap.
+# src/cli.ts close behind at 50.91% lines / 56.41% functions, and NEITHER is a testing gap.
 # test/cli-main.test.ts drives the CLI through Bun.spawnSync on the real binary — a full suite
 # asserting the bytes it puts on disk — and Bun does not instrument child processes, so every
 # line main() executes reads as uncovered. Spawning the real binary is the better test: it
@@ -48,8 +52,12 @@ coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 # thing: that one is the raw per-file minimum across every file; this is what the minimum
 # becomes once src/cli.ts and src/prompts.ts — both already accounted for above, both
 # subprocess-tested by design — are removed from consideration. With those two excluded, the
-# floor is src/format.ts, at 90.70% lines and 90.91% functions. It sets BOTH halves. Aggregate
-# is 99.41% lines / 99.73% functions.
+# floor is src/format.ts, at 90.70% lines and 90.91% functions. It sets the LINES half alone
+# (src/derive/ast.ts is next at 91.18%). On FUNCTIONS it no longer sets the half by itself:
+# src/emit/server/tools-rest.ts ties it exactly, also at 90.91%, so an uncovered function
+# arriving in EITHER file fails this threshold, and a reader who checks only format.ts will
+# not see the other half of what is holding 0.90 up. Aggregate is 99.52% lines / 99.77%
+# functions. Re-measured 2026-08-24 with `bun test --coverage`.
 #
 # format.ts is a small file, and a per-file floor over a small file leaves single-line margins
 # by construction: one more uncovered line there is worth a bigger percentage swing than the
@@ -74,8 +82,10 @@ coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 # above describes, and it is why the honest floor is 0.90 rather than something higher.
 #
 # src/derive/ast.ts (91.18% lines) is the same shape one file down — the @babel/parser load
-# path, subprocess for the same reason — so closing format.ts entirely would move this to 0.91
-# and no further. Do not raise either number for headroom: 0.90 is what the tree supports.
+# path, subprocess for the same reason — so closing format.ts entirely would move the LINES
+# floor to 0.91 and no further, and would not move the functions floor at all, since
+# src/emit/server/tools-rest.ts is already sitting on it at the same 90.91%. Do not raise
+# either number for headroom: 0.90 is what the tree supports.
 #
 # This was 0.88 / 0.90. Lines move because src/golden/resolve-root.ts reached 100% (a sibling
 # directory that exists but carries no marker file is now tested, which is the arm that falls

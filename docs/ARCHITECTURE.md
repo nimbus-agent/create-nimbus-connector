@@ -180,10 +180,13 @@ accepted by the pipeline that will consume it.
 ### `src/golden/` — fixture machinery
 
 Root resolution (`resolve.ts`, `resolve-root.ts`, `sdk-root.ts`), the expectations file
-(`expectations.ts`), snapshots (`snapshots.ts`), and `run.ts`, the subprocess wrapper the
-harnesses share. Kept out of `scripts/` deliberately: these are the parts that decide
-something from their arguments alone, so they can be unit-tested, while `scripts/` holds what
-genuinely needs subprocesses.
+(`expectations.ts`), snapshots (`snapshots.ts`), `run.ts`, the subprocess wrapper the
+harnesses share, and `biome-version.ts`, whose `checkBiomeVersion` compares this repo's
+resolved Biome against the monorepo's `@biomejs/biome` pin and returns a warning line rather
+than throwing — a byte-diff taken under a different formatter is not trustworthy evidence
+either way, and `diff:golden` and `reach` both print it above their results. Kept out of
+`scripts/` deliberately: these are the parts that decide something from their arguments alone,
+so they can be unit-tested, while `scripts/` holds what genuinely needs subprocesses.
 
 ## The verification layers
 
