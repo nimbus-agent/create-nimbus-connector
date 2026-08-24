@@ -21,7 +21,7 @@ coverageSkipTestFiles = true
 # Bun enforces this PER FILE, not against the aggregate — verified: 0.30 passes, 0.95 fails,
 # and src/cli.ts is one of the files that fails 0.95. That is the stronger reading (an average
 # lets one well-covered file hide an uncovered one), so the floor is set by the weakest file
-# rather than by the mean, which — before any exclusion — reads 98.15% lines / 98.55%
+# rather than by the mean, which — before any exclusion — reads 98.16% lines / 98.55%
 # functions. Re-measured 2026-08-24 with `bun --config=<scratch>.toml test --coverage`, the
 # scratch config being this one with coveragePathIgnorePatterns emptied. Use the flag rather
 # than editing this file: these four numbers cannot be read any other way — the two files
@@ -56,7 +56,7 @@ coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 # (src/derive/ast.ts is next at 91.18%). On FUNCTIONS it no longer sets the half by itself:
 # src/emit/server/tools-rest.ts ties it exactly, also at 90.91%, so an uncovered function
 # arriving in EITHER file fails this threshold, and a reader who checks only format.ts will
-# not see the other half of what is holding 0.90 up. Aggregate is 99.52% lines / 99.77%
+# not see the other half of what is holding 0.90 up. Aggregate is 99.54% lines / 99.77%
 # functions. Re-measured 2026-08-24 with `bun test --coverage`.
 #
 # format.ts is a small file, and a per-file floor over a small file leaves single-line margins

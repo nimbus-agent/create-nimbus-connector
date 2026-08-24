@@ -362,3 +362,26 @@ describe("rest-kit query parameters", () => {
     expect(out).not.toContain("body:");
   });
 });
+
+describe("renderRestKitTools, the auth-entry guard", () => {
+  it("refuses a rest-kit spec whose env declares no auth entry", () => {
+    // `tokenEnvVar` reads the one bearer var makeRestToolRegistrar is handed. Reaching this
+    // throw needs a ConnectorSpec that never came through `parseSpec`: the schema refuses a
+    // rest-kit connector without `auth: "bearer"` twice over — once per entry ("an env entry
+    // with no auth and no default must set required: true") and once at the root ("a rest-kit
+    // connector must declare exactly one env entry, with auth: bearer and a single var").
+    //
+    // Pinned anyway, and deliberately. The guard is the emitter's own restatement of a schema
+    // rule, and the two can come apart: a future style that relaxes the root refine would reach
+    // this line with `spec.env` holding entries but none of them an auth entry, and an
+    // unguarded `authEntry.vars[0]` would emit a registrar reading `undefined` — a generated
+    // package that compiles and resolves no token. Asserting the MESSAGE, not just that it
+    // throws, so the failure names the spec field a caller has to fix.
+    //
+    // The empty `env` is built by overriding a parsed spec rather than by casting a literal:
+    // no `as`, no `any`, and the rest of the spec stays exactly what the schema produced.
+    expect(() => renderRestKitTools({ ...spec, env: [] })).toThrow(
+      'style "rest-kit" requires one env entry with an "auth" field.',
+    );
+  });
+});
