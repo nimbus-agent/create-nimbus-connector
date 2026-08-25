@@ -35,6 +35,13 @@ scripts/_lib/reach-baseline.ts the shared decision logic BOTH scripts above run,
                                only argv plumbing and process.exit dispatch — which is
                                why they are the ones sonar-project.properties excludes
                                from coverage and this file is not.
+scripts/_lib/nimbus-root-args.ts
+                               parseNimbusRootOnly — the "--nimbus-root and nothing
+                               else" parser that reach-baseline's parseArgs and
+                               preflight's share. An unrecognised argument is REFUSED,
+                               not ignored: `reach:baseline newrelic` once dropped the
+                               name and rewrote the FULL baseline while reporting
+                               success, which is the failure both copies existed for.
 src/derive/
   ast.ts        the Babel boundary — parseModule, the AstNode type
   read.ts       THE ONLY module that reads a node's fields

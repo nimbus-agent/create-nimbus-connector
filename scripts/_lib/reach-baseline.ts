@@ -1,8 +1,8 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { takeValue } from "../../src/cli.ts";
 import { initParser, parserAvailable, parserUnavailableReason } from "../../src/derive/ast.ts";
 import { formatterAvailable, formatterUnavailableReason, initFormatter } from "../../src/format.ts";
+import { parseNimbusRootOnly } from "./nimbus-root-args.ts";
 import type { ConnectorResult, Tier } from "./reach.ts";
 
 export type Baseline = { connectorsTree: string; tiers: Record<string, Tier> };
@@ -19,21 +19,13 @@ export type Baseline = { connectorsTree: string; tiers: Record<string, Tier> };
  * unsupported flag or a positional name is refused rather than ignored.
  */
 export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
-  let nimbusRoot: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--nimbus-root") {
-      nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
-    } else {
-      throw new Error(
-        `reach:baseline accepts only --nimbus-root; got "${a}". It always measures and records ` +
-          "the full corpus — there is no flag to scope it to a subset of connectors. " +
-          "`bun run reach --baseline` compares the full corpus against the recorded baseline; " +
-          "use `bun run reach <connector>` to measure a subset instead.",
-      );
-    }
-  }
-  return { nimbusRoot };
+  return parseNimbusRootOnly(
+    argv,
+    "reach:baseline",
+    "It always measures and records the full corpus — there is no flag to scope it to a " +
+      "subset of connectors. `bun run reach --baseline` compares the full corpus against the " +
+      "recorded baseline; use `bun run reach <connector>` to measure a subset instead.",
+  );
 }
 
 const RANK: Tier[] = ["blocked", "emits", "server-identical", "all-identical"];

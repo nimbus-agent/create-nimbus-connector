@@ -1,15 +1,9 @@
-import {
-  type ConnectorSpec,
-  type PathSegment,
-  parsePathTemplate,
-  type QueryParam,
-  registrarName,
-} from "../../spec.ts";
+import { type ConnectorSpec, parsePathTemplate, registrarName } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
 import { renderPath } from "./path-template.ts";
-import { queryArgsUsed, renderQueryLines } from "./query.ts";
+import { renderQueryLines, usedHoists } from "./query.ts";
 
 const PARAM = "parsed";
 
@@ -19,32 +13,6 @@ function tokenEnvVar(spec: ConnectorSpec): string {
     throw new Error('style "rest-kit" requires one env entry with an "auth" field.');
   }
   return authEntry.vars[0]!;
-}
-
-/**
- * The hoisted consts this tool's emitted callback actually reads: the ones the path names,
- * plus the ones a query entry reads.
- *
- * Only the path can consume a hoist here — the hoists are emitted inside the path callback,
- * and the init callback is a separate arrow with its own scope. A hoisted const no path
- * segment names would be a TS6133 in the generated package, reachable from a rest-kit POST
- * with one boolean arg and a fully static path. A query entry reads the same hoisted const
- * the path would, so its args must join the set or the hoist is never emitted and the
- * reference dangles.
- */
-function usedHoists(
-  segments: readonly PathSegment[],
-  hoisted: ReadonlyMap<string, string>,
-  query: readonly QueryParam[] | undefined,
-): Set<string> {
-  const used = new Set<string>();
-  for (const s of segments) {
-    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
-  }
-  if (query !== undefined) {
-    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
-  }
-  return used;
 }
 
 /**
@@ -86,9 +54,10 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     ...(query === undefined ? {} : { prefix: baseExpr(spec) }),
   });
 
-  // The path's hoists plus the query's — see usedHoists for why each contributes, and why
-  // the init callback below contributes nothing.
-  const used = usedHoists(segments, hoisted, query);
+  // The path's hoists plus the query's — see usedHoists for why each contributes. The empty
+  // seed is the fact that the init callback below contributes nothing: it is a separate arrow
+  // with its own scope, so a hoist only it named would be declared and never read.
+  const used = usedHoists(segments, hoisted, query, []);
 
   const needsParam =
     used.size > 0 ||

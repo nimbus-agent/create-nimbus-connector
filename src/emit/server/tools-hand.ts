@@ -1,42 +1,12 @@
-import {
-  type ConnectorSpec,
-  type PathSegment,
-  parsePathTemplate,
-  type QueryParam,
-} from "../../spec.ts";
+import { type ConnectorSpec, parsePathTemplate } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
 import { type RenderContext, renderPath } from "./path-template.ts";
-import { queryArgsUsed, renderQueryLines } from "./query.ts";
+import { renderQueryLines, usedHoists } from "./query.ts";
 import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
-
-/**
- * The hoisted consts this tool's emitted handler actually reads — see renderHoists for why
- * only those may be emitted.
- *
- * `seed` carries the body's own usage, which the caller reports (it excludes booleans). The
- * path consumes every hoisted arg it names; and a query entry reads the same hoisted const
- * the path would, so its args must join the set or the hoist is never emitted and the
- * reference dangles.
- */
-function usedHoists(
-  segments: readonly PathSegment[],
-  hoisted: ReadonlyMap<string, string>,
-  query: readonly QueryParam[] | undefined,
-  seed: Iterable<string>,
-): Set<string> {
-  const used = new Set<string>(seed);
-  for (const s of segments) {
-    if (s.kind === "arg" && hoisted.has(s.name)) used.add(s.name);
-  }
-  if (query !== undefined) {
-    for (const name of queryArgsUsed(query, hoisted)) used.add(name);
-  }
-  return used;
-}
 
 /**
  * The one-line `reg(name, description, schema, async … => call,\n);` form, which only the

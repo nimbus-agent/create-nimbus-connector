@@ -1,4 +1,5 @@
 import { loadDocument } from "../../src/openapi/document.ts";
+import type { Refusal } from "../../src/openapi/operation.ts";
 import type { OpenApiDocument } from "../../src/openapi/schema.ts";
 
 /**
@@ -86,4 +87,26 @@ export function onePath(
   pathItem: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return { [path]: { ...pathItem, [method]: { operationId: "op", ...operation } } };
+}
+
+/**
+ * The two refusal readers `operation.test.ts` and `spec.test.ts` both need, here for the same
+ * reason `documentFor` and `onePath` are: each file had its own byte-identical copy, and a
+ * drifted copy is two suites disagreeing about what a refusal looks like.
+ *
+ * They are deliberately the readers and not the assertions. What each file DOES with a refusal
+ * differs — one asserts against `mapOperation`'s output, the other against `assembleSpec`'s —
+ * and their `mustRefuse` helpers stay local for exactly that reason.
+ */
+export function kindsOf(refusals: readonly Refusal[]): string[] {
+  return refusals.map((r) => r.kind);
+}
+
+/** The detail of the one refusal of `kind`, so a message can be asserted on rather than a count. */
+export function detailOf(refusals: readonly Refusal[], kind: string): string {
+  const hit = refusals.find((r) => r.kind === kind);
+  if (hit === undefined) {
+    throw new Error(`no "${kind}" refusal among [${kindsOf(refusals).join(", ")}]`);
+  }
+  return hit.detail;
 }

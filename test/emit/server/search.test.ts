@@ -217,6 +217,22 @@ describe("emitServer search imports", () => {
     expect(out).toContain('import { filterEvents, filterItems } from "./search-filter.ts";');
   });
 
+  it("imports both search helpers and the filter for a HAND-ROLLED connector too", () => {
+    // `handRolledImportLines` carries its own copy of the search block and the filter block;
+    // the read-only-kit assertions above prove nothing about it, and no fixture combines
+    // `style: "hand-rolled"` with a search tool (checked across fixtures/*.spec.json), so this
+    // is the only thing standing between a dropped block and a generated `src/server.ts` that
+    // calls matchesResult/searchToolInputSchema without importing them — TS2304 in the
+    // generated package, and invisible to every golden snapshot.
+    const out = emitServer(specWith([SEARCH], "hand-rolled"), "monorepo").content;
+    expect(out).toContain(
+      'import { matchesResult, searchToolInputSchema } from "../../shared/mcp-search-tool.ts";',
+    );
+    expect(out).toContain('import { filterMercuryAccounts } from "./search-filter.ts";');
+    // Sorted with the rest of the relative-import group rather than appended after it.
+    expect(out.indexOf("mcp-search-tool.ts")).toBeLessThan(out.indexOf("mcp-tool-kit.ts"));
+  });
+
   it("emits no search imports for a spec with no search tool", () => {
     const out = emitServer(
       specWith([{ name: "mercury_list", description: "List.", path: "/api/v1/accounts" }]),

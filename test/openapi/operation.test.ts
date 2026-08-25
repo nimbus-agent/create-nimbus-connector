@@ -8,7 +8,7 @@ import {
 } from "../../src/openapi/operation.ts";
 import { parsePathTemplate, ToolSchema } from "../../src/spec.ts";
 import { RESERVED_IDENTIFIERS } from "../../src/validate.ts";
-import { documentFor, onePath } from "../support/openapi-doc.ts";
+import { detailOf, documentFor, kindsOf, onePath } from "../support/openapi-doc.ts";
 
 /**
  * Every document below is SYNTHETIC — invented here, not transcribed from any published API.
@@ -44,19 +44,6 @@ function mustRefuse(
   const result = mapOne(paths, extra);
   if (result.ok) throw new Error(`expected refusals, mapped: ${JSON.stringify(result.mapped)}`);
   return result.refusals;
-}
-
-function kindsOf(refusals: readonly Refusal[]): string[] {
-  return refusals.map((r) => r.kind);
-}
-
-/** The detail of the one refusal of `kind`, so a message can be asserted on rather than a count. */
-function detailOf(refusals: readonly Refusal[], kind: string): string {
-  const hit = refusals.find((r) => r.kind === kind);
-  if (hit === undefined) {
-    throw new Error(`no "${kind}" refusal among [${kindsOf(refusals).join(", ")}]`);
-  }
-  return hit.detail;
 }
 
 /** `tool.args` as a plain record, for the many cases that assert on it. */
@@ -1264,5 +1251,18 @@ describe("resolved references", () => {
       },
     );
     expect(argsOf(mapped)).toEqual({ widgetId: { type: "string" } });
+  });
+});
+
+describe("detailOf, the shared refusal reader", () => {
+  it("names the kinds it did see when the asked-for kind is absent", () => {
+    // Every `detailOf(...)` assertion in this file and in spec.test.ts depends on this message:
+    // a case whose refusal kind changed should fail saying WHICH kinds arrived, not with an
+    // undefined-property error three lines later. Asserted here rather than assumed, because the
+    // helper moved out of both test files into test/support/ and a shared helper's diagnostics
+    // are the thing that stops being obvious once nobody owns it.
+    expect(() => detailOf([{ kind: "schema-type", detail: "d" }], "no-operation-id")).toThrow(
+      'no "no-operation-id" refusal among [schema-type]',
+    );
   });
 });

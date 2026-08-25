@@ -180,6 +180,64 @@ const REFUSED_SOURCES = [
       "}",
     ].join("\n"),
   ],
+
+  // --- Near misses on the two transforms. `matchTransformExpr` reaches each of these with the
+  // right node SHAPE and the right callee, and has to refuse on the detail — the case a
+  // shape-only match gets wrong, because the emitter writes exactly one spelling of each
+  // transform and re-emitting a different one is a spec that claims bytes it cannot reproduce.
+
+  [
+    "rejects trimTrailingSlash() applied to something other than the binding it read",
+    [
+      "function baseUrl(): string {",
+      '  const u = process.env["AIRFLOW_URL"]?.trim();',
+      "  return trimTrailingSlash(other);",
+      "}",
+    ].join("\n"),
+  ],
+  [
+    'rejects .replace(/\\/$/g, "") — renderEnvAccessor writes the pattern with no flags',
+    [
+      "function baseUrl(): string {",
+      '  const u = process.env["GRAFANA_URL"]?.trim();',
+      '  return u.replace(/\\/$/g, "");',
+      "}",
+    ].join("\n"),
+  ],
+  [
+    'rejects .replace(/\\/$/, "/") — a replacement that is not the empty string is a different transform',
+    [
+      "function baseUrl(): string {",
+      '  const u = process.env["GRAFANA_URL"]?.trim();',
+      '  return u.replace(/\\/$/, "/");',
+      "}",
+    ].join("\n"),
+  ],
+
+  [
+    // src/spec.ts's EnvSchema refine: 'auth: "basic" takes one or two vars'. A three-var
+    // accessor is shaped like `renderBasic`'s output in every other respect, so only the
+    // read-count bound refuses it — without that bound the recognizer would hand back a
+    // three-var basic entry that parseSpec then rejects, losing the named blocker.
+    "rejects a basic accessor reading three guarded vars, which EnvSchema cannot express",
+    [
+      "function authHeader(): Record<string, string> {",
+      '  const u = process.env["A"]?.trim();',
+      '  if (u === undefined || u === "") {',
+      '    throw new Error("A is not set");',
+      "  }",
+      '  const p = process.env["B"]?.trim();',
+      '  if (p === undefined || p === "") {',
+      '    throw new Error("B is not set");',
+      "  }",
+      '  const x = process.env["C"]?.trim();',
+      '  if (x === undefined || x === "") {',
+      '    throw new Error("C is not set");',
+      "  }",
+      '  return { Authorization: encodeBasicAuthHeader(u, p), Accept: "application/json" };',
+      "}",
+    ].join("\n"),
+  ],
 ];
 
 describe("recognizeEnv", () => {

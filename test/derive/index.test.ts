@@ -457,6 +457,20 @@ describe("deriveSpec, rest-kit registrar/title and fetch-helper-name cross-check
     expect(result.blockers.map((b) => b.kind)).toEqual(["rest-fetch-helper-name-mismatch"]);
   });
 
+  it("blocks a rest-kit connector with one unrecognized statement, naming it", () => {
+    // `deriveRestKitSpec` runs its OWN totality rule, checked before either rest recognizer's
+    // `undefined` case so that an unclaimed statement reports on its own bucket rather than
+    // collapsing into the generic "unrecognized-handler". Nothing else exercises that path —
+    // the hand-rolled twin below is a different function, one style over.
+    const server = `${SERVER_REST}
+import { listTools } from "./tools.ts";`;
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers.map((b) => b.kind)).toEqual(["import-from:./tools.ts"]);
+  });
+
   it("refuses a rest-kit connector when hitlRequired demands an effect no recognized tool can carry", () => {
     // Every tool SERVER_REST declares is GET, so no attribution reproduces a declared "write" —
     // the rest-kit path's own call into attributeEffects, exercised past every earlier check.
