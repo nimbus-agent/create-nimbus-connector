@@ -138,7 +138,10 @@ mirrored in the monorepo at `packages/mcp-connectors/shared/*` as named re-expor
 
 **Gateway wiring** — the type-coupled registration a first-party connector needs *outside* its
 package: a sync handler in `packages/gateway/src/connectors/`, plus catalog, secrets-manifest
-and rate-limiter entries. Not generated; the CLI prints a verified checklist instead.
+and rate-limiter entries. Not generated. `--gateway-wiring` writes the sync and mapping
+skeletons and prints the pasteable lines for **two** of those sites —
+`platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The
+secrets-manifest and rate-limiter entries it does not cover, and does not claim to.
 
 **Sandbox test** — `test/sandbox.test.ts`, identical across 79 connectors and wrapped in
 `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])`. That variable is set nowhere in Nimbus,

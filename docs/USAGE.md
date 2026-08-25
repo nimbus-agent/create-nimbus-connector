@@ -181,8 +181,11 @@ A connector living inside the monorepo also needs type-coupled registration in t
 which this tool does **not** generate — sync handlers live in
 `packages/gateway/src/connectors/` and no connector package contains one.
 
-`--gateway-wiring <nimbus-root>` emits a wiring skeleton and prints a verified checklist of the
-sites to touch (catalog, connector-secrets-manifest, rate-limiter):
+`--gateway-wiring <nimbus-root>` emits a wiring skeleton and prints the two edits it can state
+exactly, to paste into `platform/assemble-sync-registrations.ts` and
+`connectors/connector-catalog.ts`. The other registration sites a first-party connector needs —
+`connectors/connector-secrets-manifest.ts` and `sync/rate-limiter.ts` — are **not** in that
+checklist and stay yours to make:
 
 ```bash
 bun src/cli.ts --spec ./acme.spec.json --gateway-wiring /path/to/Nimbus

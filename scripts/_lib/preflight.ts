@@ -50,8 +50,8 @@
  * what that cost when it was measured.
  */
 
-import { takeValue } from "../../src/cli.ts";
 import type { Check } from "./checks.ts";
+import { parseNimbusRootOnly } from "./nimbus-root-args.ts";
 
 export type GateStatus = "pass" | "fail" | "skip";
 
@@ -277,18 +277,10 @@ export function toCheck(r: GateResult): Check {
  * meant to skip.
  */
 export function parseArgs(argv: readonly string[]): { nimbusRoot?: string } {
-  let nimbusRoot: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--nimbus-root") {
-      nimbusRoot = takeValue(argv, ++i, "--nimbus-root");
-    } else {
-      throw new Error(
-        `preflight accepts only --nimbus-root; got "${a}". Without it the four gates that need ` +
-          "the Nimbus monorepo are skipped by name, and the run does not report itself as " +
-          "fully verified.",
-      );
-    }
-  }
-  return { nimbusRoot };
+  return parseNimbusRootOnly(
+    argv,
+    "preflight",
+    "Without it the four gates that need the Nimbus monorepo are skipped by name, and the " +
+      "run does not report itself as fully verified.",
+  );
 }

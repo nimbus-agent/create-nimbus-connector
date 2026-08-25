@@ -139,7 +139,7 @@ The value is validated as an SPDX identifier or expression before anything is wr
 A first-party connector also needs type-coupled registration in the Gateway, which no connector package contains. This is opt-in, monorepo-target only, and off by default — normal generation never touches Nimbus's Gateway.
 
 ```bash
-bun src/cli.ts --spec fixtures/acme.spec.json --gateway-wiring /path/to/Nimbus
+bun src/cli.ts --spec ./acme.spec.json --gateway-wiring /path/to/Nimbus
 ```
 
 Two files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
@@ -152,6 +152,8 @@ Two files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
 **Writing refuses to overwrite an existing target file** unless `--force` is passed. Nimbus already ships hand-authored files such as `newrelic-sync.ts`; an unguarded write on a connector reusing one of those names would destroy it.
 
 **Two files are never written, only printed**: `platform/assemble-sync-registrations.ts` and `connectors/connector-catalog.ts`. The CLI prints the exact lines to paste into each rather than editing them — patching a large file it does not own, in another repository under another licence, risks silent corruption; a two-line paste the author controls is the safer trade.
+
+**And two more registration sites are neither written nor printed**, so the checklist is not the whole of wiring: `connectors/connector-secrets-manifest.ts`, which maps a service id to its Vault secret keys, and `sync/rate-limiter.ts`, which carries a per-service request budget. The spec language has no field for either — a request budget is a property of the service, not of the connector — so both stay yours to add by hand after pasting the two the CLI does print.
 
 ## Development
 

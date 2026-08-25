@@ -5,7 +5,7 @@ import { mapOperation, type Refusal } from "../../src/openapi/operation.ts";
 import { type Assembled, assembleSpec } from "../../src/openapi/spec.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { RESERVED_IDENTIFIERS, validateSpec } from "../../src/validate.ts";
-import { documentFor, onePath } from "../support/openapi-doc.ts";
+import { detailOf, documentFor, kindsOf, onePath } from "../support/openapi-doc.ts";
 
 /**
  * Every document here is SYNTHETIC — invented in this repository, not transcribed from any
@@ -56,19 +56,6 @@ function mustRefuse(
   const result = assembleFor(paths, extra);
   if (result.ok) throw new Error(`expected refusals, assembled: ${JSON.stringify(result.spec)}`);
   return result.refusals;
-}
-
-function kindsOf(refusals: readonly Refusal[]): string[] {
-  return refusals.map((r) => r.kind);
-}
-
-/** The detail of the one refusal of `kind`, so a message can be asserted on rather than a count. */
-function detailOf(refusals: readonly Refusal[], kind: string): string {
-  const hit = refusals.find((r) => r.kind === kind);
-  if (hit === undefined) {
-    throw new Error(`no "${kind}" refusal among [${kindsOf(refusals).join(", ")}]`);
-  }
-  return hit.detail;
 }
 
 function toolsOf(spec: Record<string, unknown>): Record<string, unknown>[] {

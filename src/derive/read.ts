@@ -1072,11 +1072,12 @@ export function logical(node: AstNode | undefined): BinaryParts | undefined {
   return twoSided(node, "LogicalExpression");
 }
 
-export type AssignmentParts = {
-  readonly operator: string;
-  readonly left: AstNode;
-  readonly right: AstNode;
-};
+/**
+ * An AssignmentExpression's parts. Structurally identical to `BinaryParts` — Babel gives all
+ * three node types the same `operator`/`left`/`right` shape — and named separately only so a
+ * caller's type reads as what it asked for.
+ */
+export type AssignmentParts = BinaryParts;
 
 /**
  * `a = b`, `a += b`, … — an AssignmentExpression, distinct from both `binary` and `logical`
@@ -1084,14 +1085,13 @@ export type AssignmentParts = {
  * with `operator: "="`). Needed for renderRestKitFetchHelper's `json = JSON.parse(text) as
  * unknown;` / `json = null;` — the one place this deriver's emitter output assigns to a
  * pre-declared `let` inside a try/catch rather than returning from one.
+ *
+ * Reads through the same `twoSided` unpack as `binary` and `logical`: the three differed only
+ * in the node type they accept, and the third copy of the unpack was where a fix to the other
+ * two would have stopped.
  */
 export function assignment(node: AstNode | undefined): AssignmentParts | undefined {
-  if (node?.type !== "AssignmentExpression") return undefined;
-  const operator = stringField(node, "operator");
-  const left = child(node, "left");
-  const right = child(node, "right");
-  if (operator === undefined || left === undefined || right === undefined) return undefined;
-  return { operator, left, right };
+  return twoSided(node, "AssignmentExpression");
 }
 
 export type Template = {

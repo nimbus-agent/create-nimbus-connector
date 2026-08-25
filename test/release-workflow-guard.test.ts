@@ -24,8 +24,10 @@
  *
  * Not every describe below is a release fact. This file is also where the repository-wide
  * workflow invariants live, having no other home: one Bun pin everywhere, harden-runner first
- * in every job, every action SHA-pinned, the license-boundary gate, the CLA token's narrowing,
- * and the two static-analysis gates that fail open. The ones that can read the workflow
+ * in every job, every action SHA-pinned, a bounded `timeout-minutes` on every job, a per-ref
+ * concurrency group on every workflow with `cancel-in-progress` stated rather than defaulted,
+ * the license-boundary gate, the CLA token's narrowing, and the two static-analysis gates that
+ * fail open. The ones that can read the workflow
  * DIRECTORY rather than a list of filenames do, so a workflow added later inherits them
  * without anyone remembering to enrol it — which is exactly how the Bun pin came to be
  * checked in only two of the four files that state it.
@@ -58,6 +60,7 @@ type Job = {
   outputs?: Record<string, string>;
   steps?: Step[];
   env?: Record<string, string>;
+  "timeout-minutes"?: number;
 };
 
 type Workflow = {
@@ -65,6 +68,7 @@ type Workflow = {
   env?: Record<string, string>;
   on?: Record<string, unknown>;
   permissions?: Record<string, string>;
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean };
 };
 
 /** Every environment variable name a workflow sets, at any of the three levels. */
@@ -640,6 +644,66 @@ describe("runner hardening", () => {
     expect(uses.length).toBeGreaterThanOrEqual(20);
     for (const u of uses) {
       expect(u.ref, `${u.file} / ${u.jobId}`).toMatch(/@[0-9a-f]{40}$/);
+    }
+  });
+});
+
+describe("the runner budget", () => {
+  it("gives every job a timeout-minutes", () => {
+    // GitHub's default is 360 minutes. A job that hangs — a harness waiting on a token that
+    // never expires, a `bun install` against a registry that accepted the connection and then
+    // stopped answering — holds a runner for six hours before anything notices, and on a repo
+    // with concurrency groups that also blocks the next push to the same ref. Every job carries
+    // one today; nothing made that true, which is the same shape as the Bun pin below.
+    expect(
+      allJobs.length,
+      "the collector must find jobs — an empty list satisfies the loop below silently",
+    ).toBeGreaterThanOrEqual(9);
+    for (const { file, jobId, job } of allJobs) {
+      const limit = job["timeout-minutes"];
+      expect(limit, `${file} / ${jobId} must declare timeout-minutes`).toBeDefined();
+      expect(typeof limit, `${file} / ${jobId}: timeout-minutes must be a number`).toBe("number");
+      // An upper bound as well as a lower one: `timeout-minutes: 360` is the default written
+      // out longhand, which passes a presence check while changing nothing. The longest job
+      // here is CodeQL at 30.
+      expect(limit, `${file} / ${jobId}: timeout-minutes ${limit}`).toBeGreaterThan(0);
+      expect(limit, `${file} / ${jobId}: timeout-minutes ${limit}`).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("gives every workflow a per-ref concurrency group", () => {
+    expect(workflows.length, "the collector must find workflows").toBeGreaterThanOrEqual(7);
+    for (const { file, workflow } of workflows) {
+      const group = workflow.concurrency?.group;
+      expect(group, `${file} must declare a concurrency group`).toBeDefined();
+      // A constant group is a repository-wide lock: every run of that workflow queues behind
+      // every other, whatever ref it is for. The interpolation is what makes the group per-ref
+      // (or per-pull-request, in the two `pull_request_target` workflows), so it is the part
+      // worth asserting rather than mere presence.
+      expect(group, `${file}: concurrency group "${group}" is constant`).toContain("${{");
+    }
+  });
+
+  it("never cancels a run that publishes or posts a verdict", () => {
+    // cancel-in-progress is right for a check and wrong for a release: cancelling release.yml
+    // mid-publish can leave a tag pushed with no npm artifact behind it, and this org's release
+    // tags are immutable, so the recovery is to abandon the version. The three that must not
+    // cancel are the one that publishes and the two that run on `pull_request_target` and
+    // report a per-PR verdict a cancelled run would leave un-posted.
+    const NEVER_CANCEL = ["cla.yml", "dependabot-auto-merge.yml", "release.yml"];
+    for (const file of NEVER_CANCEL) {
+      const found = workflows.find((w) => w.file === file);
+      expect(found, `${file} is missing — update this list or restore the workflow`).toBeDefined();
+      expect(found?.workflow.concurrency?.["cancel-in-progress"], `${file}`).toBe(false);
+    }
+    // Stated explicitly everywhere, not only in the three above: an omitted key is `false` by
+    // default, so a check workflow that meant to cancel and forgot the line queues superseded
+    // runs instead of dropping them, with nothing in the diff to point at.
+    for (const { file, workflow } of workflows) {
+      expect(
+        workflow.concurrency?.["cancel-in-progress"],
+        `${file} must state cancel-in-progress explicitly`,
+      ).toBeTypeOf("boolean");
     }
   });
 });
