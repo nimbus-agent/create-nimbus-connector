@@ -36,8 +36,12 @@ test broke — a file dropped below its floor. `ci.yml` runs the coverage form a
 the real TypeScript compiler. That is the one that catches an unbalanced brace or an unused
 import in generated source — substring assertions cannot.
 
-`biome check` reporting `Found N infos` is **not** a failure. Infos are pre-existing
-`useLiteralKeys` / `useTemplate` notes. Only errors fail.
+`biome check` reporting `Found N infos` is **not** a failure. Every info this repo reports is
+`useLiteralKeys`, on deliberate bracket access into `Record<string, unknown>` shapes — Babel AST
+nodes in `src/derive/read.ts`, JSON-schema keys in the generators and their tests. Only errors
+fail. Biome classifies the rewrite as an **unsafe** fix, so `--write` leaves them alone and the
+count is stable; clearing them means `--write --unsafe`, which rewrites every one of those
+reads for no behaviour change and is out of scope for any change that is not about them.
 
 ## 2. The gates CI cannot run
 

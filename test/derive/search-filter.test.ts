@@ -293,3 +293,133 @@ describe("recognizeSearchFilter", () => {
     }
   });
 });
+
+/**
+ * The near misses each matcher has to refuse.
+ *
+ * Every case here is a file that has the right SHAPE and fails on one detail — a title alias
+ * that carries no title, an extractor entry that is not one of the four primitives, a signature
+ * or guard one token away from the emitted one, a stub arrow the emitter never writes. They are
+ * the cases a shape-only match gets wrong, and getting one wrong is not a missed recognition: it
+ * derives a spec that re-emits DIFFERENT bytes while `deriveSpec` reports `ok: true`, which is
+ * the "claimed but not reproducible" defect the whole recognizer is built to avoid.
+ *
+ * The refusal is asserted as `function:fieldsOf` (or the equivalent unclaimed-statement kind)
+ * rather than as bare `ok: false`, so a file that started failing for an unrelated reason — a
+ * changed import list, a different blocker — does not keep the test green.
+ */
+describe("recognizeSearchFilter: near misses", () => {
+  /** The extractor form with one clause substituted, and nothing else changed. */
+  function extractorSource(options: {
+    signature?: string;
+    guard?: string;
+    entries?: string;
+  }): string {
+    return [
+      'import { asObjectish, makeQueryFilter, nestedString, type SearchMatchOptions, stringField } from "../../shared/search-filter.ts";',
+      "",
+      "export type XSearchMatchOptions = SearchMatchOptions;",
+      "",
+      options.signature ?? "function fieldsOf(item: unknown): readonly string[] | null {",
+      "  const row = asObjectish(item);",
+      options.guard ?? "  if (row === undefined) {",
+      "    return null;",
+      "  }",
+      `  return ${options.entries ?? '[stringField(row, "a"), nestedString(row, ["b", "c"])]'};`,
+      "}",
+      "",
+      "export const filterX = makeQueryFilter(fieldsOf);",
+    ].join("\n");
+  }
+
+  it("refuses a type alias named exactly SearchMatchOptions — the recovered title would be the empty string", () => {
+    // `matchTitleAlias` slices TITLE_SUFFIX off the alias name, so a self-alias recovers "" and
+    // the caller would hand `spec.title = ""` to parseSpec. Refusing at the recognizer names the
+    // construct; accepting it would report the file as blocked one tier down, by a schema error
+    // that says nothing about the alias.
+    const result = recognizeSearchFilter(
+      [
+        'import { fieldsFromKeys, makeQueryFilter, type SearchMatchOptions } from "../../shared/search-filter.ts";',
+        "",
+        "export type SearchMatchOptions = SearchMatchOptions;",
+        "",
+        'export const filterX = makeQueryFilter(fieldsFromKeys(["a", "b"]));',
+      ].join("\n"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers[0]?.kind).toBe("search-filter:no-type-alias");
+  });
+
+  it("refuses a type alias that does not end in SearchMatchOptions, even with the right right-hand side", () => {
+    const result = recognizeSearchFilter(
+      [
+        'import { fieldsFromKeys, makeQueryFilter, type SearchMatchOptions } from "../../shared/search-filter.ts";',
+        "",
+        "export type XOptions = SearchMatchOptions;",
+        "",
+        'export const filterX = makeQueryFilter(fieldsFromKeys(["a", "b"]));',
+      ].join("\n"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers[0]?.kind).toBe("search-filter:no-type-alias");
+  });
+
+  it("refuses an extractor entry that is none of the four primitive calls", () => {
+    // `renderEntry` writes exactly stringField / nestedString / tagText / tagNamesFromObjects.
+    // A bare member access recovers no FieldEntry at all, so accepting the function around it
+    // would silently DROP a field from the derived spec — the file would still look recognized.
+    const result = recognizeSearchFilter(
+      extractorSource({
+        entries: '[stringField(row, "a"), nestedString(row, ["b", "c"]), row.custom]',
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers.map((b) => b.kind)).toContain("function:fieldsOf");
+  });
+
+  it("refuses an extractor whose parameter is annotated as something other than `unknown`", () => {
+    // `matchesFieldsOfSignature` pins the parameter's annotation as well as its name:
+    // emitSearchFilter writes `fieldsOf(item: unknown)` and nothing else, so a narrower
+    // annotation is a byte the generator cannot reproduce — and it is the plausible hand-edit,
+    // since `Record<string, unknown>` is what the body actually needs.
+    const result = recognizeSearchFilter(
+      extractorSource({
+        signature: "function fieldsOf(item: Record<string, unknown>): readonly string[] | null {",
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers.map((b) => b.kind)).toContain("function:fieldsOf");
+  });
+
+  it("refuses an extractor guarded on `row === null` rather than `row === undefined`", () => {
+    // asObjectish returns undefined, never null, so the null guard is dead code in the file's
+    // own terms — and re-emitting it as the undefined form would change bytes. This is the same
+    // "reject rather than normalize" rule the asRecord case above applies to the guard's callee.
+    const result = recognizeSearchFilter(extractorSource({ guard: "  if (row === null) {" }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.blockers.map((b) => b.kind)).toContain("function:fieldsOf");
+  });
+
+  it("refuses a throwing stub declared as an async arrow — stubFilter writes a synchronous one", () => {
+    // makeQueryFilter's contract is synchronous; an async stub returns a rejected promise the
+    // filter never awaits, so the tool reports success. Recovering it as the ordinary stub would
+    // re-emit the synchronous form and quietly change the generated package's behaviour.
+    const corrupted = MONOREPO_SOURCE.replace(
+      "filterZzfilterunitStub: SearchFilter = () => {",
+      "filterZzfilterunitStub: SearchFilter = async () => {",
+    );
+    expect(corrupted).not.toBe(MONOREPO_SOURCE);
+
+    const result = recognizeSearchFilter(corrupted);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.blockers.map((b) => b.kind)).toContain("statement:ExportNamedDeclaration");
+    }
+  });
+});

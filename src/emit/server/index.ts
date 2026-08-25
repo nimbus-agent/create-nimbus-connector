@@ -266,6 +266,29 @@ function standaloneImportLines(spec: ConnectorSpec, target: GenerateTarget): str
 }
 
 /**
+ * The search-kit and filter blocks, which every relative-import group ends with and which
+ * read-only-kit and hand-rolled built separately until they disagreed: the hand-rolled copy of
+ * the search block was reached by no test and no fixture (nothing in fixtures/ pairs
+ * `style: "hand-rolled"` with an `impl: "search"` tool), so a hand-rolled connector losing it
+ * would have emitted a server calling matchesResult/searchToolInputSchema without importing
+ * them — a TS2304 in the generated package that no golden snapshot could see. One source, so
+ * the two styles cannot answer this differently.
+ *
+ * Both blocks are conditional, and both conditions are the emitter's own: `searchKitNames`
+ * returns nothing without a search tool, and `filterImport` nothing without a filter file.
+ */
+function searchAndFilterBlocks(spec: ConnectorSpec, target: GenerateTarget): RelativeImportBlock[] {
+  const search = searchKitNames(spec, target);
+  const filters = filterImport(spec, target);
+  return [
+    ...(search.length > 0
+      ? [{ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) }]
+      : []),
+    ...(filters === undefined ? [] : [{ from: filterSpecifier(target), lines: [filters] }]),
+  ];
+}
+
+/**
  * The relative-import group of a monorepo read-only-kit server.
  *
  * No blank line precedes it: unlike hand-rolled/rest-kit (which precede the McpServer/
@@ -275,8 +298,6 @@ function standaloneImportLines(spec: ConnectorSpec, target: GenerateTarget): str
  */
 function readOnlyKitImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
   const kit = kitImportNames(spec, false, target);
-  const search = searchKitNames(spec, target);
-  const filters = filterImport(spec, target);
   const blocks: RelativeImportBlock[] = [];
   if (kit.length > 0)
     blocks.push({ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) });
@@ -284,28 +305,19 @@ function readOnlyKitImportLines(spec: ConnectorSpec, target: GenerateTarget): st
     from: RUN_READ_ONLY,
     lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
   });
-  if (search.length > 0) {
-    blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
-  }
-  if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
+  blocks.push(...searchAndFilterBlocks(spec, target));
   return sortedRelativeImportLines(blocks);
 }
 
 /** The relative-import group of a monorepo hand-rolled server. */
 function handRolledImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
-  const search = searchKitNames(spec, target);
-  const filters = filterImport(spec, target);
-  const blocks: RelativeImportBlock[] = [
+  return sortedRelativeImportLines([
     {
       from: MCP_TOOL_KIT,
       lines: renderNamedImport(kitImportNames(spec, false, target), MCP_TOOL_KIT),
     },
-  ];
-  if (search.length > 0) {
-    blocks.push({ from: SEARCH_TOOL, lines: renderNamedImport(search, SEARCH_TOOL) });
-  }
-  if (filters !== undefined) blocks.push({ from: filterSpecifier(target), lines: [filters] });
-  return sortedRelativeImportLines(blocks);
+    ...searchAndFilterBlocks(spec, target),
+  ]);
 }
 
 function imports(spec: ConnectorSpec, target: GenerateTarget): string {
