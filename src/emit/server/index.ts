@@ -298,14 +298,16 @@ function searchAndFilterBlocks(spec: ConnectorSpec, target: GenerateTarget): Rel
  */
 function readOnlyKitImportLines(spec: ConnectorSpec, target: GenerateTarget): string[] {
   const kit = kitImportNames(spec, false, target);
-  const blocks: RelativeImportBlock[] = [];
-  if (kit.length > 0)
-    blocks.push({ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) });
-  blocks.push({
-    from: RUN_READ_ONLY,
-    lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
-  });
-  blocks.push(...searchAndFilterBlocks(spec, target));
+  const blocks: RelativeImportBlock[] = [
+    ...(kit.length > 0
+      ? [{ from: MCP_TOOL_KIT, lines: renderNamedImport(kit, MCP_TOOL_KIT) }]
+      : []),
+    {
+      from: RUN_READ_ONLY,
+      lines: [`import { runReadOnlyMcpConnector } from "${RUN_READ_ONLY}";`],
+    },
+    ...searchAndFilterBlocks(spec, target),
+  ];
   return sortedRelativeImportLines(blocks);
 }
 

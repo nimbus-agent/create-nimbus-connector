@@ -48,7 +48,7 @@
     "standalone-acceptance": "bun scripts/standalone-acceptance.ts"
   },
   "dependencies": {
-    "zod": "^4.4.2"
+    "zod": "^4.5.4"
   },
   "optionalDependencies": {
     "@babel/parser": "^8.0.4",

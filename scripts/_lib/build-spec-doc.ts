@@ -170,6 +170,20 @@ export function renderType(schema: JsonSchema): string {
   if (Array.isArray(allowed)) return allowed.map((v) => JSON.stringify(v)).join(" | ");
 
   const type = schema["type"];
+
+  // A union of primitives. zod 4.5 emits `type: ["string","number","boolean"]` where 4.4 emitted
+  // an `anyOf` of single-type subschemas; the two are the same JSON Schema, so they render the
+  // same way the `anyOf` branch above does. Restricted to primitive names on purpose — a type
+  // array containing "array" or "object" needs the items/properties handling below, and this
+  // function's contract is to throw on a shape it does not model rather than print a guess.
+  if (Array.isArray(type)) {
+    const PRIMITIVES = new Set(["string", "number", "integer", "boolean", "null"]);
+    if (type.length > 0 && type.every((t) => typeof t === "string" && PRIMITIVES.has(t))) {
+      return type.join(" | ");
+    }
+    throw new Error(`renderType: unmodelled type array [${type.join(", ")}]`);
+  }
+
   if (type === "array") {
     const items = schema["items"];
     if (!isSchemaObject(items)) throw new Error("renderType: an array with no items subschema");
