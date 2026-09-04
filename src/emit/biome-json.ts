@@ -13,7 +13,7 @@ import type { GeneratedFile } from "../types.ts";
  * two guards before them compared the emitted output against this constant, so both held for
  * any value it took, and the constant sat a patch behind the pin unnoticed.
  */
-export const BIOME_VERSION = "2.5.10";
+export const BIOME_VERSION = "2.5.12";
 
 /**
  * Standalone target only. A monorepo-target connector inherits the workspace root's
