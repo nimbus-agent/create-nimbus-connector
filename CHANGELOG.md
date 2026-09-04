@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.1...create-nimbus-connector-v0.13.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **deps:** unblock the zod bump and clear two Sonar findings ([#119](https://github.com/nimbus-agent/create-nimbus-connector/issues/119)) ([23f773a](https://github.com/nimbus-agent/create-nimbus-connector/commit/23f773a1ea5b377cfd6a551e5ce2ecd03cece298))
+
 ## [0.13.1](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.0...create-nimbus-connector-v0.13.1) (2026-08-15)
 
 
