@@ -30,7 +30,7 @@ jobs:
       # allowlist that drifts fails the build for reasons unrelated to the change
       # under test. release.yml makes the same trade for the same reason.
       - name: Harden Runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
