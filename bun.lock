@@ -49,7 +49,7 @@
 
     "@biomejs/js-api": ["@biomejs/js-api@6.0.0", "", { "peerDependencies": { "@biomejs/wasm-bundler": "^2.5.0", "@biomejs/wasm-nodejs": "^2.5.0", "@biomejs/wasm-web": "^2.5.0" }, "optionalPeers": ["@biomejs/wasm-bundler", "@biomejs/wasm-nodejs", "@biomejs/wasm-web"] }, "sha512-8HP7wexjQo5Np1J9h0B2x8L5G0GZpCacgjykxLHtvLPvF0hNqSG754oh8bxo+OSFDpVGMfSjmLO+ZY/5KbfjmQ=="],
 
-    "@biomejs/wasm-nodejs": ["@biomejs/wasm-nodejs@2.5.12", "", {}, "sha512-fCWM8aDn3X19cc4u/ewDVpx93CpNq4A3BtrGgBYkm/fb2LXNZMdhRUJ0gM2jgsGHTYQ7fz+I2XnPsvlSOqVx/w=="],
+    "@biomejs/wasm-nodejs": ["@biomejs/wasm-nodejs@2.5.13", "", {}, "sha512-0F/VhR2nFxdYbi2HZbjxKgrrutkaMy5/Zi+IQGMIJYy1ZQR6pxvmzEnh6foEth8ekNR68EZa1oAcS7Jtiiqvzg=="],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
