@@ -9,17 +9,22 @@ name: dependency-review
 # the half a human never reads. A transitive AGPL dependency would relicense the published
 # package by operation of law, not by anyone's decision.
 #
-# It matters most on Dependabot's pull requests. dependabot-auto-merge.yml enables auto-merge
-# for patch and minor updates without a human looking, and a patch bump is exactly where a
-# dependency quietly changes its license or adds a copyleft transitive.
+# It matters most on a dependency-update pull request: a periodic bulk update a maintainer
+# opens (CONTRIBUTING.md, *Updating dependencies*). A bulk update moves many packages at once,
+# which is exactly where a dependency quietly changes its license or adds a copyleft transitive
+# without anyone reading the line that did it.
 #
-# ONE THING OUTSIDE THIS FILE IS REQUIRED FOR THAT TO HOLD: `dependency-review` must be added
-# to main's ruleset as a required status check. GitHub's auto-merge waits for the REQUIRED
-# checks only — currently `check`, `cla` and `Analyze (javascript-typescript)` — so until this
-# one joins them, a Dependabot patch bump that this job turns red still merges itself. The
-# job is visible on a human's pull request either way; it is the unattended path that needs
-# the ruleset entry. Update dependabot-auto-merge.yml's list of required checks when you add
-# it, so the two stop disagreeing.
+# This job is NOT a required status check, so its verdict binds only when the person merging
+# reads it, and GitHub auto-merge — if someone enables it on a pull request — waits for the
+# REQUIRED checks alone. Making it binding means adding it to main's ruleset under the context
+# its check run actually reports: `review`, this job's id, since the job sets no `name:`. Not
+# `dependency-review`, which is only the workflow's name and which no check run carries; a
+# required context that nothing produces blocks every pull request, as cla.yml records. Read
+# the required set back from the ruleset rather than from a list written here:
+#
+#   gh api repos/nimbus-agent/create-nimbus-connector/rulesets --jq '.[].id'
+#   gh api repos/nimbus-agent/create-nimbus-connector/rulesets/<id> \
+#     --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
 #
 # `pull_request` only: the action reads the dependency-graph diff between base and head, which
 # GitHub computes for a pull request. On any other trigger it needs base-ref/head-ref supplied

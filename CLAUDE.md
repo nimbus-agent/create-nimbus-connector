@@ -170,6 +170,10 @@ test asks the emitters rather than enumerating the names by hand.
   Do hand-manage *line breaks*, which Biome preserves.
 - **Never commit on `main`.** Work on a branch.
 - **Conventional Commits** drive release-please. A `feat:` bumps the minor, `fix:` the patch.
+- **Dependencies are updated by hand**, in periodic bulk pull requests — Dependabot is retired.
+  [`CONTRIBUTING.md`](./CONTRIBUTING.md#updating-dependencies)'s *Updating dependencies* lists
+  what must move together and which ranges `bun outdated` cannot see: the ones
+  `src/emit/package-json.ts` emits, several of them byte-locked to the Nimbus corpus.
 - Comments explain **why**, and cite the corpus measurement behind a choice where one exists.
   This codebase's comments carry reasoning, not restatement; match that.
 - Before claiming anything works, run it. "Generated and it looked right" is not verification.

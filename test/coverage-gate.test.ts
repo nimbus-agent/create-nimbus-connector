@@ -17,10 +17,10 @@
  * test/release-workflow-guard.test.ts gives for its own directory sweep.
  *
  * Workflows that never run the suite need no exemption and get none: acceptance.yml runs the
- * two harnesses, and cla.yml, codeql.yml, dependency-review.yml and dependabot-auto-merge.yml
- * run no Bun at all. None of them matches the collector, so the rule is expressed as "wherever
- * the suite runs" rather than as a list of files to skip — and adding a workflow that DOES run
- * the suite cannot arrive exempt.
+ * two harnesses, and cla.yml, codeql.yml and dependency-review.yml run no Bun at all. None of
+ * them matches the collector, so the rule is expressed as "wherever the suite runs" rather
+ * than as a list of files to skip — and adding a workflow that DOES run the suite cannot
+ * arrive exempt.
  *
  * `coveragePathIgnorePatterns` is asserted for the opposite reason. It is the one exclusion
  * in bunfig.toml, and exclusions are how coverage numbers get faked. Pinning its contents

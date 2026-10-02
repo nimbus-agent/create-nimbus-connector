@@ -29,7 +29,7 @@ permissions: {}
 # someone reads that name off a real release PR; removing `bot*` on the reasoning above has
 # already been tried once and it broke the release.
 env:
-  CLA_ALLOWLIST: 'bot*,*[bot],nimbus-release-bot[bot],dependabot[bot],asafgolombek,claude'
+  CLA_ALLOWLIST: 'bot*,*[bot],nimbus-release-bot[bot],asafgolombek,claude'
 
 # Keyed by head SHA for push events, so two commits pushed in quick succession do not
 # contend: previously both shared one group, and on PR #38 the newer commit's run was

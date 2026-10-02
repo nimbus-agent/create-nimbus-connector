@@ -79,10 +79,11 @@ is a GitHub platform behaviour, not a setting in this repository, and it applies
 `acceptance.yml`'s daily `--registry` run and `codeql.yml`'s weekly scan. Those two are
 precisely the unattended safety nets: the daily acceptance run exists because the published
 `@nimbus-dev/sdk` can change without a single commit here, and the weekly CodeQL run exists so a
-newly published query finds existing code rather than waiting for someone to touch it. The thing
-that keeps the window open today is incidental — Dependabot's weekly branch pushes count as
-activity — which means the protection lapses exactly when nothing needs updating, the case it
-was for.
+newly published query finds existing code rather than waiting for someone to touch it. Nothing
+keeps that window open on its own. Dependabot's weekly branch pushes once did, incidentally, and
+Dependabot is retired, so the only activity left is a maintainer's — the periodic
+dependency-update pull requests among it. The protection therefore lapses exactly when the
+repository is quiet, the case it was for.
 
 GitHub emails the repository admins before disabling them, so the instruction is short and it is
 the whole of the mitigation: **re-enable them, and do not read a green Actions tab as proof they
