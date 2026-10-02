@@ -17,6 +17,15 @@ section carries no `###` sub-heading and no bulleted entry. The gate runs before
 `npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
 is written next to the step.
 
+### Output changes
+
+* **A generated standalone package now pins Biome 2.5.15, where 0.13.2 pinned 2.5.13.** The
+  emitted `biome.json`'s `$schema` URL and the emitted `@biomejs/biome` devDependency range move
+  together, because both come from `BIOME_VERSION`. The engine `src/format.ts` formats with moved
+  to the same release, and the emitted source did not change under it: the three committed
+  snapshots kept their `src/server.ts` bytes, and `diff:golden` still matches every fixture's
+  recorded expectation. The monorepo target emits no `biome.json` and is untouched.
+
 *Nothing pending.*
 
 ## [0.13.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.1...create-nimbus-connector-v0.13.2) (2026-09-04)
