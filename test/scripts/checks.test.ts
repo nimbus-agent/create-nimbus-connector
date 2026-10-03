@@ -13,6 +13,7 @@ import {
   type Check,
   formatCheckLines,
   isUnpublishedFloorFailure,
+  standaloneReport,
 } from "../../scripts/_lib/checks.ts";
 
 describe("formatCheckLines", () => {
@@ -78,6 +79,134 @@ describe("formatCheckLines", () => {
       "boom",
       "PASS  bun run lint",
     ]);
+  });
+});
+
+/**
+ * standalone-acceptance's whole report. It sat at the bottom of the driver's main() until now,
+ * where nothing could reach it; what it decides is the sentence a reader quotes as evidence. A
+ * run with skips must never print the sentence a fully verified run prints — the registry mode
+ * skips a fixture whose SDK floor is not published yet, and "all checks passed" over that reduced
+ * set is the gate quietly no longer gating.
+ */
+describe("standaloneReport", () => {
+  const ALL_PASSED = "All standalone acceptance checks passed.";
+  const pass = (name: string): Check => ({ name, ok: true, output: "" });
+  const fail = (name: string, output: string): Check => ({ name, ok: false, output });
+  const skip = (name: string): Check => ({
+    name,
+    ok: true,
+    skipped: true,
+    output: "@nimbus-dev/sdk ^9.0.0 is not on the registry yet",
+  });
+
+  it("prefixes each check with its fixture and closes a clean run with the verified sentence", () => {
+    const { lines, exitCode } = standaloneReport([
+      { fixture: "zzstandalone", checks: [pass("bun install"), pass("tsc --noEmit")] },
+      { fixture: "zzwrite", checks: [pass("bun install")] },
+    ]);
+
+    expect(lines).toEqual([
+      "PASS  [zzstandalone] bun install",
+      "PASS  [zzstandalone] tsc --noEmit",
+      "PASS  [zzwrite] bun install",
+      "",
+      ALL_PASSED,
+    ]);
+    expect(exitCode).toBe(0);
+  });
+
+  it("prints no verdict sentence at all when a check failed, and exits 1", () => {
+    const { lines, exitCode } = standaloneReport([
+      { fixture: "zzstandalone", checks: [pass("bun install")] },
+      { fixture: "zzwrite", checks: [fail("tsc --noEmit", "error TS2322: nope")] },
+    ]);
+
+    // The FAIL line and the command's own output are the report; nothing after them.
+    expect(lines).toEqual([
+      "PASS  [zzstandalone] bun install",
+      "FAIL  [zzwrite] tsc --noEmit",
+      "error TS2322: nope",
+    ]);
+    expect(exitCode).toBe(1);
+  });
+
+  it("names which fixture failed when two fixtures fail the same check", () => {
+    // Every fixture emits the same check list, so without the prefix these two lines would be
+    // identical and the report would not say which style broke.
+    const { lines, exitCode } = standaloneReport([
+      { fixture: "zzstandalone", checks: [fail("bun run lint", "")] },
+      { fixture: "zzwriterest", checks: [fail("bun run lint", "")] },
+    ]);
+
+    expect(lines).toEqual([
+      "FAIL  [zzstandalone] bun run lint",
+      "FAIL  [zzwriterest] bun run lint",
+    ]);
+    expect(exitCode).toBe(1);
+  });
+
+  it("names the skipped fixtures instead of claiming a verified run, and still exits 0", () => {
+    const { lines, exitCode } = standaloneReport([
+      { fixture: "zzstandalone", checks: [pass("bun install")] },
+      { fixture: "zzsearch", checks: [skip("bun install (@nimbus-dev/sdk ^9.0.0)")] },
+      { fixture: "zzwrite", checks: [pass("bun install")] },
+      { fixture: "zzextract", checks: [skip("bun install (@nimbus-dev/sdk ^9.0.0)")] },
+    ]);
+
+    expect(lines).toEqual([
+      "PASS  [zzstandalone] bun install",
+      "SKIP  [zzsearch] bun install (@nimbus-dev/sdk ^9.0.0)",
+      "@nimbus-dev/sdk ^9.0.0 is not on the registry yet",
+      "PASS  [zzwrite] bun install",
+      "SKIP  [zzextract] bun install (@nimbus-dev/sdk ^9.0.0)",
+      "@nimbus-dev/sdk ^9.0.0 is not on the registry yet",
+      "",
+      "Standalone acceptance passed for every fixture it could run, and SKIPPED 2: zzsearch, zzextract.",
+      "Those fixtures are NOT verified against the registry by this run.",
+    ]);
+    expect(lines).not.toContain(ALL_PASSED);
+    // A skip is unanswerable, not failed: exiting non-zero would red the daily registry run
+    // every time a fixture is ahead of the published SDK.
+    expect(exitCode).toBe(0);
+  });
+
+  it("counts and names a skipped fixture once, however many of its checks were skipped", () => {
+    const { lines } = standaloneReport([
+      { fixture: "zzsearch", checks: [skip("bun install"), skip("tsc --noEmit")] },
+    ]);
+
+    expect(lines.at(-2)).toBe(
+      "Standalone acceptance passed for every fixture it could run, and SKIPPED 1: zzsearch.",
+    );
+  });
+
+  it("lets a failure outrank a skip: exit 1, and neither verdict sentence", () => {
+    const { lines, exitCode } = standaloneReport([
+      { fixture: "zzsearch", checks: [skip("bun install")] },
+      { fixture: "zzwrite", checks: [fail("bun run build", "")] },
+    ]);
+
+    expect(lines).toEqual([
+      "SKIP  [zzsearch] bun install",
+      "@nimbus-dev/sdk ^9.0.0 is not on the registry yet",
+      "FAIL  [zzwrite] bun run build",
+    ]);
+    expect(exitCode).toBe(1);
+  });
+
+  it("refuses to report a pass for a run that checked nothing", () => {
+    // No fixtures, or fixtures that each produced no check: either way nothing was verified, and
+    // the verified sentence over an empty set is the vacuous pass this harness must not print.
+    for (const byFixture of [[], [{ fixture: "zzstandalone", checks: [] }]]) {
+      const { lines, exitCode } = standaloneReport(byFixture);
+
+      expect(lines).toEqual([
+        "",
+        "No standalone acceptance checks ran. Refusing to report a pass.",
+      ]);
+      expect(exitCode).toBe(1);
+    }
   });
 });
 

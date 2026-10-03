@@ -16,14 +16,25 @@
  * still report green, which is the failure shape this repo keeps removing.
  */
 
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertLocalSdkBuilt, modeBanner, resolveSdkPkg } from "../../scripts/_lib/sdk-pkg.ts";
+import {
+  assertLocalSdkBuilt,
+  modeBanner,
+  resolveSdkPkg,
+  withLocalSdk,
+} from "../../scripts/_lib/sdk-pkg.ts";
+import { generate } from "../../src/emit/index.ts";
+import { formatAll, initFormatter } from "../../src/format.ts";
+import { parseSpec } from "../../src/spec.ts";
+import { displayPath } from "../../src/types.ts";
 import { tempDirs } from "../support/tmp.ts";
 
 const tmp = tempDirs();
 afterAll(tmp.cleanup);
+
+const repoRoot = join(import.meta.dir, "..", "..");
 
 /** A directory that passes resolveSdkRoot's marker check (sdks/typescript/package.json). */
 function fakeSdkCheckout(): string {
@@ -136,6 +147,97 @@ describe("assertLocalSdkBuilt", () => {
     // make the registry mode — the only one that can catch `dist` missing from the
     // published `files` array — impossible to run.
     expect(() => assertLocalSdkBuilt(undefined)).not.toThrow();
+  });
+});
+
+/**
+ * Local-checkout mode's one edit to what the generator emitted. Both installing harnesses used to
+ * make it inline, so it had never been tested; what it must not do is touch anything BUT the SDK
+ * dependency, because every other byte of the package is what the harness is there to judge.
+ */
+describe("withLocalSdk", () => {
+  beforeAll(async () => {
+    await initFormatter();
+  });
+
+  /** The package.json the generator really emits for a fixture — the document the harnesses edit. */
+  function emittedPackageJson(fixture: string): string {
+    const spec = parseSpec(
+      JSON.parse(readFileSync(join(repoRoot, "fixtures", `${fixture}.spec.json`), "utf8")),
+    );
+    const pkg = formatAll(generate(spec, { target: "standalone" })).find(
+      (f) => displayPath(f.path) === "package.json",
+    );
+    if (pkg === undefined) throw new Error(`${fixture} emitted no package.json`);
+    return pkg.content;
+  }
+
+  it("points the emitted SDK dependency at the local package and changes nothing else", () => {
+    const emitted = emittedPackageJson("zzstandalone");
+    const before = JSON.parse(emitted) as { dependencies: Record<string, string> };
+    // The premise, read off the emitter rather than assumed: a standalone package declares the
+    // SDK as a registry range under `dependencies`. If an emitter change ever moves it, this
+    // fails here, by name, instead of the rewrite quietly adding a second declaration.
+    expect(before.dependencies["@nimbus-dev/sdk"]).toMatch(/^\^\d/);
+
+    const expected = structuredClone(before);
+    expected.dependencies["@nimbus-dev/sdk"] = "file:/w/nimbus-sdk/sdks/typescript";
+
+    // Byte equality with the input re-serialized: every other key, its value, and the order of
+    // both — at the top level and inside `dependencies` — survive the edit untouched.
+    expect(withLocalSdk(emitted, "/w/nimbus-sdk/sdks/typescript")).toBe(
+      `${JSON.stringify(expected, undefined, 2)}\n`,
+    );
+  });
+
+  it("writes the file: path with forward slashes, so a Windows checkout yields the same form", () => {
+    const out = withLocalSdk(
+      '{"dependencies":{"@nimbus-dev/sdk":"^2.0.0"}}',
+      "C:\\w\\nimbus-sdk\\sdks\\typescript",
+    );
+
+    expect(JSON.parse(out).dependencies["@nimbus-dev/sdk"]).toBe(
+      "file:C:/w/nimbus-sdk/sdks/typescript",
+    );
+  });
+
+  it("re-serializes with a two-space indent and exactly one trailing newline", () => {
+    const out = withLocalSdk(
+      '{"name":"x","dependencies":{"zod":"^4.6.5","@nimbus-dev/sdk":"^2.0.0"},"license":"MIT"}',
+      "/sdk",
+    );
+
+    expect(out).toBe(
+      [
+        "{",
+        '  "name": "x",',
+        '  "dependencies": {',
+        '    "zod": "^4.6.5",',
+        '    "@nimbus-dev/sdk": "file:/sdk"',
+        "  },",
+        '  "license": "MIT"',
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("refuses a document with no dependencies object, rather than rewriting it into another shape", () => {
+    // An array is the case that would otherwise pass silently: assigning a string key to it is
+    // legal, and JSON.stringify then drops that key, writing `"dependencies": []` back out with
+    // no SDK dependency at all — an install that "succeeds" against nothing.
+    for (const doc of [
+      "{}",
+      '{"dependencies":null}',
+      '{"dependencies":[]}',
+      '{"dependencies":"^2.0.0"}',
+      "[]",
+      "null",
+    ]) {
+      expect(() => withLocalSdk(doc, "/sdk"), doc).toThrow(
+        "the generated package.json declares no dependencies object",
+      );
+    }
   });
 });
 

@@ -471,6 +471,56 @@ import { listTools } from "./tools.ts";`;
     expect(result.blockers.map((b) => b.kind)).toEqual(["import-from:./tools.ts"]);
   });
 
+  /**
+   * The generic arm that sits AFTER the totality rule above: every statement the module does have
+   * is claimed, yet one of the three things a rest-kit spec is assembled from was never recognized.
+   * Totality cannot see an ABSENT statement, only an unclaimed one, so without this arm assembly
+   * would go on to read `restFetchHelper.local` off `undefined` — a TypeError out of the deriver
+   * rather than a blocker, taking `reach` down with it. Both removals below leave nothing
+   * unclaimed, which is what proves they reach this arm and not the one above.
+   */
+  it("blocks a rest-kit module whose fetch helper is absent, though everything it does contain is claimed", () => {
+    const start = SERVER_REST.indexOf("async function zzFetch(");
+    const end = SERVER_REST.indexOf("const server = new McpServer");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const server = SERVER_REST.slice(0, start) + SERVER_REST.slice(end);
+
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers).toEqual([
+      {
+        kind: "unrecognized-handler",
+        detail: "a rest-kit registrar, its calls, or its fetch helper were not understood",
+        line: 0,
+      },
+    ]);
+  });
+
+  it("blocks a rest-kit module with no registrar factory and no registrations, rather than deriving one", () => {
+    const start = SERVER_REST.indexOf("const registerZzrestTool = makeRestToolRegistrar({");
+    const end = SERVER_REST.indexOf("const transport = new StdioServerTransport();");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const server = SERVER_REST.slice(0, start) + SERVER_REST.slice(end);
+
+    const result = deriveSpec({ server, manifest: MANIFEST_REST });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // The whole blocker, not just its kind: the kind alone is shared by the shared-style path's
+    // own "a reg() handler was not understood", and only the detail says which arm refused.
+    expect(result.blockers).toEqual([
+      {
+        kind: "unrecognized-handler",
+        detail: "a rest-kit registrar, its calls, or its fetch helper were not understood",
+        line: 0,
+      },
+    ]);
+  });
+
   it("refuses a rest-kit connector when hitlRequired demands an effect no recognized tool can carry", () => {
     // Every tool SERVER_REST declares is GET, so no attribution reproduces a declared "write" —
     // the rest-kit path's own call into attributeEffects, exercised past every earlier check.
@@ -554,6 +604,32 @@ describe("deriveSpec", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.blockers.map((b) => b.kind)).toEqual(["no-fetch-helper"]);
+  });
+
+  /**
+   * The same shape one recognizer further on: a frame AND a fetch helper, but not one reg() call.
+   * `recognizeTools` refuses zero registrations rather than returning `{ tools: [] }` — a spec with
+   * no tools passes parseSpec and validateSpec and regenerates a connector that never existed, a
+   * false `emits` — and refusing claims nothing, so with no reg() statement there is nothing left
+   * for the totality rule to report either. This arm is the only thing between that module and an
+   * `ok: true`.
+   */
+  it("blocks a hand-rolled module with no reg() call at all, rather than deriving tools: []", () => {
+    const registration = [
+      'reg("newrelic_application_list", "List APM applications.", z.object({}), async () =>',
+      '  jsonResult(await nrGet("/v2/applications.json")),',
+      ");",
+    ].join("\n");
+    const server = SERVER.replace(registration, "");
+    expect(server).not.toBe(SERVER);
+
+    const result = deriveSpec({ server, manifest: MANIFEST });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.blockers).toEqual([
+      { kind: "unrecognized-handler", detail: "a reg() handler was not understood", line: 0 },
+    ]);
   });
 
   it("refuses a hand-rolled connector when hitlRequired demands an effect no recognized tool can carry", () => {

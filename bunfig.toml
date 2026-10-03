@@ -21,20 +21,30 @@ coverageSkipTestFiles = true
 # Bun enforces this PER FILE, not against the aggregate — verified: 0.30 passes, 0.95 fails,
 # and src/cli.ts is one of the files that fails 0.95. That is the stronger reading (an average
 # lets one well-covered file hide an uncovered one), so the floor is set by the weakest file
-# rather than by the mean, which — before any exclusion — reads 98.16% lines / 98.55%
-# functions. Re-measured 2026-08-24 with `bun --config=<scratch>.toml test --coverage`, the
-# scratch config being this one with coveragePathIgnorePatterns emptied. Use the flag rather
-# than editing this file: these four numbers cannot be read any other way — the two files
-# below are ABSENT from the normal report, not sitting at 0% in it — and a temporary edit
-# here is a weakened gate that can be committed by accident.
+# rather than by the mean, which — before any exclusion — reads 97.64% lines / 97.82%
+# functions. (Bun's "All files" row is the unweighted mean of the per-file percentages, not
+# covered lines over all lines; every aggregate in this file is that row.) Re-measured
+# 2026-10-03 with `bun --config=<scratch>.toml test --coverage`, the scratch config being this
+# one with coveragePathIgnorePatterns emptied. Use the flag rather than editing this file: these
+# numbers cannot be read any other way — the two files below are ABSENT from the normal report,
+# not sitting at 0% in it — and a temporary edit here is a weakened gate that can be committed
+# by accident.
 #
-# That PRE-exclusion floor is src/prompts.ts at 35.42% lines / 42.86% functions, with
-# src/cli.ts close behind at 50.91% lines / 56.41% functions, and NEITHER is a testing gap.
-# test/cli-main.test.ts drives the CLI through Bun.spawnSync on the real binary — a full suite
-# asserting the bytes it puts on disk — and Bun does not instrument child processes, so every
-# line main() executes reads as uncovered. Spawning the real binary is the better test: it
-# proves the shipped entry point works, which an in-process call does not. src/prompts.ts is
-# interactive readline code, exercised the same way.
+# That PRE-exclusion floor is src/prompts.ts at 7.92% lines / 0.00% functions, with src/cli.ts
+# at 9.70% lines / 19.05% functions, and NEITHER is a testing gap. test/cli-main.test.ts drives
+# the CLI through Bun.spawnSync on the real binary — a full suite asserting the bytes it puts on
+# disk — and Bun does not instrument child processes, so every line main() executes reads as
+# uncovered. Spawning the real binary is the better test: it proves the shipped entry point
+# works, which an in-process call does not. src/prompts.ts is interactive readline code,
+# exercised the same way.
+#
+# Those two read 35.42% / 42.86% and 50.91% / 56.41% until 2026-10-03, when the halves that
+# never needed a subprocess moved out: the argument parser to src/cli-args.ts, and buildSpec to
+# src/prompt-spec.ts. test/cli.test.ts had always called both directly, but inside an excluded
+# file, so those tests counted toward no floor. Both new files fall under the floor like any
+# other and sit at 100%; what is left in the two excluded files is what only a subprocess
+# reaches, which is why they now read near zero. Keep it that way — logic a test can call
+# directly belongs in one of the graded halves, not in an excluded file.
 #
 # So do NOT "raise coverage" on those two by adding in-process tests that duplicate the
 # subprocess ones. That would move the number without adding assurance, which is the
@@ -43,7 +53,7 @@ coverageSkipTestFiles = true
 # Excluded from the coverage METRIC, not from testing — and this is the one exclusion in
 # this file, so it has to earn itself. Both are driven through Bun.spawnSync on the real
 # binary, which Bun cannot instrument, so leaving them in drags the per-file floor down to
-# src/prompts.ts's 35.42% lines and makes the threshold vacuous for every other file. If a
+# src/prompts.ts's 7.92% lines and makes the threshold vacuous for every other file. If a
 # future change tests either of these in-process, delete its entry rather than raising the
 # floor around it.
 coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
@@ -54,8 +64,9 @@ coveragePathIgnorePatterns = ["src/cli.ts", "src/prompts.ts"]
 # subprocess-tested by design — are removed from consideration. With those two excluded, the
 # floor is src/format.ts, at 90.70% lines and 90.91% functions, and it sets BOTH halves alone:
 # src/derive/ast.ts is next on lines at 91.18%, and on functions every other measured file is
-# at 100%. Aggregate is 99.53% lines / 99.89% functions. Re-measured 2026-10-03 with
-# `bun test --coverage`.
+# at 100%. Aggregate is 99.73% lines / 99.89% functions. Re-measured 2026-10-03 with
+# `bun test --coverage`, after the 2026-10 coverage pass brought src/cli-args.ts,
+# src/prompt-spec.ts and three new scripts/_lib/ modules under the floor, all at 100%.
 #
 # format.ts is a small file, and a per-file floor over a small file leaves single-line margins
 # by construction: one more uncovered line there is worth a bigger percentage swing than the

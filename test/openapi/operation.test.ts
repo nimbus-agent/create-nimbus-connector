@@ -730,6 +730,29 @@ describe("refusals", () => {
     }
   });
 
+  it("refuses a body property that is neither scalar nor nested as schema-type, not as a nested body", () => {
+    // `nested-request-body` is the refusal for a property the mapper cannot FLATTEN. A property
+    // with no type, or typed `null`, is flat and simply has no equivalent among the spec
+    // language's types — the query-parameter case — so it earns `schema-type`, and the message
+    // says which of the two it is. Before this, every body-property refusal under test was
+    // nested, so nothing showed the two kinds stay apart once a caller passes `nestedKind`.
+    for (const [schema, says] of [
+      [{}, "declares no type"],
+      [{ type: "null" }, 'declares type "null"'],
+    ] as const) {
+      const refusals = mustRefuse(
+        onePath("/widgets", "post", {
+          requestBody: {
+            content: { "application/json": { schema: { properties: { note: schema } } } },
+          },
+        }),
+      );
+      expect(kindsOf(refusals)).toEqual(["schema-type"]);
+      expect(detailOf(refusals, "schema-type")).toContain("note");
+      expect(detailOf(refusals, "schema-type")).toContain(says);
+    }
+  });
+
   it("refuses a parameter that declares no schema, and one that uses content instead", () => {
     expect(
       kindsOf(mustRefuse(onePath("/widgets", "get", { parameters: [{ name: "q", in: "query" }] }))),

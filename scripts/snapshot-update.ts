@@ -1,64 +1,26 @@
-import { readFileSync, rmSync } from "node:fs";
+/**
+ * `bun run snapshot:update` — regenerates the checked-in snapshot tree of every write fixture.
+ *
+ * The driver only: what each fixture's update is, the report lines, the deletion of files the
+ * generator stopped emitting and the closing tally all live in scripts/_lib/snapshot-update.ts,
+ * where test/scripts/snapshot-update.test.ts reaches them against temp directories. What stays
+ * here is the refusal to run without the formatter, and the order: every fixture's plan is
+ * printed before that fixture is written.
+ */
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeFiles } from "../src/cli.ts";
-import { generate } from "../src/emit/index.ts";
+import { formatterAvailable, formatterUnavailableReason, initFormatter } from "../src/format.ts";
+import { listWriteFixtures, type SnapshotDiff } from "../src/golden/snapshots.ts";
 import {
-  formatAll,
-  formatterAvailable,
-  formatterUnavailableReason,
-  initFormatter,
-} from "../src/format.ts";
-import {
-  compareSnapshot,
-  listWriteFixtures,
-  loadSnapshot,
-  type SnapshotDiff,
-} from "../src/golden/snapshots.ts";
-import { parseSpec } from "../src/spec.ts";
-import { displayPath, type GeneratedFile } from "../src/types.ts";
+  applySnapshotUpdate,
+  planSnapshotUpdate,
+  snapshotSummary,
+} from "./_lib/snapshot-update.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(scriptDir, "..", "fixtures");
 const snapshotsDir = join(fixturesDir, "snapshots");
-
-/** Like loadSnapshot, but a first run for a brand-new fixture has nothing to load yet. */
-export function loadExistingSnapshot(dir: string): Map<string, string> {
-  try {
-    return loadSnapshot(dir);
-  } catch {
-    return new Map();
-  }
-}
-
-/** Regenerate one fixture's snapshot tree, reporting what moved. */
-async function updateOne(name: string): Promise<SnapshotDiff> {
-  const spec = parseSpec(JSON.parse(readFileSync(join(fixturesDir, `${name}.spec.json`), "utf8")));
-  const files: GeneratedFile[] = formatAll(generate(spec, { target: "standalone" }));
-  const actual = new Map(files.map((f) => [displayPath(f.path), f.content]));
-  const outDir = join(snapshotsDir, name);
-
-  const diff = compareSnapshot(actual, loadExistingSnapshot(outDir));
-  const { missing, unexpected, changed } = diff;
-
-  console.log(`${name}:`);
-  if (missing.length === 0 && unexpected.length === 0 && changed.length === 0) {
-    console.log("  (no changes)");
-  } else {
-    for (const p of unexpected) console.log(`  + ${p}`);
-    for (const p of changed) console.log(`  ~ ${p}`);
-    for (const p of missing) console.log(`  - ${p}`);
-  }
-
-  // Rewrite every current file (idempotent for the unchanged ones) and delete whatever the
-  // generator stopped emitting, so the checked-in tree ends up exactly matching `files`
-  // regardless of which of the three buckets above it fell into.
-  await writeFiles(files, outDir);
-  for (const p of missing) {
-    rmSync(join(outDir, ...p.split("/")), { force: true });
-  }
-  return diff;
-}
 
 async function main(): Promise<void> {
   await initFormatter();
@@ -79,21 +41,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  let totalAdded = 0;
-  let totalChanged = 0;
-  let totalRemoved = 0;
-
+  const diffs: SnapshotDiff[] = [];
   for (const name of names) {
-    const { missing, unexpected, changed } = await updateOne(name);
-    totalAdded += unexpected.length;
-    totalChanged += changed.length;
-    totalRemoved += missing.length;
+    const plan = planSnapshotUpdate(name, fixturesDir, snapshotsDir);
+    for (const line of plan.lines) console.log(line);
+    await applySnapshotUpdate(plan);
+    diffs.push(plan.diff);
   }
 
-  console.log(
-    `\n${names.length} write fixture(s): ${totalAdded} added, ${totalChanged} changed, ` +
-      `${totalRemoved} removed.`,
-  );
+  console.log(`\n${snapshotSummary(diffs)}`);
 }
 
 // Guarded exactly as src/cli.ts is. Importing this module used to rewrite every checked-in

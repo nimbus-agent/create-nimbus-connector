@@ -76,6 +76,35 @@ export function assertLocalSdkBuilt(sdkPkg: string | undefined): void {
 }
 
 /**
+ * A generated `package.json` with its `@nimbus-dev/sdk` dependency pointed at a local SDK package.
+ *
+ * This is local-checkout mode's one edit to what the generator emitted, and both installing
+ * harnesses used to make it with their own copy of the same three lines. Everything else in the
+ * document passes through untouched — every other dependency, and the order of every key — and is
+ * re-serialized with a two-space indent and one trailing newline. The `file:` path is written with
+ * forward slashes on every platform, so a Windows checkout's backslashes are converted here.
+ *
+ * A document with no `dependencies` object is refused by name rather than failing as a TypeError
+ * on `undefined`: every standalone package the generator emits declares the SDK there, so its
+ * absence is an emitter change this harness should report, not one to paper over.
+ */
+export function withLocalSdk(packageJson: string, sdkPkg: string): string {
+  const pkg: unknown = JSON.parse(packageJson);
+  const deps =
+    typeof pkg === "object" && pkg !== null
+      ? (pkg as { dependencies?: unknown }).dependencies
+      : undefined;
+  if (typeof deps !== "object" || deps === null || Array.isArray(deps)) {
+    throw new Error(
+      "the generated package.json declares no dependencies object, so there is no " +
+        "@nimbus-dev/sdk dependency to point at a local SDK checkout",
+    );
+  }
+  (deps as Record<string, unknown>)["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
+  return `${JSON.stringify(pkg, undefined, 2)}\n`;
+}
+
+/**
  * The banner naming which of the two modes this run is answering for.
  *
  *   local checkout (default) — the generated dependency is rewritten to

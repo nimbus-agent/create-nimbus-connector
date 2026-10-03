@@ -23,9 +23,15 @@
  * run script rather than a CI test. Unlike them it needs no network beyond the SDK install:
  * the "API" is a Bun.serve on an ephemeral loopback port, and the generated connector's base
  * URL is pointed at it.
+ *
+ * What stays here is what a unit test cannot run: installing each generated package and driving
+ * its server. The scenarios — each connector's spec, its credentials, the calls it is driven
+ * through — and the checks that judge its traffic live in scripts/_lib/runtime-scenarios.ts, where
+ * test/scripts/runtime-scenarios.test.ts shows every check failing on the traffic of a connector
+ * that gets it wrong.
  */
 
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,226 +42,10 @@ import { parseSpec } from "../src/spec.ts";
 import type { Check } from "./_lib/checks.ts";
 import { type Recorded, startApi } from "./_lib/fake-api.ts";
 import { callTools } from "./_lib/mcp-driver.ts";
-import { describeAuth, describeFormFields } from "./_lib/redact.ts";
-import { resolveSdkPkg } from "./_lib/sdk-pkg.ts";
+import { RUNTIME_SCENARIOS, runtimeReport } from "./_lib/runtime-scenarios.ts";
+import { resolveSdkPkg, withLocalSdk } from "./_lib/sdk-pkg.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-
-const checks: Check[] = [];
-function check(name: string, ok: boolean, output: string): void {
-  checks.push({ name, ok, output });
-}
-
-/** A bearer-auth connector exercising path interpolation, bodies, booleans and errors. */
-export function bearerSpec(base: string): unknown {
-  return {
-    name: "rtbearer",
-    displayName: "RtBearer",
-    description: "Runtime acceptance connector.",
-    serviceLabel: "RtBearer",
-    style: "hand-rolled",
-    network: ["127.0.0.1"],
-    syncInterval: 300,
-    minNimbusVersion: "0.2.0",
-    env: [{ vars: ["RTBEARER_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
-    fetchHelper: { local: "rtGet", base, headers: "headers" },
-    tools: [
-      {
-        name: "rt_list",
-        description: "List items.",
-        path: "/items?flag=${arg.flag|bool}",
-        args: { flag: { type: "boolean", optional: true } },
-      },
-      {
-        name: "rt_get",
-        description: "Get one item.",
-        path: "/items/${arg.id|enc}",
-        args: { id: { type: "string" } },
-      },
-      {
-        name: "rt_create",
-        description: "Create an item.",
-        path: "/items",
-        method: "POST",
-        effect: "write",
-        args: {
-          title: { type: "string" },
-          draft: { type: "boolean", optional: true },
-          size: { type: "number", optional: true, default: 20 },
-        },
-      },
-      {
-        name: "rt_patch",
-        description: "Patch an item.",
-        path: "/items/${arg.id|enc}",
-        method: "PATCH",
-        effect: "write",
-        args: { id: { type: "string" }, title: { type: "string" } },
-      },
-      {
-        name: "rt_remove",
-        description: "Remove an item.",
-        path: "/items/${arg.id|enc}",
-        method: "DELETE",
-        effect: "delete",
-        args: { id: { type: "string" } },
-      },
-      { name: "rt_boom", description: "Trigger a 500.", path: "/boom" },
-    ],
-  };
-}
-
-/** A client-credentials connector, to observe the token exchange and its caching. */
-export function ccSpec(base: string): unknown {
-  return {
-    name: "rtcc",
-    displayName: "RtCc",
-    description: "Runtime acceptance client-credentials connector.",
-    serviceLabel: "RtCc",
-    style: "hand-rolled",
-    network: ["127.0.0.1"],
-    syncInterval: 300,
-    minNimbusVersion: "0.2.0",
-    env: [
-      {
-        vars: ["RTCC_CLIENT_ID", "RTCC_CLIENT_SECRET"],
-        local: "authHeaders",
-        auth: "client-credentials",
-        tokenUrl: `${base}/oauth/token`,
-        credentialsIn: "body",
-      },
-    ],
-    fetchHelper: { local: "ccGet", base, headers: "authHeaders" },
-    tools: [{ name: "cc_list", description: "List.", path: "/items" }],
-  };
-}
-
-/**
- * rest-kit, whose writes take a completely different route: makeRestToolRegistrar in the
- * SDK builds the request from a `buildInit` callback, so none of the hand-rolled fetch
- * helper's code runs. That path had never been executed either.
- */
-export function restKitSpec(base: string): unknown {
-  return {
-    name: "rtrest",
-    displayName: "RtRest",
-    description: "Runtime acceptance rest-kit connector.",
-    serviceLabel: "RtRest",
-    style: "rest-kit",
-    network: ["127.0.0.1"],
-    syncInterval: 300,
-    minNimbusVersion: "0.2.0",
-    env: [{ vars: ["RTREST_TOKEN"], local: "authHeaders", bindings: ["t"], auth: "bearer" }],
-    fetchHelper: { local: "rtRestFetch", base },
-    tools: [
-      { name: "rr_list", description: "List.", path: "/items" },
-      {
-        name: "rr_create",
-        description: "Create.",
-        path: "/items",
-        method: "POST",
-        effect: "write",
-        args: { title: { type: "string" }, draft: { type: "boolean", optional: true } },
-      },
-      {
-        name: "rr_patch",
-        description: "Patch.",
-        path: "/items/${arg.id|enc}",
-        method: "PATCH",
-        effect: "write",
-        args: { id: { type: "string" }, title: { type: "string" } },
-      },
-    ],
-  };
-}
-
-/**
- * A hand-rolled connector with one query-declaring GET tool, whose base has a path
- * component (`/v2`) — the shape every source-level check (compile, string assertion,
- * byte-diff) could pass while the actual request still doubled that path component onto
- * itself. Only a request actually made can prove it does not: buildPath/the handler return
- * an ABSOLUTE URL (`` `${u}` ``, tools-hand.ts/tools-rest.ts) to avoid the base being
- * prepended twice, and the fetch helper has to recognise and pass that absolute form
- * through untouched (fetch-helper.ts's `hasQueryTool` gate) rather than treating it as a
- * bare path and prepending the base again.
- */
-export function querySpec(base: string): unknown {
-  return {
-    name: "rtquery",
-    displayName: "RtQuery",
-    description: "Runtime acceptance query-parameter connector.",
-    serviceLabel: "RtQuery",
-    style: "hand-rolled",
-    network: ["127.0.0.1"],
-    syncInterval: 300,
-    minNimbusVersion: "0.2.0",
-    env: [{ vars: ["RTQUERY_TOKEN"], local: "headers", bindings: ["t"], auth: "bearer" }],
-    // The path component ("/v2") is the whole point: a base with no path (api.github.com)
-    // cannot distinguish "doubled" from "correct" — the doubling has nothing to duplicate.
-    fetchHelper: { local: "rtqGet", base: `${base}/v2`, headers: "headers" },
-    tools: [
-      {
-        name: "rtq_list",
-        description: "List items, filtered.",
-        path: "/items",
-        args: {
-          limit: { type: "number", optional: true, default: 10 },
-          after: { type: "string", optional: true },
-        },
-        query: [
-          { name: "limit", arg: "limit" },
-          { name: "after", arg: "after", omitWhen: "empty" },
-        ],
-      },
-    ],
-  };
-}
-
-/** auth: "headers" — a named header rather than Authorization: Bearer. */
-export function headersSpec(base: string): unknown {
-  return {
-    name: "rthdr",
-    displayName: "RtHdr",
-    description: "Runtime acceptance header-auth connector.",
-    serviceLabel: "RtHdr",
-    style: "hand-rolled",
-    network: ["127.0.0.1"],
-    syncInterval: 300,
-    minNimbusVersion: "0.2.0",
-    env: [
-      {
-        vars: ["RTHDR_KEY"],
-        local: "headers",
-        bindings: ["k"],
-        auth: "headers",
-        headerNames: ["X-Api-Key"],
-      },
-    ],
-    fetchHelper: { local: "hdrGet", base, headers: "headers" },
-    tools: [{ name: "hdr_list", description: "List.", path: "/items" }],
-  };
-}
-
-/** Same as ccSpec, but its token endpoint mints a 2-second token. */
-export function shortTokenSpec(base: string): unknown {
-  const spec = ccSpec(base) as {
-    name: string;
-    displayName: string;
-    serviceLabel: string;
-    env: Array<{ tokenUrl: string; local: string }>;
-    fetchHelper: { local: string; headers: string };
-  };
-  return {
-    ...spec,
-    name: "rtshort",
-    displayName: "RtShort",
-    serviceLabel: "RtShort",
-    // credentialsIn: "basic" here and "body" in ccSpec, so both placements are executed
-    // without a fourth install.
-    env: [{ ...spec.env[0]!, tokenUrl: `${base}/oauth/token?short`, credentialsIn: "basic" }],
-    fetchHelper: { ...spec.fetchHelper, local: "shortGet" },
-  };
-}
 
 /** Generate a package into `dir`, point its SDK dependency at the right place, install. */
 async function materialize(spec: unknown, dir: string, sdkPkg: string | undefined): Promise<void> {
@@ -263,288 +53,12 @@ async function materialize(spec: unknown, dir: string, sdkPkg: string | undefine
   await writeFiles(formatAll(generate(parsed, { target: "standalone" })), dir);
   if (sdkPkg !== undefined) {
     const pkgPath = join(dir, "package.json");
-    const pkg = JSON.parse(await Bun.file(pkgPath).text());
-    pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
-    writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`, "utf8");
+    writeFileSync(pkgPath, withLocalSdk(await Bun.file(pkgPath).text(), sdkPkg), "utf8");
   }
   const install = Bun.spawnSync(["bun", "install"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
   if (install.exitCode !== 0) {
     throw new Error(`bun install failed in ${dir}:\n${install.stderr.toString()}`);
   }
-}
-
-const find = (rec: readonly Recorded[], pred: (r: Recorded) => boolean): Recorded | undefined =>
-  rec.find(pred);
-
-/**
- * One scenario per function, in the order main() runs them.
- *
- * They are deliberately sequential and share the single `recorded` log: each slices off the
- * requests made since it started, which is what lets "two tool calls, one exchange" be a
- * statement about one connector rather than about the whole run. Splitting them up does not
- * make them independent — running one on its own is fine, but reordering them is not.
- */
-async function checkBearerConnector(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  // ---- bearer connector -------------------------------------------------------------
-  const bearerDir = join(root, "rtbearer");
-  await materialize(bearerSpec(base), bearerDir, sdkPkg);
-  const results = await callTools(bearerDir, { RTBEARER_TOKEN: "tok-123" }, [
-    { name: "rt_list", args: {} },
-    { name: "rt_get", args: { id: "a b/c" } },
-    { name: "rt_create", args: { title: "hello", draft: true } },
-    { name: "rt_patch", args: { id: "x1", title: "renamed" } },
-    { name: "rt_remove", args: { id: "x1" } },
-    { name: "rt_boom", args: {} },
-  ]);
-
-  const list = find(recorded, (r) => r.path.startsWith("/items?"));
-  check(
-    "bearer token reaches the wire as an Authorization header",
-    list?.auth === "Bearer tok-123",
-    `Authorization: ${describeAuth(list?.auth, "Bearer tok-123")}`,
-  );
-
-  // The URL half of the asymmetry above, finally observed rather than argued.
-  check(
-    "unset optional boolean renders false in the URL",
-    list?.path === "/items?flag=false",
-    `GET ${list?.path ?? "(no request)"}`,
-  );
-
-  const created = find(recorded, (r) => r.method === "POST");
-  const createdBody = created === undefined ? undefined : JSON.parse(created.body);
-  check(
-    'a boolean in a JSON body is a real boolean, not the string "true"',
-    createdBody?.draft === true,
-    `POST body: ${created?.body ?? "(none)"}`,
-  );
-  check(
-    "a defaulted arg is sent with its default applied",
-    createdBody?.size === 20,
-    `POST body: ${created?.body ?? "(none)"}`,
-  );
-  check(
-    "a write sends Content-Type: application/json",
-    created?.contentType?.includes("application/json") === true,
-    `Content-Type: ${created?.contentType ?? "(none)"}`,
-  );
-
-  const got = find(recorded, (r) => r.method === "GET" && r.path.startsWith("/items/"));
-  check(
-    "path args are percent-encoded at runtime",
-    got?.path === "/items/a%20b%2Fc",
-    `GET ${got?.path ?? "(no request)"}`,
-  );
-
-  const patched = find(recorded, (r) => r.method === "PATCH");
-  const patchedBody = patched === undefined ? undefined : JSON.parse(patched.body);
-  check(
-    "a path arg is excluded from the default write body (D5)",
-    patchedBody !== undefined && !("id" in patchedBody) && patchedBody.title === "renamed",
-    `PATCH ${patched?.path ?? "?"} body: ${patched?.body ?? "(none)"}`,
-  );
-
-  const removed = find(recorded, (r) => r.method === "DELETE");
-  check(
-    "a DELETE whose only arg is in the path sends no body",
-    removed?.body === "",
-    `DELETE ${removed?.path ?? "?"} body: ${JSON.stringify(removed?.body ?? null)}`,
-  );
-
-  const boom = results[5];
-  check(
-    "a non-2xx response surfaces as a tool error naming the status",
-    boom?.isError === true && boom.text.includes("500"),
-    `rt_boom → ${boom?.text ?? "(no result)"}`,
-  );
-}
-
-async function checkClientCredentials(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  // ---- client-credentials connector -------------------------------------------------
-  const ccDir = join(root, "rtcc");
-  await materialize(ccSpec(base), ccDir, sdkPkg);
-  const before = recorded.length;
-  await callTools(ccDir, { RTCC_CLIENT_ID: "id-1", RTCC_CLIENT_SECRET: "secret-1" }, [
-    { name: "cc_list", args: {} },
-    { name: "cc_list", args: {} },
-  ]);
-  const cc = recorded.slice(before);
-  const exchanges = cc.filter((r) => r.path.startsWith("/oauth/token"));
-
-  check(
-    "the token exchange happens before the API call",
-    cc[0]?.path.startsWith("/oauth/token") === true && cc[1]?.path === "/items",
-    cc.map((r) => `${r.method} ${r.path}`).join(" → ") || "(no requests)",
-  );
-  check(
-    "credentialsIn: body puts the id and secret in the form body",
-    exchanges[0]?.body.includes("client_id=id-1") === true &&
-      exchanges[0].body.includes("client_secret=secret-1"),
-    `token body: ${describeFormFields(exchanges[0]?.body, ["grant_type", "client_id", "client_secret"])}`,
-  );
-  check(
-    "the exchanged token is used for the API call",
-    cc[1]?.auth === "Bearer exchanged-token-abc",
-    `Authorization: ${describeAuth(cc[1]?.auth, "Bearer exchanged-token-abc")}`,
-  );
-  check(
-    "the token is cached — two tool calls, one exchange",
-    exchanges.length === 1,
-    `${exchanges.length} exchange(s) for ${cc.filter((r) => r.path === "/items").length} API call(s)`,
-  );
-}
-
-/**
- * rest-kit: a different code path end to end. makeRestToolRegistrar builds the request from
- * the emitted `buildInit` callback, so none of the hand-rolled fetch helper runs.
- */
-async function checkRestKit(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  const restDir = join(root, "rtrest");
-  await materialize(restKitSpec(base), restDir, sdkPkg);
-  const beforeRest = recorded.length;
-  await callTools(restDir, { RTREST_TOKEN: "rest-tok" }, [
-    { name: "rr_list", args: {} },
-    { name: "rr_create", args: { title: "made", draft: true } },
-    { name: "rr_patch", args: { id: "p1", title: "renamed" } },
-  ]);
-  const rest = recorded.slice(beforeRest);
-  const restPost = find(rest, (r) => r.method === "POST");
-  const restPostBody = restPost === undefined ? undefined : JSON.parse(restPost.body);
-  const restPatch = find(rest, (r) => r.method === "PATCH");
-  const restPatchBody = restPatch === undefined ? undefined : JSON.parse(restPatch.body);
-
-  check(
-    "rest-kit sends the bearer token the registrar resolves itself",
-    find(rest, (r) => r.method === "GET")?.auth === "Bearer rest-tok",
-    `Authorization: ${describeAuth(find(rest, (r) => r.method === "GET")?.auth, "Bearer rest-tok")}`,
-  );
-  check(
-    "rest-kit buildInit produces the declared method and a JSON body",
-    restPost?.method === "POST" && restPostBody?.title === "made" && restPostBody.draft === true,
-    `POST ${restPost?.path ?? "?"} body: ${restPost?.body ?? "(none)"}`,
-  );
-  check(
-    "rest-kit applies the D5 path-arg exclusion too",
-    restPatchBody !== undefined && !("id" in restPatchBody) && restPatch?.path === "/items/p1",
-    `PATCH ${restPatch?.path ?? "?"} body: ${restPatch?.body ?? "(none)"}`,
-  );
-}
-
-/**
- * The check Critical 1 of Task 4's round-1 review asked for: every other gate in this repo
- * looks at emitted SOURCE (a shape check, a string assertion, a byte-diff), and none of them
- * observed the actual REQUEST — which is exactly how a doubled base URL survived a green
- * board. `querySpec`'s base carries a path component precisely so this can fail: if the
- * request lands at "/v2/v2/items" the assertion below catches it directly, rather than
- * inferring correctness from the emitted text.
- */
-async function checkQueryConnector(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  const queryDir = join(root, "rtquery");
-  await materialize(querySpec(base), queryDir, sdkPkg);
-  const before = recorded.length;
-  await callTools(queryDir, { RTQUERY_TOKEN: "tok-q" }, [
-    { name: "rtq_list", args: { after: "abc" } },
-  ]);
-  const list = recorded.slice(before)[0];
-
-  check(
-    "a query tool's request path carries the base's path component exactly once",
-    list?.path === "/v2/items?limit=10&after=abc",
-    `GET ${list?.path ?? "(no request)"}`,
-  );
-  check(
-    "the base's own path segment is not duplicated in the request",
-    (list?.path.match(/\/v2/g) ?? []).length === 1,
-    `GET ${list?.path ?? "(no request)"}`,
-  );
-}
-
-async function checkHeaderAuth(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  // ---- header auth ----------------------------------------------------------------
-  const hdrDir = join(root, "rthdr");
-  await materialize(headersSpec(base), hdrDir, sdkPkg);
-  const beforeHdr = recorded.length;
-  await callTools(hdrDir, { RTHDR_KEY: "key-9" }, [{ name: "hdr_list", args: {} }]);
-  const hdr = recorded.slice(beforeHdr)[0];
-  check(
-    'auth: "headers" sends the named header, not Authorization',
-    hdr?.apiKey === "key-9" && hdr.auth === undefined,
-    `X-Api-Key: ${describeAuth(hdr?.apiKey, "key-9")} / Authorization: ${describeAuth(hdr?.auth, "")}`,
-  );
-}
-
-/**
- * Token expiry. The cache used to be unconditional: `if (cachedToken !== null) return
- * cachedToken`, with expires_in never read — correct only while connectors stayed
- * short-lived, which is a property of the caller, not of this code. Observed here rather
- * than argued.
- */
-async function checkTokenExpiry(
-  root: string,
-  base: string,
-  recorded: readonly Recorded[],
-  sdkPkg: string | undefined,
-): Promise<void> {
-  const shortDir = join(root, "rtshort");
-  await materialize(shortTokenSpec(base), shortDir, sdkPkg);
-  const beforeShort = recorded.length;
-  await callTools(
-    shortDir,
-    { RTCC_CLIENT_ID: "id-2", RTCC_CLIENT_SECRET: "secret-2" },
-    [
-      { name: "cc_list", args: {} },
-      { name: "cc_list", args: {} },
-      { name: "cc_list", args: {} },
-    ],
-    // Longer than the 1s the emitted code treats a 2s token as valid for, so at least one
-    // gap straddles an expiry. Short enough to keep the harness quick.
-    1400,
-  );
-  const short = recorded.slice(beforeShort);
-  const shortExchanges = short.filter((r) => r.path.startsWith("/oauth/token"));
-  const apiCalls = short.filter((r) => r.path === "/items");
-  check(
-    'credentialsIn: "basic" sends the credentials as an Authorization: Basic header',
-    shortExchanges[0]?.auth?.startsWith("Basic ") === true &&
-      !shortExchanges[0].body.includes("client_secret"),
-    `Basic scheme: ${shortExchanges[0]?.auth?.startsWith("Basic ") === true}; ` +
-      `secret kept out of the body: ${shortExchanges[0]?.body.includes("client_secret") === false}`,
-  );
-  check(
-    "an expired token is re-exchanged rather than reused",
-    shortExchanges.length > 1,
-    `${shortExchanges.length} exchange(s) for ${apiCalls.length} API call(s)`,
-  );
-  check(
-    "the API call after re-exchange carries the NEW token",
-    apiCalls.at(-1)?.auth !== apiCalls[0]?.auth,
-    `first and last Authorization differ: ${apiCalls.at(-1)?.auth !== apiCalls[0]?.auth}`,
-  );
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -554,32 +68,32 @@ async function main(argv: readonly string[]): Promise<void> {
   const recorded: Recorded[] = [];
   const { server, base } = startApi(recorded);
   const root = mkdtempSync(join(tmpdir(), "cnc-runtime-"));
+  const checks: Check[] = [];
 
   try {
-    await checkBearerConnector(root, base, recorded, sdkPkg);
-    await checkClientCredentials(root, base, recorded, sdkPkg);
-    await checkRestKit(root, base, recorded, sdkPkg);
-    await checkQueryConnector(root, base, recorded, sdkPkg);
-    await checkHeaderAuth(root, base, recorded, sdkPkg);
-    await checkTokenExpiry(root, base, recorded, sdkPkg);
+    // One scenario at a time against the one fake API. Each judge is handed only the requests
+    // made since its own scenario started, which is what keeps "two tool calls, one exchange" a
+    // statement about one connector rather than about the whole run.
+    for (const scenario of RUNTIME_SCENARIOS) {
+      const dir = join(root, scenario.name);
+      await materialize(scenario.spec(base), dir, sdkPkg);
+      const before = recorded.length;
+      const results = await callTools(dir, { ...scenario.env }, scenario.calls, scenario.gapMs);
+      checks.push(...scenario.judge(recorded.slice(before), results));
+    }
   } finally {
     server.stop(true);
     rmSync(root, { recursive: true, force: true });
   }
 
-  for (const c of checks) {
-    console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}\n        ${c.output}`);
-  }
-  const failed = checks.filter((c) => !c.ok);
-  console.log(`\n${checks.length - failed.length}/${checks.length} runtime checks passed.`);
-  if (failed.length > 0) throw new Error(`${failed.length} runtime check(s) failed.`);
+  const { lines, failure } = runtimeReport(checks);
+  for (const line of lines) console.log(line);
+  if (failure !== undefined) throw new Error(failure);
 }
 
 // Guarded exactly as src/cli.ts is. argv used to be consumed at module scope, so importing
-// this file to reach a spec builder or one of the redaction helpers either resolved an SDK
-// checkout the importer did not have or threw on flags it never passed.
-// `bun scripts/runtime-acceptance.ts [--registry|--sdk-root <path>]` is unchanged.
+// this file either resolved an SDK checkout the importer did not have or threw on flags it
+// never passed. `bun scripts/runtime-acceptance.ts [--registry|--sdk-root <path>]` is unchanged.
 if (import.meta.main) {
-  if (!existsSync(scriptDir)) throw new Error("unreachable");
   await main(process.argv.slice(2));
 }

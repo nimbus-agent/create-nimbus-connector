@@ -495,7 +495,7 @@ describe("the placeholders, each of which stands for something no document state
     expect(hostile.displayName).toContain("Widgets");
   });
 
-  it("gives a tool with no summary the TODO: describe form src/prompts.ts already uses", () => {
+  it("gives a tool with no summary the TODO: describe form src/prompt-spec.ts already uses", () => {
     const { spec } = mustAssemble(onePath("/widgets", "get", { operationId: "listWidgets" }));
     expect(firstTool(spec).description).toBe("TODO: describe listWidgets.");
   });

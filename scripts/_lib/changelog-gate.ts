@@ -145,3 +145,34 @@ export function unreleasedProblems(markdown: string): string[] {
 
   return problems;
 }
+
+/**
+ * The gate's whole verdict: every line scripts/check-changelog.ts prints, in order, and the exit
+ * code that goes with them.
+ *
+ * The exit code is the part that guards `npm publish`, and it used to be decided in the driver,
+ * where nothing tested it — so `unreleasedProblems` could be exactly right while the step that
+ * runs it exited 0 on every input, the same defanged-gate shape this file's header records of the
+ * awk. Deciding it here puts it under test/scripts/changelog-gate.test.ts with the rule itself.
+ *
+ * A failing verdict closes with one general annotation after the per-line ones. It names the fix
+ * only in outline: the full recovery path is written beside the step in release.yml, where
+ * someone reading a failed job will be looking, and a second copy here would go stale.
+ */
+export function changelogVerdict(markdown: string): { lines: string[]; exitCode: 0 | 1 } {
+  const problems = unreleasedProblems(markdown);
+  if (problems.length === 0) {
+    return {
+      lines: ["changelog ok: the Unreleased section holds nothing but its placeholder"],
+      exitCode: 0,
+    };
+  }
+  return {
+    lines: [
+      ...problems,
+      "::error::Move the notes under their version and let release-please cut the next patch. " +
+        "Publishing by hand loses the provenance attestation and is not the fix.",
+    ],
+    exitCode: 1,
+  };
+}

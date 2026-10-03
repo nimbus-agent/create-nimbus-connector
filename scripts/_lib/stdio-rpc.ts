@@ -21,10 +21,8 @@ export async function* readJsonLines(stream: ReadableStream<Uint8Array>): AsyncG
   const decoder = new TextDecoder();
   let buffered = "";
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return;
-    buffered += decoder.decode(value, { stream: true });
+  for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+    buffered += decoder.decode(chunk.value, { stream: true });
 
     const lines = buffered.split("\n");
     buffered = lines.pop() ?? ""; // keep the trailing partial fragment

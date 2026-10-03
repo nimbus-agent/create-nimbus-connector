@@ -46,6 +46,50 @@ export function formatCheckLines(checks: readonly Check[]): string[] {
 }
 
 /**
+ * The whole report for a standalone-acceptance run — every fixture's checks, prefixed with the
+ * fixture that produced them, then the verdict — and the exit code that goes with it.
+ *
+ * The prefix is there because every fixture emits the same check list: unprefixed, two fixtures
+ * failing the same check would print two identical FAIL lines and name neither.
+ *
+ * **The verdict sentence is the point.** A run with skips exits 0 — the skipped question is
+ * unanswerable, not failed — but it must never print the sentence a fully-verified run prints,
+ * so it names the fixtures it skipped instead. "All standalone acceptance checks passed" over a
+ * silently reduced fixture set is precisely how a gate stops gating without anyone noticing,
+ * which is also why a run that checked nothing at all fails rather than reporting success. A run
+ * with a failure prints no verdict sentence at all: the FAIL lines are the report.
+ */
+export function standaloneReport(
+  byFixture: ReadonlyArray<{ readonly fixture: string; readonly checks: readonly Check[] }>,
+): { lines: string[]; exitCode: 0 | 1 } {
+  const lines = formatCheckLines(
+    byFixture.flatMap(({ fixture, checks }) =>
+      checks.map((c) => ({ ...c, name: `[${fixture}] ${c.name}` })),
+    ),
+  );
+  const all = byFixture.flatMap((f) => f.checks);
+  if (all.length === 0) {
+    lines.push("", "No standalone acceptance checks ran. Refusing to report a pass.");
+    return { lines, exitCode: 1 };
+  }
+  if (all.some((c) => !c.ok)) return { lines, exitCode: 1 };
+
+  const skipped = byFixture
+    .filter((f) => f.checks.some((c) => c.skipped === true))
+    .map((f) => f.fixture);
+  if (skipped.length > 0) {
+    lines.push(
+      "",
+      `Standalone acceptance passed for every fixture it could run, and SKIPPED ${skipped.length}: ${skipped.join(", ")}.`,
+      "Those fixtures are NOT verified against the registry by this run.",
+    );
+    return { lines, exitCode: 0 };
+  }
+  lines.push("", "All standalone acceptance checks passed.");
+  return { lines, exitCode: 0 };
+}
+
+/**
  * Whether a failed `bun install` in --registry mode means "this fixture's declared SDK floor
  * is not published yet" rather than "something is broken".
  *

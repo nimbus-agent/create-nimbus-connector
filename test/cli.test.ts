@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseCliArgs, renderTree, USAGE } from "../src/cli.ts";
+import { renderTree, USAGE } from "../src/cli.ts";
+import { parseCliArgs } from "../src/cli-args.ts";
 import { emitReadme } from "../src/emit/readme.ts";
-import { buildSpec, type PromptAnswers } from "../src/prompts.ts";
+import { buildSpec, type PromptAnswers } from "../src/prompt-spec.ts";
 import { registrarName } from "../src/spec.ts";
 
 describe("parseCliArgs", () => {
@@ -500,7 +501,8 @@ describe("buildSpec (promptForSpec's spec-construction logic)", () => {
 });
 
 describe("--help", () => {
-  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli.ts"), "utf8");
+  // parseFlags lives in src/cli-args.ts, USAGE in src/cli.ts: the two are compared across files.
+  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli-args.ts"), "utf8");
 
   /**
    * Usage text that drifts from the parser is worse than no usage text: it documents flags

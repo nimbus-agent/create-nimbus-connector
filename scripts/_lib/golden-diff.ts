@@ -20,7 +20,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { takeValue } from "../../src/cli.ts";
+import { takeValue } from "../../src/cli-args.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll } from "../../src/format.ts";
 import { type Comparison, classify, type Expectations } from "../../src/golden/expectations.ts";

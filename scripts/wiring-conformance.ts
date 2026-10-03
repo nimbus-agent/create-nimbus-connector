@@ -28,7 +28,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { takeValue } from "../src/cli.ts";
+import { takeValue } from "../src/cli-args.ts";
 import { emitWiring } from "../src/emit/wiring.ts";
 import { resolveNimbusRoot } from "../src/golden/resolve.ts";
 import { parseSpec } from "../src/spec.ts";

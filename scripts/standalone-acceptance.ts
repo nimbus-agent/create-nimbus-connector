@@ -30,10 +30,10 @@ import {
 } from "../src/format.ts";
 import { run } from "../src/golden/run.ts";
 import { parseSpec } from "../src/spec.ts";
-import { type Check, formatCheckLines, isUnpublishedFloorFailure } from "./_lib/checks.ts";
+import { type Check, isUnpublishedFloorFailure, standaloneReport } from "./_lib/checks.ts";
 import { findEscapingImports } from "./_lib/escaping-imports.ts";
 import { toolsListCheck } from "./_lib/mcp-driver.ts";
-import { assertLocalSdkBuilt, modeBanner, resolveSdkPkg } from "./_lib/sdk-pkg.ts";
+import { assertLocalSdkBuilt, modeBanner, resolveSdkPkg, withLocalSdk } from "./_lib/sdk-pkg.ts";
 
 /**
  * Both emission styles, because they import the kit differently and only one of them was
@@ -129,9 +129,7 @@ async function runFixture(NAME: string, sdkPkg: string | undefined): Promise<Che
       }
       checks.push({ name: "bun install", ...install });
     } else {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      pkg.dependencies["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;
-      writeFileSync(pkgPath, `${JSON.stringify(pkg, undefined, 2)}\n`);
+      writeFileSync(pkgPath, withLocalSdk(readFileSync(pkgPath, "utf8"), sdkPkg));
 
       // --force so a rebuilt SDK at the same path and version is not served from bun's cache.
       // The temp dir is fresh so node_modules is empty, but the cached *file:* package is not.
@@ -230,32 +228,16 @@ async function main(argv: readonly string[]): Promise<void> {
   console.log(modeBanner(sdkPkg));
   console.log(`Fixtures:    ${FIXTURES.join(", ")}\n`);
 
-  const checks: Check[] = [];
+  const byFixture: { fixture: string; checks: Check[] }[] = [];
   for (const fixture of FIXTURES) {
-    const result = await runFixture(fixture, sdkPkg);
-    // Prefixed so a failure names the style that produced it. Both fixtures emit the same
-    // check list, so an unprefixed report would show two identically-named failures.
-    checks.push(...result.map((c) => ({ ...c, name: `[${fixture}] ${c.name}` })));
+    byFixture.push({ fixture, checks: await runFixture(fixture, sdkPkg) });
   }
 
-  for (const line of formatCheckLines(checks)) console.log(line);
-
-  if (checks.some((c) => !c.ok)) process.exit(1);
-
-  // A run with skips exits 0 — the skipped question is unanswerable, not failed — but it must
-  // never print the same sentence a fully-verified run prints. Naming the fixtures is the
-  // point: "all checks passed" over a silently reduced fixture set is precisely how a gate
-  // stops gating without anyone noticing.
-  const skipped = checks.filter((c) => c.skipped === true);
-  if (skipped.length > 0) {
-    const names = skipped.map((c) => c.name.replace(/^\[([^\]]+)\].*$/, "$1")).join(", ");
-    console.log(
-      `\nStandalone acceptance passed for every fixture it could run, and SKIPPED ${skipped.length}: ${names}.` +
-        "\nThose fixtures are NOT verified against the registry by this run.",
-    );
-    return;
-  }
-  console.log("\nAll standalone acceptance checks passed.");
+  // The report and its verdict sentence live in scripts/_lib/checks.ts's standaloneReport, where
+  // a test shows a run with skips can never print the sentence a fully-verified run prints.
+  const { lines, exitCode } = standaloneReport(byFixture);
+  for (const line of lines) console.log(line);
+  if (exitCode !== 0) process.exit(exitCode);
 }
 
 // Guarded exactly as src/cli.ts is. All of the above used to run at module scope: argv was

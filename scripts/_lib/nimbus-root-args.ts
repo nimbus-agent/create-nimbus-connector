@@ -1,4 +1,4 @@
-import { takeValue } from "../../src/cli.ts";
+import { takeValue } from "../../src/cli-args.ts";
 
 /**
  * The argument parser shared by the two commands whose entire command line is `--nimbus-root`

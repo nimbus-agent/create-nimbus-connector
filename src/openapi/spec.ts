@@ -18,8 +18,8 @@
  *    the author is expected to set it, so they carry a `TODO:` marker wherever the field is prose.
  *    They live in `PLACEHOLDER`, in one place, so the set is readable at a glance.
  * 3. **Derived by this generator's own conventions** — the fetch helper's `local`, the env
- *    accessor's `local`, and the credential variable names, all following the shapes
- *    `src/prompts.ts` already produces for an interactively-authored connector.
+ *    accessor's `local`, and the credential variable names, all following the shapes the
+ *    interactive path (`src/prompts.ts` and `src/prompt-spec.ts`) already produces.
  *
  * **The line between 1 and 2, which the four server refusals exist to hold.** A placeholder stands
  * in for something the document has no way to say. A base URL is a FACT about the API that an
@@ -104,9 +104,9 @@ export type Assembled =
  * `syncInterval` is a positive integer and `style` is an enum, so neither can carry one; they are
  * given a value that PARSES and is obviously provisional instead (and `syncInterval` /
  * `minNimbusVersion` are stated explicitly rather than left to the schema's default, so the author
- * sees them in the printed spec at all). `TODO: describe ${name}.` is `src/prompts.ts`'s exact
- * form, because a connector authored from a document and one authored interactively should leave
- * the same thing behind for their author to finish.
+ * sees them in the printed spec at all). `TODO: describe ${name}.` is the exact form
+ * `src/prompt-spec.ts` writes, because a connector authored from a document and one authored
+ * interactively should leave the same thing behind for their author to finish.
  *
  * `serviceLabel` takes no interpolation on purpose: `src/emit/server/fetch-helper.ts` splices it
  * RAW into an emitted template literal and `src/emit/wiring.ts` into a block comment, so a
@@ -141,7 +141,7 @@ const CREDENTIAL_SUFFIX = {
   apiKey: "API_KEY",
 } as const;
 
-/** The env accessor's name. Fixed, matching `src/prompts.ts` and the grafana fixture. */
+/** The env accessor's name. Fixed, matching `src/prompt-spec.ts` and the grafana fixture. */
 const ENV_LOCAL = "authHeaders";
 
 /** The rule `identifierField()` enforces on every `local`, restated here to check against. */

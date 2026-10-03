@@ -307,12 +307,50 @@ describe("measure", () => {
     expect(result.blockers).toEqual([]);
   });
 
+  it("hands the validated spec to the emit step, and blocks with emitter-error naming what it threw", () => {
+    const files = new Map([
+      ["src/server.ts", validServer("xGet")],
+      ["nimbus.extension.json", MANIFEST],
+    ]);
+    const handed: string[][] = [];
+
+    const result = measure("x", files, (spec) => {
+      handed.push(spec.tools.map((t) => t.name));
+      throw new Error("boom: injected emitter bug");
+    });
+
+    // Returned, not thrown: one connector whose emit fails must not end a 94-connector sweep.
+    expect(result).toEqual({
+      name: "x",
+      tier: "blocked",
+      blockers: [{ kind: "emitter-error", detail: "boom: injected emitter bug", line: 0 }],
+    });
+    expect(handed).toEqual([["x_list"]]);
+  });
+
+  it("names a thrown non-Error by its string form rather than losing it", () => {
+    const files = new Map([
+      ["src/server.ts", validServer("xGet")],
+      ["nimbus.extension.json", MANIFEST],
+    ]);
+
+    const result = measure("x", files, () => {
+      throw "emitter gave up";
+    });
+
+    expect(result.blockers).toEqual([
+      { kind: "emitter-error", detail: "emitter gave up", line: 0 },
+    ]);
+  });
+
   it("blocks with kind emitter-error when generate()/formatAll() throws, without crashing the sweep", () => {
     // The seam is Biome itself: mock.module replaces "@biomejs/js-api/nodejs" with a fake
     // whose formatContent() always reports a fatal diagnostic, which is exactly how a genuine
     // emitter defect (syntactically invalid emitted TypeScript) surfaces in production. Run in
     // a subprocess, same rationale as test/format.test.ts's own mock.module tests: a fresh
-    // module registry, and mock.module's effect is process-global.
+    // module registry, and mock.module's effect is process-global. The two tests above reach the
+    // same arm in-process through `measure`'s injected `emit`; this one is the proof that a REAL
+    // formatter failure arrives there, which an injected throw cannot show.
     const server = JSON.stringify(validServer("xGet"));
     const manifest = JSON.stringify(MANIFEST);
     const script =
