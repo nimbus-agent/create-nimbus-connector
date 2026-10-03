@@ -193,10 +193,22 @@ describe("the guards the generator carries", () => {
         properties: { a: { type: "string" }, b: { type: "number" } },
       }),
     ).toBe("{ a: string; b?: number }");
+    // The `type`-array spelling of a primitive union, which zod 4.5 emits where 4.4 emitted an
+    // `anyOf`. The real schema carries one (`tools[].args.<name>.default`), so the byte comparison
+    // above already drives this arm — but only on its passing side, which is why its two refusals
+    // are driven below rather than left to that comparison.
+    expect(renderType({ type: ["string", "number", "boolean"] })).toBe("string | number | boolean");
 
     expect(() => renderType({ type: "array" })).toThrow("an array with no items");
     expect(() => renderType({ type: "object" })).toThrow("neither a record nor a shape");
     expect(() => renderType({})).toThrow("no type");
+    // A member that needs the items/properties handling only the array and object arms carry, and
+    // an empty array: `[].every(…)` is true, so without the length check the second would render
+    // an empty Type cell rather than refuse.
+    expect(() => renderType({ type: ["string", "object"] })).toThrow(
+      "unmodelled type array [string, object]",
+    );
+    expect(() => renderType({ type: [] })).toThrow("unmodelled type array []");
   });
 
   it("collects a constraint wherever it sits, and stops at the next table", () => {

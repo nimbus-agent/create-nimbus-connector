@@ -1047,6 +1047,12 @@ export function conditional(node: AstNode | undefined): Conditional | undefined 
   return { test, consequent, alternate };
 }
 
+/**
+ * The `operator`/`left`/`right` triple Babel gives three node types alike — BinaryExpression,
+ * LogicalExpression and AssignmentExpression — and so what `binary`, `logical` and `assignment`
+ * below all return. One type, not three names for it: which node a value came from is the
+ * caller's to know, by which of those it called.
+ */
 export type BinaryParts = {
   readonly operator: string;
   readonly left: AstNode;
@@ -1073,13 +1079,6 @@ export function logical(node: AstNode | undefined): BinaryParts | undefined {
 }
 
 /**
- * An AssignmentExpression's parts. Structurally identical to `BinaryParts` — Babel gives all
- * three node types the same `operator`/`left`/`right` shape — and named separately only so a
- * caller's type reads as what it asked for.
- */
-export type AssignmentParts = BinaryParts;
-
-/**
  * `a = b`, `a += b`, … — an AssignmentExpression, distinct from both `binary` and `logical`
  * above (Babel gives it its own node type, `AssignmentExpression`, not a `BinaryExpression`
  * with `operator: "="`). Needed for renderRestKitFetchHelper's `json = JSON.parse(text) as
@@ -1090,7 +1089,7 @@ export type AssignmentParts = BinaryParts;
  * in the node type they accept, and the third copy of the unpack was where a fix to the other
  * two would have stopped.
  */
-export function assignment(node: AstNode | undefined): AssignmentParts | undefined {
+export function assignment(node: AstNode | undefined): BinaryParts | undefined {
   return twoSided(node, "AssignmentExpression");
 }
 
