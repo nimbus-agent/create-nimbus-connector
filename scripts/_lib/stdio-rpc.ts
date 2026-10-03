@@ -17,13 +17,15 @@
  * is untidy, not a protocol error, and neither harness should fail on it.
  */
 export async function* readJsonLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
-  const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
 
-  let chunk = await reader.read();
-  while (!chunk.done) {
-    buffered += decoder.decode(chunk.value, { stream: true });
+  // `preventCancel`, because both callers leave this loop early — each returns on the frame it
+  // wanted — and a plain `for await` over a ReadableStream CANCELS the stream on any early exit
+  // (observed 2026-10-04, Bun 1.3.14), tearing the server's stdout down under the caller. With it,
+  // leaving early only releases the lock. test/scripts/stdio-rpc.test.ts pins the difference.
+  for await (const chunk of stream.values({ preventCancel: true })) {
+    buffered += decoder.decode(chunk, { stream: true });
 
     const lines = buffered.split("\n");
     buffered = lines.pop() ?? ""; // keep the trailing partial fragment
@@ -38,12 +40,5 @@ export async function* readJsonLines(stream: ReadableStream<Uint8Array>): AsyncG
       }
       yield msg;
     }
-
-    // One read at a time is what reading a stream is: whether to read again at all is the last
-    // read's `done`. `for await` over the stream would say the same thing without an `await` in
-    // the loop, but leaving that loop early CANCELS the stream (observed 2026-10-04, Bun 1.3.14),
-    // and a caller that returns on the frame it wanted would then cancel the server's stdout under
-    // it — a teardown this reader has never done.
-    chunk = await reader.read(); // NOSONAR S9382: a stream read — the next read depends on this one's `done`
   }
 }

@@ -126,4 +126,30 @@ describe("readJsonLines", () => {
 
     expect(messages).toEqual([{ text: "café" }]);
   });
+
+  it("leaves the stream uncancelled when the caller stops reading early", async () => {
+    // Both conversations return on the frame they wanted, mid-stream. That has to end the read
+    // without cancelling the server's stdout under them — and a plain `for await` over a
+    // ReadableStream cancels it on any early exit, which is why the reader asks for
+    // `preventCancel`. An endless stream makes "early" unambiguous: there is no end to reach.
+    let cancelled = false;
+    const frame = new TextEncoder().encode('{"id":1}\n');
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(frame);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    let first: unknown;
+    for await (const msg of readJsonLines(endless)) {
+      first = msg;
+      break;
+    }
+
+    expect(first).toEqual({ id: 1 });
+    expect(cancelled).toBe(false);
+  });
 });
