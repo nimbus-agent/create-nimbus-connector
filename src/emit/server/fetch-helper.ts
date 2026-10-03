@@ -1,4 +1,5 @@
 import { type ConnectorSpec, isEnvRefHeaderValue } from "../../spec.ts";
+import { objectKey } from "./env.ts";
 
 /** Replace ${env.X} with X() inside a base or header template. */
 function resolveEnvRefs(tpl: string): string {
@@ -56,7 +57,7 @@ function headerOption(spec: ConnectorSpec): string {
   if (fh.inlineHeaders !== undefined) {
     const fields = Object.entries(fh.inlineHeaders)
       .map(([k, v]) => {
-        const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+        const key = objectKey(k);
         // isEnvRefHeaderValue lives in src/spec.ts and is what FetchHelperSchema refuses a
         // MIXED value with — the same call, not a second copy of the pattern, so the branch
         // taken here and the value the schema admits cannot come apart.
@@ -91,10 +92,7 @@ function renderRestKitFetchHelper(spec: ConnectorSpec): string {
     fh.inlineHeaders === undefined
       ? ""
       : Object.entries(fh.inlineHeaders)
-          .map(([k, v]) => {
-            const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
-            return `      ${key}: ${JSON.stringify(v)},`;
-          })
+          .map(([k, v]) => `      ${objectKey(k)}: ${JSON.stringify(v)},`)
           .join("\n");
 
   return [

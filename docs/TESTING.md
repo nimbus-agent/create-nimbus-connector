@@ -163,8 +163,8 @@ is *not* to add in-process tests duplicating the subprocess ones: that moves the
 adding assurance, which is the false-green pattern this repo keeps removing. Raise the floor
 only when a real gap closes, as it did for `src/golden/resolve-root.ts` and
 `src/derive/search-filter.ts` — the two that carried 0.88 → 0.90. `src/format.ts` is the file
-that then **sets** the floor — alone on lines, but tied exactly by
-`src/emit/server/tools-rest.ts` on functions, so both halves have to be re-measured before that
+that then **sets** the floor, on both halves alone since a rest-kit test closed the one
+uncovered function `src/emit/server/tools-rest.ts` had tied it with; re-measure before either
 number moves. bunfig explains why format.ts's last eight lines cannot be closed
 in-process. `test/coverage-gate.test.ts` pins
 the exclusion list at exactly those two, so adding a third is a reviewed change to a test

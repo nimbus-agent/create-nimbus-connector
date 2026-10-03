@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { renderEnvAccessor, renderEnvAccessors } from "../../../src/emit/server/env.ts";
+import { objectKey, renderEnvAccessor, renderEnvAccessors } from "../../../src/emit/server/env.ts";
 import { EnvSchema, parseSpec } from "../../../src/spec.ts";
 
 const env = (raw: unknown) => EnvSchema.parse(raw);
@@ -745,5 +745,26 @@ function baseUrl(): string {
     const out = renderEnvAccessors(spec([{ ...URL_ENTRY, transform: "stripTrailingSlash" }]));
     expect(out).not.toContain("function trimTrailingSlash(");
     expect(out).toContain(String.raw`return v.replace(/\/$/, "");`);
+  });
+});
+
+/**
+ * `objectKey` is the emitter's one spelling of a spec-supplied object key — this module's header
+ * names, fetch-helper.ts's inline headers and body.ts's body fields all go through it, and the
+ * deriver refuses either spelling where the other was due (src/derive/read.ts's
+ * `quoteMinimalProps`), so a wrong answer here is a connector that cannot be read back.
+ */
+describe("objectKey", () => {
+  it("writes a valid identifier bare", () => {
+    for (const name of ["Accept", "Authorization", "_private", "$ref", "v2"]) {
+      expect(objectKey(name)).toBe(name);
+    }
+  });
+
+  it("JSON-quotes every name that is not one", () => {
+    expect(objectKey("DD-API-KEY")).toBe('"DD-API-KEY"');
+    expect(objectKey("Intercom-Version")).toBe('"Intercom-Version"');
+    expect(objectKey("2fa")).toBe('"2fa"');
+    expect(objectKey("display name")).toBe('"display name"');
   });
 });

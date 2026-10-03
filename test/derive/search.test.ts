@@ -3,7 +3,7 @@ import { type AstNode, initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
 import { callArgs, calleeOf, expressionOf, isIdent, stringLit } from "../../src/derive/read.ts";
 import { recognizeFrame } from "../../src/derive/server/index.ts";
-import { recognizeSearchTool } from "../../src/derive/server/search.ts";
+import { recognizeSearchTool, regCallParts } from "../../src/derive/server/search.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -263,5 +263,38 @@ describe("recognizeSearchTool", () => {
 
   it("refuses a fetch call with more than one argument", () => {
     refused(['    return matchesResult(await zzGet("/v1/items", "extra"), filterX, p);']);
+  });
+});
+
+/**
+ * The `reg(name, description, schema, handler)` unpack every `reg(...)` recognizer starts from —
+ * `recognizeSearchTool` above, and tools-hand.ts's `recognizeOne` and `recognizeStubShape`, which
+ * import it from search.ts. Pinned on its own because three recognizers now inherit whatever it
+ * accepts.
+ */
+describe("regCallParts", () => {
+  function callOf(source: string): AstNode {
+    const call = expressionOf(parseModule(source)[0]);
+    if (call === undefined) throw new Error(`no call in ${source}`);
+    return call;
+  }
+
+  it("reads the emitted reg() call: both literals, then the schema and handler nodes in position", () => {
+    const parts = regCallParts(regCallFor(BASE_SPEC, "zzsearchunit_rows"));
+    expect(parts?.name).toBe("zzsearchunit_rows");
+    expect(parts?.description).toBe("Search with a rows envelope.");
+    expect(parts?.schemaNode.type).toBe("CallExpression");
+    expect(parts?.handlerNode.type).toBe("ArrowFunctionExpression");
+  });
+
+  it("refuses any arity but four — renderTool and renderSearchTool both write exactly four", () => {
+    expect(regCallParts(callOf('reg("t", "d", s, h);'))).toBeDefined();
+    expect(regCallParts(callOf('reg("t", "d", s);'))).toBeUndefined();
+    expect(regCallParts(callOf('reg("t", "d", s, h, extra);'))).toBeUndefined();
+  });
+
+  it("refuses a name or description that is not a string literal — the emitter writes JSON.stringify", () => {
+    expect(regCallParts(callOf('reg(name, "d", s, h);'))).toBeUndefined();
+    expect(regCallParts(callOf('reg("t", `d`, s, h);'))).toBeUndefined();
   });
 });

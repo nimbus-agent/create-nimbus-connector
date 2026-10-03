@@ -342,6 +342,36 @@ function extrasField(extras: Record<string, string>): Pick<EnvEntry, "extraHeade
 }
 
 /**
+ * The inverse of `headerObjectLines` (src/emit/server/env.ts): a returned header object's
+ * properties up to, and not including, its closing `Accept: "application/json"`. That function
+ * appends the `Accept` LAST, bare and verbatim, to every header object a synchronous accessor
+ * returns — `returnLines`, `renderBasic` and `renderSplitAccessor`'s wrapper all write through it
+ * — so anything else in that position is refused rather than guessed at, and so is an object
+ * with nothing in front of it: every one of those shapes carries at least one auth property.
+ *
+ * One reader for the three recognizers of that one emitter function — `classifyAuthReturn`,
+ * `matchSplitBearerWrapper` and `matchBasicHeaderObject` — on `isStringRecord`'s reasoning: they
+ * carried this prelude verbatim, three places for the next tightening to be applied twice.
+ *
+ * `quoteMinimalProps` is the pin, NOT `bareKeyedProps`, and for the same reason in all three: any
+ * key in front of the `Accept` can come from a spec field — `headerNames` for `auth: "headers"`,
+ * and `extraHeaders` for `extraProps`' static run — and the emitter quotes such a key exactly when
+ * `IDENTIFIER_RE` rejects it. So datadog's `"DD-API-KEY"` and intercom's `"Intercom-Version"` must
+ * arrive quoted while the trailing `Accept` must not. Nor is `objectProps` the answer: it merges an
+ * Identifier key and a same-named StringLiteral key into one resolved name, so `{ "Authorization":
+ * …, "Accept": … }` classified the same as the bare form `returnLines` actually writes — a claimed
+ * function regenerating non-identical bytes from an identical `EnvEntry`, which no gate can see.
+ * Both mistakes are the same wrong claim, pointed opposite ways.
+ */
+function headerObjectProps(arg: AstNode | undefined): Prop[] | undefined {
+  const properties = quoteMinimalProps(arg);
+  if (properties === undefined || properties.length < 2) return undefined;
+  const last = properties.at(-1)!;
+  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
+  return properties.slice(0, -1);
+}
+
+/**
  * The two auth return shapes `returnLines` writes: `auth: "bearer"`'s
  * `{ Authorization: \`Bearer ${binding}\`, Accept: "application/json" }`, and
  * `auth: "headers"`'s `{ <name>: <binding>, ..., Accept: "application/json" }` with one entry
@@ -350,19 +380,10 @@ function extrasField(extras: Record<string, string>): Pick<EnvEntry, "extraHeade
  * position, or a property that isn't a plain key/value pair, is rejected rather than guessed at.
  */
 function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape | undefined {
-  // The widening this comment used to disclose and accept is now closed. `objectProps` merges an
-  // Identifier key and a same-named StringLiteral key into one resolved name, so
-  // `{ "Authorization": …, "Accept": … }` classified the same as the bare form `returnLines`
-  // actually writes — a claimed function regenerating non-identical bytes from an identical
-  // `EnvEntry`, which no gate can see. `quoteMinimalProps` is the pin, NOT `bareKeyedProps`: the
-  // header names here are `headerNames`, a spec field, and `returnLines` quotes one exactly when
-  // `IDENTIFIER_RE` rejects it — so datadog's `"DD-API-KEY"` must arrive quoted and the trailing
-  // `Accept` must not. Both mistakes are the same wrong claim, pointed opposite ways.
-  const properties = quoteMinimalProps(arg);
-  if (properties === undefined || properties.length < 2) return undefined;
-  const last = properties.at(-1)!;
-  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
-  const rest = properties.slice(0, -1);
+  // Through `headerObjectProps`, whose docstring is why the keys are read quote-minimal and
+  // nothing looser — the widening an earlier version of this comment disclosed and accepted.
+  const rest = headerObjectProps(arg);
+  if (rest === undefined) return undefined;
 
   if (reads.length === 1) {
     const split = splitExtraHeaders(rest, 1);
@@ -387,6 +408,20 @@ function classifyAuthReturn(arg: AstNode, reads: readonly ReadLine[]): AuthShape
   }
 
   return undefined;
+}
+
+/**
+ * A function's body statements when its LAST one is a `return` — undefined otherwise, an empty
+ * body included. The frame every synchronous accessor shape shares: `renderEnvAccessor`,
+ * `renderSplitAccessor`'s reader half and `renderBasic` each end in exactly one `return` of the
+ * value their recognizer then classifies, so a body ending in anything else is none of them and
+ * is refused before a single statement is read. What opens the body differs by shape —
+ * `collectReadLines` for the first two, `collectBasicPairs` for `renderBasic` — and stays with
+ * each caller; this is the part the three recognizers had each written out by hand.
+ */
+function returningBody(fn: AstNode): AstNode[] | undefined {
+  const statements = functionBody(fn);
+  return statements?.at(-1)?.type === "ReturnStatement" ? statements : undefined;
 }
 
 type ReadSection = { readonly reads: ReadLine[]; readonly rest: AstNode[] };
@@ -515,9 +550,8 @@ function recognizeOne(fn: AstNode): EnvEntry | undefined {
   // renderEnvAccessor's tail is never async.
   if (isAsyncFunction(fn)) return undefined;
 
-  const statements = functionBody(fn);
-  if (statements === undefined || statements.length === 0) return undefined;
-  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
+  const statements = returningBody(fn);
+  if (statements === undefined) return undefined;
 
   const section = collectReadLines(statements);
   if (section === undefined) return undefined;
@@ -585,9 +619,8 @@ function matchSplitBearerReader(
     return undefined;
   }
 
-  const statements = functionBody(fn);
-  if (statements === undefined || statements.length === 0) return undefined;
-  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
+  const statements = returningBody(fn);
+  if (statements === undefined) return undefined;
 
   const section = collectReadLines(statements);
   if (section?.reads.length !== 1) return undefined;
@@ -687,18 +720,12 @@ function matchSplitBearerWrapper(
   const statements = functionBody(fn);
   if (statements?.length !== 1) return undefined;
 
-  const arg = returnArgument(statements[0]!);
-  // `quoteMinimalProps`, NOT `bareKeyedProps`: an extra static header's key comes from
-  // `extraHeaders`, a spec field, and `extraProps` quotes it exactly when `IDENTIFIER_RE`
-  // rejects it — so "Intercom-Version" must arrive quoted, the same asymmetry
-  // `classifyAuthReturn`'s own docstring states for `headerNames`. The auth property's OWN key
-  // is quoted or bare on the same rule, since for `auth: "headers"` it too comes from a spec
-  // field (`headerNames`).
-  const properties = quoteMinimalProps(arg);
-  if (properties === undefined || properties.length < 2) return undefined;
-  const last = properties.at(-1)!;
-  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
-  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  // Read through `headerObjectProps`, whose docstring is why the keys are quote-minimal: an extra
+  // static header's key ("Intercom-Version") and, for `auth: "headers"`, the auth property's OWN
+  // key both come from spec fields.
+  const properties = headerObjectProps(returnArgument(statements[0]!));
+  if (properties === undefined) return undefined;
+  const split = splitExtraHeaders(properties, 1);
   const authProp = split?.auth[0];
   if (split === undefined || authProp === undefined) return undefined;
 
@@ -778,9 +805,9 @@ function collectBasicPairs(statements: readonly AstNode[]): BasicSection | undef
  * `Authorization` and the trailing `Accept` are hardcoded and bare — `renderBasic` always writes
  * them in that order, verbatim, so a module writing the two in the other order is refused rather
  * than normalized. Between them `renderBasic` can also write `extraProps`' run of static headers
- * (Task 3's `extraHeaders`), so this reads through `quoteMinimalProps`/`splitExtraHeaders` rather
- * than pinning exactly two bare keys, the same reasoning `matchSplitBearerWrapper` and
- * `classifyAuthReturn` apply to their own trailing runs: an extra key's name comes from a spec
+ * (Task 3's `extraHeaders`), so this reads through `headerObjectProps`/`splitExtraHeaders` rather
+ * than pinning exactly two bare keys — the reader `matchSplitBearerWrapper` and
+ * `classifyAuthReturn` share for their own trailing runs: an extra key's name comes from a spec
  * field and is quoted exactly when `IDENTIFIER_RE` requires it, so a quoted one (a name shaped
  * like intercom's `"Intercom-Version"`) is accepted, not refused.
  */
@@ -789,11 +816,9 @@ function matchBasicHeaderObject(
   userBinding: string,
   passBinding: string | undefined,
 ): BasicUser | undefined {
-  const properties = quoteMinimalProps(returnArgument(returnStatement));
-  if (properties === undefined || properties.length < 2) return undefined;
-  const last = properties.at(-1)!;
-  if (last.key !== "Accept" || stringLit(last.value) !== "application/json") return undefined;
-  const split = splitExtraHeaders(properties.slice(0, -1), 1);
+  const properties = headerObjectProps(returnArgument(returnStatement));
+  if (properties === undefined) return undefined;
+  const split = splitExtraHeaders(properties, 1);
   const authProp = split?.auth[0];
   if (split === undefined || authProp?.key !== "Authorization") return undefined;
 
@@ -820,9 +845,8 @@ function recognizeBasicAuth(fn: AstNode): EnvEntry | undefined {
     return undefined;
   }
 
-  const statements = functionBody(fn);
-  if (statements === undefined || statements.length === 0) return undefined;
-  if (statements.at(-1)?.type !== "ReturnStatement") return undefined;
+  const statements = returningBody(fn);
+  if (statements === undefined) return undefined;
 
   const section = collectBasicPairs(statements);
   if (section === undefined) return undefined;
@@ -1442,8 +1466,8 @@ function matchClientCredentialsWrapper(fn: AstNode): string | undefined {
   if (statements?.length !== 1) return undefined;
   // renderClientCredentials writes no comment in the wrapper — see the section header.
   if (!commentsAre(statements[0]!, [])) return undefined;
-  // Both keys hardcoded and bare — unlike the two synchronous header objects above, which now
-  // read through `quoteMinimalProps`/`splitExtraHeaders` to admit `extraHeaders`. `auth:
+  // Both keys hardcoded and bare — unlike the synchronous header objects above, which read
+  // through `headerObjectProps`/`splitExtraHeaders` to admit `extraHeaders`. `auth:
   // "client-credentials"` never carries that field (EnvSchema's own refine), so this pair stays
   // pinned to exactly two bare keys with no static-header run to admit.
   const properties = bareKeyedProps(returnArgument(statements[0]!));

@@ -249,7 +249,7 @@ describe("recognizeBodyExpr", () => {
  */
 const REFUSED_BODIES: ReadonlyArray<readonly [string, string, string]> = [
   [
-    "a quoted key that is a valid identifier — renderBodyExpr quotes a field only when IDENT rejects it",
+    "a quoted key that is a valid identifier — renderBodyExpr quotes a field only when objectKey must",
     "JSON.stringify({ display_name: p.title })",
     'JSON.stringify({ "display_name": p.title })',
   ],

@@ -138,9 +138,11 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
 - **A pure refactor can drop a file onto the floor with no test change.** Deleting a *covered*
   function from a file takes one off both halves of its ratio, and `(h-1)/(f-1) < h/f` whenever
   anything in that file is uncovered — so hoisting a shared helper OUT lowers the donor's
-  function coverage. `src/emit/server/tools-rest.ts` sits at 90.91% functions today, tied with
-  `src/format.ts` for the floor, and no test moved. Run `bun test --coverage` after a dedup, not
-  only after adding code.
+  function coverage. It nearly happened in the 2026-10 dedup: hoisting the query block out of
+  `src/emit/server/tools-rest.ts` would have taken it from 10/11 functions to 8/9, under the
+  floor, with no test changed. Its one uncovered function was a real untested branch, and a test
+  for it went in first — `bunfig.toml` has the detail. Run `bun test --coverage` after a dedup,
+  not only after adding code.
 
 ## The byte-safety invariant
 

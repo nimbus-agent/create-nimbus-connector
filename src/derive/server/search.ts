@@ -24,7 +24,7 @@ import {
   typeLiteralMembers,
   unionTypes,
 } from "../read.ts";
-import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
+import { type ArgFields, recognizeArgs, type SchemaShape, schemaShapeOf } from "./args.ts";
 import { recognizePath } from "./path-template.ts";
 import type { ToolFields } from "./tools-hand.ts";
 
@@ -133,10 +133,9 @@ function recognizeSchema(node: AstNode): SchemaRecovery | undefined {
   return {
     args: ownArgs,
     maxLimit,
-    schemaShape: {
-      propertyCount: keys.length,
-      oneLine: merged.schemaStyle === "inline",
-    },
+    // The merged object as WRITTEN, `query` and `limit` included — that `z.object(...)` is the
+    // one the argsSchemaStyle vote reads, not the own-args record handed back beside it.
+    schemaShape: schemaShapeOf(merged),
   };
 }
 
@@ -240,6 +239,42 @@ function recognizeRowsBody(
 }
 
 /**
+ * `reg(name, description, schema, handler)`'s four arguments, with the two string-literal ones
+ * already read — the exact starting point every `reg(...)` recognizer needs: this file's
+ * `recognizeSearchTool`, and tools-hand.ts's `recognizeOne` and `recognizeStubShape`.
+ * `renderSearchTool` and tools-hand.ts's `renderTool` write the identical four-argument call, so
+ * one unpack serves all three. tools-rest.ts's own unpack is factored into `registrarCallParts`
+ * for the identical reason (see that function's own docstring); leaving this one duplicated is
+ * how the two *files'* recognizers drifted before hoists.ts was extracted, one level down.
+ *
+ * It lives HERE rather than in tools-hand.ts, which reads more calls with it, because tools-hand.ts
+ * already imports this module (`recognizeSearchTool`): the reverse import would be a runtime
+ * import cycle — the kind server/conditional-path.ts's `ReturnReader` callback exists to avoid
+ * between tools-hand.ts and that module.
+ */
+export type RegCallParts = {
+  readonly name: string;
+  readonly description: string;
+  readonly schemaNode: AstNode;
+  readonly handlerNode: AstNode;
+};
+
+export function regCallParts(call: AstNode): RegCallParts | undefined {
+  const args = callArgs(call);
+  if (args?.length !== 4) return undefined;
+  const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
+    AstNode,
+    AstNode,
+    AstNode,
+    AstNode,
+  ];
+  const name = stringLit(nameNode);
+  const description = stringLit(descriptionNode);
+  if (name === undefined || description === undefined) return undefined;
+  return { name, description, schemaNode, handlerNode };
+}
+
+/**
  * The inverse of `renderSearchTool` (src/emit/server/search.ts). `call` is one `reg(...)`
  * CallExpression — the same shape tools-hand.ts's `recognizeOne` reads, tried first by the
  * caller; this is the fallback for the one it does not recognize, a search tool's handler being
@@ -253,17 +288,9 @@ export function recognizeSearchTool(
   call: AstNode,
   helperLocal: string,
 ): SearchToolResult | undefined {
-  const args = callArgs(call);
-  if (args?.length !== 4) return undefined;
-  const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
-    AstNode,
-    AstNode,
-    AstNode,
-    AstNode,
-  ];
-  const name = stringLit(nameNode);
-  const description = stringLit(descriptionNode);
-  if (name === undefined || description === undefined) return undefined;
+  const parts = regCallParts(call);
+  if (parts === undefined) return undefined;
+  const { name, description, schemaNode, handlerNode } = parts;
 
   // renderSearchTool always writes an async, single-parameter, BLOCK-bodied handler — never
   // the concise expression-bodied form tools-hand.ts's recognizeOne also models (that is the

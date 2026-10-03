@@ -3,7 +3,8 @@ import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
 import { renderPath } from "./path-template.ts";
-import { renderQueryLines, usedHoists } from "./query.ts";
+import { renderQueryBlock, usedHoists } from "./query.ts";
+import { registrationHead, renderStubTool } from "./tools-hand.ts";
 
 const PARAM = "parsed";
 
@@ -26,19 +27,10 @@ function closeCall(lines: readonly string[], initArg: string | undefined): strin
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   const name = registrarName(spec);
   const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
-  const head = [
-    `${name}(`,
-    `  ${JSON.stringify(tool.name)},`,
-    `  ${JSON.stringify(tool.description)},`,
-    `  ${schema},`,
-  ];
+  const head = registrationHead(name, tool, schema);
 
-  if (tool.impl === "stub") {
-    const notImplemented = JSON.stringify(`${tool.name} is not implemented`);
-    return [...head, `  () => {`, `    throw new Error(${notImplemented});`, "  },", ");"].join(
-      "\n",
-    );
-  }
+  // tools-hand.ts's stub with a non-async callback — see `renderStubTool`.
+  if (tool.impl === "stub") return renderStubTool(head, tool, false);
 
   // Schema guarantees "path" is present here — ToolSchema's refine rejects any
   // impl !== "stub" tool with no path.
@@ -82,16 +74,10 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
       : `  ${initParam} => ({ method: ${JSON.stringify(tool.method)}${bodyPart} }),`;
 
   if (query !== undefined) {
-    const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
-    const queryLines = renderQueryLines(query, { param: PARAM, hoisted, args: tool.args }).map(
-      (l) => `    ${l}`,
-    );
     const lines = [
       ...head,
       `  ${param} => {`,
-      ...hoists,
-      `    const u = new URL(${pathExpr});`,
-      ...queryLines,
+      ...renderQueryBlock(query, { param: PARAM, hoisted, args: tool.args, used, pathExpr }),
       // The absolute URL, NOT `${u.pathname}${u.search}` — that drops only the origin and
       // keeps `u.pathname`, which still carries the base's OWN path component (e.g.
       // "/api/v10"), because `pathExpr` was built with the base spliced in as a `new URL(...)`

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { createClaimSet } from "../../src/derive/claims.ts";
-import { recognizeTools } from "../../src/derive/server/tools-hand.ts";
+import { recognizeTools, toolColumns } from "../../src/derive/server/tools-hand.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll, initFormatter } from "../../src/format.ts";
 import { parseSpec } from "../../src/spec.ts";
@@ -722,5 +722,49 @@ describe("recognizeTools recognizes the stub tool handler", () => {
     );
     expect(corrupted).not.toBe(pristine);
     expect(recognizeTools(parseModule(corrupted), createClaimSet(), "zzGet")).toBeUndefined();
+  });
+});
+
+/**
+ * `toolColumns` builds the per-tool columns BOTH registration styles return — this file's
+ * `recognizeTools` and tools-rest.ts's `recognizeRestTools` — so index.ts can read `tools[i]`
+ * beside `staticPathStyles[i]`, `schemaShapes[i]` and `basePrefixes[i]` from either.
+ */
+describe("toolColumns", () => {
+  it("keeps every column parallel to the shapes, an absent per-tool fact included", () => {
+    const columns = toolColumns([
+      {
+        fields: "a",
+        staticStyle: "quoted",
+        schemaShape: { propertyCount: 0, oneLine: true },
+      },
+      {
+        fields: "b",
+        schemaShape: { propertyCount: 2, oneLine: false },
+        basePrefix: { kind: "const", name: "BASE" },
+      },
+    ]);
+    expect(columns).toEqual({
+      tools: ["a", "b"],
+      staticPathStyles: ["quoted", undefined],
+      schemaShapes: [
+        { propertyCount: 0, oneLine: true },
+        { propertyCount: 2, oneLine: false },
+      ],
+      basePrefixes: [undefined, { kind: "const", name: "BASE" }],
+    });
+    // Index-for-index, not just member-for-member: an absent fact must still hold its slot, or
+    // every later tool's evidence would be read against the wrong tool.
+    expect(columns.staticPathStyles).toHaveLength(2);
+    expect(columns.basePrefixes).toHaveLength(2);
+  });
+
+  it("gives four empty columns for no shapes", () => {
+    expect(toolColumns([])).toEqual({
+      tools: [],
+      staticPathStyles: [],
+      schemaShapes: [],
+      basePrefixes: [],
+    });
   });
 });
