@@ -31,7 +31,7 @@ coverageSkipTestFiles = true
 # by accident.
 #
 # That PRE-exclusion floor is src/prompts.ts at 7.92% lines / 0.00% functions, with src/cli.ts
-# at 9.70% lines / 19.05% functions, and NEITHER is a testing gap. test/cli-main.test.ts drives
+# at 9.67% lines / 19.05% functions, and NEITHER is a testing gap. test/cli-main.test.ts drives
 # the CLI through Bun.spawnSync on the real binary — a full suite asserting the bytes it puts on
 # disk — and Bun does not instrument child processes, so every line main() executes reads as
 # uncovered. Spawning the real binary is the better test: it proves the shipped entry point

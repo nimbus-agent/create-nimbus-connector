@@ -73,8 +73,10 @@ is part of the bytes being matched.
   spec language cannot express is stubbed, never dropped or guessed.
 - **`pathWhen`** — an ordered array of `{ "absent": "<arg>", "path": "…" }` guards, each
   choosing a different endpoint when its argument is absent, with the tool's own `path` as the
-  unguarded fallthrough. Refused on `stub` and `search` tools and alongside `query`, since both
-  decide the request line. `zzcond` and `codemagic` are the fixtures that exercise it.
+  unguarded fallthrough. Refused on `stub` and `search` tools, alongside `query` (both decide
+  the request line), and in a `rest-kit` connector, whose registrar takes one path expression
+  per tool; `docs/SPEC-RULES.md`'s *Conditional endpoints* lists every refusal. `zzcond` and
+  `codemagic` are the fixtures that exercise it.
 
 ### Conditional query parameters — `query`
 
