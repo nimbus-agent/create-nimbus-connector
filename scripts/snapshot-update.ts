@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   for (const name of names) {
     const plan = planSnapshotUpdate(name, fixturesDir, snapshotsDir);
     for (const line of plan.lines) console.log(line);
-    await applySnapshotUpdate(plan); // NOSONAR S9382: each fixture's plan prints before its own write
+    await applySnapshotUpdate(plan); // NOSONAR S9382: fail-fast — a failed write stops the run before the next fixture is touched
     diffs.push(plan.diff);
   }
 

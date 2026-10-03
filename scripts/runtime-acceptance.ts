@@ -79,14 +79,15 @@ async function main(argv: readonly string[]): Promise<void> {
     // spawnSync, which Promise.all could not overlap anyway.
     for (const scenario of RUNTIME_SCENARIOS) {
       const dir = join(root, scenario.name);
-      await materialize(scenario.spec(base), dir, sdkPkg); // NOSONAR S9382: scenarios share one fake API, so they must not overlap
+      await materialize(scenario.spec(base), dir, sdkPkg); // NOSONAR S9382: materialize's bun install is a spawnSync, which Promise.all could not overlap
       const before = recorded.length;
       const results = await callTools(dir, { ...scenario.env }, scenario.calls, scenario.gapMs); // NOSONAR S9382: the judge reads recorded.slice(before)
       checks.push(...scenario.judge(recorded.slice(before), results));
     }
   } finally {
-    // `true` closes any connection a connector left open, so this settles at once instead of
-    // waiting on a keep-alive.
+    // `true` is what lets this await settle at once. An idle keep-alive would not hold it up
+    // either way, but the default stop() waits for a request still in flight to finish (Bun's own
+    // doc; probed 2026-10-04 with a request whose body never arrived), and `true` cuts it off.
     await server.stop(true);
     rmSync(root, { recursive: true, force: true });
   }
