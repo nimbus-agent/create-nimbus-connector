@@ -113,7 +113,7 @@ jobs:
         run: bun test --coverage --coverage-reporter=lcov
 
       - name: SonarCloud scan
-        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         with:
           # Without `wait`, the scanner uploads its report and exits 0 whatever the analysis
           # then concludes — the workflow goes green, the quality gate's verdict is written

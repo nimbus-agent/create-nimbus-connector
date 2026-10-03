@@ -322,7 +322,7 @@ jobs:
           fi
 
       - name: Verify provenance names this repo, workflow and commit
-        uses: nimbus-agent/.github/actions/verify-npm-provenance@5fb42792fa88287048fd24f704183b9a9b807a67
+        uses: nimbus-agent/.github/actions/verify-npm-provenance@75921257abc9596b7de0fb4162402ad7fb7440f6
         with:
           package: "create-nimbus-connector"
           version: ${{ steps.published.outputs.version }}
