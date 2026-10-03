@@ -25,6 +25,15 @@ is written next to the step.
   to the same release, and the emitted source did not change under it: the three committed
   snapshots kept their `src/server.ts` bytes, and `diff:golden` still matches every fixture's
   recorded expectation. The monorepo target emits no `biome.json` and is untouched.
+* **A generated standalone package now depends on the latest releases:** `@nimbus-dev/sdk`
+  `^2.0.0` (0.13.2 emitted `^1.11.0`, or `^1.15.0` for a spec with a search tool),
+  `@modelcontextprotocol/sdk` `1.32.0` (was `1.30.0`), `zod` `^4.6.5` (was `^4.4.2`) and the
+  `typescript` devDependency `^7.0.2` (was `^5.6.0`). Only the emitted `package.json` changes. The
+  SDK's 2.0.0 break is confined to its agents module; `connector-kit` and `testing`, the two
+  modules a generated connector imports, are unchanged from 1.34.0, the release `^1.11.0` resolved
+  to. A package generated before this keeps working on 1.x and TypeScript 5; regenerating it moves
+  it to 2.x and TypeScript 7. The monorepo target is untouched: `diff:golden` holds its ranges to
+  the ones the Nimbus corpus declares.
 
 *Nothing pending.*
 

@@ -83,7 +83,7 @@ export function assertLocalSdkBuilt(sdkPkg: string | undefined): void {
  *     contract?", which is the pre-release gate: it can be pointed at a branch that is not
  *     on npm and cannot be, so it stays useful after every future SDK change.
  *
- *   --registry (sdkPkg undefined) — the generated "^1.11.0" is left alone and bun resolves
+ *   --registry (sdkPkg undefined) — the generated range is left alone and bun resolves
  *     it from npm. Answers "does the artifact actually on the registry satisfy the
  *     contract?" — which the local mode cannot, because a local checkout has files the
  *     published tarball may not. A `dist` missing from the published `files` array surfaces

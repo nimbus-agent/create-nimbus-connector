@@ -53,8 +53,8 @@ export function formatCheckLines(checks: readonly Check[]): string[] {
  * the floor that will carry it, and until that release lands there is no version to install.
  * The registry gate's question — "does the artifact on the registry satisfy the contract?" —
  * is genuinely unanswerable for that fixture, and answering "no" would be wrong. Stage D's
- * `zzsearch` and `zzsearchstub` are the first instance: they need `@nimbus-dev/sdk ^1.15.0`,
- * and the search kit is still an unmerged branch.
+ * `zzsearch` and `zzsearchstub` were the first instance: they needed `@nimbus-dev/sdk ^1.15.0`
+ * while the search kit was still an unmerged branch.
  *
  * **Deliberately narrow, in the failing direction.** Both the exact declared range and the
  * package name must appear in bun's own unresolvable-range message. A registry outage, a 500,

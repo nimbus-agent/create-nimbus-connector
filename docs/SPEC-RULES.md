@@ -254,7 +254,7 @@ Two things worth knowing about `read-only-kit`:
 
 **`filter.fields` is optional, and omitting it is the honest escape hatch.** Path and tag entries reach nested, projected and tag-bearing shapes, but not every hand-written corpus extractor — one that joins across arrays, flattens a computed field, or coerces a non-string value still has no spec expression. Omit `fields` and the emitter writes a **throwing stub** typed as `SearchFilter` for you to replace. The stub replaces the *filter*, not the extractor, and that placement is load-bearing rather than stylistic: `makeQueryFilter` calls the extractor once per row, so a throwing *extractor* never fires on an empty result set and the tool would report `{ matches: [] }` as success. Throwing from the filter position fires on every invocation.
 
-**Standalone search needs `@nimbus-dev/sdk` ≥ 1.15.0**, and only a spec declaring a search tool gets that floor; everything else stays at `^1.11.0`. One search symbol is deliberately *not* in the SDK: `searchToolInputSchema` builds a zod schema, and the SDK ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
+**Standalone search needs `@nimbus-dev/sdk` ≥ 1.15.0**, the release the search kit landed in. Every standalone package declares `^2.0.0`, which carries it, so a search tool no longer raises the floor on its own. One search symbol is deliberately *not* in the SDK: `searchToolInputSchema` builds a zod schema, and the SDK ships with no runtime dependencies, so standalone packages define it locally in the same way they inline the `runReadOnly` glue.
 
 ## Env auth: `authScheme`, `extraHeaders`, `tokenLocal` and one-var `basic`
 
