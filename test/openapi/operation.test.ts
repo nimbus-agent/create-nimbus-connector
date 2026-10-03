@@ -526,6 +526,21 @@ describe("refusals", () => {
     }
   });
 
+  it("refuses a type named after a member every object inherits, as it refuses any other", () => {
+    // The scalar lookup is keyed by the document's own `type` string, so it must answer for the
+    // table's own entries and nothing else. Read off a plain object, "toString" found
+    // Object.prototype.toString: the parameter mapped as an argument with NO type, and the
+    // command then failed at parseSpec with "tools[0].args.q.type: Invalid option … usually a
+    // missing key" — a message about a key the document never left out.
+    for (const type of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+      const refusals = mustRefuse(
+        onePath("/widgets", "get", { parameters: [{ name: "q", in: "query", schema: { type } }] }),
+      );
+      expect(kindsOf(refusals), type).toEqual(["schema-type"]);
+      expect(detailOf(refusals, "schema-type"), type).toContain(`declares type "${type}"`);
+    }
+  });
+
   it("refuses a parameter schema that declares no type at all", () => {
     const refusals = mustRefuse(
       onePath("/widgets", "get", { parameters: [{ name: "anything", in: "query", schema: {} }] }),

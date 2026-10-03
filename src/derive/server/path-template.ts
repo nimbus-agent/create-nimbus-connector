@@ -108,11 +108,20 @@ export function recognizePathParts(
   return out;
 }
 
-/** The two modes whose forward rendering wraps the bare reference in a named call. */
-const WRAPPER_MODES: Readonly<Record<string, "num" | "enc">> = {
-  String: "num",
-  encodeURIComponent: "enc",
-};
+/**
+ * The two modes whose forward rendering wraps the bare reference in a named call, keyed by that
+ * call's name.
+ *
+ * A Map, not an object literal, because the key is a callee name read off the connector's source:
+ * an object answers for every name it inherits as well as its own two. `toString(p.id)` found
+ * Object.prototype.toString and recovered as a mode spelled with that function's source text, and
+ * `${toString()}` — an env accessor named `toString`, which the emitter writes for
+ * `${env.toString}` — was refused as a wrapper called with the wrong arity.
+ */
+const WRAPPER_MODES: ReadonlyMap<string, "num" | "enc"> = new Map<string, "num" | "enc">([
+  ["String", "num"],
+  ["encodeURIComponent", "enc"],
+]);
 
 /**
  * Resolves the arg name behind a bare reference: a hoisted local via `locals`, or a direct
@@ -155,7 +164,7 @@ function callPlaceholder(
   // argument — rather than falling through to the env-accessor branch below on a mismatch.
   // Falling through would recover `String()` as `${env.String}`, a wrong match rather than
   // the rejection a zero-argument call to that name should produce.
-  const wrapperMode = WRAPPER_MODES[calleeName];
+  const wrapperMode = WRAPPER_MODES.get(calleeName);
   if (wrapperMode !== undefined) {
     if (args.length !== 1) return undefined;
     const argName = argNameFromExpr(args[0]!, locals);
