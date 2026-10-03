@@ -1044,13 +1044,13 @@ this side.
   target still emits `packages/mcp-connectors/<name>/` importing `../../shared/*`, and everything
   that takes a Nimbus root — the four gates that need a checkout, plain `reach`, and
   `--gateway-wiring` — recognises one by `packages/mcp-connectors/shared/mcp-tool-kit.ts`, so it
-  refuses a current Nimbus checkout by name, and a `nimbus-mcp-servers` checkout too. They run against a Nimbus checkout from before
-  the move, and `reach --baseline` against exactly the tree `fixtures/reach-baseline.json`
-  records (`23c90b92`, Nimbus `a8f76942`). The refusal is the right behaviour — a gate reading a
-  tree it was not written for would report differences it cannot explain — but it means the
-  byte gates measure the corpus as it stood before the move, and `reach --baseline` exactly as
-  it stood on 2026-08-14, the tree [The measured ceiling](#the-measured-ceiling) is stamped
-  with — not as it stands.
+  refuses a current Nimbus checkout by name, and a `nimbus-mcp-servers` checkout too. They run
+  against a Nimbus checkout from before the move, and `reach --baseline` against exactly the tree
+  `fixtures/reach-baseline.json` records (`23c90b92`, Nimbus `a8f76942`). The refusal is the right
+  behaviour — a gate reading a tree it was not written for would report differences it cannot
+  explain — but it means the byte gates measure the corpus as it stood before the move, and
+  `reach --baseline` exactly as it stood on 2026-08-14, the tree
+  [The measured ceiling](#the-measured-ceiling) is stamped with — not as it stands.
 
   **Following it is not a path change.** Read 2026-10-03 at `nimbus-mcp-servers` `3d0c7818`:
   the connectors live at `connectors/<name>/` and import `../../../shared/*`, one level deeper
