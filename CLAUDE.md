@@ -3,13 +3,15 @@
 ## What this is
 
 An **MIT-licensed** CLI that generates a [Nimbus](https://github.com/nimbus-agent/Nimbus)
-MCP connector package from a small JSON spec. Nimbus's `packages/mcp-connectors/` holds 94+
-connectors built from one rigid shape; this turns that shape into
-`bunx create-nimbus-connector <name>`.
+MCP connector package from a small JSON spec. Nimbus's 94 first-party connectors were built
+from one rigid shape — in the monorepo's `packages/mcp-connectors/` until 2026-08-27, in
+[`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) since; this turns
+that shape into `bunx create-nimbus-connector <name>`.
 
 It generates for two targets: **monorepo** (lives at `packages/mcp-connectors/<name>/`,
-imports `../../shared/*`) and **standalone** (self-contained, imports
-`@nimbus-dev/sdk/connector-kit`, runs anywhere).
+imports `../../shared/*` — the pre-move layout; see
+[`--nimbus-root` means a pre-move checkout](#--nimbus-root-means-a-pre-move-checkout)) and
+**standalone** (self-contained, imports `@nimbus-dev/sdk/connector-kit`, runs anywhere).
 
 Published to npm as `create-nimbus-connector`. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 for how it is built, [`docs/ROADMAP.md`](./docs/ROADMAP.md) for where it is going,
@@ -18,17 +20,18 @@ for how it is built, [`docs/ROADMAP.md`](./docs/ROADMAP.md) for where it is goin
 
 ## ⚠️ The licensing constraint — read this before copying anything
 
-Three repos, three roles, and the split is load-bearing:
+Four repos, and the split is load-bearing:
 
 | Repo | License | Role |
 | --- | --- | --- |
 | `create-nimbus-connector` (here) | **MIT** | the generator |
-| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | **AGPL-3.0-only** | the monorepo, 94+ connector packages |
+| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | **AGPL-3.0-only** | the monorepo — gateway and apps; held the connectors in `packages/mcp-connectors/` until 2026-08-27 |
+| [`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) | **AGPL-3.0-only** | the 94 first-party connectors and their `shared/` since then, published as `@nimbus-dev/connectors` |
 | [`nimbus-sdk`](https://github.com/nimbus-agent/nimbus-sdk) | **MIT** | publishes `@nimbus-dev/sdk` |
 
-**No connector source, and no `shared/` source, may be copied from Nimbus into this
-repository.** Not into `src/`, not into `test/`, not into `fixtures/`. That is a licensing
-violation, not a style preference.
+**No connector source, and no `shared/` source, may be copied from Nimbus or
+`nimbus-mcp-servers` into this repository.** Not into `src/`, not into `test/`, not into
+`fixtures/`. That is a licensing violation, not a style preference.
 
 **The one carve-out: description strings.** All fourteen real-connector fixtures reproduce that
 connector's `nimbus.extension.json` description and its tool descriptions verbatim — 12,688
@@ -67,6 +70,26 @@ Node, npm or pnpm path in this project or its output.
 The one exception is publishing: `.github/workflows/release.yml` sets up Node and runs
 `npm publish --provenance`, because that is the only way to attach a sigstore attestation to
 an npm tarball.
+
+## `--nimbus-root` means a pre-move checkout
+
+On 2026-08-27 Nimbus deleted `packages/mcp-connectors/` (commit `2118cdd4`, #1347); its
+connectors now live in `nimbus-mcp-servers` as `connectors/<name>/` beside a root `shared/`.
+**This repository has not followed.** The default target still emits the pre-move layout, and
+everything here that takes a Nimbus root — `--gateway-wiring` and the four gates below that need
+one — recognises a checkout by `packages/mcp-connectors/shared/mcp-tool-kit.ts`
+(`src/golden/resolve.ts`'s `MARKER`). A current Nimbus checkout, or a `nimbus-mcp-servers` one,
+is therefore refused by name — "marker file missing" from a gate, "does not look like a Nimbus
+checkout" from `--gateway-wiring` — so `preflight --nimbus-root` against one stops at
+`diff:golden` with a FAIL.
+
+So `<nimbus-root>` / `--nimbus-root` means a Nimbus checkout from **before** that commit, and for
+`reach --baseline` exactly the `packages/mcp-connectors` tree `fixtures/reach-baseline.json`
+records — `23c90b92`, Nimbus `a8f76942` (2026-08-14). Re-targeting the generator and its gates
+at the new repository is unbuilt and undecided —
+[`docs/ROADMAP.md`](./docs/ROADMAP.md#known-limitations), *What the byte gates do not reach*,
+has why it is not a path change. **Never edit `fixtures/expectations.json`, or re-record
+`fixtures/reach-baseline.json`, against the new layout to make a gate pass.**
 
 ## The gates, and which ones can lie
 
@@ -123,9 +146,9 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
 - **"Runs in CI" and "is in the merge gate" are different claims**, and conflating them has
   already put a false sentence into a source file. `ci.yml` is the merge gate and runs three
   commands. `standalone-acceptance --registry` and `runtime:acceptance --registry` **do** run in
-  CI — in `acceptance.yml`, on a daily cron and on pull requests touching `src/`, `scripts/` or
-  `fixtures/` — but neither is a required check, deliberately, because both install from npm and
-  a registry outage must not red-X an unrelated pull request.
+  CI — in `acceptance.yml`, on a daily cron and on pull requests touching `src/`, `scripts/`,
+  `fixtures/`, `package.json` or `bun.lock` — but neither is a required check, deliberately,
+  because both install from npm and a registry outage must not red-X an unrelated pull request.
 - **`reach` measures the spec language's coverage of the corpus and proves nothing about any
   individual generated connector that `diff:golden` does not already prove.** It too needs the
   AGPL monorepo and cannot run in CI. `reach --baseline` is the gate form: it fails when a

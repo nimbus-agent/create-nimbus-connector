@@ -114,5 +114,5 @@ Pre-1.0, so the version number does not carry the usual semver promise. In pract
 ## Licensing
 
 MIT, and it stays MIT. **No AGPL source may be copied into this repository** — see
-[GLOSSARY.md](./GLOSSARY.md#the-three-repos). This is a hard constraint that shapes the test
+[GLOSSARY.md](./GLOSSARY.md#the-four-repos). This is a hard constraint that shapes the test
 strategy, and any change that would vendor Nimbus source is rejected on that ground alone.

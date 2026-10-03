@@ -34,6 +34,12 @@ which is where they must stay true. Nothing was copied out of the Nimbus checkou
 to establish a fact is expected, transcribing it is not, and
 [LICENSING.md](./LICENSING.md) is why.
 
+**That tree is no longer at Nimbus's HEAD.** On 2026-08-27 Nimbus deleted
+`packages/mcp-connectors/` (commit `2118cdd4`) and the connectors moved to
+[`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers). None of the four
+preconditions below has been re-read against that repository, so each is a record of what was
+true on 2026-08-07, and the corpus counts in them are counts of the pre-move tree.
+
 ## The two tools
 
 | | [`@nimbus-dev/create-connector`](https://github.com/nimbus-agent/nimbus-sdk/tree/main/tools/create-connector) | `create-nimbus-connector` (here) |
@@ -191,6 +197,11 @@ was chosen — none is a link. An author who arrives at the SDK first has no way
 tool exists. That costs
 nothing to fix and is not blocked by anything above — but the fix belongs in the other
 repository, which is why it is recorded here rather than tracked as work.
+
+**Done upstream since.** Re-read 2026-10-03 at nimbus-sdk `758c87e`: its `docs/README.md` has
+linked this repository, and this page's four preconditions, since `ad4a99a` (2026-08-19,
+nimbus-sdk #134), saying when to reach for each tool; its `docs/ROADMAP.md` links here as the
+home of spec-driven generation. The cross-link now runs both ways.
 
 ## What consolidation does not mean
 

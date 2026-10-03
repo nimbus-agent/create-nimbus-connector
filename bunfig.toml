@@ -35,8 +35,9 @@ coverageSkipTestFiles = true
 # the CLI through Bun.spawnSync on the real binary — a full suite asserting the bytes it puts on
 # disk — and Bun does not instrument child processes, so every line main() executes reads as
 # uncovered. Spawning the real binary is the better test: it proves the shipped entry point
-# works, which an in-process call does not. src/prompts.ts is interactive readline code,
-# exercised the same way.
+# works, which an in-process call does not. src/prompts.ts is the interactive questionnaire,
+# built on Bun's synchronous prompt(), and test/prompts-interactive.test.ts drives it the same
+# way, over piped stdin.
 #
 # Those two read 35.42% / 42.86% and 50.91% / 56.41% until 2026-10-03, when the halves that
 # never needed a subprocess moved out: the argument parser to src/cli-args.ts, and buildSpec to

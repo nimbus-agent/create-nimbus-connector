@@ -44,16 +44,22 @@ and `publish` runs only when `release_created == 'true'`.
 
 The publish job re-proves the package before and after it goes out:
 
-1. **Typecheck, lint and test** — again, on the release commit. A release does not inherit a
-   green from an earlier run.
-2. **Preflight** — OIDC is available and npm meets the trusted-publishing version floor.
-3. **Verify the packed tarball actually runs** — `npm pack`, install the tarball into a clean
+1. **Refuse to publish with notes still under `Unreleased`** — `bun scripts/check-changelog.ts`,
+   before anything is installed. release-please files its generated section *below* the
+   hand-written one, so notes nobody moved would publish still reading as unreleased. The job
+   fails on any `###` sub-heading or bulleted entry left in the section, or a last line other than
+   the `*Nothing pending.*` placeholder; the section's own convention prose is allowed to stay.
+   The recovery path, if it fires, is written beside the step in `release.yml`.
+2. **Typecheck, lint and test** — again, on the release commit, with the per-file coverage floor
+   evaluated. A release does not inherit a green from an earlier run.
+3. **Preflight** — OIDC is available and npm meets the trusted-publishing version floor.
+4. **Verify the packed tarball actually runs** — `npm pack`, install the tarball into a clean
    tree, and execute the CLI from it. This is the check that catches a `files` array missing
    something the CLI needs at runtime, which no source-level test can see.
-4. **Publish** — `npm publish --provenance`, with a sigstore attestation.
-5. **Verify the registry signature** — install the *published* package into a clean tree and
+5. **Publish** — `npm publish --provenance`, with a sigstore attestation.
+6. **Verify the registry signature** — install the *published* package into a clean tree and
    check its signature cryptographically, retrying while the registry propagates.
-6. **Verify the provenance names this repo, workflow and commit** — via the org's shared
+7. **Verify the provenance names this repo, workflow and commit** — via the org's shared
    `verify-npm-provenance` action.
 
 Node appears in this workflow and nowhere else in the project. `npm publish --provenance` is
@@ -66,7 +72,9 @@ bumping a tag comment.
 ## Before you merge a release PR
 
 CI covers what it can, but **four** gates need a Nimbus checkout and therefore cannot run in
-Actions. Run the whole local sequence against the release commit — one command runs all eight,
+Actions — a checkout from before 2026-08-27, when Nimbus's connectors moved out and took the
+marker file these gates recognise a root by with them; [CLAUDE.md](../CLAUDE.md) names the
+commit. Run the whole local sequence against the release commit — one command runs all eight,
 in order, and names any it could not run:
 
 ```bash

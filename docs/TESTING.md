@@ -281,6 +281,13 @@ This is not fixable, and it is not a backlog item. This repository is MIT and th
 AGPL-3.0-only; the golden harness reads the monorepo **at runtime** from a path passed on the
 command line precisely so that nothing is vendored. See [LICENSING.md](./LICENSING.md).
 
+**Since 2026-08-27 that checkout also has to predate the connectors' move out of the monorepo.**
+All four recognise a Nimbus root by `packages/mcp-connectors/shared/mcp-tool-kit.ts`, which
+Nimbus deleted that day, so they refuse a current checkout by name rather than reading a tree
+they were not written for. [CLAUDE.md](../CLAUDE.md)'s *`--nimbus-root` means a pre-move
+checkout* says which checkout to use; [ROADMAP § Known limitations](./ROADMAP.md#known-limitations)
+says what re-targeting them would take.
+
 The tempting fix is refused explicitly, in [CLAUDE.md](../CLAUDE.md)'s *The gates, and which
 ones can lie*: **do not add a CI job that skips when the root is absent; a silently-skipping
 gate is the failure mode this repo keeps removing.** A job that is green because it did nothing

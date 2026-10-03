@@ -7,8 +7,8 @@ name: sonar
 # REQUIRES two things that live outside this repository, both before the merge: a
 # SONAR_TOKEN secret, and Automatic Analysis switched OFF for this project. Without the
 # token the scanner cannot authenticate at all ("Not authorized or project not found"), and
-# with Automatic Analysis on SonarCloud refuses a CI analysis outright. The order is in the
-# README.
+# with Automatic Analysis on SonarCloud refuses a CI analysis outright. The order is in
+# CONTRIBUTING.md's *SonarCloud coverage*.
 #
 # This step is deliberately NOT guarded with `if: env.SONAR_TOKEN != ''`. A guard would make
 # the workflow green while analysing nothing, which is the precise failure this repo keeps

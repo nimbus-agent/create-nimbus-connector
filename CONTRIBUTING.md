@@ -45,6 +45,8 @@ The eight, in the order it runs them:
 
 Run an individual gate directly when you are iterating on the thing it checks.
 
+**The Nimbus checkout has to predate 2026-08-27.** That day Nimbus deleted `packages/mcp-connectors/` (commit `2118cdd4`, #1347) and its connectors moved to [`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers), which this generator has not been re-targeted at. Every gate that needs a root recognises one by `packages/mcp-connectors/shared/mcp-tool-kit.ts`, so a current Nimbus checkout is refused by name, and a preflight pointed at one stops at its first monorepo gate with a FAIL. Check out a commit whose `packages/mcp-connectors` tree is the one `fixtures/reach-baseline.json` records, because `reach --baseline` compares against nothing else — `a8f76942` is the commit [ROADMAP § The measured ceiling](./docs/ROADMAP.md#the-measured-ceiling) names for it. [ROADMAP § Known limitations](./docs/ROADMAP.md#known-limitations) has what re-targeting would take.
+
 ## CI's permanent ceiling — the four gates you have to run yourself
 
 **CI runs four of those eight, and that will never change.** It gets those four in *three* commands — `ci.yml` runs `bun test --coverage`, `bun run typecheck` and `bun run lint`, and the coverage form satisfies the `bun test` gate and the `bun test --coverage` gate at once — so do not read the command count as a gate count. The other four in the table above need a checkout of the Nimbus monorepo. That monorepo is AGPL-3.0-only; this repository is MIT. Vendoring it here was refused — see [`docs/LICENSING.md`](./docs/LICENSING.md) for the whole boundary — so the harnesses read it at runtime from a path you pass, and a CI runner has no such path.
@@ -62,7 +64,7 @@ What each of the four answers that nothing else can:
 
 If you change anything under `src/emit/`, run them before opening a PR and say in the PR that you did. `diff:golden` fails on divergence **in either direction**: a fixture that starts matching *more* files is as much a failure as one that matches fewer, because both mean the recorded expectation in `fixtures/expectations.json` is now stale. `reach --baseline` behaves the same way about `fixtures/reach-baseline.json` — a tier that *improved* is a result to state, not to quietly re-record.
 
-Two further harnesses need the npm registry rather than the monorepo, so they **do** run in CI — in `acceptance.yml`, daily and on pull requests touching `src/`, `scripts/` or `fixtures/` — but neither is a required check, because a registry outage must not red-X an unrelated pull request. Run them yourself when you change standalone emission:
+Two further harnesses need the npm registry rather than the monorepo, so they **do** run in CI — in `acceptance.yml`, daily and on pull requests touching `src/`, `scripts/`, `fixtures/`, `package.json` or `bun.lock` — but neither is a required check, because a registry outage must not red-X an unrelated pull request. Run them yourself when you change standalone emission:
 
 ```bash
 bun run standalone-acceptance --registry          # against the published @nimbus-dev/sdk
@@ -72,7 +74,7 @@ bun run runtime:acceptance --registry             # what the connectors actually
 
 ## The licensing boundary
 
-This repository is MIT. The Nimbus monorepo it generates connectors for is AGPL-3.0-only. **No connector source from that monorepo may be copied into this repository** — not into `src/`, `test/`, `fixtures/`, or documentation. The fixtures are hand-written specs, and the golden harness reads the monorepo at runtime instead. A PR that vendors monorepo source will be asked to remove it regardless of how small the excerpt is.
+This repository is MIT. The Nimbus monorepo it generates connectors for is AGPL-3.0-only, and so is `nimbus-mcp-servers`, where those connectors have lived since 2026-08-27. **No connector source from either may be copied into this repository** — not into `src/`, `test/`, `fixtures/`, or documentation. The fixtures are hand-written specs, and the golden harness reads the monorepo at runtime instead. A PR that vendors monorepo source will be asked to remove it regardless of how small the excerpt is.
 
 ## Commits
 
@@ -119,7 +121,7 @@ Coverage is enforced **per file, not in aggregate** — an average lets one well
 
 ## Updating dependencies
 
-Dependencies are updated by a maintainer, in periodic bulk pull requests; no bot opens dependency-update pull requests here. Run `bun outdated`, edit the ranges in `package.json`, run `bun install`, and run the full checks — `bun run preflight --nimbus-root /path/to/Nimbus` — before opening the pull request. GitHub's Dependabot *alerts* stay enabled, so an advisory published against something this repository installs is still surfaced; only the update pull requests were retired.
+Dependencies are updated by a maintainer, in periodic bulk pull requests; no bot opens dependency-update pull requests here. Run `bun outdated`, edit the ranges in `package.json`, run `bun install`, and run the full checks — `bun run preflight --nimbus-root /path/to/Nimbus`, against the pre-move checkout [The gates](#the-gates) describes — before opening the pull request. A pull request that changes `package.json` or `bun.lock` also triggers `acceptance.yml`, so the two registry harnesses run on the pull request itself. GitHub's Dependabot *alerts* stay enabled, so an advisory published against something this repository installs is still surfaced; only the update pull requests were retired.
 
 What the retired automation's configuration recorded, rewritten for the person doing the update by hand:
 

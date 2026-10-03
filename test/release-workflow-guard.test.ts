@@ -255,7 +255,7 @@ describe("the release workflow", () => {
     expect(
       packIndex,
       "the publish job must pack the tarball and execute the installed bin — `bin` points " +
-        'at ./src/cli.ts and `files` is ["src", "README.md"], so a bad `files` array ' +
+        'at ./src/cli.ts and `files` is ["src", "schema", "README.md"], so a bad `files` array ' +
         "produces a package that installs and then cannot run, and no test in this repo " +
         "would notice because they all run against the working tree",
     ).toBeGreaterThanOrEqual(0);

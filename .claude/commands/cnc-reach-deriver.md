@@ -16,6 +16,14 @@ can this generator derive a spec for and regenerate, and how far does each get.*
 AGPL monorepo at runtime — never vendors it — so it cannot run in CI, and no job may skip when
 the root is absent.
 
+**`<path>` has to be a Nimbus checkout from before 2026-08-27**, when Nimbus deleted
+`packages/mcp-connectors/` (commit `2118cdd4`) and the connectors moved to
+`nimbus-mcp-servers`. The harness reads only `packages/mcp-connectors/<name>/` and recognises a
+root by `packages/mcp-connectors/shared/mcp-tool-kit.ts`, so it refuses a current Nimbus
+checkout, and a `nimbus-mcp-servers` one, by name. For `--baseline` it must be the tree
+`fixtures/reach-baseline.json` records — Nimbus `a8f76942`. `docs/ROADMAP.md`'s *Known
+limitations* has what re-targeting would take; it is not a path change.
+
 It is the inverse of the rest of the repo: `src/emit/` turns a spec into source, and
 `src/derive/` turns source back into a spec. The round trip is the proof.
 
@@ -70,8 +78,8 @@ see. That argument covers the spec language's **parsers** and nothing else: impo
 emitter's **renderer** would let a renderer bug agree with itself, which is the opposite trade.
 
 **The deriver lives under `src/derive/`, and ships.** `package.json`'s `files` is
-`["src", "README.md"]`, so it reaches npm — which is the point: `--from-connector` is the same
-code pointed at a user's directory rather than at the corpus. `@babel/parser` is an
+`["src", "schema", "README.md"]`, so it reaches npm — which is the point: `--from-connector` is
+the same code pointed at a user's directory rather than at the corpus. `@babel/parser` is an
 `optionalDependency`, following `@biomejs/js-api`, and `src/derive/ast.ts` imports it dynamically
 so a consumer without it loses `--from-connector` and nothing else.
 
@@ -174,8 +182,10 @@ single-parameter `(reg) =>` block arrow, not async; for the named form the equiv
 counterpart writes, and the round-trip test is what keeps the pair honest — including the
 places where the two must agree on a literal the other side chose (`tools-rest.ts` mirrors the
 emitter's parameter name `parsed`, `tools-hand.ts` mirrors `p`). The mirror is not one-to-one in
-both directions: `frame.ts` and `hoists.ts` model constructs no single emitter module owns, so
-they have no counterpart.
+both directions: `frame.ts`, `hoists.ts`, `second-file.ts` and `conditional-path.ts` model
+constructs no single emitter module owns, so they have no counterpart — the four the *Layout*
+block above lists, and `test/derive-server-mirror.test.ts` derives the set rather than trusting
+either list.
 
 Match only what the emitter can actually produce. Widening a matcher to accept a shape the
 emitter never writes only widens what gets claimed — see the deliberate leading slash in
@@ -250,7 +260,7 @@ trusting a prediction).
 ```bash
 bun test test/derive/                                     # per-module + round trip
 bunx tsc --noEmit                                        # the read.ts guard is a TYPE rule
-bun run reach --baseline --nimbus-root C:/gitrep/Nimbus  # tier regression, needs the monorepo
+bun run reach --baseline --nimbus-root <pre-move-nimbus>  # tier regression; a pre-move checkout
 ```
 
 `bun run reach --verbose` prints the connectors behind each histogram bucket, which is how a

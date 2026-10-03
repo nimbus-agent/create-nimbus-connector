@@ -124,8 +124,14 @@ widened matcher, and it is not optional.
 
 ## Nimbus
 
-**Connector** — a package under `packages/mcp-connectors/<name>/` exposing a service's data to
-Nimbus as MCP tools over stdio.
+**Connector** — a package exposing a service's data to Nimbus as MCP tools over stdio. The
+first-party ones lived under the monorepo's `packages/mcp-connectors/<name>/` — the layout the
+`monorepo` target emits and the golden harness reads — until 2026-08-27, and under
+`nimbus-mcp-servers`' `connectors/<name>/` since.
+
+**Corpus** — the first-party connectors this generator is measured against: the 94 under
+`packages/mcp-connectors/` in a pre-move Nimbus checkout, identified by the git tree
+`fixtures/reach-baseline.json` records.
 
 **Manifest** — `nimbus.extension.json`: id, display name, `permissions.network`, `hitlRequired`,
 `syncInterval`, runtime.
@@ -134,7 +140,8 @@ Nimbus as MCP tools over stdio.
 of action behind user approval.
 
 **The kit** — the shared connector helpers. Published as `@nimbus-dev/sdk/connector-kit`;
-mirrored in the monorepo at `packages/mcp-connectors/shared/*` as named re-exports.
+mirrored as named re-exports in the connectors' own `shared/` — the monorepo's
+`packages/mcp-connectors/shared/*` before the move, `nimbus-mcp-servers`' root `shared/*` after.
 
 **Gateway wiring** — the type-coupled registration a first-party connector needs *outside* its
 package: a sync handler in `packages/gateway/src/connectors/`, plus catalog, secrets-manifest
@@ -147,13 +154,14 @@ secrets-manifest and rate-limiter entries it does not cover, and does not claim 
 `describe.skipIf(!process.env["NIMBUS_TEST_HARNESS"])`. That variable is set nowhere in Nimbus,
 so it skips everywhere. Emitted to match the corpus, not as evidence.
 
-## The three repos
+## The four repos
 
 | Repo | License | Role |
 | --- | --- | --- |
 | `create-nimbus-connector` | MIT | this generator |
-| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | AGPL-3.0-only | gateway, apps, 94+ connectors |
+| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | AGPL-3.0-only | gateway and apps; the connectors too, until 2026-08-27 |
+| [`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) | AGPL-3.0-only | the 94 first-party connectors since 2026-08-27 |
 | [`nimbus-sdk`](https://github.com/nimbus-agent/nimbus-sdk) | MIT | publishes `@nimbus-dev/sdk` |
 
-The MIT/AGPL split is load-bearing: **no Nimbus source may be copied into this repository.**
-The harnesses read a checkout at runtime instead.
+The MIT/AGPL split is load-bearing: **no Nimbus or `nimbus-mcp-servers` source may be copied
+into this repository.** The harnesses read a checkout at runtime instead.

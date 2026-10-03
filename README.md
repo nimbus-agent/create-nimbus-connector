@@ -2,7 +2,7 @@
 
 A generator for [**Nimbus**](https://github.com/nimbus-agent/Nimbus) MCP connector packages.
 
-Nimbus's `packages/mcp-connectors/` holds 94+ connectors built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts`. Adding the next one means hand-copying those six files and editing the parts that vary.
+Nimbus's 94 first-party connectors were built from one rigid shape — a `server.ts`, a `nimbus.extension.json` manifest, a `tsconfig.json`, a `package.json`, a boilerplate `README.md`, and a constant `test/sandbox.test.ts` — inside the Nimbus monorepo's `packages/mcp-connectors/`, until they moved to [`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) on 2026-08-27. Adding the next one meant hand-copying those six files and editing the parts that vary.
 
 This tool turns that shape into a generator: describe a connector as a small JSON spec, and it emits all six files — plus `src/search-filter.ts` when the spec declares a search tool, and a `biome.json` when the target is `--standalone` — run through the same Biome formatter the real connectors are formatted with.
 
@@ -23,7 +23,7 @@ bunx create-nimbus-connector acme --standalone
 | [SPEC-RULES.md](./docs/SPEC-RULES.md) | How the fields work together, and what gets a spec rejected |
 | [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the generator is built, and how it is verified |
 | [ROADMAP.md](./docs/ROADMAP.md) | Where it is going, and the known limitations |
-| [LICENSING.md](./docs/LICENSING.md) | The three-repo licence boundary, and what `--from-connector` may and may not produce |
+| [LICENSING.md](./docs/LICENSING.md) | The licence boundary between the repos, and what `--from-connector` may and may not produce |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) · [GOVERNANCE.md](./docs/GOVERNANCE.md) · [RELEASING.md](./docs/RELEASING.md) · [SECURITY.md](./SECURITY.md) | Working on it |
 | [GLOSSARY.md](./docs/GLOSSARY.md) | Terms as this repo uses them |
 | [CLAUDE.md](./CLAUDE.md) | Context for Claude Code |
@@ -52,6 +52,8 @@ bunx create-nimbus-connector acme --standalone
 ```bash
 bunx create-nimbus-connector acme
 ```
+
+That is the layout Nimbus had until 2026-08-27, when its connectors moved to `nimbus-mcp-servers`, which lays them out as `connectors/<name>/` and splits most of them across a `src/tools.ts` this generator does not emit. **The generator has not been re-targeted yet**: this output assumes a Nimbus checkout from before the move, and `--gateway-wiring` and the four gates that read a Nimbus checkout refuse a current one by name. [ROADMAP § Known limitations](./docs/ROADMAP.md#known-limitations) has the detail, under *What the byte gates do not reach*.
 
 **This CLI, and every connector it generates, is Bun-only.** `nimbus.extension.json` declares `"runtime": "bun"`, `test/sandbox.test.ts` imports `bun:test`, the standalone `build` script targets Bun, and `src/cli.ts` carries a `#!/usr/bin/env bun` shebang — so Bun is required however the CLI is invoked, `bunx` included. There is no Node, npm or pnpm path in this project or its output. The one exception is publishing: `.github/workflows/release.yml` runs `npm publish --provenance` in CI, because that is the only way to attach a sigstore attestation to an npm tarball.
 
@@ -142,12 +144,14 @@ A first-party connector also needs type-coupled registration in the Gateway, whi
 bun src/cli.ts --spec ./acme.spec.json --gateway-wiring /path/to/Nimbus
 ```
 
+**Today it refuses every current Nimbus checkout.** `<nimbus-root>` is validated by the same marker file the golden harness uses, `packages/mcp-connectors/shared/mcp-tool-kit.ts`, which Nimbus deleted with the rest of its connector tree on 2026-08-27 — although the Gateway files the wiring is written into and pasted into are all still there. Until the generator is re-targeted (see [The two targets](#the-two-targets)), it accepts only a checkout from before that date.
+
 Two files are written into `<nimbus-root>/packages/gateway/src/connectors/`:
 
 - **`<name>-sync.ts`** — a `create<Name>Syncable(): Syncable` matching the Gateway's own interface (`serviceId`, `defaultIntervalMs`, `sync()`). Its `sync()` body **throws**.
 - **`<name>-mapping.ts`** — a `map<Name>ItemToItem` stub with the expected signature, whose body also **throws**.
 
-**Both are skeletons, not implementations, deliberately.** The Gateway's ~98 real `*-sync.ts` files are not one formulaic shape: the "drain a list tool and upsert" assembly this project could plausibly generate appears in exactly **2** of them; the rest are hand-authored with direct `fetch` calls, cursor pagination and connector-specific options. Generating a working `sync()` would mean reproducing AGPL source nearly verbatim in an MIT repository, and asserting a shape that fits 2 of 98 connectors. So the tool emits what the type system dictates — the shape, not anyone's implementation choices — plus a TODO, and leaves the real work to a human. `<name>-mapping.ts`'s body is unknowable from a spec for a related reason: no spec field describes a service's API response shape.
+**Both are skeletons, not implementations, deliberately.** The Gateway's real `*-sync.ts` files are not one formulaic shape: the "drain a list tool and upsert" assembly this project could plausibly generate appears in **6** of the 98 there were when it was last measured (2026-08-07; `src/emit/wiring.ts` carries the tree and the command) — the warehouse and BI connectors draining `listConnectorItems` — and the rest are hand-authored with direct `fetch` calls, cursor pagination and connector-specific options. Generating a working `sync()` would mean reproducing AGPL source nearly verbatim in an MIT repository, and asserting a shape that fits 6 of 98 connectors. So the tool emits what the type system dictates — the shape, not anyone's implementation choices — plus a TODO, and leaves the real work to a human. `<name>-mapping.ts`'s body is unknowable from a spec for a related reason: no spec field describes a service's API response shape.
 
 **Writing refuses to overwrite an existing target file** unless `--force` is passed. Nimbus already ships hand-authored files such as `newrelic-sync.ts`; an unguarded write on a connector reusing one of those names would destroy it.
 
@@ -165,7 +169,7 @@ bunx biome check src/ test/ scripts/
 
 `generate(spec)` is pure — no filesystem, env or clock — and `formatAll(files)` is the only stage that touches Biome. The split is deliberate: it makes the emitters unit-testable without a monorepo, and it means the CLI, `--dry-run` and the golden harness all format through the identical code path.
 
-Several gates need a checkout of the Nimbus monorepo or the SDK and therefore cannot run in CI. [CONTRIBUTING.md](./CONTRIBUTING.md) lists what to run before opening a PR, and [ARCHITECTURE.md](./docs/ARCHITECTURE.md#the-verification-layers) explains what each harness proves and — just as importantly — what it does not.
+Several gates need a checkout of the Nimbus monorepo — one from before its connectors moved out, as [The two targets](#the-two-targets) explains — or of the SDK, and therefore cannot run in CI. [CONTRIBUTING.md](./CONTRIBUTING.md) lists what to run before opening a PR, and [ARCHITECTURE.md](./docs/ARCHITECTURE.md#the-verification-layers) explains what each harness proves and — just as importantly — what it does not.
 
 ## License
 

@@ -1,8 +1,9 @@
 # Licensing
 
-What `create-nimbus-connector --from-connector` may and may not produce. The three-repository
-split that makes this a live question is [CLAUDE.md](../CLAUDE.md)'s; this document assumes it
-rather than restates the table.
+What `create-nimbus-connector --from-connector` may and may not produce. The repository split
+that makes this a live question — this MIT generator beside the AGPL-3.0-only Nimbus and
+`nimbus-mcp-servers`, which has held the connectors since 2026-08-27 — is
+[CLAUDE.md](../CLAUDE.md)'s; this document assumes it rather than restates the table.
 
 ## Deriving a spec is not vendoring
 
