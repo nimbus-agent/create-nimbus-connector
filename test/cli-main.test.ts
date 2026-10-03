@@ -358,15 +358,15 @@ describe("CLI surface", () => {
   /**
    * The published JSON Schema's false green, stated where the user meets it.
    *
-   * It is documented in the schema document's own `description`, in README's *Editor support*
-   * section and in ROADMAP — all three of which require the reader to already be looking. The
-   * moment they are not looking is this one: the CLI has just refused a file their editor called
-   * clean, and `parseSpec`'s message says nothing about a schema.
+   * It is documented in the schema document's own `description`, in docs/SPEC-RULES.md's
+   * *Editor support* section and in ROADMAP — all three of which require the reader to already be
+   * looking. The moment they are not looking is this one: the CLI has just refused a file their
+   * editor called clean, and `parseSpec`'s message says nothing about a schema.
    */
   it("tells a rejected --spec that the published schema cannot check the rule it broke", () => {
     withTempDir((dir) => {
-      // `default` without `optional: true` — one of the three cases README names as green in an
-      // editor and refused here, because it is a refinement JSON Schema cannot express.
+      // `default` without `optional: true` — one of the three cases docs/SPEC-RULES.md names as
+      // green in an editor and refused here, because it is a refinement JSON Schema cannot express.
       const spec = JSON.parse(readFileSync(specPath, "utf8")) as {
         tools: { args?: Record<string, unknown> }[];
       };
