@@ -73,16 +73,21 @@ async function main(argv: readonly string[]): Promise<void> {
   try {
     // One scenario at a time against the one fake API. Each judge is handed only the requests
     // made since its own scenario started, which is what keeps "two tool calls, one exchange" a
-    // statement about one connector rather than about the whole run.
+    // statement about one connector rather than about the whole run. That is why both awaits
+    // below stay in the loop rather than going to Promise.all: two scenarios in flight at once
+    // would land both connectors' requests in one slice — and materialize's `bun install` is a
+    // spawnSync, which Promise.all could not overlap anyway.
     for (const scenario of RUNTIME_SCENARIOS) {
       const dir = join(root, scenario.name);
-      await materialize(scenario.spec(base), dir, sdkPkg);
+      await materialize(scenario.spec(base), dir, sdkPkg); // NOSONAR S9382: scenarios share one fake API, so they must not overlap
       const before = recorded.length;
-      const results = await callTools(dir, { ...scenario.env }, scenario.calls, scenario.gapMs);
+      const results = await callTools(dir, { ...scenario.env }, scenario.calls, scenario.gapMs); // NOSONAR S9382: the judge reads recorded.slice(before)
       checks.push(...scenario.judge(recorded.slice(before), results));
     }
   } finally {
-    server.stop(true);
+    // `true` closes any connection a connector left open, so this settles at once instead of
+    // waiting on a keep-alive.
+    await server.stop(true);
     rmSync(root, { recursive: true, force: true });
   }
 

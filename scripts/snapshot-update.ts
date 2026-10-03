@@ -41,11 +41,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Fixture by fixture, never Promise.all — the order this file's header describes: each
+  // fixture's plan is on screen before that fixture is written, and a failed write stops the run
+  // before the next fixture's plan is printed or its tree touched.
   const diffs: SnapshotDiff[] = [];
   for (const name of names) {
     const plan = planSnapshotUpdate(name, fixturesDir, snapshotsDir);
     for (const line of plan.lines) console.log(line);
-    await applySnapshotUpdate(plan);
+    await applySnapshotUpdate(plan); // NOSONAR S9382: each fixture's plan prints before its own write
     diffs.push(plan.diff);
   }
 

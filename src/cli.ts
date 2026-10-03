@@ -86,12 +86,20 @@ export function assertNimbusRoot(root: string): string {
   );
 }
 
-/** Exported for scripts/acceptance.ts (Task 18) — must stay side-effect-free besides disk I/O. */
+/**
+ * Exported for scripts/acceptance.ts (Task 18) — must stay side-effect-free besides disk I/O.
+ *
+ * One file at a time, never Promise.all. A failed write stops the loop before the next file is
+ * started, so a run that fails leaves every file before it whole and none after it begun.
+ * Promise.all would leave the other writes in flight after the first rejection, and main()'s
+ * `process.exit(1)` does not wait for them: it can end the process part-way through a file — one
+ * that may sit in someone else's checkout, under --gateway-wiring.
+ */
 export async function writeFiles(files: readonly GeneratedFile[], outDir: string): Promise<void> {
   for (const f of files) {
     const target = join(outDir, ...f.path);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, f.content, "utf8");
+    await mkdir(dirname(target), { recursive: true }); // NOSONAR S9382: fail-fast — nothing after a failed write may start
+    await writeFile(target, f.content, "utf8"); // NOSONAR S9382: fail-fast — process.exit(1) must not cut a write short
   }
 }
 

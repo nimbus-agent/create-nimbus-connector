@@ -228,9 +228,13 @@ async function main(argv: readonly string[]): Promise<void> {
   console.log(modeBanner(sdkPkg));
   console.log(`Fixtures:    ${FIXTURES.join(", ")}\n`);
 
+  // One fixture at a time, never Promise.all. runFixture's install, tsc and build steps are
+  // spawnSync calls, so fixtures in flight together would not run in parallel: they would only
+  // interleave, with one fixture's spawnSync stalling the event loop under another fixture's
+  // live tools/list conversation and its give-up timer.
   const byFixture: { fixture: string; checks: Check[] }[] = [];
   for (const fixture of FIXTURES) {
-    byFixture.push({ fixture, checks: await runFixture(fixture, sdkPkg) });
+    byFixture.push({ fixture, checks: await runFixture(fixture, sdkPkg) }); // NOSONAR S9382: runFixture blocks in spawnSync, so overlap only stalls other fixtures
   }
 
   // The report and its verdict sentence live in scripts/_lib/checks.ts's standaloneReport, where

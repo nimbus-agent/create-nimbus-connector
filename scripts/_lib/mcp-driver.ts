@@ -44,6 +44,32 @@ function initializeRequest(clientName: string): unknown {
   };
 }
 
+/** What sendFrame needs of a spawned server: its stdin, and the means to end it. */
+export type FrameTarget = {
+  readonly stdin: { write(chunk: string): number | Promise<number> };
+  kill(): void;
+};
+
+/**
+ * Write one newline-delimited JSON-RPC frame to a server's stdin.
+ *
+ * Bun's `FileSink.write` returns a Promise whenever the pipe does not take the bytes at once. On
+ * Windows that Promise REJECTS — "EOF: end of file, write" — when the server exits before reading
+ * them; on Linux the same write resolves with a short count instead (both observed 2026-10-04,
+ * Bun 1.3.14). Neither conversation below can await it: each promises that a server which dies is
+ * REPORTED, never thrown on, and an awaited rejection is a throw. Left floating it is worse — an
+ * unhandled rejection, which Bun prints and then turns into exit code 1, failing a harness run
+ * whose every check passed.
+ *
+ * So a refused write ends the conversation the way the give-up timer does: by killing the server.
+ * Its stdout closes, the read loop ends, and the caller reports what it has — the results so far
+ * from callTools, a failed check quoting stderr from toolsListCheck. The usual reason a write is
+ * refused is that its reader has already gone, and killing an exited server is harmless.
+ */
+export function sendFrame(server: FrameTarget, msg: unknown): void {
+  Promise.resolve(server.stdin.write(`${JSON.stringify(msg)}\n`)).catch(() => server.kill());
+}
+
 /**
  * Drive a generated server over stdio: initialize, then one tools/call per request, in
  * order, returning each result.
@@ -76,7 +102,7 @@ export async function callTools(
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   const results: Array<{ isError: boolean; text: string }> = [];
   try {
-    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
+    const send = (msg: unknown) => sendFrame(proc, msg);
     send(initializeRequest("runtime-acceptance"));
 
     let next = 0;
@@ -137,7 +163,7 @@ export async function toolsListCheck(
 
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   try {
-    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
+    const send = (msg: unknown) => sendFrame(proc, msg);
     send(initializeRequest("standalone-acceptance"));
 
     let sawInitialized = false;
