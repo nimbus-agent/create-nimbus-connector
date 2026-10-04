@@ -72,7 +72,13 @@ exception together. A number without those two is what the rule forbids.
 
 ## The other repos
 
-- [Nimbus](https://github.com/nimbus-agent/Nimbus) — AGPL-3.0-only: the gateway, the apps, and
-  the connectors this generator reproduces
+- [Nimbus](https://github.com/nimbus-agent/Nimbus) — AGPL-3.0-only: the gateway and the apps. It
+  also held the connectors this generator reproduces, under `packages/mcp-connectors/`, until
+  2026-08-27 — and a checkout from before then is what the monorepo gates read; see
+  [CLAUDE.md](../CLAUDE.md)
+- [nimbus-mcp-servers](https://github.com/nimbus-agent/nimbus-mcp-servers) — AGPL-3.0-only: the
+  94 first-party connectors since 2026-08-27, published as `@nimbus-dev/connectors`. This
+  generator has not been re-targeted at it yet; see
+  [ROADMAP § Known limitations](./ROADMAP.md#known-limitations)
 - [nimbus-sdk](https://github.com/nimbus-agent/nimbus-sdk) — MIT: publishes `@nimbus-dev/sdk`,
   whose `connector-kit` export a standalone connector imports

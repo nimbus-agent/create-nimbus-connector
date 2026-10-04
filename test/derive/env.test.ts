@@ -915,6 +915,121 @@ describe("recognizeEnv: the key SPELLING of every emitted header object", () => 
   });
 });
 
+/**
+ * Every header object above, corrupted in its trailing `Accept: "application/json"` alone.
+ *
+ * `headerObjectLines` (src/emit/server/env.ts) appends that property LAST to each of them, and one
+ * reader — env.ts's `headerObjectProps` — checks it for all three recognizers. Pinned per shape
+ * rather than once, so a recognizer that stopped going through that reader fails here by name:
+ * the property out of position, carrying another value, and standing alone with no auth property
+ * in front of it.
+ */
+const ACCEPT_CORRUPTIONS: ReadonlyArray<readonly [string, string, string]> = [
+  [
+    "a bearer return with the Accept moved in front",
+    BEARER_AUTH,
+    BEARER_AUTH.replace(
+      '{ Authorization: `Bearer ${tok}`, Accept: "application/json" }',
+      '{ Accept: "application/json", Authorization: `Bearer ${tok}` }',
+    ),
+  ],
+  [
+    "a bearer return whose Accept is not application/json",
+    BEARER_AUTH,
+    BEARER_AUTH.replace('Accept: "application/json"', 'Accept: "text/plain"'),
+  ],
+  [
+    "a bearer return carrying the Accept alone",
+    BEARER_AUTH,
+    BEARER_AUTH.replace("Authorization: `Bearer ${tok}`, ", ""),
+  ],
+  [
+    "a headers return with the Accept moved in front",
+    HEADERS_AUTH,
+    HEADERS_AUTH.replace(
+      '    "DD-API-KEY": ak,\n    "DD-APPLICATION-KEY": app,\n    Accept: "application/json",',
+      '    Accept: "application/json",\n    "DD-API-KEY": ak,\n    "DD-APPLICATION-KEY": app,',
+    ),
+  ],
+  [
+    "a headers return whose Accept is not application/json",
+    HEADERS_AUTH,
+    HEADERS_AUTH.replace('Accept: "application/json"', 'Accept: "text/plain"'),
+  ],
+  [
+    "a headers return carrying the Accept alone",
+    HEADERS_AUTH,
+    HEADERS_AUTH.replace('    "DD-API-KEY": ak,\n    "DD-APPLICATION-KEY": app,\n', ""),
+  ],
+  [
+    "a basic return with the Accept moved in front",
+    BASIC_AUTH,
+    BASIC_AUTH.replace(
+      '    Authorization: encodeBasicAuthHeader(user, pass),\n    Accept: "application/json",',
+      '    Accept: "application/json",\n    Authorization: encodeBasicAuthHeader(user, pass),',
+    ),
+  ],
+  [
+    "a basic return whose Accept is not application/json",
+    BASIC_AUTH,
+    BASIC_AUTH.replace('Accept: "application/json"', 'Accept: "text/plain"'),
+  ],
+  [
+    "a basic return carrying the Accept alone",
+    BASIC_AUTH,
+    BASIC_AUTH.replace("    Authorization: encodeBasicAuthHeader(user, pass),\n", ""),
+  ],
+];
+
+describe("recognizeEnv: the trailing Accept of every emitted header object", () => {
+  for (const [reason, pristine, corrupted] of ACCEPT_CORRUPTIONS) {
+    it(`refuses ${reason}`, () => {
+      expect(corrupted).not.toBe(pristine);
+      // The pristine form is recognized, so the row proves it is the Accept that was refused.
+      const before = run(pristine);
+      expect(before.entries).toHaveLength(1);
+      expect(before.unclaimed).toEqual([]);
+
+      const { entries, unclaimed } = run(corrupted);
+      expect(entries).toEqual([]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+
+  // The split-bearer wrapper is the pair again, for the reason the spelling rows above give: a
+  // refused wrapper leaves the reader standing as a plain required entry, not nothing at all.
+  for (const [reason, wrapper] of [
+    [
+      "the Accept moved in front",
+      SPLIT_BEARER_WRAPPER.replace(
+        '{ Authorization: `Bearer ${apiToken()}`, Accept: "application/json" }',
+        '{ Accept: "application/json", Authorization: `Bearer ${apiToken()}` }',
+      ),
+    ],
+    [
+      "an Accept that is not application/json",
+      SPLIT_BEARER_WRAPPER.replace('Accept: "application/json"', 'Accept: "text/plain"'),
+    ],
+    [
+      "the Accept alone",
+      SPLIT_BEARER_WRAPPER.replace("Authorization: `Bearer ${apiToken()}`, ", ""),
+    ],
+  ] as const) {
+    it(`does not form a split-bearer pair from a wrapper with ${reason}`, () => {
+      expect(wrapper).not.toBe(SPLIT_BEARER_WRAPPER);
+      const pristine = run([SPLIT_BEARER_READER, "", SPLIT_BEARER_WRAPPER].join("\n\n"));
+      expect(pristine.entries).toHaveLength(1);
+      expect(pristine.entries[0]?.tokenLocal).toBe("apiToken");
+
+      const { entries, unclaimed } = run([SPLIT_BEARER_READER, "", wrapper].join("\n\n"));
+      expect(entries).toEqual([
+        { vars: ["MERCURY_TOKEN"], local: "apiToken", bindings: ["t"], required: true },
+      ]);
+      expect(unclaimed).toHaveLength(1);
+    });
+  }
+});
+
 describe("recognizeEnv: the shared trimTrailingSlash helper", () => {
   const HELPER = [
     "function trimTrailingSlash(s: string): string {",

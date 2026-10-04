@@ -1,4 +1,5 @@
 import type { ArgSpec, PathSegment, QueryParam } from "../../spec.ts";
+import { renderHoists } from "./args.ts";
 
 export type QueryContext = {
   readonly param: string;
@@ -36,8 +37,8 @@ function guardExpr(value: string, omitWhen: "absent" | "empty"): string {
 }
 
 /**
- * The `searchParams` statements for one tool, unindented — the caller owns indentation because
- * the rest-kit and hand-rolled callbacks nest them at different depths.
+ * The `searchParams` statements for one tool, unindented — `renderQueryBlock` below indents them
+ * along with the rest of the block they sit in.
  */
 export function renderQueryLines(query: readonly QueryParam[], ctx: QueryContext): string[] {
   const lines: string[] = [];
@@ -60,6 +61,34 @@ export function renderQueryLines(query: readonly QueryParam[], ctx: QueryContext
     );
   }
   return lines;
+}
+
+export type QueryBlockContext = QueryContext & {
+  /** The hoists something in the callback reads — `usedHoists`' result; see `renderHoists`. */
+  readonly used: ReadonlySet<string>;
+  /** The path rendered with the base spliced in ahead of it: what `new URL(...)` is handed. */
+  readonly pathExpr: string;
+};
+
+/**
+ * The statements every query tool's callback opens with, indented for that callback's block: the
+ * hoists it reads, `const u = new URL(<pathExpr>);`, then the `searchParams` lines.
+ *
+ * `renderTool`'s query branch writes this run in BOTH registration styles (tools-hand.ts and
+ * tools-rest.ts), at the same depth — each callback is the fourth argument of its registration
+ * call — and the two differ only in what follows it: the hand-rolled handler binds
+ * `` const path = `${u}` `` and fetches, the rest-kit callback returns `` `${u}` `` itself. That
+ * ending stays with each caller, beside its comment on why the URL is absolute. The deriver reads
+ * the run the same way, through one `recognizeQueryBlock` (src/derive/server/query.ts) for both
+ * styles; two hand-written copies here were two places for the emitter half of that pair to
+ * drift, the reason `usedHoists` below lives in this module too.
+ */
+export function renderQueryBlock(query: readonly QueryParam[], ctx: QueryBlockContext): string[] {
+  return [
+    ...renderHoists(ctx.args, ctx.param, ctx.used),
+    `const u = new URL(${ctx.pathExpr});`,
+    ...renderQueryLines(query, ctx),
+  ].map((l) => `    ${l}`);
 }
 
 /** Hoisted arg names this query reads, so the caller emits exactly the hoists something uses. */

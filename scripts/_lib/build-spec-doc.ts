@@ -159,6 +159,12 @@ export function assertEveryKeywordRendered(doc: JsonSchema): void {
  *
  * Throws rather than falling back for a shape it does not model, on the same reasoning
  * `assertEveryKeywordRendered` gives: a placeholder in this column reads as an answer.
+ *
+ * The shapes are tried in a fixed order — union, literal set, `type` array, array, object, scalar —
+ * and each `type` that needs more than its own name has a step of its own below, named for the
+ * shape it renders. The order is the contract: `enum` is read before `type` because zod emits the
+ * two together on a literal set, and the scalar arm is last because it is the only one that
+ * accepts whatever string `type` holds.
  */
 export function renderType(schema: JsonSchema): string {
   const branches = schema["anyOf"];
@@ -170,37 +176,45 @@ export function renderType(schema: JsonSchema): string {
   if (Array.isArray(allowed)) return allowed.map((v) => JSON.stringify(v)).join(" | ");
 
   const type = schema["type"];
-
-  // A union of primitives. zod 4.5 emits `type: ["string","number","boolean"]` where 4.4 emitted
-  // an `anyOf` of single-type subschemas; the two are the same JSON Schema, so they render the
-  // same way the `anyOf` branch above does. Restricted to primitive names on purpose — a type
-  // array containing "array" or "object" needs the items/properties handling below, and this
-  // function's contract is to throw on a shape it does not model rather than print a guess.
-  if (Array.isArray(type)) {
-    const PRIMITIVES = new Set(["string", "number", "integer", "boolean", "null"]);
-    if (type.length > 0 && type.every((t) => typeof t === "string" && PRIMITIVES.has(t))) {
-      return type.join(" | ");
-    }
-    throw new Error(`renderType: unmodelled type array [${type.join(", ")}]`);
-  }
-
-  if (type === "array") {
-    const items = schema["items"];
-    if (!isSchemaObject(items)) throw new Error("renderType: an array with no items subschema");
-    const inner = renderType(items);
-    return inner.includes(" | ") ? `(${inner})[]` : `${inner}[]`;
-  }
-
-  if (type === "object") {
-    const properties = schema["properties"];
-    if (isSchemaObject(properties)) return renderObjectLiteral(schema, properties);
-    const values = schema["additionalProperties"];
-    if (isSchemaObject(values)) return `Record<string, ${renderType(values)}>`;
-    throw new Error("renderType: an object that is neither a record nor a shape");
-  }
+  if (Array.isArray(type)) return renderPrimitiveUnion(type);
+  if (type === "array") return renderArrayType(schema);
+  if (type === "object") return renderObjectType(schema);
 
   if (typeof type !== "string") throw new Error("renderType: a subschema with no type");
   return type;
+}
+
+/**
+ * A union of primitives. zod 4.5 emits `type: ["string","number","boolean"]` where 4.4 emitted
+ * an `anyOf` of single-type subschemas; the two are the same JSON Schema, so they render the
+ * same way `renderType`'s `anyOf` branch does. Restricted to primitive names on purpose — a type
+ * array containing "array" or "object" needs the items/properties handling the two steps below
+ * carry, and `renderType`'s contract is to throw on a shape it does not model rather than print a
+ * guess. The errors keep `renderType:`'s prefix, since that is the function a caller called.
+ */
+function renderPrimitiveUnion(type: readonly unknown[]): string {
+  const PRIMITIVES = new Set(["string", "number", "integer", "boolean", "null"]);
+  if (type.length > 0 && type.every((t) => typeof t === "string" && PRIMITIVES.has(t))) {
+    return type.join(" | ");
+  }
+  throw new Error(`renderType: unmodelled type array [${type.join(", ")}]`);
+}
+
+/** `type: "array"` — its items' type, parenthesised when that type is itself a union. */
+function renderArrayType(schema: JsonSchema): string {
+  const items = schema["items"];
+  if (!isSchemaObject(items)) throw new Error("renderType: an array with no items subschema");
+  const inner = renderType(items);
+  return inner.includes(" | ") ? `(${inner})[]` : `${inner}[]`;
+}
+
+/** `type: "object"` — a shape, printed inline, or a record of one value type. */
+function renderObjectType(schema: JsonSchema): string {
+  const properties = schema["properties"];
+  if (isSchemaObject(properties)) return renderObjectLiteral(schema, properties);
+  const values = schema["additionalProperties"];
+  if (isSchemaObject(values)) return `Record<string, ${renderType(values)}>`;
+  throw new Error("renderType: an object that is neither a record nor a shape");
 }
 
 function renderObjectLiteral(schema: JsonSchema, properties: JsonSchema): string {

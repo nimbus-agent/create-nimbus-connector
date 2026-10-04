@@ -1,4 +1,5 @@
-import { type ConnectorSpec, capitalize, parseSpec } from "./spec.ts";
+import { type AuthKind, buildSpec } from "./prompt-spec.ts";
+import { type ConnectorSpec, capitalize } from "./spec.ts";
 
 /**
  * Bun implements the browser `prompt(message, default)`: synchronous, prints
@@ -45,8 +46,6 @@ function askValidated(
 /** The schema's own rule, restated here so the prompt rejects what parseSpec would reject. */
 const CONNECTOR_NAME = /^[a-z0-9-]+$/;
 
-export type AuthKind = "bearer" | "token" | "basic";
-
 const AUTH_KINDS: readonly AuthKind[] = ["bearer", "token", "basic"];
 
 /**
@@ -60,89 +59,6 @@ const AUTH_KINDS: readonly AuthKind[] = ["bearer", "token", "basic"];
 function normalizeAuthKind(raw: string): AuthKind | undefined {
   const lower = raw.trim().toLowerCase();
   return (AUTH_KINDS as readonly string[]).includes(lower) ? (lower as AuthKind) : undefined;
-}
-
-/** Raw answers collected from the interactive session, before spec construction. */
-export type PromptAnswers = {
-  name: string;
-  displayName: string;
-  serviceLabel: string;
-  description: string;
-  baseUrl: string;
-  authKind: AuthKind;
-  envVar: string;
-  /** Header name; only meaningful (and only asked for) when authKind is "token" or "basic". */
-  headerName: string;
-  toolNames: readonly string[];
-};
-
-/**
- * Pure spec construction from collected answers — no stdin access, so this is
- * the part unit tests exercise directly.
- *
- * The schema (Tasks 9–13) requires a rest-kit connector to declare exactly one
- * env entry with auth: "bearer" and a single var — makeRestToolRegistrar
- * resolves the token itself. Only the "bearer" auth choice satisfies that
- * shape, so it alone maps to style: "rest-kit". "token" and "basic" both map
- * to style: "hand-rolled" with a single auth: "headers" env entry naming one
- * header, wired through fetchHelper.headers (the accessor's own `local`).
- *
- * Prompted tools are all impl: "stub" — the CLI cannot know a service's URL
- * paths, and emitting a stub the author fills in is honest where guessing a
- * path would not be.
- */
-/** Parse a URL, throwing a message that names the offending field and value. */
-function parseBaseUrl(baseUrl: string): URL {
-  try {
-    return new URL(baseUrl);
-  } catch {
-    throw new Error(
-      `Base API URL "${baseUrl}" is not a valid URL — include the scheme, ` +
-        `e.g. https://api.example.com`,
-    );
-  }
-}
-
-export function buildSpec(answers: PromptAnswers): ConnectorSpec {
-  const fetchLocal = `${answers.name.replaceAll("-", "")}Fetch`;
-  const tools = answers.toolNames.map((name) => ({
-    name,
-    description: `TODO: describe ${name}.`,
-    impl: "stub" as const,
-  }));
-
-  const shared = {
-    name: answers.name,
-    title: answers.displayName,
-    displayName: answers.displayName,
-    description: answers.description,
-    serviceLabel: answers.serviceLabel,
-    network: [parseBaseUrl(answers.baseUrl).host],
-    tools,
-  };
-
-  if (answers.authKind === "bearer") {
-    return parseSpec({
-      ...shared,
-      style: "rest-kit",
-      env: [{ vars: [answers.envVar], local: "authHeaders", auth: "bearer" }],
-      fetchHelper: { local: fetchLocal, base: answers.baseUrl },
-    });
-  }
-
-  return parseSpec({
-    ...shared,
-    style: "hand-rolled",
-    env: [
-      {
-        vars: [answers.envVar],
-        local: "headers",
-        auth: "headers",
-        headerNames: [answers.headerName],
-      },
-    ],
-    fetchHelper: { local: fetchLocal, base: answers.baseUrl, headers: "headers" },
-  });
 }
 
 /**

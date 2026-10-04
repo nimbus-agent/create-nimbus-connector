@@ -13,12 +13,12 @@ import {
   isIdent,
   stringLit,
 } from "../read.ts";
-import { recognizeArgs, type SchemaShape } from "./args.ts";
+import { recognizeArgs, type SchemaShape, schemaShapeOf } from "./args.ts";
 import { recognizeBodyExpr } from "./body.ts";
 import { type HoistedBlock, mergeHoistedArgs, recognizeHoistedBlock } from "./hoists.ts";
 import { recognizePath } from "./path-template.ts";
 import { type BasePrefix, recognizeQueryBlock } from "./query.ts";
-import { recognizeStubHandler, type ToolFields } from "./tools-hand.ts";
+import { recognizeStubHandler, type ToolFields, toolColumns } from "./tools-hand.ts";
 
 /**
  * The inverse of src/emit/server/tools-rest.ts's `renderRestKitTools` — recovers the
@@ -373,10 +373,7 @@ function recognizeOneCall(call: AstNode): ToolShape | undefined {
 
   const argsResult = recognizeArgs(schemaNode);
   if (argsResult === undefined) return undefined;
-  const schemaShape = {
-    propertyCount: Object.keys(argsResult.args).length,
-    oneLine: argsResult.schemaStyle === "inline",
-  };
+  const schemaShape = schemaShapeOf(argsResult);
 
   // Checked before the pathFn forms below because none of THEM is a zero-parameter block —
   // recognizeStubHandler is the only reader for that shape, and `initFnNode === undefined` is
@@ -532,10 +529,5 @@ export function recognizeRestTools(
     calls.map((entry) => entry.statement),
     "rest-tools",
   );
-  return {
-    tools: shapes.map((s) => s.fields),
-    staticPathStyles: shapes.map((s) => s.staticStyle),
-    schemaShapes: shapes.map((s) => s.schemaShape),
-    basePrefixes: shapes.map((s) => s.basePrefix),
-  };
+  return toolColumns(shapes);
 }

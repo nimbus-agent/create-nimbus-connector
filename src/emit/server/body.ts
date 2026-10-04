@@ -1,7 +1,6 @@
 import { parsePathTemplate, type ToolSpec } from "../../spec.ts";
+import { objectKey } from "./env.ts";
 import type { RenderContext } from "./path-template.ts";
-
-const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /** A rendered JSON body, plus which hoisted consts it consumed. */
 export type BodyExpr = {
@@ -109,7 +108,7 @@ export function renderBodyExpr(tool: ToolSpec, ctx: RenderContext): BodyExpr | u
   const hoistsUsed = new Set<string>();
   const fields = pairs
     .map(([field, arg]) => {
-      const key = IDENT.test(field) ? field : JSON.stringify(field);
+      const key = objectKey(field);
       const value = fieldValue(tool, arg, ctx, hoistsUsed);
       // Shorthand when the API field name and the expression are the same identifier — which
       // happens exactly when a hoisted const is named after the field it fills. This is the

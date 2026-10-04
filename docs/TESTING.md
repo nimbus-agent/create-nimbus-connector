@@ -143,11 +143,14 @@ explains each at length. Three things it cannot express, each of which has misle
 modules the run loaded. A module nothing imports is not at 0% — it is absent, and the per-file
 floor has nothing to compare. This is why most harnesses in `scripts/` split into a thin driver
 plus a `scripts/_lib/` module: logic left inline behind an `import.meta.main` guard is logic no
-floor is measuring. It is a convention, not an invariant — `scripts/snapshot-update.ts` imports
-no `_lib` module at all and exports `loadExistingSnapshot` from the driver, and `reach.ts`,
-`acceptance.ts`, `runtime-acceptance.ts` and `wiring-conformance.ts` each keep some exported
-logic there too. `scripts/_lib/build-spec-doc.ts` and `scripts/_lib/preflight.ts` both state
-this in their own headers (`scripts/_lib/build-schema.ts`'s states the *convention*, and its
+floor is measuring. It is a convention, not an invariant — `reach.ts`, `acceptance.ts` and
+`wiring-conformance.ts` each keep some exported logic in the driver, all three of them harnesses
+that need a Nimbus checkout. `snapshot-update.ts` and `runtime-acceptance.ts` did too until
+2026-10-03, when the first gained `scripts/_lib/snapshot-update.ts` and the second's scenarios
+and the checks that judge them moved to `scripts/_lib/runtime-scenarios.ts` — whose tests found
+two of those checks passing on traffic they exist to reject. `scripts/_lib/build-spec-doc.ts`
+and `scripts/_lib/preflight.ts` both state this in their own headers
+(`scripts/_lib/build-schema.ts`'s states the *convention*, and its
 own second load is a different one — a drift argument about regenerating by two routes), and
 `scripts/_lib/preflight.ts` is the sharpest example: `verdict` is the one sentence a reader
 quotes back as evidence, and `toCheck` — the PASS/FAIL/SKIP label for each gate — sat in the
@@ -158,13 +161,16 @@ driver until it was measured, where a constant `skipped: false` printed four nev
 `Bun.spawnSync` on the **real binary**, and Bun does not instrument child processes, so every
 line `main()` executes reads as uncovered. Spawning the real binary is the better test — it
 proves the shipped entry point works, which an in-process call does not — so the two files are
-excluded from the **metric**, not from testing. `bunfig.toml` is explicit that the fix for this
-is *not* to add in-process tests duplicating the subprocess ones: that moves the number without
+excluded from the **metric**, not from testing. Each keeps only its subprocess half: the argument
+parser lives in `src/cli-args.ts` and `buildSpec` in `src/prompt-spec.ts`, which
+`test/cli.test.ts` calls directly and the floor grades like any other file. `bunfig.toml` is
+explicit that the fix for what remains is *not* to add in-process tests duplicating the
+subprocess ones: that moves the number without
 adding assurance, which is the false-green pattern this repo keeps removing. Raise the floor
 only when a real gap closes, as it did for `src/golden/resolve-root.ts` and
 `src/derive/search-filter.ts` — the two that carried 0.88 → 0.90. `src/format.ts` is the file
-that then **sets** the floor — alone on lines, but tied exactly by
-`src/emit/server/tools-rest.ts` on functions, so both halves have to be re-measured before that
+that then **sets** the floor, on both halves alone since a rest-kit test closed the one
+uncovered function `src/emit/server/tools-rest.ts` had tied it with; re-measure before either
 number moves. bunfig explains why format.ts's last eight lines cannot be closed
 in-process. `test/coverage-gate.test.ts` pins
 the exclusion list at exactly those two, so adding a third is a reviewed change to a test
@@ -274,6 +280,13 @@ that changed nothing related. It is also path-filtered to `src/`, `scripts/`, `f
 This is not fixable, and it is not a backlog item. This repository is MIT and the monorepo is
 AGPL-3.0-only; the golden harness reads the monorepo **at runtime** from a path passed on the
 command line precisely so that nothing is vendored. See [LICENSING.md](./LICENSING.md).
+
+**Since 2026-08-27 that checkout also has to predate the connectors' move out of the monorepo.**
+All four recognise a Nimbus root by `packages/mcp-connectors/shared/mcp-tool-kit.ts`, which
+Nimbus deleted that day, so they refuse a current checkout by name rather than reading a tree
+they were not written for. [CLAUDE.md](../CLAUDE.md)'s *`--nimbus-root` means a pre-move
+checkout* says which checkout to use; [ROADMAP § Known limitations](./ROADMAP.md#known-limitations)
+says what re-targeting them would take.
 
 The tempting fix is refused explicitly, in [CLAUDE.md](../CLAUDE.md)'s *The gates, and which
 ones can lie*: **do not add a CI job that skips when the root is absent; a silently-skipping

@@ -59,7 +59,10 @@ regression test — a spec-supplied filesystem path containing `$&` or `$$` prev
 published from CI with `npm publish --provenance`, and the release workflow verifies the
 resulting tarball's registry signature and that the provenance attestation names this
 repository, workflow and commit. Every GitHub Action is pinned to a full-length commit SHA.
-Dependabot and CodeQL run on this repo.
+CodeQL runs on this repo, a dependency review flags any AGPL- or GPL-licensed dependency a pull
+request introduces, and GitHub's Dependabot alerts are enabled. Dependency *updates* are not
+automated: a maintainer makes them in periodic bulk pull requests, as
+[CONTRIBUTING.md](./CONTRIBUTING.md#updating-dependencies) describes.
 
 **No telemetry.** The CLI makes no network calls. `bun install` in a *generated* standalone
 package resolves `@nimbus-dev/sdk` from npm; that is the package manager, not this tool.

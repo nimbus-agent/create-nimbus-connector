@@ -11,8 +11,9 @@ Conventional Commits drive the release. The PR title becomes the squashed subjec
 
 ## Gates
 
-CI cannot run the **four** gates that need a Nimbus checkout. Run them locally and paste the real
-output — not a summary, and not copied from a plan.
+CI cannot run the **four** gates that need a Nimbus checkout — one from before 2026-08-27, when
+the connectors moved out of Nimbus; CONTRIBUTING.md's *The gates* says which. Run them locally
+and paste the real output — not a summary, and not copied from a plan.
 
 `bun run preflight --nimbus-root <path>` runs the eight boxes below it, in order, and names any
 it could not run. Tick that one and paste its verdict, or tick them individually.

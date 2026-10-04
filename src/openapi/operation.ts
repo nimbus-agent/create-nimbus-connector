@@ -98,12 +98,23 @@ const PATH_VARIABLE_NAME = /^[A-Za-z0-9_.-]+$/;
 /** Express's `/:id`, which is neither OpenAPI's form nor this generator's. */
 const EXPRESS_PLACEHOLDER = /\/:[A-Za-z_]/;
 
-const SCALAR_TYPES: Record<string, { type: "string" | "number" | "boolean"; int?: true }> = {
-  string: { type: "string" },
-  number: { type: "number" },
-  integer: { type: "number", int: true },
-  boolean: { type: "boolean" },
-};
+/** What one OpenAPI scalar type becomes in an `ArgSchema`: its type, and whether it is an int. */
+type ScalarType = { type: "string" | "number" | "boolean"; int?: true };
+
+/**
+ * The OpenAPI types an argument can be generated from, keyed by the document's own `type` string.
+ *
+ * A Map, not an object literal, because the key is the document's: an object answers for every
+ * name it inherits as well as its own four, and `type: "toString"` found Object.prototype.toString
+ * — not undefined — so the parameter mapped as an argument with no type at all, and the command
+ * failed later at parseSpec with a message about a missing key instead of refusing here.
+ */
+const SCALAR_TYPES: ReadonlyMap<string, ScalarType> = new Map<string, ScalarType>([
+  ["string", { type: "string" }],
+  ["number", { type: "number" }],
+  ["integer", { type: "number", int: true }],
+  ["boolean", { type: "boolean" }],
+]);
 
 /** The two types that make a request body nested rather than flat. */
 const NESTED_TYPES = new Set(["object", "array"]);
@@ -511,7 +522,7 @@ function mapScalarSchema(
     );
   }
 
-  const scalar = typeof schema.type === "string" ? SCALAR_TYPES[schema.type] : undefined;
+  const scalar = typeof schema.type === "string" ? SCALAR_TYPES.get(schema.type) : undefined;
   if (scalar === undefined) {
     const nested =
       nestedKind !== undefined &&

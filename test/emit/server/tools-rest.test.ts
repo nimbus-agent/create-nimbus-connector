@@ -292,6 +292,28 @@ describe("rest-kit query parameters", () => {
     expect(out).toContain('() => "/users/@me/guilds",');
   });
 
+  // The query clause of `renderTool`'s `needsParam`, which no other case here reaches: every
+  // query tool above also names an arg in its path or hoists one, and either already takes the
+  // parameter. A static path with no hoist leaves the query line as the ONLY reader of `parsed`,
+  // and without that clause the callback is written `() => {` around a `parsed.q` read — a
+  // generated package that fails its own typecheck.
+  it("takes the parameter when an unhoisted query entry is the only thing that reads it", () => {
+    const out = renderRestKitTools(
+      restSpec([
+        {
+          name: "discord_search",
+          description: "Search.",
+          path: "/search",
+          args: { q: { type: "string" } },
+          query: [{ name: "q", arg: "q" }],
+        },
+      ]),
+    );
+    expect(out).toContain("  (parsed) => {\n    const u = new URL(");
+    expect(out).toContain('    u.searchParams.set("q", parsed.q);');
+    expect(out).not.toContain("() => {");
+  });
+
   // The bug this brief exists to prevent: a POST carrying query parameters must still route
   // through the write helper, not silently fall back to a read call because the query
   // branch's call expression was written separately from the method ternary. `title` is a

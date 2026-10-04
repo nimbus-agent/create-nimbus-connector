@@ -26,8 +26,8 @@
  * workflow invariants live, having no other home: one Bun pin everywhere, harden-runner first
  * in every job, every action SHA-pinned, a bounded `timeout-minutes` on every job, a per-ref
  * concurrency group on every workflow with `cancel-in-progress` stated rather than defaulted,
- * the license-boundary gate, the CLA token's narrowing, and the two static-analysis gates that
- * fail open. The ones that can read the workflow
+ * the license-boundary gate, the CLA token's narrowing, no checkout in a `pull_request_target`
+ * workflow, and the two static-analysis gates that fail open. The ones that can read the workflow
  * DIRECTORY rather than a list of filenames do, so a workflow added later inherits them
  * without anyone remembering to enrol it — which is exactly how the Bun pin came to be
  * checked in only two of the four files that state it.
@@ -95,7 +95,6 @@ const manifest = readJson<Record<string, string>>(".release-please-manifest.json
 const config = readJson<ReleasePleaseConfig>("release-please-config.json");
 const release = Bun.YAML.parse(read(".github/workflows/release.yml")) as Workflow;
 const ci = Bun.YAML.parse(read(".github/workflows/ci.yml")) as Workflow;
-const dependabot = Bun.YAML.parse(read(".github/workflows/dependabot-auto-merge.yml")) as Workflow;
 const cla = Bun.YAML.parse(read(".github/workflows/cla.yml")) as Workflow;
 
 /**
@@ -256,7 +255,7 @@ describe("the release workflow", () => {
     expect(
       packIndex,
       "the publish job must pack the tarball and execute the installed bin — `bin` points " +
-        'at ./src/cli.ts and `files` is ["src", "README.md"], so a bad `files` array ' +
+        'at ./src/cli.ts and `files` is ["src", "schema", "README.md"], so a bad `files` array ' +
         "produces a package that installs and then cannot run, and no test in this repo " +
         "would notice because they all run against the working tree",
     ).toBeGreaterThanOrEqual(0);
@@ -404,8 +403,9 @@ describe("the dependency-review gate", () => {
     // This repository's number-one invariant is a license boundary: MIT generator, AGPL-only
     // monorepo, and no source may cross. test/license.test.ts guards the license string the
     // generator EMITS — it says nothing about this repo's own dependency tree, which is what
-    // an AGPL transitive dependency would poison. It matters most on Dependabot's pull
-    // requests: dependabot-auto-merge.yml merges patch and minor without a human.
+    // an AGPL transitive dependency would poison. It matters most on a dependency-update pull
+    // request, where a bulk bump moves many packages at once and a license change rides in on
+    // one that nobody reads.
     //
     // Both the deprecated bare ids and the -only/-or-later forms, because a package can
     // declare either and the action compares the declared expression against this list.
@@ -576,8 +576,8 @@ describe("the static-analysis gates", () => {
     // the prerequisite is unmet is the one it deletes.
     //
     // The job's `if` is allowed to skip the runs where GitHub structurally withholds the
-    // Actions secret store — a fork's pull request, and a Dependabot-triggered one. Those are
-    // conditions on WHO triggered the run, checkable from the event payload alone. Reading the
+    // Actions secret store — a fork's pull request, as sonar.yml's header explains. That is a
+    // condition on where the run came from, checkable from the event payload alone. Reading the
     // secret is a different thing, and this asserts the difference rather than the wording:
     // the condition may say anything at all except "is the token set".
     const sonar = workflows.find((w) => w.file === "sonar.yml")?.workflow;
@@ -625,7 +625,7 @@ describe("runner hardening", () => {
     expect(
       allJobs.length,
       "the collector must find jobs — an empty list satisfies the loop below silently",
-    ).toBeGreaterThanOrEqual(9);
+    ).toBeGreaterThanOrEqual(8);
     for (const { file, jobId, job } of allJobs) {
       expect(job.steps?.[0]?.uses, `${file} / ${jobId}: first step`).toStartWith(
         "step-security/harden-runner@",
@@ -658,7 +658,7 @@ describe("the runner budget", () => {
     expect(
       allJobs.length,
       "the collector must find jobs — an empty list satisfies the loop below silently",
-    ).toBeGreaterThanOrEqual(9);
+    ).toBeGreaterThanOrEqual(8);
     for (const { file, jobId, job } of allJobs) {
       const limit = job["timeout-minutes"];
       expect(limit, `${file} / ${jobId} must declare timeout-minutes`).toBeDefined();
@@ -678,8 +678,8 @@ describe("the runner budget", () => {
       expect(group, `${file} must declare a concurrency group`).toBeDefined();
       // A constant group is a repository-wide lock: every run of that workflow queues behind
       // every other, whatever ref it is for. The interpolation is what makes the group per-ref
-      // (or per-pull-request, in the two `pull_request_target` workflows), so it is the part
-      // worth asserting rather than mere presence.
+      // (or per-pull-request, in the `pull_request_target` workflow), so it is the part worth
+      // asserting rather than mere presence.
       expect(group, `${file}: concurrency group "${group}" is constant`).toContain("${{");
     }
   });
@@ -687,16 +687,16 @@ describe("the runner budget", () => {
   it("never cancels a run that publishes or posts a verdict", () => {
     // cancel-in-progress is right for a check and wrong for a release: cancelling release.yml
     // mid-publish can leave a tag pushed with no npm artifact behind it, and this org's release
-    // tags are immutable, so the recovery is to abandon the version. The three that must not
-    // cancel are the one that publishes and the two that run on `pull_request_target` and
-    // report a per-PR verdict a cancelled run would leave un-posted.
-    const NEVER_CANCEL = ["cla.yml", "dependabot-auto-merge.yml", "release.yml"];
+    // tags are immutable, so the recovery is to abandon the version. The two that must not
+    // cancel are the one that publishes and the one that runs on `pull_request_target` and
+    // reports a per-PR verdict a cancelled run would leave un-posted.
+    const NEVER_CANCEL = ["cla.yml", "release.yml"];
     for (const file of NEVER_CANCEL) {
       const found = workflows.find((w) => w.file === file);
       expect(found, `${file} is missing — update this list or restore the workflow`).toBeDefined();
       expect(found?.workflow.concurrency?.["cancel-in-progress"], `${file}`).toBe(false);
     }
-    // Stated explicitly everywhere, not only in the three above: an omitted key is `false` by
+    // Stated explicitly everywhere, not only in the two above: an omitted key is `false` by
     // default, so a check workflow that meant to cancel and forgot the line queues superseded
     // runs instead of dropping them, with nothing in the diff to point at.
     for (const { file, workflow } of workflows) {
@@ -737,28 +737,45 @@ describe("the Bun pin", () => {
   });
 });
 
-describe("dependabot auto-merge workflow", () => {
-  // `pull_request_target` runs with the BASE repository's permissions and secrets.
-  // Combined with checking out the pull request's code, that is the canonical GitHub
-  // Actions privilege-escalation shape: untrusted code executing with write access to
-  // the repository it is proposing changes to.
+describe("pull_request_target workflows", () => {
+  // `pull_request_target` runs with the BASE repository's permissions and secrets. Combined
+  // with checking out the pull request's code, that is the canonical GitHub Actions
+  // privilege-escalation shape: untrusted code executing with write access to the repository
+  // it is proposing changes to.
   //
-  // This workflow is safe *because* it never checks anything out — it reads metadata
-  // and calls the API. That is a property of the file, not of anyone's intention, so
-  // it is asserted here: a future edit that adds a checkout step fails this test
-  // rather than shipping quietly.
-  it("never checks out code, because it runs as pull_request_target", () => {
-    const triggers = Object.keys(dependabot.on ?? {});
-    expect(triggers).toContain("pull_request_target");
+  // A workflow on this trigger is safe only while it never checks anything out — it reads
+  // event metadata and calls the API. That is a property of the file, not of anyone's
+  // intention, so it is asserted here, over every workflow on the trigger rather than a named
+  // one. The rule was first written for dependabot-auto-merge.yml alone; when that workflow
+  // was retired with Dependabot it was widened to the directory instead of deleted, because
+  // cla.yml — on the same trigger, handing a minted App token to a third-party action — had
+  // never been graded by it at all.
+  const targets = workflows.filter(({ workflow }) =>
+    Object.keys(workflow.on ?? {}).includes("pull_request_target"),
+  );
 
-    const steps = Object.values(dependabot.jobs).flatMap((j) => j.steps ?? []);
-    expect(steps.length).toBeGreaterThan(0); // not vacuous: there are steps to inspect
-    expect(steps.filter((s) => s.uses?.startsWith("actions/checkout"))).toHaveLength(0);
+  it("finds the workflows the rules below grade", () => {
+    // Non-vacuity: with nothing collected, both loops below pass while asserting nothing.
+    expect(targets.map((t) => t.file)).toContain("cla.yml");
+  });
+
+  it("never checks out code", () => {
+    for (const { file, workflow } of targets) {
+      const steps = Object.values(workflow.jobs).flatMap((j) => j.steps ?? []);
+      expect(steps.length, `${file}: there must be steps to inspect`).toBeGreaterThan(0);
+      expect(
+        steps.filter((s) => s.uses?.startsWith("actions/checkout")).map((s) => s.uses),
+        `${file} runs on pull_request_target and must not check out code`,
+      ).toEqual([]);
+    }
   });
 
   it("grants nothing workflow-wide", () => {
-    // Job-scoped permissions only, so the metadata step cannot write anything.
-    expect(dependabot.env === undefined || Object.keys(dependabot.env).length === 0).toBe(true);
-    expect(Object.keys(dependabot.jobs)).toHaveLength(1);
+    // `permissions: {}` at the top, so every grant is job-scoped and argued for where it is
+    // used. An omitted block is not the same thing: the token then carries the repository's
+    // default permissions, on a trigger any external contributor can fire.
+    for (const { file, workflow } of targets) {
+      expect(workflow.permissions, `${file} must declare \`permissions: {}\``).toEqual({});
+    }
   });
 });

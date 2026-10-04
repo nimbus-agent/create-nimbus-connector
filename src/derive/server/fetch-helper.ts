@@ -596,6 +596,45 @@ function classifyLastStatement(node: AstNode): boolean | undefined {
   return undefined;
 }
 
+/** What `matchThrowingFetchTail` recovers: the fetch call, its url argument, the closing line. */
+type ThrowingFetchTail = {
+  readonly fetchCall: AstNode;
+  readonly fetchUrl: AstNode;
+  readonly closing: AstNode;
+};
+
+/**
+ * The four statements both THROWING helpers end with — `renderFetchHelper` and `renderWriteHelper`
+ * write them line for line alike: the fetch call, `const text = await res.text();`, the `!res.ok`
+ * guard, then exactly ONE closing statement. Not zero (a helper cannot end at the guard), not two
+ * or more (an extra statement there is exactly the class of mutation `matchFetchHelperBody`'s
+ * positional walk exists to close). What the closing statement may be differs by helper — the
+ * read helper's two `jsonFallbackRaw` forms, the write helper's single try/catch — so it is handed
+ * back for each caller to classify.
+ *
+ * The fetch url is pinned here because both helpers pin it identically: with the passthrough const
+ * in front of the fetch, the emitter passes that const's own binding, so the base has already been
+ * consumed; pinned to the identifier `url` rather than accepted as "some expression", or a helper
+ * fetching something else entirely would be recorded with a base it never actually requests.
+ *
+ * `tail` is the body from the fetch statement on — a SLICE, so the caller's walk cursor still
+ * never leaves the caller. The two walks carried this run as two copies, which is the drift
+ * `isJsonTryCatch`'s docstring names: one side tightened while its twin keeps accepting.
+ */
+function matchThrowingFetchTail(
+  tail: readonly AstNode[],
+  passthrough: boolean,
+): ThrowingFetchTail | undefined {
+  if (tail.length !== 4) return undefined;
+  const fetchCall = matchFetchStatement(tail[0]);
+  if (fetchCall === undefined) return undefined;
+  const fetchUrl = callArgs(fetchCall)?.[0];
+  if (fetchUrl === undefined) return undefined;
+  if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
+  if (!isTextStatement(tail[1]) || !isThrowGuard(tail[2])) return undefined;
+  return { fetchCall, fetchUrl, closing: tail[3]! };
+}
+
 /** What `matchFetchHelperBody` recovers from the read helper's statement sequence. */
 type FetchHelperBody = {
   /** The `fetch(<url>, <options>)` CallExpression itself, for the caller's url/options reads. */
@@ -637,12 +676,11 @@ type FetchHelperBody = {
 function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undefined {
   let idx = 0;
 
-  // `body[idx]` is `AstNode | undefined` past the end, and every matcher below already refuses an
-  // absent node — `constDecl` and `ifStatement` (read.ts) both take `AstNode | undefined` and both
-  // begin by testing `node?.type`. So the bound is enforced once, by the type, rather than five
-  // times by hand. What the hand-written checks added was five `!` assertions asserting exactly
-  // what the ternary beside them had just tested; the WALK is unchanged, and `idx` still never
-  // leaves this function.
+  // `body[idx]` is `AstNode | undefined` past the end, and both matchers below already refuse an
+  // absent node — `constDecl` (read.ts) takes `AstNode | undefined` and begins by testing
+  // `node?.type`. So the bound is enforced by the type rather than by hand; the run from the
+  // fetch statement on is `matchThrowingFetchTail`'s, which is handed a slice and counts it
+  // exactly. The WALK is unchanged, and `idx` still never leaves this function.
   const pathPart = matchPathPartConst(body[idx]);
   const normalizeLeadingSlash = pathPart !== undefined;
   if (normalizeLeadingSlash) idx++;
@@ -662,34 +700,15 @@ function matchFetchHelperBody(body: readonly AstNode[]): FetchHelperBody | undef
   // them apart from the `normalizeLeadingSlash: true` shape `grafana` is the only fixture to set.
   if (pathPart !== undefined && pathPart.httpArm !== passthrough) return undefined;
 
-  const fetchCall = matchFetchStatement(body[idx]);
-  if (fetchCall === undefined) return undefined;
-  idx++;
-
-  const fetchUrl = callArgs(fetchCall)?.[0];
-  if (fetchUrl === undefined) return undefined;
-  // With the passthrough const in front of it the emitter passes that const's own binding, so
-  // the base has already been consumed above; pinned to the identifier `url` rather than accepted
-  // as "some expression", or a helper fetching something else entirely would be recorded with a
-  // base it never actually requests.
-  if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
-
-  if (!isTextStatement(body[idx])) return undefined;
-  idx++;
-
-  if (!isThrowGuard(body[idx])) return undefined;
-  idx++;
-
-  // Exactly one statement left — the plain return or the jsonFallbackRaw try/catch. Not zero
-  // (a helper cannot end at the guard), not two-or-more (an extra statement here is exactly
-  // the class of mutation this rewrite closes).
-  if (body.length - idx !== 1) return undefined;
-  const jsonFallbackRaw = classifyLastStatement(body[idx]!);
+  const tail = matchThrowingFetchTail(body.slice(idx), passthrough);
+  if (tail === undefined) return undefined;
+  // The closing statement — the plain return or the jsonFallbackRaw try/catch.
+  const jsonFallbackRaw = classifyLastStatement(tail.closing);
   if (jsonFallbackRaw === undefined) return undefined;
 
   return {
-    fetchCall,
-    baseTemplate: passthroughTemplate ?? fetchUrl,
+    fetchCall: tail.fetchCall,
+    baseTemplate: passthroughTemplate ?? tail.fetchUrl,
     normalizeLeadingSlash,
     jsonFallbackRaw,
     passthrough,
@@ -1007,34 +1026,20 @@ function matchWriteHelperBody(body: readonly AstNode[]): WriteHelperBody | undef
   const passthrough = passthroughTemplate !== undefined;
   if (passthrough) idx++;
 
-  const fetchCall = matchFetchStatement(body[idx]);
-  if (fetchCall === undefined) return undefined;
-  idx++;
+  // The same four-statement run the read helper ends with, url pin included.
+  const tail = matchThrowingFetchTail(body.slice(idx), passthrough);
+  if (tail === undefined) return undefined;
 
-  const args = callArgs(fetchCall);
-  const fetchUrl = args?.[0];
-  const options = args?.[1];
-  if (fetchUrl === undefined || options === undefined) return undefined;
-  // Same pin as the read helper's: with the passthrough const in front of it the emitter passes
-  // that const's own binding, so a helper fetching something else would be recorded with a base
-  // it never actually requests.
-  if (passthrough && !isIdent(fetchUrl, "url")) return undefined;
-
+  const options = callArgs(tail.fetchCall)?.[1];
+  if (options === undefined) return undefined;
   const headers = matchWriteHelperOptions(options);
   if (headers === undefined) return undefined;
 
-  if (!isTextStatement(body[idx])) return undefined;
-  idx++;
+  // Only one shape the closing statement can be: renderWriteHelper's tail has no spec field to
+  // vary it, unlike the read helper's jsonFallbackRaw pair.
+  if (!isJsonTryCatch(tail.closing, (s) => isNullLiteral(returnArgument(s)))) return undefined;
 
-  if (!isThrowGuard(body[idx])) return undefined;
-  idx++;
-
-  // Exactly one statement left, and only one shape it can be: renderWriteHelper's tail has no
-  // spec field to vary it, unlike the read helper's jsonFallbackRaw pair.
-  if (body.length - idx !== 1) return undefined;
-  if (!isJsonTryCatch(body[idx]!, (s) => isNullLiteral(returnArgument(s)))) return undefined;
-
-  return { baseTemplate: passthroughTemplate ?? fetchUrl, headers, passthrough };
+  return { baseTemplate: passthroughTemplate ?? tail.fetchUrl, headers, passthrough };
 }
 
 /** `matchWriteHelperFunction`'s match, plus the hoisted base const's own statement (if any) for the caller to claim alongside the function. */

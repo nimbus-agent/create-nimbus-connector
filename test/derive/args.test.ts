@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser, parseModule } from "../../src/derive/ast.ts";
 import { constDecl } from "../../src/derive/read.ts";
-import { recognizeArgs } from "../../src/derive/server/args.ts";
+import { recognizeArgs, schemaShapeOf } from "../../src/derive/server/args.ts";
 
 beforeAll(async () => {
   await initParser();
@@ -117,5 +117,37 @@ describe("recognizeArgs: schemaStyle", () => {
       limit: { type: "number", optional: true },
     });
     expect(result?.schemaStyle).toBe("expanded");
+  });
+});
+
+/**
+ * `schemaShapeOf` is the one construction of the argsSchemaStyle vote's per-tool evidence —
+ * tools-hand.ts, tools-rest.ts and search.ts all build theirs through it.
+ */
+describe("schemaShapeOf", () => {
+  function shapeOf(expression: string) {
+    const result = resultOf(expression);
+    if (result === undefined) throw new Error(`not a recognized schema: ${expression}`);
+    return schemaShapeOf(result);
+  }
+
+  it("counts the properties the object was written with, and reports a one-liner as one", () => {
+    expect(shapeOf("z.object({ a: z.string(), b: z.number() })")).toEqual({
+      propertyCount: 2,
+      oneLine: true,
+    });
+  });
+
+  it("reports an expanded object as not one line", () => {
+    expect(shapeOf("z.object({\n  a: z.string(),\n})")).toEqual({
+      propertyCount: 1,
+      oneLine: false,
+    });
+  });
+
+  it("reports an empty object as zero properties and not one line — the vote's abstention", () => {
+    // `schemaStyle` is ABSENT for `z.object({})` (identical under both conventions), and
+    // absence must read as not-one-line: a one-liner is decisive in voteArgsSchemaStyle.
+    expect(shapeOf("z.object({})")).toEqual({ propertyCount: 0, oneLine: false });
   });
 });

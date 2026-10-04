@@ -48,16 +48,16 @@
     "standalone-acceptance": "bun scripts/standalone-acceptance.ts"
   },
   "dependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "optionalDependencies": {
-    "@babel/parser": "^8.0.4",
-    "@babel/types": "^8.0.4",
+    "@babel/parser": "^8.0.6",
+    "@babel/types": "^8.0.6",
     "@biomejs/js-api": "^6.0.0",
-    "@biomejs/wasm-nodejs": "^2.5.13"
+    "@biomejs/wasm-nodejs": "^2.5.15"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.13",
+    "@biomejs/biome": "^2.5.15",
     "@types/bun": "latest",
     "typescript": "^7.0.2"
   }

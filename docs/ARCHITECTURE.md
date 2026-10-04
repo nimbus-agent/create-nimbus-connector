@@ -273,6 +273,14 @@ sibling directory named `Nimbus` or `nimbus`. A resolved path must contain the m
 `packages/mcp-connectors/shared/mcp-tool-kit.ts` or resolution fails loudly, rather than
 producing a wall of missing-file errors.
 
+Nimbus deleted that file, with the rest of `packages/mcp-connectors/`, on 2026-08-27 (commit
+`2118cdd4`), when its connectors moved to `nimbus-mcp-servers`. So every harness that resolves a
+root — and `--gateway-wiring`, which checks the same marker — refuses a current Nimbus checkout
+by name, and runs only against one from before the move. That is the right failure: it stops a
+gate from reading a tree it was not written for. What re-targeting would take is in
+[ROADMAP § Known limitations](./ROADMAP.md#known-limitations), under *What the byte gates do not
+reach*.
+
 `fixtures/expectations.json` records, per fixture, **which** files are expected to match — not
 how many. That distinction is load-bearing: for a partial fixture at 3 of 6, a count alone
 reports PASS when a change newly matches `README.md` while breaking `package.json`. The harness
@@ -387,7 +395,7 @@ credentials where `credentialsIn` says, and **caches** — two tool calls produc
 
 It needs only the SDK from npm and no Nimbus checkout, so unlike `diff:golden` and
 `wiring:conformance` it **does** run in CI, in `.github/workflows/acceptance.yml`, on pull
-requests touching `src/`, `scripts/` or `fixtures/`, and daily.
+requests touching `src/`, `scripts/`, `fixtures/`, `package.json` or `bun.lock`, and daily.
 
 That workflow is deliberately separate from the merge gate: both network-dependent harnesses
 live there, so a registry outage cannot red-X a pull request that changed nothing related. The

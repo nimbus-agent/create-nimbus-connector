@@ -364,11 +364,11 @@ describe("the checked-in schema document", () => {
     ).toContain("schema/connector-spec.schema.json");
   });
 
-  it("cannot be referenced from inside a spec file, which is why README says to map the glob", () => {
+  it("cannot be referenced from inside a spec file, which is why SPEC-RULES says to map the glob", () => {
     // The obvious way to wire a JSON Schema up — a "$schema" key in the document itself — is the
     // one way that does not work here: ConnectorSpecSchema is a z.strictObject, so the key that
-    // made the editor happy is the key that makes the CLI refuse the file. README states this;
-    // this is what keeps the statement true if the schema ever stops being strict.
+    // made the editor happy is the key that makes the CLI refuse the file. docs/SPEC-RULES.md
+    // states this; this is what keeps the statement true if the schema ever stops being strict.
     expect(() => parseSpec({ ...validSpec, $schema: SCHEMA_ID })).toThrow(
       'Unrecognized key: "$schema"',
     );
@@ -412,9 +412,9 @@ describe("the gap between the published schema and the generator", () => {
   }
 
   it("accepts an env local named `token`, which validateSpec — not parseSpec — rejects", () => {
-    // README names three specs that are green in an editor and refused by the CLI; the table
-    // above pins two. This is the third, and it cannot join them: every case there asserts
-    // `parseSpec` itself throws, and this one gets PAST `parseSpec` entirely.
+    // docs/SPEC-RULES.md names three specs that are green in an editor and refused by the CLI;
+    // the table above pins two. This is the third, and it cannot join them: every case there
+    // asserts `parseSpec` itself throws, and this one gets PAST `parseSpec` entirely.
     //
     // Which is why it is the one most worth a test. RESERVED_IDENTIFIERS lives in
     // src/validate.ts and is checked by `validateSpec`, a pass of its own — the distinction the

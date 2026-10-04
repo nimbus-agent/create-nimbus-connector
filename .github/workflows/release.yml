@@ -195,7 +195,7 @@ jobs:
 
       # The second irreversible-mistake gate, and the one specific to this
       # package. `bin` points at ./src/cli.ts — a TypeScript file with a
-      # `#!/usr/bin/env bun` shebang — and `files` is ["src", "README.md"].
+      # `#!/usr/bin/env bun` shebang — and `files` is ["src", "schema", "README.md"].
       # That is deliberate (the CLI is Bun-only), but it means the usual signals
       # are all blind to the failure that matters: `npm pack` happily builds a
       # tarball whose bin target was excluded by `files`, `npm install` happily
@@ -322,7 +322,7 @@ jobs:
           fi
 
       - name: Verify provenance names this repo, workflow and commit
-        uses: nimbus-agent/.github/actions/verify-npm-provenance@5fb42792fa88287048fd24f704183b9a9b807a67
+        uses: nimbus-agent/.github/actions/verify-npm-provenance@75921257abc9596b7de0fb4162402ad7fb7440f6
         with:
           package: "create-nimbus-connector"
           version: ${{ steps.published.outputs.version }}

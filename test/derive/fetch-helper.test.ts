@@ -1273,6 +1273,66 @@ describe("recognizeWriteHelper", () => {
 });
 
 /**
+ * The run both THROWING helpers end with — the fetch call, `const text = await res.text();`, the
+ * `!res.ok` guard and exactly one closing statement — is read by one matcher for both
+ * (`matchThrowingFetchTail`). Every mutation of that run is applied to the read helper AND the
+ * write helper, so a walk that stopped going through the shared matcher, and with it any one of
+ * these checks, fails here by name.
+ */
+describe("the throwing tail both fetch helpers share", () => {
+  const TEXT_LINE = "  const text = await res.text();\n";
+  const GUARD_RE = / {2}if \(!res\.ok\) \{\n {4}throw [^\n]*\n {2}\}\n/;
+
+  function guardOf(source: string): string {
+    const guard = GUARD_RE.exec(source)?.[0];
+    if (guard === undefined) throw new Error("no !res.ok guard in the source");
+    return guard;
+  }
+
+  // The first two keep the run at four statements, so each is refused by the one check it names
+  // and not by the count; the rest change the count or the order.
+  const MUTATIONS: ReadonlyArray<readonly [string, (source: string) => string]> = [
+    [
+      "reads the body with res.json() instead",
+      (s) => s.replace("await res.text();", "await res.json();"),
+    ],
+    ["tests res.ok without negating it", (s) => s.replace("if (!res.ok) {", "if (res.ok) {")],
+    ["drops the text() read", (s) => s.replace(TEXT_LINE, "")],
+    ["drops the !res.ok guard", (s) => s.replace(GUARD_RE, "")],
+    [
+      "puts the guard ahead of the text() read",
+      (s) => s.replace(guardOf(s), "").replace(TEXT_LINE, `${guardOf(s)}${TEXT_LINE}`),
+    ],
+    [
+      "ends at the guard, with no closing statement",
+      (s) => `${s.slice(0, s.indexOf(guardOf(s)) + guardOf(s).length)}}`,
+    ],
+    ["carries a second closing statement", (s) => s.replace(/\n\}$/, "\n  return null;\n}")],
+  ];
+
+  const HELPERS = [
+    ["the read helper", NEWRELIC, (source: string) => run(source)],
+    ["the write helper", ZZ_BOTH_WRITE, (source: string) => runWrite(source)],
+  ] as const;
+
+  for (const [helper, pristine, recognize] of HELPERS) {
+    it(`recognizes ${helper} unmutated, so every refusal below is the mutation's`, () => {
+      expect(recognize(pristine).fields).toBeDefined();
+    });
+
+    for (const [mutation, mutate] of MUTATIONS) {
+      it(`refuses ${helper} when it ${mutation}`, () => {
+        const corrupted = mutate(pristine);
+        expect(corrupted).not.toBe(pristine);
+        const { fields, claims } = recognize(corrupted);
+        expect(fields).toBeUndefined();
+        expect(claims.claims()).toEqual([]);
+      });
+    }
+  }
+});
+
+/**
  * Which HELPERS a module carries is decided entirely by its tools (`renderReadHelper` /
  * `renderWriteHelper`), so each one's presence is evidence to be held against the recognized
  * tools — the same class of cross-check `fetch-helper:query-passthrough-mismatch` already applies

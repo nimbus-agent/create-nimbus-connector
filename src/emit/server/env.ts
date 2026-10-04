@@ -5,7 +5,7 @@ type EnvEntry = z.infer<typeof EnvSchema>;
 
 const STRIP = String.raw`replace(/\/$/, "")`;
 
-/** Matches a bare JS identifier — see `headerKey`, its only caller. */
+/** Matches a bare JS identifier — see `objectKey`, its only caller. */
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
@@ -74,8 +74,18 @@ function guardLines(e: EnvEntry): string[] {
   return [`  if (${conds}) {`, `    throw new Error(${JSON.stringify(message)});`, `  }`];
 }
 
-/** A header name that needs no quotes as an object key. */
-function headerKey(name: string): string {
+/**
+ * A spec-supplied name as an object-literal key: bare when it is a valid identifier, quoted
+ * otherwise — so `Accept` stays bare and datadog's `"DD-API-KEY"` cannot be written any other way.
+ *
+ * The emitter's ONE spelling of that rule, for every object whose keys come from a spec field:
+ * this module's header names (`headerNames`, `extraHeaders`), fetch-helper.ts's `inlineHeaders`
+ * in both the hand-rolled and the rest-kit helper, and body.ts's request-body field names. Those
+ * were four hand-written copies of the pattern; the deriver reads them all back through one rule,
+ * src/derive/read.ts's `IDENTIFIER_KEY_RE`, which is a copy of this one for the
+ * dependency-direction reason its own docstring gives.
+ */
+export function objectKey(name: string): string {
   return IDENTIFIER_RE.test(name) ? name : JSON.stringify(name);
 }
 
@@ -97,7 +107,7 @@ function headerKey(name: string): string {
  */
 function authProps(e: EnvEntry, values: readonly string[]): string[] {
   if (e.auth === "headers") {
-    return e.vars.map((_, i) => `${headerKey(e.headerNames![i]!)}: ${values[i]!}`);
+    return e.vars.map((_, i) => `${objectKey(e.headerNames![i]!)}: ${values[i]!}`);
   }
   if (e.auth === "basic") {
     // prefix/suffix decorate the USERNAME only — see EnvSchema's refine.
@@ -123,7 +133,7 @@ function bindingValues(e: EnvEntry): string[] {
 /** The static header lines, in spec order, between the auth entries and the trailing Accept. */
 function extraProps(e: EnvEntry): string[] {
   return Object.entries(e.extraHeaders ?? {}).map(
-    ([name, value]) => `${headerKey(name)}: ${JSON.stringify(value)}`,
+    ([name, value]) => `${objectKey(name)}: ${JSON.stringify(value)}`,
   );
 }
 

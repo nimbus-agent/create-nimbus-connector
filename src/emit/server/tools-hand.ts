@@ -1,9 +1,9 @@
-import { type ConnectorSpec, parsePathTemplate } from "../../spec.ts";
+import { type ConnectorSpec, parsePathTemplate, type ToolSpec } from "../../spec.ts";
 import { hoistedLocals, renderHoists, renderZodSchema } from "./args.ts";
 import { renderBodyExpr } from "./body.ts";
 import { baseExpr } from "./fetch-helper.ts";
 import { type RenderContext, renderPath } from "./path-template.ts";
-import { renderQueryLines, usedHoists } from "./query.ts";
+import { renderQueryBlock, usedHoists } from "./query.ts";
 import { renderSearchTool } from "./search.ts";
 
 const PARAM = "p";
@@ -20,24 +20,55 @@ function renderConciseTool(head: string, param: string, call: string, inline: bo
   return `reg(${head}, async ${param} =>\n  ${call},\n);`;
 }
 
+/** What a registration's opening lines name of the tool. */
+type ToolHeading = Pick<ToolSpec, "name" | "description">;
+
+/**
+ * A multi-line registration call's opening: the callee, then the tool's name, description and
+ * schema one per line. Every multi-line form in both registration styles opens with it — `reg(`
+ * here, the registrar's own name in tools-rest.ts — and the deriver reads the same three
+ * arguments back through `regCallParts` and `registrarCallParts`.
+ */
+export function registrationHead(callee: string, tool: ToolHeading, schema: string): string[] {
+  return [
+    `${callee}(`,
+    `  ${JSON.stringify(tool.name)},`,
+    `  ${JSON.stringify(tool.description)},`,
+    `  ${schema},`,
+  ];
+}
+
+/**
+ * An `impl: "stub"` tool in either registration style: the opening, then a parameterless handler
+ * whose only statement throws `<name> is not implemented`. The styles differ in exactly one
+ * respect — this file's handler is always `async`, tools-rest.ts's registrar callback never is —
+ * and that is the one parameter the deriver's `recognizeStubHandler` takes to read the same shape
+ * back, for the same reason: two copies of the stub were two places for one style to drift.
+ */
+export function renderStubTool(
+  head: readonly string[],
+  tool: ToolHeading,
+  isAsync: boolean,
+): string {
+  const notImplemented = JSON.stringify(`${tool.name} is not implemented`);
+  return [
+    ...head,
+    `  ${isAsync ? "async " : ""}() => {`,
+    `    throw new Error(${notImplemented});`,
+    "  },",
+    ");",
+  ].join("\n");
+}
+
 function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): string {
   if (tool.impl === "search") return renderSearchTool(spec, tool);
   const schema = renderZodSchema(tool.args, spec.argsSchemaStyle);
   const head = `${JSON.stringify(tool.name)}, ${JSON.stringify(tool.description)}, ${schema}`;
+  // The same three arguments one per line, for every form but the concise one-liner: the stub,
+  // the query branch and the block body below.
+  const headLines = registrationHead("reg", tool, schema);
 
-  if (tool.impl === "stub") {
-    const notImplemented = JSON.stringify(`${tool.name} is not implemented`);
-    return [
-      "reg(",
-      `  ${JSON.stringify(tool.name)},`,
-      `  ${JSON.stringify(tool.description)},`,
-      `  ${schema},`,
-      "  async () => {",
-      `    throw new Error(${notImplemented});`,
-      "  },",
-      ");",
-    ].join("\n");
-  }
+  if (tool.impl === "stub") return renderStubTool(headLines, tool, true);
 
   // Schema guarantees "path" is present here — ToolSchema's refine rejects any
   // impl !== "stub" tool with no path.
@@ -116,19 +147,10 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
   const param = needsParam ? `(${PARAM})` : "()";
 
   if (query !== undefined) {
-    const hoists = renderHoists(tool.args, PARAM, used).map((l) => `    ${l}`);
-    const queryLines = renderQueryLines(query, { param: PARAM, hoisted, args: tool.args }).map(
-      (l) => `    ${l}`,
-    );
     return [
-      "reg(",
-      `  ${JSON.stringify(tool.name)},`,
-      `  ${JSON.stringify(tool.description)},`,
-      `  ${schema},`,
+      ...headLines,
       `  async ${param} => {`,
-      ...hoists,
-      `    const u = new URL(${pathExpr});`,
-      ...queryLines,
+      ...renderQueryBlock(query, { param: PARAM, hoisted, args: tool.args, used, pathExpr }),
       // The absolute URL, NOT `${u.pathname}${u.search}` — that drops only the origin and
       // keeps `u.pathname`, which still carries the base's OWN path component (e.g.
       // "/api/v10"), because `pathExpr` was built with the base spliced in as a `new URL(...)`
@@ -165,10 +187,7 @@ function renderTool(spec: ConnectorSpec, tool: ConnectorSpec["tools"][number]): 
     "    }",
   ]);
   return [
-    "reg(",
-    `  ${JSON.stringify(tool.name)},`,
-    `  ${JSON.stringify(tool.description)},`,
-    `  ${schema},`,
+    ...headLines,
     `  async ${param} => {`,
     ...hoists,
     ...guardLines,

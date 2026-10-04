@@ -29,8 +29,9 @@
  * That is a false green in this repository's exact sense, and it cannot be closed — JSON Schema
  * has no way to say "this field is only valid when that one is set to this". So it is stated, in
  * three places that a reader can reach independently: SCHEMA_LIMITATION below lands in the
- * document's own `description`, README.md repeats it beside the instructions for wiring the schema
- * up, and test/schema.test.ts pins two concrete specs that fall through the gap.
+ * document's own `description`, docs/SPEC-RULES.md's *Editor support* section repeats it beside
+ * the instructions for wiring the schema up, and test/schema.test.ts pins two concrete specs that
+ * fall through the gap.
  *
  * **Hand-encoding those rules here is the one thing not to do.** It would be a second source of
  * truth for the spec language — the thing this repo removes wherever it finds one — and it would
@@ -55,8 +56,8 @@ export const SCHEMA_PATH = join(
 
 /**
  * The URL the checked-in document is served from, and therefore the URL an EDITOR-SIDE mapping
- * points at — README.md's `.vscode/settings.json` block quotes it, and test/schema.test.ts asserts
- * the two agree, so the instructions cannot come to point somewhere the `$id` does not.
+ * points at — docs/SPEC-RULES.md's `.vscode/settings.json` block quotes it, and test/schema.test.ts
+ * asserts the two agree, so the instructions cannot come to point somewhere the `$id` does not.
  *
  * NOT the string a spec file names in its own `"$schema"` key. `ConnectorSpecSchema` is a
  * `z.strictObject`, so a spec carrying that key is refused — `Unrecognized key: "$schema"`, pinned

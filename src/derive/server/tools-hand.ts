@@ -16,13 +16,13 @@ import {
   stringLit,
   throwArgument,
 } from "../read.ts";
-import { type ArgFields, recognizeArgs, type SchemaShape } from "./args.ts";
+import { type ArgFields, recognizeArgs, type SchemaShape, schemaShapeOf } from "./args.ts";
 import { type BodyTool, recognizeBodyExpr } from "./body.ts";
 import { recognizeConditionalPath } from "./conditional-path.ts";
 import { mergeHoistedArgs, recognizeHoistedBlock, splitHoists } from "./hoists.ts";
 import { type PathLocal, recognizePath } from "./path-template.ts";
 import { type BasePrefix, PATH_LOCAL, type QueryEntry, recognizeQueryBlock } from "./query.ts";
-import { recognizeSearchTool, type SearchToolFields } from "./search.ts";
+import { recognizeSearchTool, regCallParts, type SearchToolFields } from "./search.ts";
 
 /**
  * The inverse of src/emit/server/tools-hand.ts's renderTool — recovers one `reg(...)` call's
@@ -150,6 +150,37 @@ export type ToolsResult = {
    */
   basePrefixes: readonly (BasePrefix | undefined)[];
 };
+
+/** The per-tool evidence `toolColumns` reads — the part both styles' shapes have in common. */
+type ColumnSource<F> = {
+  readonly fields: F;
+  readonly staticStyle?: StaticPathStyle;
+  readonly schemaShape: SchemaShape;
+  readonly basePrefix?: BasePrefix;
+};
+
+/**
+ * A recognizer's shapes as the parallel columns its result carries — `tools[i]`,
+ * `staticPathStyles[i]`, `schemaShapes[i]` and `basePrefixes[i]` all describe tool i. Both
+ * registration styles return these four (`ToolsResult` here, tools-rest.ts's `RestToolsResult`)
+ * and index.ts reads them from either the same way: `finalizeTools` votes over the two style
+ * columns and `rebaseQueryTools` reads the prefix column beside the tools. So they are built in one
+ * place for both recognizers, and only what one style alone carries — `handlerStyle`, here — is
+ * added by its caller.
+ */
+export function toolColumns<F>(shapes: readonly ColumnSource<F>[]): {
+  tools: F[];
+  staticPathStyles: (StaticPathStyle | undefined)[];
+  schemaShapes: SchemaShape[];
+  basePrefixes: (BasePrefix | undefined)[];
+} {
+  return {
+    tools: shapes.map((s) => s.fields),
+    staticPathStyles: shapes.map((s) => s.staticStyle),
+    schemaShapes: shapes.map((s) => s.schemaShape),
+    basePrefixes: shapes.map((s) => s.basePrefix),
+  };
+}
 
 function isRegCall(node: AstNode): AstNode | undefined {
   const call = expressionOf(node);
@@ -284,36 +315,6 @@ export function pathFromJsonResult(
     ...(fetched.method === undefined ? {} : { method: fetched.method }),
     ...(fetched.bodyNode === undefined ? {} : { bodyNode: fetched.bodyNode }),
   };
-}
-
-/**
- * `reg(name, description, schema, handler)`'s four arguments, with the two string-literal ones
- * already read — the exact starting point `recognizeOne` and `recognizeStubShape` both need,
- * shared here rather than duplicated. tools-rest.ts's own four-argument unpack is already
- * factored into `registrarCallParts` for the identical reason (see that function's own
- * docstring); leaving this one duplicated across two functions in the same file is how the two
- * *files'* recognizers drifted before hoists.ts was extracted, one level down.
- */
-type RegCallParts = {
-  readonly name: string;
-  readonly description: string;
-  readonly schemaNode: AstNode;
-  readonly handlerNode: AstNode;
-};
-
-function regCallParts(call: AstNode): RegCallParts | undefined {
-  const args = callArgs(call);
-  if (args?.length !== 4) return undefined;
-  const [nameNode, descriptionNode, schemaNode, handlerNode] = args as [
-    AstNode,
-    AstNode,
-    AstNode,
-    AstNode,
-  ];
-  const name = stringLit(nameNode);
-  const description = stringLit(descriptionNode);
-  if (name === undefined || description === undefined) return undefined;
-  return { name, description, schemaNode, handlerNode };
 }
 
 /** What `recognizeQueryTool` needs from the `reg()` call its caller has already read. */
@@ -457,10 +458,7 @@ function recognizeOne(call: AstNode, helperLocal: string): ToolShape | undefined
 
   const argsResult = recognizeArgs(schemaNode);
   if (argsResult === undefined) return undefined;
-  const schemaShape = {
-    propertyCount: Object.keys(argsResult.args).length,
-    oneLine: argsResult.schemaStyle === "inline",
-  };
+  const schemaShape = schemaShapeOf(argsResult);
 
   // The concise, expression-bodied form: `async (...) => jsonResult(await helper(path))`.
   if (!arrow.isBlock) {
@@ -621,10 +619,7 @@ function recognizeStubShape(call: AstNode): ToolShape | undefined {
     isBlock: true,
     hasHoists: false,
     votesHandlerStyle: false,
-    schemaShape: {
-      propertyCount: Object.keys(argsResult.args).length,
-      oneLine: argsResult.schemaStyle === "inline",
-    },
+    schemaShape: schemaShapeOf(argsResult),
   };
 }
 
@@ -700,10 +695,7 @@ export function recognizeTools(
     "tools",
   );
   return {
-    tools: shapes.map((s) => s.fields),
+    ...toolColumns(shapes),
     ...(hasBlockWithoutHoists ? { handlerStyle: "block" as const } : {}),
-    staticPathStyles: shapes.map((s) => s.staticStyle),
-    schemaShapes: shapes.map((s) => s.schemaShape),
-    basePrefixes: shapes.map((s) => s.basePrefix),
   };
 }

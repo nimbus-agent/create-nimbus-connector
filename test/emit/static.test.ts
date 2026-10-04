@@ -28,6 +28,16 @@ const spec = parseSpec({
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+/** A devDependency range this repository pins, read from its own package.json. */
+function pinnedDevRange(name: string): string {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+    devDependencies: Record<string, string>;
+  };
+  const range = pkg.devDependencies[name];
+  if (range === undefined) throw new Error(`package.json declares no ${name} devDependency`);
+  return range;
+}
+
 /**
  * The `@biomejs/biome` range this repository pins, READ from package.json rather than restated
  * here — the whole point being that a second hand-maintained copy of the version is the defect,
@@ -39,12 +49,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
  * stayed green.
  */
 function pinnedBiomeRange(): string {
-  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
-    devDependencies: Record<string, string>;
-  };
-  const range = pkg.devDependencies["@biomejs/biome"];
-  if (range === undefined) throw new Error("package.json declares no @biomejs/biome devDependency");
-  return range;
+  return pinnedDevRange("@biomejs/biome");
 }
 
 /** The same pin as a bare version, for the `$schema` URL's path segment. */
@@ -95,13 +100,19 @@ describe("emitSandboxTest", () => {
 describe("standalone package.json", () => {
   const pkg = () => JSON.parse(emitPackageJson(spec, "standalone").content);
 
-  it("raises the SDK floor to the version carrying connector-kit", () => {
-    expect(pkg().dependencies["@nimbus-dev/sdk"]).toBe("^1.11.0");
+  it("depends on the SDK's current major, whose first release carries connector-kit", () => {
+    expect(pkg().dependencies["@nimbus-dev/sdk"]).toBe("^2.0.0");
   });
 
-  it("keeps the other two connector dependencies unchanged", () => {
-    expect(pkg().dependencies["@modelcontextprotocol/sdk"]).toBe("1.30.0");
-    expect(pkg().dependencies.zod).toBe("^4.4.2");
+  it("pins the latest MCP SDK and zod, not the monorepo target's corpus-locked ranges", () => {
+    // The two targets shared these literals, which held every standalone package on whatever
+    // the corpus pinned. diff:golden byte-locks the monorepo side only, so only it may lag;
+    // "declares exactly the three connector dependencies" above holds that side still.
+    expect(pkg().dependencies["@modelcontextprotocol/sdk"]).toBe("1.32.0");
+    expect(pkg().dependencies.zod).toBe("^4.6.5");
+    expect(Object.keys(pkg().dependencies)).toEqual(
+      Object.keys(JSON.parse(emitPackageJson(spec, "monorepo").content).dependencies),
+    );
   });
 
   it("adds dev and build scripts producing the manifest's declared entrypoint", () => {
@@ -122,6 +133,14 @@ describe("standalone package.json", () => {
     expect(pkg().devDependencies["@biomejs/biome"]).toBe(pinnedBiomeRange());
     expect(pkg().devDependencies.typescript).toBeDefined();
     expect(pkg().devDependencies["@types/bun"]).toBe("latest");
+  });
+
+  it("typechecks with the TypeScript this repository pins, not a hand-kept second copy", () => {
+    // `^5.6.0` sat in the emitter two majors behind this repository's own TypeScript with
+    // nothing comparing the two — the assertion above only asks that some range is present.
+    // Held together the way BIOME_VERSION is held to the Biome pin. What proves an emitted
+    // package actually typechecks under that compiler is `standalone-acceptance --registry`.
+    expect(pkg().devDependencies.typescript).toBe(pinnedDevRange("typescript"));
   });
 
   it("leaves the monorepo target untouched", () => {
@@ -271,18 +290,19 @@ describe("SDK floor", () => {
     ],
   });
 
-  // ^1.15.0, not the ^1.12.0 the Stage D plan predicted: the SDK released 1.12.0, 1.13.0 and
-  // 1.14.0 while this stage was being built, and `git ls-tree typescript-v1.14.0
-  // sdks/typescript/src/connector-kit/` shows no search-filter.ts in any of them. A package
-  // pinning ^1.12.0 would resolve 1.14.x and fail to import matchesResult at all.
-  it("raises the floor to ^1.15.0 for a standalone search spec", () => {
+  // The search kit (search-filter.ts, matchesResult) arrived in 1.15.0 — `git ls-tree
+  // typescript-v1.14.0 sdks/typescript/src/connector-kit/` shows no search-filter.ts — so a
+  // search spec was once the one spec raised to ^1.15.0 while every other stayed at ^1.11.0.
+  // 2.0.0 still exports the kit (connector-kit/index.ts is byte-identical from 1.15.0), so the
+  // floor at the start of the 2.x line serves both, and the two cases below must agree.
+  it("gives a standalone search spec the ^2.0.0 floor, which already carries the search kit", () => {
     const pkg = JSON.parse(emitPackageJson(searchSpec, "standalone", "MIT").content);
-    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^1.15.0");
+    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^2.0.0");
   });
 
-  it("leaves the floor at ^1.11.0 for a standalone spec with no search tool", () => {
+  it("gives a standalone spec with no search tool the same floor", () => {
     const pkg = JSON.parse(emitPackageJson(plainSpec, "standalone", "MIT").content);
-    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^1.11.0");
+    expect(pkg.dependencies["@nimbus-dev/sdk"]).toBe("^2.0.0");
   });
 
   it("leaves the monorepo floor at ^1.8.1 regardless of search", () => {

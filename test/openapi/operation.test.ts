@@ -526,6 +526,21 @@ describe("refusals", () => {
     }
   });
 
+  it("refuses a type named after a member every object inherits, as it refuses any other", () => {
+    // The scalar lookup is keyed by the document's own `type` string, so it must answer for the
+    // table's own entries and nothing else. Read off a plain object, "toString" found
+    // Object.prototype.toString: the parameter mapped as an argument with NO type, and the
+    // command then failed at parseSpec with "tools[0].args.q.type: Invalid option … usually a
+    // missing key" — a message about a key the document never left out.
+    for (const type of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+      const refusals = mustRefuse(
+        onePath("/widgets", "get", { parameters: [{ name: "q", in: "query", schema: { type } }] }),
+      );
+      expect(kindsOf(refusals), type).toEqual(["schema-type"]);
+      expect(detailOf(refusals, "schema-type"), type).toContain(`declares type "${type}"`);
+    }
+  });
+
   it("refuses a parameter schema that declares no type at all", () => {
     const refusals = mustRefuse(
       onePath("/widgets", "get", { parameters: [{ name: "anything", in: "query", schema: {} }] }),
@@ -727,6 +742,29 @@ describe("refusals", () => {
       );
       expect(kindsOf(refusals)).toEqual(["nested-request-body"]);
       expect(detailOf(refusals, "nested-request-body")).toContain("tags");
+    }
+  });
+
+  it("refuses a body property that is neither scalar nor nested as schema-type, not as a nested body", () => {
+    // `nested-request-body` is the refusal for a property the mapper cannot FLATTEN. A property
+    // with no type, or typed `null`, is flat and simply has no equivalent among the spec
+    // language's types — the query-parameter case — so it earns `schema-type`, and the message
+    // says which of the two it is. Before this, every body-property refusal under test was
+    // nested, so nothing showed the two kinds stay apart once a caller passes `nestedKind`.
+    for (const [schema, says] of [
+      [{}, "declares no type"],
+      [{ type: "null" }, 'declares type "null"'],
+    ] as const) {
+      const refusals = mustRefuse(
+        onePath("/widgets", "post", {
+          requestBody: {
+            content: { "application/json": { schema: { properties: { note: schema } } } },
+          },
+        }),
+      );
+      expect(kindsOf(refusals)).toEqual(["schema-type"]);
+      expect(detailOf(refusals, "schema-type")).toContain("note");
+      expect(detailOf(refusals, "schema-type")).toContain(says);
     }
   });
 

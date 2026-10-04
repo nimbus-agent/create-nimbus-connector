@@ -57,6 +57,20 @@ export type ArgsResult = {
 };
 
 /**
+ * The `SchemaShape` a recognized `z.object(...)` carries: how many properties it was written
+ * with, and whether it was written on one line. The construction is shared for the reason the
+ * type is named — four recognizers built this literal by hand (tools-hand.ts twice, tools-rest.ts
+ * and search.ts's merged form), and a hand-built copy is a place for one of them to count
+ * differently from the rest.
+ */
+export function schemaShapeOf(result: ArgsResult): SchemaShape {
+  return {
+    propertyCount: Object.keys(result.args).length,
+    oneLine: result.schemaStyle === "inline",
+  };
+}
+
+/**
  * Unwind `z.number().int().min(1).optional()` from the outside in.
  *
  * Returns undefined on the first modifier this recognizer does not model. That is deliberate:

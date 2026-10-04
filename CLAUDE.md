@@ -3,13 +3,15 @@
 ## What this is
 
 An **MIT-licensed** CLI that generates a [Nimbus](https://github.com/nimbus-agent/Nimbus)
-MCP connector package from a small JSON spec. Nimbus's `packages/mcp-connectors/` holds 94+
-connectors built from one rigid shape; this turns that shape into
-`bunx create-nimbus-connector <name>`.
+MCP connector package from a small JSON spec. Nimbus's 94 first-party connectors were built
+from one rigid shape — in the monorepo's `packages/mcp-connectors/` until 2026-08-27, in
+[`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) since; this turns
+that shape into `bunx create-nimbus-connector <name>`.
 
 It generates for two targets: **monorepo** (lives at `packages/mcp-connectors/<name>/`,
-imports `../../shared/*`) and **standalone** (self-contained, imports
-`@nimbus-dev/sdk/connector-kit`, runs anywhere).
+imports `../../shared/*` — the pre-move layout; see
+[`--nimbus-root` means a pre-move checkout](#--nimbus-root-means-a-pre-move-checkout)) and
+**standalone** (self-contained, imports `@nimbus-dev/sdk/connector-kit`, runs anywhere).
 
 Published to npm as `create-nimbus-connector`. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 for how it is built, [`docs/ROADMAP.md`](./docs/ROADMAP.md) for where it is going,
@@ -18,17 +20,18 @@ for how it is built, [`docs/ROADMAP.md`](./docs/ROADMAP.md) for where it is goin
 
 ## ⚠️ The licensing constraint — read this before copying anything
 
-Three repos, three roles, and the split is load-bearing:
+Four repos, and the split is load-bearing:
 
 | Repo | License | Role |
 | --- | --- | --- |
 | `create-nimbus-connector` (here) | **MIT** | the generator |
-| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | **AGPL-3.0-only** | the monorepo, 94+ connector packages |
+| [`Nimbus`](https://github.com/nimbus-agent/Nimbus) | **AGPL-3.0-only** | the monorepo — gateway and apps; held the connectors in `packages/mcp-connectors/` until 2026-08-27 |
+| [`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers) | **AGPL-3.0-only** | the 94 first-party connectors and their `shared/` since then, published as `@nimbus-dev/connectors` |
 | [`nimbus-sdk`](https://github.com/nimbus-agent/nimbus-sdk) | **MIT** | publishes `@nimbus-dev/sdk` |
 
-**No connector source, and no `shared/` source, may be copied from Nimbus into this
-repository.** Not into `src/`, not into `test/`, not into `fixtures/`. That is a licensing
-violation, not a style preference.
+**No connector source, and no `shared/` source, may be copied from Nimbus or
+`nimbus-mcp-servers` into this repository.** Not into `src/`, not into `test/`, not into
+`fixtures/`. That is a licensing violation, not a style preference.
 
 **The one carve-out: description strings.** All fourteen real-connector fixtures reproduce that
 connector's `nimbus.extension.json` description and its tool descriptions verbatim — 12,688
@@ -67,6 +70,26 @@ Node, npm or pnpm path in this project or its output.
 The one exception is publishing: `.github/workflows/release.yml` sets up Node and runs
 `npm publish --provenance`, because that is the only way to attach a sigstore attestation to
 an npm tarball.
+
+## `--nimbus-root` means a pre-move checkout
+
+On 2026-08-27 Nimbus deleted `packages/mcp-connectors/` (commit `2118cdd4`, #1347); its
+connectors now live in `nimbus-mcp-servers` as `connectors/<name>/` beside a root `shared/`.
+**This repository has not followed.** The default target still emits the pre-move layout, and
+everything here that takes a Nimbus root — `--gateway-wiring` and the four gates below that need
+one — recognises a checkout by `packages/mcp-connectors/shared/mcp-tool-kit.ts`
+(`src/golden/resolve.ts`'s `MARKER`). A current Nimbus checkout, or a `nimbus-mcp-servers` one,
+is therefore refused by name — "marker file missing" from a gate, "does not look like a Nimbus
+checkout" from `--gateway-wiring` — so `preflight --nimbus-root` against one stops at
+`diff:golden` with a FAIL.
+
+So `<nimbus-root>` / `--nimbus-root` means a Nimbus checkout from **before** that commit, and for
+`reach --baseline` exactly the `packages/mcp-connectors` tree `fixtures/reach-baseline.json`
+records — `23c90b92`, Nimbus `a8f76942` (2026-08-14). Re-targeting the generator and its gates
+at the new repository is unbuilt and undecided —
+[`docs/ROADMAP.md`](./docs/ROADMAP.md#known-limitations), *What the byte gates do not reach*,
+has why it is not a path change. **Never edit `fixtures/expectations.json`, or re-record
+`fixtures/reach-baseline.json`, against the new layout to make a gate pass.**
 
 ## The gates, and which ones can lie
 
@@ -123,9 +146,9 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
 - **"Runs in CI" and "is in the merge gate" are different claims**, and conflating them has
   already put a false sentence into a source file. `ci.yml` is the merge gate and runs three
   commands. `standalone-acceptance --registry` and `runtime:acceptance --registry` **do** run in
-  CI — in `acceptance.yml`, on a daily cron and on pull requests touching `src/`, `scripts/` or
-  `fixtures/` — but neither is a required check, deliberately, because both install from npm and
-  a registry outage must not red-X an unrelated pull request.
+  CI — in `acceptance.yml`, on a daily cron and on pull requests touching `src/`, `scripts/`,
+  `fixtures/`, `package.json` or `bun.lock` — but neither is a required check, deliberately,
+  because both install from npm and a registry outage must not red-X an unrelated pull request.
 - **`reach` measures the spec language's coverage of the corpus and proves nothing about any
   individual generated connector that `diff:golden` does not already prove.** It too needs the
   AGPL monorepo and cannot run in CI. `reach --baseline` is the gate form: it fails when a
@@ -134,13 +157,18 @@ generates `zzscratch` into `packages/mcp-connectors/` and removes it again, and 
 - **Coverage floors are per-file, not aggregate**, and `src/cli.ts` / `src/prompts.ts` are
   excluded from the metric because they are driven through `Bun.spawnSync` on the real binary,
   which Bun cannot instrument. Do **not** "raise coverage" by adding in-process tests that
-  duplicate the subprocess ones — see `bunfig.toml`, which explains this at length.
+  duplicate the subprocess ones — see `bunfig.toml`, which explains this at length. The halves
+  that never needed a subprocess — the argument parser and `buildSpec` — live in
+  `src/cli-args.ts` and `src/prompt-spec.ts`, which the floor does grade; logic that a test can
+  call directly belongs there, not in the two excluded files.
 - **A pure refactor can drop a file onto the floor with no test change.** Deleting a *covered*
   function from a file takes one off both halves of its ratio, and `(h-1)/(f-1) < h/f` whenever
   anything in that file is uncovered — so hoisting a shared helper OUT lowers the donor's
-  function coverage. `src/emit/server/tools-rest.ts` sits at 90.91% functions today, tied with
-  `src/format.ts` for the floor, and no test moved. Run `bun test --coverage` after a dedup, not
-  only after adding code.
+  function coverage. It nearly happened in the 2026-10 dedup: hoisting the query block out of
+  `src/emit/server/tools-rest.ts` would have taken it from 10/11 functions to 8/9, under the
+  floor, with no test changed. Its one uncovered function was a real untested branch, and a test
+  for it went in first — `bunfig.toml` has the detail. Run `bun test --coverage` after a dedup,
+  not only after adding code.
 
 ## The byte-safety invariant
 
@@ -170,6 +198,10 @@ test asks the emitters rather than enumerating the names by hand.
   Do hand-manage *line breaks*, which Biome preserves.
 - **Never commit on `main`.** Work on a branch.
 - **Conventional Commits** drive release-please. A `feat:` bumps the minor, `fix:` the patch.
+- **Dependencies are updated by hand**, in periodic bulk pull requests — Dependabot is retired.
+  [`CONTRIBUTING.md`](./CONTRIBUTING.md#updating-dependencies)'s *Updating dependencies* lists
+  what must move together and which ranges `bun outdated` cannot see: the ones
+  `src/emit/package-json.ts` emits, several of them byte-locked to the Nimbus corpus.
 - Comments explain **why**, and cite the corpus measurement behind a choice where one exists.
   This codebase's comments carry reasoning, not restatement; match that.
 - Before claiming anything works, run it. "Generated and it looked right" is not verification.
@@ -196,8 +228,11 @@ src/optional-dep.ts
                    missing formatter falls back to unformatted output, a missing parser
                    cannot fall back at all
 src/golden/        fixture resolution, expectations, snapshots, the subprocess wrapper
-src/cli.ts         arg parsing, the flag combinations, writeFiles
+src/cli.ts         main() and its I/O: reading specs and documents, writeFiles, USAGE
+                   (excluded from coverage with prompts.ts — driven through the real binary)
+src/cli-args.ts    arg parsing and the flag combinations the CLI refuses
 src/prompts.ts     the interactive spec questionnaire (excluded from coverage with cli.ts)
+src/prompt-spec.ts buildSpec — the questionnaire's answers turned into a spec
 scripts/           the harnesses (each documented in its own header)
 schema/            the published ConnectorSpec JSON Schema, generated by `bun run schema`
 fixtures/          hand-written specs + expectations.json + reach-baseline.json + snapshots/

@@ -1,11 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { takeValue } from "../../src/cli.ts";
+import { takeValue } from "../../src/cli-args.ts";
 import type { Blocker } from "../../src/derive/blockers.ts";
 import { type Derivation, deriveSpec } from "../../src/derive/index.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll } from "../../src/format.ts";
-import { parseSpec } from "../../src/spec.ts";
+import { type ConnectorSpec, parseSpec } from "../../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../../src/types.ts";
 import { validateSpec } from "../../src/validate.ts";
 
@@ -81,8 +81,18 @@ export function walkConnector(dir: string): Map<string, string> {
  * and scripts/reach-baseline.ts) so a connector this harness cannot even read — a dangling
  * symlink, a permissions error — becomes a `read-error` blocker there rather than aborting the
  * whole sweep; this function only ever sees bytes that were read successfully.
+ *
+ * `emit` is the generate-and-format step, and it is a parameter for one reason: so a test can make
+ * it throw without `mock.module`, whose effect is process-global and would poison the formatter
+ * every other suite shares. Without it, the emitter-error arm below could only be proven in a
+ * subprocess, which Bun does not instrument. Both production callers pass nothing and get the
+ * real emitter.
  */
-export function measure(name: string, files: ReadonlyMap<string, string>): ConnectorResult {
+export function measure(
+  name: string,
+  files: ReadonlyMap<string, string>,
+  emit: (spec: ConnectorSpec) => readonly GeneratedFile[] = (spec) => formatAll(generate(spec)),
+): ConnectorResult {
   const server = files.get(SERVER);
   const manifest = files.get("nimbus.extension.json");
   if (server === undefined || manifest === undefined) {
@@ -107,7 +117,7 @@ export function measure(name: string, files: ReadonlyMap<string, string>): Conne
   // RESERVED_IDENTIFIERS is genuinely not generatable today, and counting it is the point. This
   // try is deliberately narrow — it must NOT also wrap generate()/formatAll() below, or an
   // emitter bug becomes indistinguishable in the histogram from a genuine spec rejection.
-  let spec: ReturnType<typeof parseSpec>;
+  let spec: ConnectorSpec;
   try {
     spec = parseSpec(derivation.spec);
     validateSpec(spec);
@@ -128,7 +138,7 @@ export function measure(name: string, files: ReadonlyMap<string, string>): Conne
   // A separate try/catch and a separate blocker kind: this is an emitter defect, not a spec
   // rejection, and a connector landing here must not take down the other 93 in the sweep.
   try {
-    const generated = formatAll(generate(spec));
+    const generated = emit(spec);
     return { name, tier: tierFor({ derivation, generated, real: files }), blockers: [] };
   } catch (err) {
     return {

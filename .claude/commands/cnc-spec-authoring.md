@@ -71,6 +71,12 @@ is part of the bytes being matched.
   entirely. A DELETE whose only arg is in the path sends no body and no `Content-Type`.
 - **`impl: "stub"`** emits a typed handler that throws. The honest escape hatch — a tool the
   spec language cannot express is stubbed, never dropped or guessed.
+- **`pathWhen`** — an ordered array of `{ "absent": "<arg>", "path": "…" }` guards, each
+  choosing a different endpoint when its argument is absent, with the tool's own `path` as the
+  unguarded fallthrough. Refused on `stub` and `search` tools, alongside `query` (both decide
+  the request line), and in a `rest-kit` connector, whose registrar takes one path expression
+  per tool; `docs/SPEC-RULES.md`'s *Conditional endpoints* lists every refusal. `zzcond` and
+  `codemagic` are the fixtures that exercise it.
 
 ### Conditional query parameters — `query`
 
@@ -174,8 +180,9 @@ accessor.
 > schema's. Its "token" produces `auth: "headers"` with a custom header name. In a spec file
 > only the four values above are valid.
 
-- `basic` requires exactly two `vars` (username, password); may declare `prefix`/`suffix`,
-  which decorate the **username**.
+- `basic` takes one or two `vars`: two are a username and a password; one is a credential
+  sent as the username with a literal `""` password (`lever`, `greenhouse`). It may declare
+  `prefix`/`suffix`, which decorate the **username**.
 - `headers` requires `headerNames` with one entry per var.
 - `client-credentials` requires two `vars`, `tokenUrl`, `credentialsIn` (`basic` | `body`),
   optional `scope` — and any style **except `rest-kit`**; `hand-rolled` and `read-only-kit` both
@@ -183,8 +190,13 @@ accessor.
   and `cachedToken` at module scope, so a second would redeclare both. Caches the token,
   renewing early; the skew halves for short-lived tokens. No refresh-token flow exists in the
   corpus.
-- `tokenLocal` is bearer-only: it names a raw-token accessor beside the header accessor, and
-  must differ from `local`.
+- `tokenLocal` splits the read into its own raw-value accessor beside the `local` wrapper. It
+  needs exactly one var and an `auth` mode — any mode, not only `bearer` — must differ from
+  `local`, and cannot combine with `prefix`/`suffix`.
+- `authScheme` replaces the literal `Bearer` with another scheme word (`Token`, `Bot`; the
+  emitter supplies the space) and is `bearer`-only.
+- `extraHeaders` adds static, literal-valued headers between the auth entry and the trailing
+  `Accept`, under `bearer`, `basic` or `headers`.
 - `default` and `required` are mutually exclusive — a defaulted value is never empty.
 - `transform` cannot combine with `auth` (the auth wrapper replaces the return value).
 
@@ -240,7 +252,8 @@ env accessor may well want either name. `u` and `url` — a `fetchHelper.local` 
 nothing else changes.
 
 **When you add an emitter path that declares a new module-scope name, add it to that list in
-the same change.** Two waves have been missed already, and both were found late.
+the same change.** Three waves have been missed already — the count
+`test/emitted-globals.test.ts`'s header records — and each was found late.
 
 ## Worked examples
 

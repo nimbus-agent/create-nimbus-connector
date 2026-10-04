@@ -18,7 +18,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { callTools, toolsListCheck } from "../../scripts/_lib/mcp-driver.ts";
+import { callTools, sendFrame, toolsListCheck } from "../../scripts/_lib/mcp-driver.ts";
 import { tempDirs } from "../support/tmp.ts";
 
 const tmp = tempDirs();
@@ -296,5 +296,54 @@ describe("toolsListCheck", () => {
     expect(result.ok).toBe(false);
     expect(result.output).toContain("server exited before answering tools/list");
     expect(result.output).toContain("fake server: refusing to start");
+  });
+});
+
+describe("sendFrame", () => {
+  /**
+   * A stand-in for the spawned server, with a chosen `write` outcome. A real pipe refuses a write
+   * only when the server exits with that frame still pending — one larger than the pipe's buffer,
+   * sent to a server that has stopped reading — and only on Windows; Linux resolves the same write
+   * with a short count (see sendFrame). Handing the outcome in pins what sendFrame does with a
+   * refusal on every platform.
+   */
+  function target(write: (chunk: string) => number | Promise<number>) {
+    const state = { written: [] as string[], kills: 0 };
+    const server = {
+      stdin: {
+        write: (chunk: string) => {
+          state.written.push(chunk);
+          return write(chunk);
+        },
+      },
+      kill: () => {
+        state.kills += 1;
+      },
+    };
+    return { server, state };
+  }
+
+  it("writes the message as one newline-terminated JSON line", async () => {
+    // Pending, then accepted: the shape a write takes when the pipe does not take it at once.
+    const { server, state } = target((chunk) => Promise.resolve(chunk.length));
+
+    sendFrame(server, { jsonrpc: "2.0", id: 1, method: "initialize" });
+    await Bun.sleep(0);
+
+    expect(state.written).toEqual(['{"jsonrpc":"2.0","id":1,"method":"initialize"}\n']);
+    expect(state.kills).toBe(0);
+  });
+
+  it("ends the conversation when a write is refused, rather than leaving the rejection unhandled", async () => {
+    // What Bun's FileSink.write does when the server exits with a frame still pending. Left
+    // floating, the rejection is unhandled and fails the whole harness run with exit code 1;
+    // killing the server instead closes its stdout, which ends the read loop, and the caller
+    // reports what it has — the contract both conversations above are tested against.
+    const { server, state } = target(() => Promise.reject(new Error("EOF: end of file, write")));
+
+    sendFrame(server, { jsonrpc: "2.0", method: "notifications/initialized" });
+    await Bun.sleep(0);
+
+    expect(state.kills).toBe(1);
   });
 });

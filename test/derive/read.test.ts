@@ -17,6 +17,7 @@ import {
   computedMember,
   conditional,
   constDecl,
+  constDeclTypeName,
   expressionOf,
   functionBody,
   functionName,
@@ -614,6 +615,63 @@ describe("letDecl", () => {
     expect(letDecl(only("let a = 1, b = 2;"))).toBeUndefined();
     expect(letDecl(only("let { a } = o;"))).toBeUndefined();
     expect(letDecl(undefined)).toBeUndefined();
+  });
+});
+
+describe("constDeclTypeName", () => {
+  it("reads the bare type reference on a const's own binding — the throwing-stub filter's form", () => {
+    expect(constDeclTypeName(only("const f: SearchFilter = () => {};"))).toBe("SearchFilter");
+  });
+
+  it("is undefined for an untyped const and for an annotation that is not a bare type reference", () => {
+    expect(constDeclTypeName(only("const f = () => {};"))).toBeUndefined();
+    expect(constDeclTypeName(only("const f: string[] = [];"))).toBeUndefined();
+  });
+});
+
+/**
+ * The four declaration accessors share one frame — exactly one declarator, of exactly one kind —
+ * read in one place, read.ts's private `soleDeclarator`. Pinned across all four at once, so an
+ * accessor that stopped going through it, and with it the `kind` check this module's header names
+ * as half of the defect it exists to prevent, fails here by name.
+ */
+describe("the shared declarator frame", () => {
+  const constReaders = {
+    constDecl: (s: string) => constDecl(only(s)),
+    constDeclTypeName: (s: string) => constDeclTypeName(only(s)),
+  };
+  const letReaders = {
+    letDecl: (s: string) => letDecl(only(s)),
+    uninitializedLet: (s: string) => uninitializedLet(only(s)),
+  };
+
+  it("accepts each reader's own shape, so every refusal below is a refusal and not a no-op", () => {
+    expect(constReaders.constDecl("const a: T = 1;")?.name).toBe("a");
+    expect(constReaders.constDeclTypeName("const a: T = 1;")).toBe("T");
+    expect(letReaders.letDecl("let a = 1;")?.name).toBe("a");
+    expect(letReaders.uninitializedLet("let a: T;")).toBe("a");
+  });
+
+  it.each(Object.entries(constReaders))("%s refuses let, var and a declarator list", (_, read) => {
+    expect(read("let a: T = 1;")).toBeUndefined();
+    expect(read("var a: T = 1;")).toBeUndefined();
+    expect(read("const a: T = 1, b: T = 2;")).toBeUndefined();
+  });
+
+  it.each(Object.entries(letReaders))("%s refuses const, var and a declarator list", (_, read) => {
+    // Initialized and uninitialized forms both, so each reader is shown the shape it would
+    // otherwise accept and is refused on kind or count alone.
+    for (const source of ["const a = 1;", "var a = 1;", "var a: T;", "let a = 1, b = 2;"]) {
+      expect(read(source)).toBeUndefined();
+    }
+    expect(read("let a: T, b: T;")).toBeUndefined();
+  });
+
+  it("refuses a statement that is not a declaration, and an absent node, in every reader", () => {
+    for (const read of [constDecl, constDeclTypeName, letDecl, uninitializedLet]) {
+      expect(read(only("f();"))).toBeUndefined();
+      expect(read(undefined)).toBeUndefined();
+    }
   });
 });
 

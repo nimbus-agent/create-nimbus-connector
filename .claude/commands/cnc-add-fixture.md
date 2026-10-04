@@ -19,22 +19,28 @@ is worthless if a diff is closed by weakening the expectation rather than by fix
 
 ## Before you start
 
-**Never copy connector source into this repository.** Nimbus is AGPL-3.0-only and this repo is
-MIT. Read the real connector, transcribe its *parameters* into a spec, and let the harness read
-the original from a path at runtime. Descriptions and tool names are parameters — copying a
-`server.ts` is not.
+**Never copy connector source into this repository.** Nimbus and `nimbus-mcp-servers` are
+AGPL-3.0-only and this repo is MIT. Read the real connector, transcribe its *parameters* into a
+spec, and let the harness read the original from a path at runtime. Descriptions and tool names
+are parameters — copying a `server.ts` is not.
 
 Pick a target that adds an axis. A fifth connector identical in shape to `newrelic` proves
 nothing new; one with a shape no fixture covers proves something.
 
 ## The loop
 
-**1. Read the real connector.**
+**1. Read the real connector** — in a Nimbus checkout from **before 2026-08-27**, the one
+`diff:golden` will compare against:
 
 ```
-C:\gitrep\Nimbus\packages\mcp-connectors\<name>\src\server.ts
-C:\gitrep\Nimbus\packages\mcp-connectors\<name>\nimbus.extension.json
+<pre-move-nimbus>/packages/mcp-connectors/<name>/src/server.ts
+<pre-move-nimbus>/packages/mcp-connectors/<name>/nimbus.extension.json
 ```
+
+That day the connectors left Nimbus for `nimbus-mcp-servers` (`connectors/<name>/`), whose
+copies have since diverged — most split their tools into a `src/tools.ts` this generator does
+not emit — and a current Nimbus checkout has no `packages/mcp-connectors/` at all, so the
+harness refuses it. The `cnc-preflight` skill says which commit to check out.
 
 Note its style (does it call `runReadOnlyMcpConnector`?), its auth shape, whether handlers are
 expression-bodied or block, whether arg schemas are one-line or expanded, and whether it hoists
@@ -51,7 +57,7 @@ which do not.
 **4. Diff, and read the output.**
 
 ```bash
-bun run diff:golden --nimbus-root C:/gitrep/Nimbus
+bun run diff:golden --nimbus-root <pre-move-nimbus>
 ```
 
 **5. Close each difference at its source.** Every remaining diff is exactly one of three things:

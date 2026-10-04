@@ -19,7 +19,11 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { UNRELEASED_PLACEHOLDER, unreleasedProblems } from "../../scripts/_lib/changelog-gate.ts";
+import {
+  changelogVerdict,
+  UNRELEASED_PLACEHOLDER,
+  unreleasedProblems,
+} from "../../scripts/_lib/changelog-gate.ts";
 
 /** How a case must come out: clean, or refused for a stated reason. */
 type Case = {
@@ -217,5 +221,40 @@ describe("the changelog gate", () => {
     expect(unreleasedProblems(`${HEAD}*Nothing pending.*\n${TAIL}`.replace(/\n/g, "\r\n"))).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * What the release step actually does with the rule: the exit code, and the lines printed. A
+ * correct `unreleasedProblems` behind a step that exits 0 regardless would be the defanged gate this
+ * file's header describes, so the verdict is held to the same table.
+ */
+describe("the changelog gate's verdict", () => {
+  const RECOVERY =
+    "::error::Move the notes under their version and let release-please cut the next patch. " +
+    "Publishing by hand loses the provenance attestation and is not the fix.";
+
+  it.each(CASES.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    const { lines, exitCode } = changelogVerdict(c.markdown);
+    if (c.clean) {
+      expect(lines).toEqual([
+        "changelog ok: the Unreleased section holds nothing but its placeholder",
+      ]);
+      expect(exitCode).toBe(0);
+      return;
+    }
+    // Every per-line annotation first, so each lands on its line in the diff, then one recovery
+    // annotation — and an exit code that stops the job, however few problems there were.
+    expect(lines).toEqual([...unreleasedProblems(c.markdown), RECOVERY]);
+    expect(exitCode).toBe(1);
+  });
+
+  it("fails on a single problem, not only on several", () => {
+    // The `*` bullet case reports exactly one problem, which is what makes it the case that tells
+    // "any problem fails" apart from a threshold that would let one through.
+    const one = CASES.find((c) => c.name === "a `*` bullet");
+    expect(one).toBeDefined();
+    expect(unreleasedProblems(one?.markdown ?? "")).toHaveLength(1);
+    expect(changelogVerdict(one?.markdown ?? "").exitCode).toBe(1);
   });
 });

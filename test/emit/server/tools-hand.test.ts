@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { renderWriteHelper } from "../../../src/emit/server/fetch-helper.ts";
-import { renderHandRolledTools } from "../../../src/emit/server/tools-hand.ts";
-import { parseSpec } from "../../../src/spec.ts";
+import {
+  registrationHead,
+  renderHandRolledTools,
+  renderStubTool,
+} from "../../../src/emit/server/tools-hand.ts";
+import { renderRestKitTools } from "../../../src/emit/server/tools-rest.ts";
+import { parseSpec, registrarName } from "../../../src/spec.ts";
 
 function make(tools: unknown[]) {
   return parseSpec({
@@ -679,6 +684,54 @@ describe('renderHandRolledTools, handlerStyle "block"', () => {
         "  async (p) => {\n" +
         "    return jsonResult(await mercuryGet(`/api/v1/account/${encodeURIComponent(p.id)}`));\n" +
         "  },\n);",
+    );
+  });
+});
+
+/**
+ * The opening and the stub both registration styles write through tools-hand.ts — `reg(` here,
+ * the registrar's own name in tools-rest.ts, and an `async` stub handler here against a plain one
+ * there. Asserted byte for byte, then held against what each style's emitter actually writes for
+ * a stub tool, so a style that stopped going through the shared pair fails here by name.
+ */
+describe("the registration head and stub both styles share", () => {
+  const tool = { name: "zz_write", description: 'Write "it".' };
+
+  it("registrationHead opens the call with its callee, then name, description and schema", () => {
+    expect(registrationHead("reg", tool, "z.object({})")).toEqual([
+      "reg(",
+      '  "zz_write",',
+      '  "Write \\"it\\".",',
+      "  z.object({}),",
+    ]);
+  });
+
+  it("renderStubTool's handler is async or not on request, and only throws", () => {
+    const head = registrationHead("reg", tool, "z.object({})");
+    const tail = ['    throw new Error("zz_write is not implemented");', "  },", ");"];
+    expect(renderStubTool(head, tool, true)).toBe([...head, "  async () => {", ...tail].join("\n"));
+    expect(renderStubTool(head, tool, false)).toBe([...head, "  () => {", ...tail].join("\n"));
+  });
+
+  it("is exactly what the hand-rolled emitter writes for a stub — async", () => {
+    const out = renderHandRolledTools(make([{ ...tool, impl: "stub" }]));
+    expect(out).toBe(renderStubTool(registrationHead("reg", tool, "z.object({})"), tool, true));
+  });
+
+  it("is exactly what the rest-kit emitter writes for a stub — not async", () => {
+    const spec = parseSpec({
+      name: "zzrest",
+      displayName: "ZZ Rest",
+      description: "d.",
+      serviceLabel: "ZZ Rest",
+      style: "rest-kit",
+      env: [{ vars: ["ZZREST_TOKEN"], local: "token", auth: "bearer" }],
+      fetchHelper: { local: "zzFetch", base: "https://api.zzrest.test" },
+      tools: [{ ...tool, impl: "stub" }],
+    });
+    const head = registrationHead(registrarName(spec), tool, "z.object({})");
+    expect(renderRestKitTools(spec).endsWith(`\n\n${renderStubTool(head, tool, false)}`)).toBe(
+      true,
     );
   });
 });

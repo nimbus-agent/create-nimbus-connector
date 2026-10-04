@@ -268,6 +268,25 @@ export function computedMember(
 export type ConstDecl = { readonly name: string; readonly init: AstNode | undefined };
 
 /**
+ * The one VariableDeclarator of a `<kind>` declaration — `const a = 1;` for "const", `let a;` for
+ * "let" — or undefined for any other kind, for a list of two or more (`const a = 1, b = 2;`), or
+ * for a node that is not a VariableDeclaration at all.
+ *
+ * The frame all four declaration accessors below start from, and `kind` is a REQUIRED parameter
+ * for the reason in this module's header: a matcher that forgets to check it is one of the two
+ * forms of the defect this module exists to prevent, so the one place the frame is read cannot be
+ * called without naming one. The four used to spell this prelude out by hand, each with its own
+ * `kind` comparison to keep — and to get right.
+ */
+function soleDeclarator(node: AstNode | undefined, kind: "const" | "let"): AstNode | undefined {
+  if (node?.type !== "VariableDeclaration") return undefined;
+  if (raw(node)["kind"] !== kind) return undefined;
+  const declarations = childList(node, "declarations");
+  if (declarations?.length !== 1) return undefined;
+  return declarations[0];
+}
+
+/**
  * `const <name> = <init>;` — one declarator, an Identifier binding, `kind === "const"`.
  *
  * `let` and `var` produce the identical VariableDeclaration node; `kind` is the only thing that
@@ -275,11 +294,7 @@ export type ConstDecl = { readonly name: string; readonly init: AstNode | undefi
  * to prevent.
  */
 export function constDecl(node: AstNode | undefined): ConstDecl | undefined {
-  if (node?.type !== "VariableDeclaration") return undefined;
-  if (raw(node)["kind"] !== "const") return undefined;
-  const declarations = childList(node, "declarations");
-  if (declarations?.length !== 1) return undefined;
-  const declarator = declarations[0];
+  const declarator = soleDeclarator(node, "const");
   const name = identName(child(declarator, "id"));
   if (name === undefined) return undefined;
   return { name, init: child(declarator, "init") };
@@ -293,11 +308,7 @@ export function constDecl(node: AstNode | undefined): ConstDecl | undefined {
  * `ConstDecl` return, since every other `constDecl` call site reads an untyped `const`.
  */
 export function constDeclTypeName(node: AstNode | undefined): string | undefined {
-  if (node?.type !== "VariableDeclaration") return undefined;
-  if (raw(node)["kind"] !== "const") return undefined;
-  const declarations = childList(node, "declarations");
-  if (declarations?.length !== 1) return undefined;
-  const id = child(declarations[0], "id");
+  const id = child(soleDeclarator(node, "const"), "id");
   const typeRef = identTypeAnnotation(id);
   if (typeRef?.type !== "TSTypeReference") return undefined;
   return identName(child(typeRef, "typeName"));
@@ -311,11 +322,7 @@ export function constDeclTypeName(node: AstNode | undefined): string | undefined
  * is refused, not partially read as though the initializer were absent.
  */
 export function uninitializedLet(node: AstNode | undefined): string | undefined {
-  if (node?.type !== "VariableDeclaration") return undefined;
-  if (raw(node)["kind"] !== "let") return undefined;
-  const declarations = childList(node, "declarations");
-  if (declarations?.length !== 1) return undefined;
-  const declarator = declarations[0];
+  const declarator = soleDeclarator(node, "let");
   if (child(declarator, "init") !== undefined) return undefined;
   return identName(child(declarator, "id"));
 }
@@ -343,11 +350,7 @@ export type LetDecl = {
  * `AstNode | undefined` rather than resolving a name: `tokenExpiresAt` is written bare.
  */
 export function letDecl(node: AstNode | undefined): LetDecl | undefined {
-  if (node?.type !== "VariableDeclaration") return undefined;
-  if (raw(node)["kind"] !== "let") return undefined;
-  const declarations = childList(node, "declarations");
-  if (declarations?.length !== 1) return undefined;
-  const declarator = declarations[0];
+  const declarator = soleDeclarator(node, "let");
   const id = child(declarator, "id");
   const name = identName(id);
   const init = child(declarator, "init");
@@ -688,9 +691,9 @@ function objectProps(node: AstNode | undefined): Prop[] | undefined {
 }
 
 /**
- * The emitter's own rule for whether an object key needs quoting. `IDENTIFIER_RE`
- * (src/emit/server/env.ts), `IDENT` (src/emit/server/body.ts) and the two inline copies in
- * src/emit/server/fetch-helper.ts are all this pattern.
+ * The emitter's own rule for whether an object key needs quoting — `objectKey`
+ * (src/emit/server/env.ts), the one function every spec-supplied key the emitter writes goes
+ * through: header names, inline header names and request-body field names alike.
  *
  * Copied rather than imported, and this is the deriver's SINGLE copy —
  * `src/derive/server/body.ts`'s `fieldName` reads it from here rather than holding its own, so the
@@ -705,7 +708,8 @@ function objectProps(node: AstNode | undefined): Prop[] | undefined {
  * mismatch rather than recovering a different field. A copy that drifts LOOSER refuses a
  * producible module, and one that drifts TIGHTER refuses it too — a visible blocker in both
  * directions, never a wrong claim, unlike a shared parser whose under-parsing direction is silent.
- * Fold it back into one definition when a task may edit `src/emit/`.
+ * The emitter's own copies — four of them once — are already folded into `objectKey`; this one is
+ * the copy that has to stay, for the dependency-direction reason above.
  */
 export const IDENTIFIER_KEY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
@@ -1047,6 +1051,12 @@ export function conditional(node: AstNode | undefined): Conditional | undefined 
   return { test, consequent, alternate };
 }
 
+/**
+ * The `operator`/`left`/`right` triple Babel gives three node types alike — BinaryExpression,
+ * LogicalExpression and AssignmentExpression — and so what `binary`, `logical` and `assignment`
+ * below all return. One type, not three names for it: which node a value came from is the
+ * caller's to know, by which of those it called.
+ */
 export type BinaryParts = {
   readonly operator: string;
   readonly left: AstNode;
@@ -1073,13 +1083,6 @@ export function logical(node: AstNode | undefined): BinaryParts | undefined {
 }
 
 /**
- * An AssignmentExpression's parts. Structurally identical to `BinaryParts` — Babel gives all
- * three node types the same `operator`/`left`/`right` shape — and named separately only so a
- * caller's type reads as what it asked for.
- */
-export type AssignmentParts = BinaryParts;
-
-/**
  * `a = b`, `a += b`, … — an AssignmentExpression, distinct from both `binary` and `logical`
  * above (Babel gives it its own node type, `AssignmentExpression`, not a `BinaryExpression`
  * with `operator: "="`). Needed for renderRestKitFetchHelper's `json = JSON.parse(text) as
@@ -1090,7 +1093,7 @@ export type AssignmentParts = BinaryParts;
  * in the node type they accept, and the third copy of the unpack was where a fix to the other
  * two would have stopped.
  */
-export function assignment(node: AstNode | undefined): AssignmentParts | undefined {
+export function assignment(node: AstNode | undefined): BinaryParts | undefined {
   return twoSided(node, "AssignmentExpression");
 }
 

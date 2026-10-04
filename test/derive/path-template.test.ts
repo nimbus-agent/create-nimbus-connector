@@ -152,6 +152,19 @@ describe("recognizePath", () => {
     expect(pathOf("`/api/${org(1)}`")).toBeUndefined();
   });
 
+  it("knows only its own two wrappers, never a name every object inherits", () => {
+    // The wrapper table is keyed by a callee name read off the connector's source, so it must
+    // answer for String and encodeURIComponent and nothing else. Read off a plain object,
+    // `toString` found Object.prototype.toString: one argument recovered as a mode spelled with
+    // that function's source text — a placeholder parsePathTemplate refuses — and no argument,
+    // the env-accessor shape the emitter writes for `${env.toString}`, was refused as a wrapper
+    // called with the wrong arity.
+    expect(pathOf("`/api/${toString(p.id)}`")).toBeUndefined();
+    expect(pathOf("`/api/${constructor(p.id)}`")).toBeUndefined();
+    expect(pathOf("`/api/${toString()}`")).toBe("/api/${env.toString}");
+    expect(pathOf("`/api/${valueOf()}`")).toBe("/api/${env.valueOf}");
+  });
+
   it("returns undefined for a nested member expression, e.g. p.q.r", () => {
     expect(pathOf("`/a/${p.q.r}`")).toBeUndefined();
   });

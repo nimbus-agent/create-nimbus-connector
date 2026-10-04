@@ -2,8 +2,8 @@
 
 A start-to-finish guide to generating a Nimbus MCP connector. To look a spec field up, see
 [SPEC.md](./SPEC.md); for the rules that reject a spec, and how the fields work together, see
-the [README](../README.md); for how the generator is built see
-[ARCHITECTURE.md](./ARCHITECTURE.md).
+[SPEC-RULES.md](./SPEC-RULES.md); for every flag, the [README](../README.md#cli-reference); for
+how the generator is built see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 **Bun is required.** The CLI carries a `#!/usr/bin/env bun` shebang, so it needs Bun however
 you invoke it — `bunx` included. Generated connectors are Bun-only too.
@@ -31,14 +31,23 @@ speed up first-party connectors.
 bunx create-nimbus-connector my-service
 ```
 
+That layout is the one Nimbus had **until 2026-08-27**, when its connectors moved to
+[`nimbus-mcp-servers`](https://github.com/nimbus-agent/nimbus-mcp-servers), which lays them out
+differently — `connectors/<name>/`, importing `../../../shared/*`. This generator has not been
+re-targeted at that repository, so the monorepo target only fits a Nimbus checkout from before
+the move; see [ROADMAP § Known limitations](./ROADMAP.md#known-limitations). Standalone output
+needs no checkout of either.
+
 ---
 
 ## 2. Two ways to drive it
 
 ### Interactive
 
-Run it with a name and answer the prompts — connector name, display name, service label,
-description, base API URL, auth type, credential env var, and the read tools to register:
+Run it with a name and answer the prompts — display name, service label, description, base API
+URL, auth type, credential env var, a header name when the auth type is `token` or `basic`, and
+the read tools to register. The name itself is the positional argument; run with neither a name
+nor `--spec` and the session asks for it first:
 
 ```bash
 bunx create-nimbus-connector my-service --standalone
@@ -194,6 +203,12 @@ bun src/cli.ts --spec ./acme.spec.json --gateway-wiring /path/to/Nimbus
 It refuses to overwrite existing wiring files unless you pass `--force`. `--gateway-wiring` is
 incompatible with `--standalone`, since a standalone connector has no Gateway to wire into.
 
+**It also refuses a current Nimbus checkout.** The root is validated by the marker file
+`packages/mcp-connectors/shared/mcp-tool-kit.ts`, which Nimbus deleted on 2026-08-27 when its
+connectors moved out, even though the Gateway files the wiring targets are still there — so
+today it accepts only a checkout from before that date. The
+[README](../README.md#gateway-wiring) has the rest.
+
 ---
 
 ## 8. Deriving a spec from an existing connector
@@ -254,6 +269,9 @@ it only ever prints to stdout, so none of the flags that shape a write have anyt
 | `--force` | Allow overwriting existing **wiring** files. Only valid with `--gateway-wiring` |
 | `--from-connector <dir>` | Read an existing connector directory and print its derived spec. Excludes a positional name, `--spec`, `--gateway-wiring`, `--out-dir`, `--standalone`, `--license` and `--dry-run` |
 | `--partial` | With `--from-connector`, print a draft spec (marked so it cannot be generated) instead of only a blocker report. Only valid with `--from-connector` |
+| `--from-openapi <doc>` | Read an OpenAPI 3 document (JSON or YAML) and print the spec for the operations `--op` selects. Excludes a positional name, `--spec`, `--from-connector` and every flag that shapes a write |
+| `--list-operations` | With `--from-openapi`, list each operation as `operationId  METHOD  /path`, with the ones it cannot offer named on stderr. Only valid with `--from-openapi`, and not with `--op` |
+| `--op <operationId>` | With `--from-openapi`, select an operation to become a tool. Repeatable; at least one is required unless `--list-operations` is given |
 | `--help` | Usage |
 | `--version` | Version |
 

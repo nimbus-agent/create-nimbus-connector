@@ -17,14 +17,15 @@
  * is untidy, not a protocol error, and neither harness should fail on it.
  */
 export async function* readJsonLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
-  const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return;
-    buffered += decoder.decode(value, { stream: true });
+  // `preventCancel`, because both callers leave this loop early — each returns on the frame it
+  // wanted — and a plain `for await` over a ReadableStream CANCELS the stream on any early exit
+  // (observed 2026-10-04, Bun 1.3.14), tearing the server's stdout down under the caller. With it,
+  // leaving early only releases the lock. test/scripts/stdio-rpc.test.ts pins the difference.
+  for await (const chunk of stream.values({ preventCancel: true })) {
+    buffered += decoder.decode(chunk, { stream: true });
 
     const lines = buffered.split("\n");
     buffered = lines.pop() ?? ""; // keep the trailing partial fragment

@@ -10,9 +10,10 @@ description: >
 # create-nimbus-connector — Pre-flight
 
 **`bun run preflight --nimbus-root <path>` runs all eight in order** and is the fastest way to
-answer "is this ready to push". It stops at the first failure, and — this is the part that
-matters — **without `--nimbus-root` it reports the four monorepo gates as `SKIP` by name and
-refuses to print its fully-verified sentence.** A skip is never dressed up as a pass.
+answer "is this ready to push" — with `<path>` a Nimbus checkout from before 2026-08-27, as
+section 2 explains. It stops at the first failure, and — this is the part that matters —
+**without `--nimbus-root` it reports the four monorepo gates as `SKIP` by name and refuses to
+print its fully-verified sentence.** A skip is never dressed up as a pass.
 
 The gate list below is what it runs, and is still worth reading: four of the eight need a
 Nimbus checkout, and two of them answer different questions that are easy to conflate. Run an
@@ -49,11 +50,21 @@ These need a checkout of the AGPL Nimbus monorepo, which CI does not have and th
 must not vendor. **They are local pre-merge gates. Do not add a CI job that skips when the
 root is absent** — a silently-skipping gate reads as coverage while asserting nothing.
 
+**The checkout has to be from before 2026-08-27.** That day Nimbus deleted
+`packages/mcp-connectors/` (commit `2118cdd4`) and the connectors moved to
+`nimbus-mcp-servers`; this repo has not been re-targeted. All four gates recognise a root by
+`packages/mcp-connectors/shared/mcp-tool-kit.ts`, so a current checkout — `C:/gitrep/Nimbus`
+on `main` included — is refused with "marker file missing", and a `nimbus-mcp-servers`
+checkout is refused the same way. Use a clone of Nimbus checked out at `a8f76942`, with
+`bun install` run in it: its `packages/mcp-connectors` tree is the one
+`fixtures/reach-baseline.json` records, and `reach --baseline` compares against no other.
+`<pre-move-nimbus>` below is that clone.
+
 ```bash
-bun run diff:golden --nimbus-root C:/gitrep/Nimbus
-bun run reach --baseline --nimbus-root C:/gitrep/Nimbus     # if src/ changed
-bun run acceptance C:/gitrep/Nimbus            # if emission changed
-bun run wiring:conformance --nimbus-root C:/gitrep/Nimbus   # if wiring changed
+bun run diff:golden --nimbus-root <pre-move-nimbus>
+bun run reach --baseline --nimbus-root <pre-move-nimbus>     # if src/ changed
+bun run acceptance <pre-move-nimbus>            # if emission changed
+bun run wiring:conformance --nimbus-root <pre-move-nimbus>   # if wiring changed
 ```
 
 **`diff:golden` is the gate that matters most.** Read its output, do not just check the exit
