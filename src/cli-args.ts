@@ -70,6 +70,9 @@ const KNOWN_FLAGS = [
   "--version",
 ] as const;
 
+/** KNOWN_FLAGS as a set of plain strings, so an arbitrary argument can be looked up in it. */
+const KNOWN_FLAG_SET: ReadonlySet<string> = new Set(KNOWN_FLAGS);
+
 /** Levenshtein distance, for suggesting the flag a typo probably meant. */
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -120,7 +123,7 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
  */
 function takeOutDir(argv: readonly string[], i: number): string {
   const dir = takeValue(argv, i, "--out-dir");
-  if (KNOWN_FLAGS.some((flag) => flag === dir)) {
+  if (KNOWN_FLAG_SET.has(dir)) {
     throw new Error(
       `--out-dir requires a directory, and ${dir} is one of this CLI's flags — was the ` +
         `directory left out? A directory really named ${dir} can be given as ./${dir}.`,
