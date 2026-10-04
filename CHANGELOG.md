@@ -37,6 +37,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.2...create-nimbus-connector-v0.13.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** update dependencies and the ranges generated standalone packages declare ([#135](https://github.com/nimbus-agent/create-nimbus-connector/issues/135)) ([5283e67](https://github.com/nimbus-agent/create-nimbus-connector/commit/5283e6744ff42f1daad82549066a8c023f2b8a43))
+
 ## [0.13.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.1...create-nimbus-connector-v0.13.2) (2026-09-04)
 
 
