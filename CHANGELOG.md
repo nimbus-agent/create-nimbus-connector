@@ -17,6 +17,24 @@ section carries no `###` sub-heading and no bulleted entry. The gate runs before
 `npm publish`, because npm cannot unpublish after 72 hours; the recovery path when it fires
 is written next to the step.
 
+*Nothing pending.*
+
+## [0.13.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.2...create-nimbus-connector-v0.13.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** update dependencies and the ranges generated standalone packages declare ([#135](https://github.com/nimbus-agent/create-nimbus-connector/issues/135)) ([5283e67](https://github.com/nimbus-agent/create-nimbus-connector/commit/5283e6744ff42f1daad82549066a8c023f2b8a43))
+
+### Not on npm
+
+**0.13.3 was tagged and GitHub-released, and never published.** The Unreleased-section gate
+refused it, as it did 0.11.1: the notes below this paragraph were still filed as unreleased when
+the release workflow ran. The recovery is the same forward-only path: re-running the job would
+check out the same commit and fail the same way, so the notes move under their version here and
+release-please cuts the next patch. **Everything described below therefore reaches npm as
+0.13.4**, and the registry skips from 0.13.2 to it.
+
 ### Output changes
 
 * **A generated standalone package now pins Biome 2.5.15, where 0.13.2 pinned 2.5.13.** The
@@ -34,15 +52,6 @@ is written next to the step.
   to. A package generated before this keeps working on 1.x and TypeScript 5; regenerating it moves
   it to 2.x and TypeScript 7. The monorepo target is untouched: `diff:golden` holds its ranges to
   the ones the Nimbus corpus declares.
-
-*Nothing pending.*
-
-## [0.13.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.2...create-nimbus-connector-v0.13.3) (2026-10-04)
-
-
-### Bug Fixes
-
-* **deps:** update dependencies and the ranges generated standalone packages declare ([#135](https://github.com/nimbus-agent/create-nimbus-connector/issues/135)) ([5283e67](https://github.com/nimbus-agent/create-nimbus-connector/commit/5283e6744ff42f1daad82549066a8c023f2b8a43))
 
 ## [0.13.2](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.1...create-nimbus-connector-v0.13.2) (2026-09-04)
 
