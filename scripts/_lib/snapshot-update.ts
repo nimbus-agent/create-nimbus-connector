@@ -19,16 +19,36 @@ import { join } from "node:path";
 import { writeFiles } from "../../src/cli.ts";
 import { generate } from "../../src/emit/index.ts";
 import { formatAll } from "../../src/format.ts";
-import { compareSnapshot, loadSnapshot, type SnapshotDiff } from "../../src/golden/snapshots.ts";
+import {
+  compareSnapshot,
+  emptySnapshotDirectoryMessage,
+  loadSnapshot,
+  noSnapshotDirectoryMessage,
+  type SnapshotDiff,
+} from "../../src/golden/snapshots.ts";
 import { parseSpec } from "../../src/spec.ts";
 import { displayPath, type GeneratedFile } from "../../src/types.ts";
 
-/** Like loadSnapshot, but a first run for a brand-new fixture has nothing to load yet. */
+/**
+ * Like loadSnapshot, but a first run for a brand-new fixture has nothing to load yet.
+ *
+ * "Nothing yet" is loadSnapshot's two refusals and nothing else — no directory, or one with no
+ * file in it — recognised by the exact message loadSnapshot builds for this `dir`. Any other
+ * throw is rethrown: a tree that is there but cannot be read is not a first run, and reading it as
+ * one would print every file as added and plan no stale file for deletion.
+ */
 export function loadExistingSnapshot(dir: string): Map<string, string> {
   try {
     return loadSnapshot(dir);
-  } catch {
-    return new Map();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message === noSnapshotDirectoryMessage(dir) ||
+        error.message === emptySnapshotDirectoryMessage(dir))
+    ) {
+      return new Map();
+    }
+    throw error;
   }
 }
 

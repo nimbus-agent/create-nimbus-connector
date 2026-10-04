@@ -66,10 +66,7 @@ export function compareSnapshot(
  */
 export function loadSnapshot(dir: string): Map<string, string> {
   if (!existsSync(dir)) {
-    throw new Error(
-      `No snapshot directory at ${dir}. Run \`bun run snapshot:update\` to create it — ` +
-        "a missing snapshot must fail loudly, not compare against nothing.",
-    );
+    throw new Error(noSnapshotDirectoryMessage(dir));
   }
 
   const out = new Map<string, string>();
@@ -81,14 +78,32 @@ export function loadSnapshot(dir: string): Map<string, string> {
   }
 
   if (out.size === 0) {
-    throw new Error(
-      `No snapshot files found under ${dir} — the directory exists but is empty. Run ` +
-        "`bun run snapshot:update` to populate it; a directory that is present but hollow " +
-        "must fail exactly like one that is absent.",
-    );
+    throw new Error(emptySnapshotDirectoryMessage(dir));
   }
 
   return out;
+}
+
+/**
+ * loadSnapshot's refusal for a `dir` that does not exist. It and its sibling below are functions
+ * rather than inline literals for scripts/_lib/snapshot-update.ts, which reads exactly these two
+ * refusals as a fixture's first run and must recognise them by the message thrown here: a copy of
+ * the wording would stop matching the moment this text changed.
+ */
+export function noSnapshotDirectoryMessage(dir: string): string {
+  return (
+    `No snapshot directory at ${dir}. Run \`bun run snapshot:update\` to create it — ` +
+    "a missing snapshot must fail loudly, not compare against nothing."
+  );
+}
+
+/** loadSnapshot's refusal for a `dir` that exists but holds no file. */
+export function emptySnapshotDirectoryMessage(dir: string): string {
+  return (
+    `No snapshot files found under ${dir} — the directory exists but is empty. Run ` +
+    "`bun run snapshot:update` to populate it; a directory that is present but hollow " +
+    "must fail exactly like one that is absent."
+  );
 }
 
 /**

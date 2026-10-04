@@ -41,6 +41,16 @@ describe("loadExistingSnapshot", () => {
     expect(loadExistingSnapshot(tmp.make("cnc-snap-empty-"))).toEqual(new Map());
   });
 
+  it("rethrows anything else loadSnapshot throws, rather than reading it as a first run", () => {
+    // Only the two refusals above mean "nothing checked in yet". A file where the fixture's
+    // directory should be is the portable way to make a path that EXISTS unreadable as a tree:
+    // permission bits deny no read on Windows, and root ignores them on Linux.
+    const notADirectory = join(tmp.make("cnc-snap-file-"), FIXTURE);
+    writeFileSync(notADirectory, "not a directory\n", "utf8");
+
+    expect(() => loadExistingSnapshot(notADirectory)).toThrow(/ENOTDIR/);
+  });
+
   it("returns a populated tree's files keyed by forward-slash path", () => {
     const dir = tmp.make("cnc-snap-full-");
     mkdirSync(join(dir, "src"), { recursive: true });
@@ -63,6 +73,15 @@ describe("planSnapshotUpdate", () => {
     expect(plan.lines).toEqual([`${FIXTURE}:`, ...paths.map((p) => `  + ${p}`)]);
     // A plan only reads: the driver prints it before anything on disk moves.
     expect(existsSync(plan.outDir)).toBe(false);
+  });
+
+  it("refuses to plan against a snapshot path it cannot read, rather than reporting a first run", () => {
+    // Without the rethrow this printed a first run's report — every file `+`, nothing `-` — for
+    // a fixture whose snapshot path is already occupied, and failed only afterwards, on the write.
+    const snapshotsDir = tmp.make("cnc-snap-unreadable-");
+    writeFileSync(join(snapshotsDir, FIXTURE), "not a directory\n", "utf8");
+
+    expect(() => planSnapshotUpdate(FIXTURE, fixturesDir, snapshotsDir)).toThrow(/ENOTDIR/);
   });
 
   it("reports no changes for a tree a previous run wrote", async () => {

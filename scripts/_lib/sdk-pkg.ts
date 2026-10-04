@@ -86,7 +86,10 @@ export function assertLocalSdkBuilt(sdkPkg: string | undefined): void {
  *
  * A document with no `dependencies` object is refused by name rather than failing as a TypeError
  * on `undefined`: every standalone package the generator emits declares the SDK there, so its
- * absence is an emitter change this harness should report, not one to paper over.
+ * absence is an emitter change this harness should report, not one to paper over. The same goes
+ * for a `dependencies` object without an `@nimbus-dev/sdk` key. This REPLACES the generator's
+ * declaration and never makes one: adding the key would install the SDK whatever was emitted, and
+ * acceptance would pass for a package that does not declare it.
  */
 export function withLocalSdk(packageJson: string, sdkPkg: string): string {
   const pkg: unknown = JSON.parse(packageJson);
@@ -98,6 +101,13 @@ export function withLocalSdk(packageJson: string, sdkPkg: string): string {
     throw new Error(
       "the generated package.json declares no dependencies object, so there is no " +
         "@nimbus-dev/sdk dependency to point at a local SDK checkout",
+    );
+  }
+  if (!Object.hasOwn(deps, "@nimbus-dev/sdk")) {
+    throw new Error(
+      "the generated package.json declares no @nimbus-dev/sdk dependency, so there is none to " +
+        "point at a local SDK checkout — adding one here would install the SDK whether or not " +
+        "the generator declared it",
     );
   }
   (deps as Record<string, unknown>)["@nimbus-dev/sdk"] = `file:${sdkPkg.replaceAll("\\", "/")}`;

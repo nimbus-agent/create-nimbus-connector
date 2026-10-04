@@ -49,7 +49,10 @@ export type CliOptions = {
   ops: string[];
 };
 
-/** Every flag parseFlags accepts. Single source for the unknown-flag suggestion. */
+/**
+ * Every flag parseFlags accepts. Single source for the unknown-flag suggestion, and for the flags
+ * takeOutDir refuses to take as a directory.
+ */
 const KNOWN_FLAGS = [
   "--dry-run",
   "--force",
@@ -104,6 +107,28 @@ export function takeValue(argv: readonly string[], i: number, flag: string): str
   return value;
 }
 
+/**
+ * --out-dir's value, refusing one of this CLI's own flags in its place.
+ *
+ * takeValue only catches a value that is missing, so `acme --out-dir --dry-run` took --dry-run as
+ * the directory: no dry run, and the package written into ./--dry-run/. Nothing downstream catches
+ * it for --out-dir — the directory is created if it does not exist, so a swallowed flag becomes a
+ * directory on disk rather than a failed lookup.
+ *
+ * Only the flags in KNOWN_FLAGS are refused, never every leading hyphen: -preview is a valid
+ * relative directory, and one really named after a flag can still be given as ./--dry-run.
+ */
+function takeOutDir(argv: readonly string[], i: number): string {
+  const dir = takeValue(argv, i, "--out-dir");
+  if (KNOWN_FLAGS.some((flag) => flag === dir)) {
+    throw new Error(
+      `--out-dir requires a directory, and ${dir} is one of this CLI's flags — was the ` +
+        `directory left out? A directory really named ${dir} can be given as ./${dir}.`,
+    );
+  }
+  return dir;
+}
+
 /** Flag → option, with no cross-flag validation: that is assertFlagCombination's job. */
 function parseFlags(argv: readonly string[]): CliOptions {
   const opts: CliOptions = {
@@ -142,7 +167,7 @@ function parseFlags(argv: readonly string[]): CliOptions {
         opts.specPath = takeValue(argv, ++i, "--spec");
         break;
       case "--out-dir":
-        opts.outDir = takeValue(argv, ++i, "--out-dir");
+        opts.outDir = takeOutDir(argv, ++i);
         break;
       case "--license":
         opts.license = validateLicense(takeValue(argv, ++i, "--license"));

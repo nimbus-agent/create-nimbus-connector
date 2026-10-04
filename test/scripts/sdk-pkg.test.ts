@@ -177,7 +177,8 @@ describe("withLocalSdk", () => {
     const before = JSON.parse(emitted) as { dependencies: Record<string, string> };
     // The premise, read off the emitter rather than assumed: a standalone package declares the
     // SDK as a registry range under `dependencies`. If an emitter change ever moves it, this
-    // fails here, by name, instead of the rewrite quietly adding a second declaration.
+    // fails here, by name — and withLocalSdk refuses the moved document rather than adding a
+    // declaration of its own (pinned below).
     expect(before.dependencies["@nimbus-dev/sdk"]).toMatch(/^\^\d/);
 
     const expected = structuredClone(before);
@@ -236,6 +237,38 @@ describe("withLocalSdk", () => {
     ]) {
       expect(() => withLocalSdk(doc, "/sdk"), doc).toThrow(
         "the generated package.json declares no dependencies object",
+      );
+    }
+  });
+
+  it("refuses a dependencies object without the SDK, rather than adding the dependency itself", () => {
+    // The rewrite may only REPLACE a declaration the generator made. Adding one would install the
+    // SDK whatever the generator emitted, so local-checkout acceptance would pass for a package
+    // that does not declare it — a green run that checked nothing about the emitted dependency.
+    // Both paths over the generator's own output: with the key it is rewritten; with that one key
+    // taken out, the shape an emitter change dropping or moving it would leave, it is refused.
+    const emitted = JSON.parse(emittedPackageJson("zzstandalone")) as {
+      dependencies: Record<string, string>;
+    };
+    expect(Object.keys(emitted.dependencies)).toContain("@nimbus-dev/sdk");
+    const withoutSdk = {
+      ...emitted,
+      dependencies: Object.fromEntries(
+        Object.entries(emitted.dependencies).filter(([name]) => name !== "@nimbus-dev/sdk"),
+      ),
+    };
+
+    expect(
+      JSON.parse(withLocalSdk(JSON.stringify(emitted), "/sdk")).dependencies["@nimbus-dev/sdk"],
+    ).toBe("file:/sdk");
+    for (const doc of [
+      JSON.stringify(withoutSdk),
+      '{"dependencies":{}}',
+      // A declaration anywhere but `dependencies` is not the one this rewrites.
+      '{"dependencies":{"zod":"^4.6.5"},"peerDependencies":{"@nimbus-dev/sdk":"^2.0.0"}}',
+    ]) {
+      expect(() => withLocalSdk(doc, "/sdk"), doc).toThrow(
+        "the generated package.json declares no @nimbus-dev/sdk dependency",
       );
     }
   });

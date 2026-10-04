@@ -57,6 +57,27 @@ describe("parseCliArgs", () => {
     expect(() => parseCliArgs(["--out-dir"])).toThrow(/--out-dir/);
   });
 
+  it("rejects one of its own flags as --out-dir's value instead of writing into a directory of that name", () => {
+    // `acme --out-dir --dry-run` took --dry-run as the directory: no dry run, and the package
+    // written into ./--dry-run/ with exit 0. The flags are read off USAGE, which the --help tests
+    // below hold to the parser, rather than copied here, where a new flag would be left out.
+    const flags = [...USAGE.matchAll(/^ {2}(--[a-z-]+)/gm)].map((m) => m[1]!);
+    expect(flags.length).toBeGreaterThan(5);
+    for (const flag of flags) {
+      expect(() => parseCliArgs(["acme", "--out-dir", flag]), flag).toThrow(
+        `--out-dir requires a directory, and ${flag} is one of this CLI's flags`,
+      );
+    }
+  });
+
+  it("still takes a hyphen-leading --out-dir value that is not one of its flags", () => {
+    // Refusing every leading hyphen would be the over-correction: -preview is a valid relative
+    // directory. The refusal's own advice for a directory really named after a flag, ./--dry-run,
+    // has to parse too — advice that is itself refused is worse than none.
+    expect(parseCliArgs(["acme", "--out-dir", "-preview"]).outDir).toBe("-preview");
+    expect(parseCliArgs(["acme", "--out-dir", "./--dry-run"]).outDir).toBe("./--dry-run");
+  });
+
   it("rejects a positional name combined with --spec", () => {
     expect(() => parseCliArgs(["slack", "--spec", "x.json"])).toThrow(/--spec/);
   });
