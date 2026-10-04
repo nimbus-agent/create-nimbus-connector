@@ -19,6 +19,13 @@ is written next to the step.
 
 *Nothing pending.*
 
+## [0.13.4](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.3...create-nimbus-connector-v0.13.4) (2026-10-04)
+
+
+### Bug Fixes
+
+* move the 0.13.3 notes under their version so the release can publish ([#137](https://github.com/nimbus-agent/create-nimbus-connector/issues/137)) ([c84792e](https://github.com/nimbus-agent/create-nimbus-connector/commit/c84792e21120c74cbf4d005076f72438d64013da))
+
 ## [0.13.3](https://github.com/nimbus-agent/create-nimbus-connector/compare/create-nimbus-connector-v0.13.2...create-nimbus-connector-v0.13.3) (2026-10-04)
 
 
