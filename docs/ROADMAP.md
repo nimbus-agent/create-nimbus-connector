@@ -103,6 +103,13 @@ repository's state — the commit and date it was last checked against are in
 **[CONSOLIDATION.md](./CONSOLIDATION.md)**, which also carries the side-by-side comparison of
 the two tools.
 
+**A third tool overlaps (noted 2026-11-12; no decision).** The gateway's CLI has its own
+`nimbus scaffold` command. It scaffolds an extension for the gateway's extension runtime, and
+with `--from-openapi` drafts one from an OpenAPI document, which is close to what this tool's
+own `--from-openapi` does for a first-party-style connector. It is not one of the two tools
+the consolidation above is about, and nothing here decides what happens to it. It is recorded
+so that "two scaffolders" in this section is not read as the whole count.
+
 Until they are met, both tools ship and the READMEs cross-link so an author can tell which one
 they want. **Nothing here is a deprecation announcement**; it is a stated direction with its
 conditions attached.
